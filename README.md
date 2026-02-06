@@ -81,6 +81,9 @@ cd website_backend
 python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+## LLM configuration
+Set `ANTHROPIC_API_KEY` in your environment (or `website_backend/.env`) to enable slug and image prompt generation.
+
 ## How to run tests
 ```bash
 pytest

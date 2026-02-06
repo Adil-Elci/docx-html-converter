@@ -12,13 +12,13 @@ except Exception:  # pragma: no cover
     load_dotenv = None
 
 try:
-    from openai import OpenAI
+    from anthropic import Anthropic
 except Exception:  # pragma: no cover
-    OpenAI = None
+    Anthropic = None
 
 logger = logging.getLogger("doc_converter.llm")
 
-MODEL_NAME = "gpt-4o-mini"
+MODEL_NAME = "claude-sonnet-4-5-20250929"
 TIMEOUT_SECONDS = 10
 MAX_TOKENS = 60
 TEMPERATURE = 0.2
@@ -49,15 +49,15 @@ def generate_slug(
     else:
         logger.warning("python-dotenv is not installed; .env will not be loaded")
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        logger.error("OPENAI_API_KEY is missing")
+        logger.error("ANTHROPIC_API_KEY is missing")
         logger.info("slug_fallback reason=missing_api_key")
         return ""
 
-    if OpenAI is None:
-        logger.error("openai SDK is not available")
-        logger.info("slug_fallback reason=missing_openai_sdk")
+    if Anthropic is None:
+        logger.error("anthropic SDK is not available")
+        logger.info("slug_fallback reason=missing_anthropic_sdk")
         return ""
 
     for attempt in range(1, 3):
@@ -68,7 +68,7 @@ def generate_slug(
             True,
         )
         try:
-            result = _call_openai(api_key, title)
+            result = _call_anthropic(api_key, title)
             logger.info(
                 "slug_response received=%s length=%s",
                 bool(result),
@@ -92,26 +92,34 @@ def generate_slug(
     return ""
 
 
-def _call_openai(api_key: str, title: str) -> str:
-    client = OpenAI(api_key=api_key, timeout=TIMEOUT_SECONDS)
+def _call_anthropic(api_key: str, title: str) -> str:
+    client = Anthropic(api_key=api_key, timeout=TIMEOUT_SECONDS)
     user_message = f"Title: {title}\n"
 
-    response = client.chat.completions.create(
+    response = client.messages.create(
         model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS,
     )
 
     content: Optional[str] = None
-    choices = getattr(response, "choices", None) or []
-    if choices:
-        message = getattr(choices[0], "message", None)
-        if message:
-            content = getattr(message, "content", None)
+    blocks = getattr(response, "content", None) or []
+    texts = []
+    for block in blocks:
+        block_type = getattr(block, "type", None)
+        if block_type is None and isinstance(block, dict):
+            block_type = block.get("type")
+        if block_type != "text":
+            continue
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if text:
+            texts.append(text)
+    if texts:
+        content = "".join(texts)
 
     if not content:
         raise ValueError("Empty response")

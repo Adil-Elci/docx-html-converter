@@ -10,14 +10,13 @@ except Exception:  # pragma: no cover
     load_dotenv = None
 
 try:
-    from openai import OpenAI
+    from anthropic import Anthropic
 except Exception:  # pragma: no cover
-    OpenAI = None
+    Anthropic = None
 
 logger = logging.getLogger("doc_converter.llm")
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-MODEL_NAME = "gpt-4o-mini"
+MODEL_NAME = "claude-sonnet-4-5-20250929"
 TIMEOUT_SECONDS = 10
 MAX_TOKENS = 200
 TEMPERATURE = 0.4
@@ -47,15 +46,15 @@ def generate_image_prompt(title: str, intro: str) -> str:
     else:
         logger.warning("python-dotenv is not installed; .env will not be loaded")
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        logger.error("OPENAI_API_KEY is missing")
+        logger.error("ANTHROPIC_API_KEY is missing")
         logger.info("image_prompt_fallback reason=missing_api_key")
         return FALLBACK_PROMPT
 
-    if OpenAI is None:
-        logger.error("openai SDK is not available")
-        logger.info("image_prompt_fallback reason=missing_openai_sdk")
+    if Anthropic is None:
+        logger.error("anthropic SDK is not available")
+        logger.info("image_prompt_fallback reason=missing_anthropic_sdk")
         return FALLBACK_PROMPT
 
     for attempt in range(1, 3):
@@ -66,7 +65,7 @@ def generate_image_prompt(title: str, intro: str) -> str:
             True,
         )
         try:
-            result = _call_openai(api_key, title, intro)
+            result = _call_anthropic(api_key, title, intro)
             logger.info(
                 "image_prompt_response received=%s length=%s",
                 bool(result),
@@ -89,26 +88,34 @@ def generate_image_prompt(title: str, intro: str) -> str:
     return FALLBACK_PROMPT
 
 
-def _call_openai(api_key: str, title: str, intro: str) -> str:
-    client = OpenAI(api_key=api_key, timeout=TIMEOUT_SECONDS)
+def _call_anthropic(api_key: str, title: str, intro: str) -> str:
+    client = Anthropic(api_key=api_key, timeout=TIMEOUT_SECONDS)
     user_message = f"Title (German): {title}\nIntro (German): {intro}\n"
 
-    response = client.chat.completions.create(
+    response = client.messages.create(
         model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}],
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS,
     )
 
     content: Optional[str] = None
-    choices = getattr(response, "choices", None) or []
-    if choices:
-        message = getattr(choices[0], "message", None)
-        if message:
-            content = getattr(message, "content", None)
+    blocks = getattr(response, "content", None) or []
+    texts = []
+    for block in blocks:
+        block_type = getattr(block, "type", None)
+        if block_type is None and isinstance(block, dict):
+            block_type = block.get("type")
+        if block_type != "text":
+            continue
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if text:
+            texts.append(text)
+    if texts:
+        content = "".join(texts)
 
     if not content:
         raise ValueError("Empty response")

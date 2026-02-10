@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from .routers import (
+    admin_guest_posts_router,
+    auth_router,
+    clients_router,
+    guest_posts_router,
+    target_sites_router,
+    user_router,
+)
+
+load_dotenv()
+
+app = FastAPI(title="Client Portal API")
+
+cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.include_router(auth_router)
+app.include_router(clients_router)
+app.include_router(target_sites_router)
+app.include_router(guest_posts_router)
+app.include_router(admin_guest_posts_router)
+app.include_router(user_router)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": str(exc.detail)})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"ok": False, "error": "validation_error", "details": exc.errors()})
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"ok": True}

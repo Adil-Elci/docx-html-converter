@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+requests
+python-multipart
+mammoth
+beautifulsoup4
+lxml
+python-dotenv
+anthropic

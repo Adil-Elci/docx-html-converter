@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "website_backend"))
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from api.server import slugify
 

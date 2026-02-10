@@ -1,1 +1,2 @@
--r website_backend/requirements.txt
+-r converter/requirements.txt
+-r portal_backend/requirements.txt

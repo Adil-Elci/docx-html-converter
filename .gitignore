@@ -3,7 +3,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
-backend/.env
-frontend/.env
+converter/.env
+portal_backend/.env
+portal_frontend/.env
 .venv/
 node_modules/

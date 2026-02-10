@@ -1,14 +1,8 @@
 fastapi
 uvicorn
 pydantic
-requests
-python-multipart
-mammoth
-beautifulsoup4
-lxml
 pytest
 python-dotenv
-anthropic
 sqlalchemy
 psycopg2-binary
 passlib[bcrypt]

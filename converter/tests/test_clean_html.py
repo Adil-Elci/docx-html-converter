@@ -3,7 +3,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "website_backend"))
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from api.models import ConvertOptions
 from api.server import sanitize_html

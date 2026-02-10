@@ -1,3 +1,25 @@
+# Elci Services (Local Dev)
+
+This repo now contains four separate services:
+- `converter/` (document conversion API)
+- `portal_backend/` (client portal API)
+- `portal_frontend/` (client portal UI)
+- `db/` (database migrations)
+
+## Portal Backend (quick run)
+```bash
+cd portal_backend
+pip install -r requirements.txt
+uvicorn api.server:app --reload --port 8001
+```
+
+## Portal Frontend (quick run)
+```bash
+cd portal_frontend
+npm install
+npm run dev
+```
+
 # Local Guest Post Conversion Service
 
 ## What it does
@@ -77,15 +99,16 @@ curl -X POST http://localhost:8000/convert \
 
 ## How to run locally
 ```bash
-cd website_backend
+cd converter
 python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ## LLM configuration
-Set `ANTHROPIC_API_KEY` in your environment (or `website_backend/.env`) to enable slug and image prompt generation.
+Set `ANTHROPIC_API_KEY` in your environment (or `converter/.env`) to enable slug and image prompt generation.
 
 ## How to run tests
 ```bash
+cd converter
 pytest
 ```
 

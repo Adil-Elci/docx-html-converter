@@ -88,14 +88,6 @@ from pydantic import ValidationError
 from .llm.image_prompt import generate_image_prompt
 from .llm.slug import generate_slug
 from .models import ConvertDebug, ConvertOptions, ConvertRequest, ConvertResponse, ErrorResponse
-from .routers import (
-    admin_guest_posts_router,
-    auth_router,
-    clients_router,
-    guest_posts_router,
-    target_sites_router,
-    user_router,
-)
 
 load_dotenv()
 
@@ -131,12 +123,6 @@ if cors_origins:
         allow_headers=["*"],
     )
 
-app.include_router(auth_router)
-app.include_router(clients_router)
-app.include_router(target_sites_router)
-app.include_router(guest_posts_router)
-app.include_router(admin_guest_posts_router)
-app.include_router(user_router)
 
 
 @app.exception_handler(HTTPException)

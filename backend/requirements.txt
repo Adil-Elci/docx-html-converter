@@ -9,3 +9,8 @@ lxml
 pytest
 python-dotenv
 anthropic
+sqlalchemy
+psycopg2-binary
+passlib[bcrypt]
+pyjwt
+email-validator

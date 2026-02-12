@@ -9,12 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .routers import (
-    admin_guest_posts_router,
-    auth_router,
+    client_site_access_router,
     clients_router,
-    guest_posts_router,
-    target_sites_router,
-    user_router,
+    jobs_router,
+    site_credentials_router,
+    sites_router,
+    submissions_router,
 )
 
 load_dotenv()
@@ -31,12 +31,12 @@ if cors_origins:
         allow_headers=["*"],
     )
 
-app.include_router(auth_router)
 app.include_router(clients_router)
-app.include_router(target_sites_router)
-app.include_router(guest_posts_router)
-app.include_router(admin_guest_posts_router)
-app.include_router(user_router)
+app.include_router(sites_router)
+app.include_router(site_credentials_router)
+app.include_router(client_site_access_router)
+app.include_router(submissions_router)
+app.include_router(jobs_router)
 
 
 @app.exception_handler(HTTPException)

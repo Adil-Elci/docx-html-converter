@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from ..db import get_db
+from ..portal_models import Site
+from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
+
+router = APIRouter(prefix="/sites", tags=["sites"])
+
+
+def _site_to_out(site: Site) -> SiteOut:
+    return SiteOut(
+        id=site.id,
+        name=site.name,
+        site_url=site.site_url,
+        wp_rest_base=site.wp_rest_base,
+        status=site.status,
+        created_at=site.created_at,
+        updated_at=site.updated_at,
+    )
+
+
+@router.get("", response_model=List[SiteOut])
+def list_sites(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+) -> List[SiteOut]:
+    query = db.query(Site)
+    if status_filter:
+        query = query.filter(Site.status == status_filter.strip().lower())
+    sites = query.order_by(Site.created_at.desc()).all()
+    return [_site_to_out(site) for site in sites]
+
+
+@router.post("", response_model=SiteOut, status_code=status.HTTP_201_CREATED)
+def create_site(
+    payload: SiteCreate,
+    db: Session = Depends(get_db),
+) -> SiteOut:
+    site = Site(
+        name=payload.name,
+        site_url=payload.site_url,
+        wp_rest_base=payload.wp_rest_base,
+        status=payload.status,
+    )
+    db.add(site)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Site URL already exists.") from exc
+    db.refresh(site)
+    return _site_to_out(site)
+
+
+@router.patch("/{site_id}", response_model=SiteOut)
+def update_site(
+    site_id: UUID,
+    payload: SiteUpdate,
+    db: Session = Depends(get_db),
+) -> SiteOut:
+    site = db.query(Site).filter(Site.id == site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found.")
+
+    if payload.name is not None:
+        site.name = payload.name
+    if payload.site_url is not None:
+        site.site_url = payload.site_url
+    if payload.wp_rest_base is not None:
+        site.wp_rest_base = payload.wp_rest_base
+    if payload.status is not None:
+        site.status = payload.status
+
+    db.add(site)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Site URL already exists.") from exc
+    db.refresh(site)
+    return _site_to_out(site)

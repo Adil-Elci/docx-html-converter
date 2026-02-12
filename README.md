@@ -4,7 +4,7 @@ This repo now contains four separate services:
 - `converter/` (document conversion API)
 - `portal_backend/` (client portal API)
 - `portal_frontend/` (client portal UI)
-- `db/` (database migrations)
+- `migrations/` + `init.sql` (database schema and migrations)
 
 ## Portal Backend (quick run)
 ```bash

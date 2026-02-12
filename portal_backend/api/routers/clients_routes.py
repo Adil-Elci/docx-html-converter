@@ -4,12 +4,12 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import require_admin
 from ..db import get_db
-from ..portal_models import Client, User
-from ..portal_schemas import ClientOut, ClientUpdate
+from ..portal_models import Client
+from ..portal_schemas import ClientCreate, ClientOut, ClientUpdate
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -18,8 +18,9 @@ def _client_to_out(client: Client) -> ClientOut:
     return ClientOut(
         id=client.id,
         name=client.name,
-        website_domain=client.website_domain,
-        active=client.active,
+        primary_domain=client.primary_domain,
+        backlink_url=client.backlink_url,
+        status=client.status,
         created_at=client.created_at,
         updated_at=client.updated_at,
     )
@@ -27,15 +28,35 @@ def _client_to_out(client: Client) -> ClientOut:
 
 @router.get("", response_model=List[ClientOut])
 def list_clients(
-    active: Optional[bool] = Query(default=None),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> List[ClientOut]:
     query = db.query(Client)
-    if active is not None:
-        query = query.filter(Client.active.is_(active))
+    if status_filter:
+        query = query.filter(Client.status == status_filter.strip().lower())
     clients = query.order_by(Client.created_at.desc()).all()
     return [_client_to_out(client) for client in clients]
+
+
+@router.post("", response_model=ClientOut, status_code=status.HTTP_201_CREATED)
+def create_client(
+    payload: ClientCreate,
+    db: Session = Depends(get_db),
+) -> ClientOut:
+    client = Client(
+        name=payload.name,
+        primary_domain=payload.primary_domain,
+        backlink_url=payload.backlink_url,
+        status=payload.status,
+    )
+    db.add(client)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Client conflict.") from exc
+    db.refresh(client)
+    return _client_to_out(client)
 
 
 @router.patch("/{client_id}", response_model=ClientOut)
@@ -43,17 +64,20 @@ def update_client(
     client_id: UUID,
     payload: ClientUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> ClientOut:
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found.")
+
     if payload.name is not None:
         client.name = payload.name
-    if payload.website_domain is not None:
-        client.website_domain = payload.website_domain
-    if payload.active is not None:
-        client.active = payload.active
+    if payload.primary_domain is not None:
+        client.primary_domain = payload.primary_domain
+    if payload.backlink_url is not None:
+        client.backlink_url = payload.backlink_url
+    if payload.status is not None:
+        client.status = payload.status
+
     db.add(client)
     db.commit()
     db.refresh(client)

@@ -4,7 +4,12 @@ This repo now contains four separate services:
 - `converter/` (document conversion API)
 - `portal_backend/` (client portal API)
 - `portal_frontend/` (client portal UI)
-- `migrations/` + `init.sql` (database schema and migrations)
+- `portal_backend/alembic/` (deploy-time schema migrations)
+
+Migration ownership:
+- Only `portal_backend` runs migrations on deploy.
+- Converter never runs Alembic migrations.
+- Database container never runs Alembic migrations.
 
 ## Portal Backend (quick run)
 ```bash

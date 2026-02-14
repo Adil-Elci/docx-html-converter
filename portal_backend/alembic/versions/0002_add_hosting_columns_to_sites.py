@@ -1,6 +1,6 @@
 """add hosting columns to sites
 
-Revision ID: 0002_add_hosting_columns_to_sites
+Revision ID: 0002_hosting_cols_sites
 Revises: 0001_initial_schema
 Create Date: 2026-02-14 00:00:00.000000
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0002_add_hosting_columns_to_sites"
+revision = "0002_hosting_cols_sites"
 down_revision = "0001_initial_schema"
 branch_labels = None
 depends_on = None

@@ -87,10 +87,21 @@ class SiteCreate(BaseModel):
     name: str
     site_url: str
     wp_rest_base: str = "/wp-json/wp/v2"
+    hosting_provider: Optional[str] = None
+    hosting_panel: Optional[str] = None
     status: str = "active"
 
     @validator("name", "site_url", "wp_rest_base")
     def non_empty_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value must not be empty.")
+        return cleaned
+
+    @validator("hosting_provider", "hosting_panel")
+    def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Value must not be empty.")
@@ -108,9 +119,11 @@ class SiteUpdate(BaseModel):
     name: Optional[str] = None
     site_url: Optional[str] = None
     wp_rest_base: Optional[str] = None
+    hosting_provider: Optional[str] = None
+    hosting_panel: Optional[str] = None
     status: Optional[str] = None
 
-    @validator("name", "site_url", "wp_rest_base")
+    @validator("name", "site_url", "wp_rest_base", "hosting_provider", "hosting_panel")
     def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
@@ -134,6 +147,8 @@ class SiteOut(BaseModel):
     name: str
     site_url: str
     wp_rest_base: str
+    hosting_provider: Optional[str]
+    hosting_panel: Optional[str]
     status: str
     created_at: datetime
     updated_at: datetime

@@ -15,6 +15,8 @@ const emptySiteForm = () => ({
   name: "",
   site_url: "",
   wp_rest_base: "/wp-json/wp/v2",
+  hosting_provider: "",
+  hosting_panel: "",
   status: "active",
 });
 
@@ -173,8 +175,13 @@ export default function App() {
 
   const createSite = async (event) => {
     event.preventDefault();
+    const payload = {
+      ...siteForm,
+      hosting_provider: siteForm.hosting_provider.trim() || null,
+      hosting_panel: siteForm.hosting_panel.trim() || null,
+    };
     try {
-      await api.post("/sites", siteForm);
+      await api.post("/sites", payload);
       setSiteForm(emptySiteForm());
       await loadAll();
     } catch (err) {
@@ -423,6 +430,20 @@ export default function App() {
               />
             </div>
             <div>
+              <label>Hosting Provider</label>
+              <input
+                value={siteForm.hosting_provider}
+                onChange={(e) => setSiteForm((prev) => ({ ...prev, hosting_provider: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label>Hosting Panel</label>
+              <input
+                value={siteForm.hosting_panel}
+                onChange={(e) => setSiteForm((prev) => ({ ...prev, hosting_panel: e.target.value }))}
+              />
+            </div>
+            <div>
               <label>Status</label>
               <select value={siteForm.status} onChange={(e) => setSiteForm((prev) => ({ ...prev, status: e.target.value }))}>
                 <option value="active">active</option>
@@ -441,6 +462,11 @@ export default function App() {
                   <div>
                     <div>{site.name}</div>
                     <div className="status">{site.site_url}</div>
+                    {site.hosting_provider || site.hosting_panel ? (
+                      <div className="status">
+                        {[site.hosting_provider, site.hosting_panel].filter(Boolean).join(" | ")}
+                      </div>
+                    ) : null}
                   </div>
                   <button className="btn small" type="button" onClick={() => toggleSiteStatus(site)}>
                     {site.status}

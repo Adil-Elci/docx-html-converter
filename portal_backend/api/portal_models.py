@@ -39,6 +39,8 @@ class Site(Base):
     name = Column(Text, nullable=False)
     site_url = Column(Text, nullable=False, unique=True)
     wp_rest_base = Column(Text, nullable=False, default="/wp-json/wp/v2")
+    hosting_provider = Column(Text, nullable=True)
+    hosting_panel = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="active")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

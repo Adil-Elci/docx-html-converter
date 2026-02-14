@@ -5,6 +5,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine.url import make_url
 
 from api.portal_models import Base
 
@@ -16,6 +17,12 @@ if config.config_file_name is not None:
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set.")
+parsed_url = make_url(DATABASE_URL)
+db_host = (parsed_url.host or "").strip().lower()
+if db_host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+    raise RuntimeError(
+        "DATABASE_URL must point to the production database; localhost/loopback hosts are not allowed."
+    )
 
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 

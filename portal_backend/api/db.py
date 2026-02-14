@@ -5,6 +5,7 @@ from typing import Generator, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import sessionmaker
 
 _ENGINE: Optional[Engine] = None
@@ -15,6 +16,12 @@ def _get_database_url() -> str:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise RuntimeError("DATABASE_URL is not set.")
+    parsed_url = make_url(database_url)
+    db_host = (parsed_url.host or "").strip().lower()
+    if db_host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+        raise RuntimeError(
+            "DATABASE_URL must point to the production database; localhost/loopback hosts are not allowed."
+        )
     return database_url
 
 

@@ -1,4 +1,4 @@
-# Elci Services (Local Dev)
+# Elci Services
 
 This repo now contains four separate services:
 - `converter/` (document conversion API)
@@ -15,8 +15,14 @@ Migration ownership:
 ```bash
 cd portal_backend
 pip install -r requirements.txt
+export DATABASE_URL="postgresql://<prod-user>:<prod-password>@<prod-host>:5432/<prod-db>"
+alembic upgrade head
 uvicorn api.server:app --reload --port 8001
 ```
+
+Database policy:
+- `DATABASE_URL` must always target the live/production Postgres instance.
+- Localhost/loopback database URLs are not allowed.
 
 ## Portal Frontend (quick run)
 ```bash

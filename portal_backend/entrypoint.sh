@@ -12,8 +12,15 @@ python - <<'PY'
 import os
 import time
 import psycopg2
+from urllib.parse import urlparse
 
 database_url = os.environ["DATABASE_URL"]
+db_host = (urlparse(database_url).hostname or "").strip().lower()
+if db_host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+    raise RuntimeError(
+        "DATABASE_URL must point to the production database; localhost/loopback hosts are not allowed."
+    )
+
 max_wait_seconds = int(os.getenv("DB_WAIT_TIMEOUT_SECONDS", "60"))
 deadline = time.time() + max_wait_seconds
 

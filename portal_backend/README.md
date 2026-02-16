@@ -63,6 +63,7 @@ Recommended operations:
 ## Make.com Replacement Webhook
 Endpoint:
 - `POST /automation/guest-post-webhook`
+- Content types supported: `application/json`, `application/x-www-form-urlencoded`, `multipart/form-data`
 
 Supported payload fields:
 - `source_type`: `google-doc`, `word-doc`, or `docx-upload`

@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ..automation_service import (
@@ -330,11 +331,48 @@ def _enqueue_job(
     return submission, job, False
 
 
+async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
+    content_type = (request.headers.get("content-type") or "").lower()
+    data: Dict[str, object]
+
+    if "application/json" in content_type:
+        parsed_json = await request.json()
+        if not isinstance(parsed_json, dict):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="JSON body must be an object.")
+        data = dict(parsed_json)
+    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form_data = await request.form()
+        data = {key: value for key, value in form_data.items()}
+    else:
+        # Fallback attempt to support callers with missing/incorrect content-type.
+        raw_body = await request.body()
+        if raw_body.strip().startswith(b"{"):
+            parsed_json = await request.json()
+            if not isinstance(parsed_json, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Request body must be a JSON object.",
+                )
+            data = dict(parsed_json)
+        else:
+            form_data = await request.form()
+            data = {key: value for key, value in form_data.items()}
+
+    try:
+        return AutomationGuestPostIn(**data)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "validation_error", "details": exc.errors()},
+        ) from exc
+
+
 @router.post("/guest-post-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)
-def process_guest_post_webhook(
-    payload: AutomationGuestPostIn,
+async def process_guest_post_webhook(
+    request: Request,
     db: Session = Depends(get_db),
 ) -> AutomationGuestPostOut:
+    payload = await _parse_automation_payload(request)
     logger.info(
         "automation.webhook.received mode=%s source_type=%s target_site=%s idempotency_key=%s",
         payload.execution_mode,

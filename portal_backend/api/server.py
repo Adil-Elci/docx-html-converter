@@ -5,6 +5,7 @@ import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -79,7 +80,17 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(status_code=422, content={"ok": False, "error": "validation_error", "details": exc.errors()})
+    sanitized_errors = []
+    for item in exc.errors():
+        if not isinstance(item, dict):
+            sanitized_errors.append(str(item))
+            continue
+        safe_item = dict(item)
+        raw_input = safe_item.get("input")
+        if isinstance(raw_input, (bytes, bytearray)):
+            safe_item["input"] = raw_input.decode("utf-8", errors="replace")
+        sanitized_errors.append(jsonable_encoder(safe_item))
+    return JSONResponse(status_code=422, content={"ok": False, "error": "validation_error", "details": sanitized_errors})
 
 
 @app.get("/health")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -17,6 +18,8 @@ from .automation_service import (
 )
 from .portal_models import Asset, Job, JobEvent, Site, SiteCredential, Submission
 
+logger = logging.getLogger("portal_backend.automation")
+
 
 class AutomationJobWorker:
     def __init__(self, db_sessionmaker: sessionmaker):
@@ -27,6 +30,7 @@ class AutomationJobWorker:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        logger.info("automation.worker.start")
         self._thread = threading.Thread(target=self._run, name="automation-job-worker", daemon=True)
         self._thread.start()
 
@@ -34,6 +38,7 @@ class AutomationJobWorker:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=5)
+        logger.info("automation.worker.stop")
 
     def _run(self) -> None:
         poll_interval = _read_int_env("AUTOMATION_WORKER_POLL_SECONDS", 2)
@@ -41,6 +46,7 @@ class AutomationJobWorker:
             try:
                 processed = self._process_next_job()
             except Exception:
+                logger.exception("automation.worker.loop_error")
                 processed = False
             if not processed:
                 self._stop_event.wait(poll_interval)
@@ -63,6 +69,7 @@ class AutomationJobWorker:
             session.add(job)
             session.commit()
             job_id = job.id
+            logger.info("automation.worker.claimed job_id=%s attempt=%s", job_id, job.attempt_count)
 
         self._process_claimed_job(job_id)
         return True
@@ -72,9 +79,11 @@ class AutomationJobWorker:
         try:
             run_config = get_runtime_config()
         except AutomationError as exc:
+            logger.warning("automation.worker.config_error job_id=%s error=%s", job_id, str(exc))
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
             return
         if not run_config["leonardo_api_key"]:
+            logger.warning("automation.worker.missing_leonardo_key job_id=%s", job_id)
             self._mark_failed_or_retry(
                 job_id,
                 max_attempts=max_attempts,
@@ -120,7 +129,9 @@ class AutomationJobWorker:
                 post_event_type=pipeline_result["post_event_type"],
                 leonardo_model_id=run_config["leonardo_model_id"],
             )
+            logger.info("automation.worker.succeeded job_id=%s", job_id)
         except (AutomationError, RuntimeError) as exc:
+            logger.warning("automation.worker.failed job_id=%s error=%s", job_id, str(exc))
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
 
     def _load_job_payload(self, job_id: UUID) -> Dict[str, Any]:
@@ -281,6 +292,13 @@ class AutomationJobWorker:
                 )
             )
             session.commit()
+            logger.warning(
+                "automation.worker.marked job_id=%s status=%s attempt=%s max_attempts=%s",
+                job_id,
+                job.job_status,
+                attempts,
+                max_attempts,
+            )
 
 
 def _read_int_env(name: str, default: int) -> int:

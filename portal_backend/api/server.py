@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -45,9 +46,16 @@ app.include_router(submissions_router)
 app.include_router(jobs_router)
 
 
+def _configure_automation_logger() -> None:
+    level_name = os.getenv("AUTOMATION_LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.getLogger("portal_backend.automation").setLevel(level)
+
+
 @app.on_event("startup")
 def verify_schema_state_on_startup() -> None:
     global _automation_worker
+    _configure_automation_logger()
     if should_verify_db_head_on_startup():
         verify_db_is_at_head()
     worker_enabled = os.getenv("AUTOMATION_WORKER_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}

@@ -98,3 +98,14 @@ Runtime env vars:
 - `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)
 - `AUTOMATION_SHADOW_WEBHOOK_URL` (optional Make webhook URL for shadow mode)
+- `AUTOMATION_LOG_LEVEL` (default: `INFO`)
+
+Debugging workflow (recommended):
+- Keep `execution_mode=async` in production; webhook returns `job_id` and `submission_id`.
+- Query job status by idempotency key / job / submission:
+  - `GET /automation/status?idempotency_key=<your_submission_key>`
+  - `GET /automation/status?job_id=<job_uuid>`
+  - `GET /automation/status?submission_id=<submission_uuid>`
+- Inspect raw job events:
+  - `GET /jobs/<job_uuid>/events`
+- For immediate error feedback while testing, temporarily use `execution_mode=sync` so API returns upstream errors directly.

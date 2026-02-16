@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Dict, Optional, Set, Tuple
 from urllib.parse import urlparse
 from uuid import UUID
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..automation_service import (
@@ -17,14 +18,17 @@ from ..automation_service import (
     run_guest_post_pipeline,
 )
 from ..db import get_db
-from ..portal_models import Client, ClientSiteAccess, Job, Site, SiteCredential, Submission
+from ..portal_models import Client, ClientSiteAccess, Job, JobEvent, Site, SiteCredential, Submission
 from ..portal_schemas import (
     AutomationGuestPostIn,
     AutomationGuestPostOut,
     AutomationGuestPostResultOut,
+    AutomationStatusEventOut,
+    AutomationStatusOut,
 )
 
 router = APIRouter(prefix="/automation", tags=["automation"])
+logger = logging.getLogger("portal_backend.automation")
 
 
 def _normalized_host(value: str) -> Optional[str]:
@@ -236,6 +240,7 @@ def _dispatch_shadow_webhook(payload: AutomationGuestPostIn) -> bool:
     try:
         response = requests.post(webhook_url, json=body, timeout=10)
     except requests.RequestException:
+        logger.exception("automation.shadow.dispatch_failed")
         return False
     return response.status_code < 400
 
@@ -330,6 +335,13 @@ def process_guest_post_webhook(
     payload: AutomationGuestPostIn,
     db: Session = Depends(get_db),
 ) -> AutomationGuestPostOut:
+    logger.info(
+        "automation.webhook.received mode=%s source_type=%s target_site=%s idempotency_key=%s",
+        payload.execution_mode,
+        payload.source_type,
+        payload.target_site,
+        payload.idempotency_key,
+    )
     try:
         config = get_runtime_config()
     except AutomationError as exc:
@@ -380,6 +392,14 @@ def process_guest_post_webhook(
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
             shadow_dispatched = _dispatch_shadow_webhook(payload)
+        logger.info(
+            "automation.webhook.enqueued mode=%s submission_id=%s job_id=%s deduplicated=%s shadow_dispatched=%s",
+            payload.execution_mode,
+            submission.id,
+            job.id,
+            deduplicated,
+            shadow_dispatched,
+        )
         return AutomationGuestPostOut(
             ok=True,
             execution_mode=payload.execution_mode,
@@ -411,6 +431,7 @@ def process_guest_post_webhook(
             poll_interval_seconds=config["poll_interval_seconds"],
         )
     except AutomationError as exc:
+        logger.warning("automation.webhook.sync_failed error=%s", str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     result = AutomationGuestPostResultOut(
@@ -426,6 +447,11 @@ def process_guest_post_webhook(
         site_id=site.id,
         site_credential_id=credential.id,
     )
+    logger.info(
+        "automation.webhook.sync_succeeded site_id=%s wp_post_id=%s",
+        site.id,
+        result.wp_post_id,
+    )
     return AutomationGuestPostOut(
         ok=True,
         execution_mode="sync",
@@ -433,3 +459,94 @@ def process_guest_post_webhook(
         shadow_dispatched=False,
         result=result,
     )
+
+
+def _status_from_submission(
+    db: Session,
+    submission: Submission,
+    *,
+    idempotency_key: Optional[str],
+) -> AutomationStatusOut:
+    job = (
+        db.query(Job)
+        .filter(Job.submission_id == submission.id)
+        .order_by(Job.created_at.desc())
+        .first()
+    )
+    events: list[AutomationStatusEventOut] = []
+    if job is not None:
+        event_rows = (
+            db.query(JobEvent)
+            .filter(JobEvent.job_id == job.id)
+            .order_by(JobEvent.created_at.asc())
+            .all()
+        )
+        events = [
+            AutomationStatusEventOut(
+                event_type=row.event_type,
+                payload=row.payload,
+                created_at=row.created_at,
+            )
+            for row in event_rows
+        ]
+
+    return AutomationStatusOut(
+        found=True,
+        idempotency_key=idempotency_key,
+        submission_id=submission.id,
+        submission_status=submission.status,
+        job_id=job.id if job else None,
+        job_status=job.job_status if job else None,
+        attempt_count=job.attempt_count if job else None,
+        last_error=job.last_error if job else None,
+        wp_post_id=job.wp_post_id if job else None,
+        wp_post_url=job.wp_post_url if job else None,
+        events=events,
+    )
+
+
+@router.get("/status", response_model=AutomationStatusOut, status_code=status.HTTP_200_OK)
+def get_automation_status(
+    idempotency_key: Optional[str] = Query(default=None),
+    job_id: Optional[UUID] = Query(default=None),
+    submission_id: Optional[UUID] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> AutomationStatusOut:
+    if not any([idempotency_key, job_id, submission_id]):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide at least one query parameter: idempotency_key, job_id, or submission_id.",
+        )
+
+    if job_id is not None:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
+        submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
+        if not submission:
+            return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
+        return _status_from_submission(db, submission, idempotency_key=idempotency_key)
+
+    if submission_id is not None:
+        submission = db.query(Submission).filter(Submission.id == submission_id).first()
+        if not submission:
+            return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
+        return _status_from_submission(db, submission, idempotency_key=idempotency_key)
+
+    cleaned_key = (idempotency_key or "").strip()
+    if not cleaned_key:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="idempotency_key is empty.")
+
+    marker = f"idempotency_key={cleaned_key}"
+    candidates = (
+        db.query(Submission)
+        .filter(Submission.notes.contains(marker))
+        .order_by(Submission.created_at.desc())
+        .all()
+    )
+    for submission in candidates:
+        note_map = _extract_note_map(submission.notes)
+        if note_map.get("idempotency_key") == cleaned_key:
+            return _status_from_submission(db, submission, idempotency_key=cleaned_key)
+
+    return AutomationStatusOut(found=False, idempotency_key=cleaned_key)

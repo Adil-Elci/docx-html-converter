@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, root_validator, validator
@@ -589,3 +589,23 @@ class AutomationGuestPostOut(BaseModel):
     job_status: Optional[str] = None
     shadow_dispatched: bool = False
     result: Optional[AutomationGuestPostResultOut] = None
+
+
+class AutomationStatusEventOut(BaseModel):
+    event_type: str
+    payload: Dict[str, Any]
+    created_at: datetime
+
+
+class AutomationStatusOut(BaseModel):
+    found: bool
+    idempotency_key: Optional[str] = None
+    submission_id: Optional[UUID] = None
+    submission_status: Optional[str] = None
+    job_id: Optional[UUID] = None
+    job_status: Optional[str] = None
+    attempt_count: Optional[int] = None
+    last_error: Optional[str] = None
+    wp_post_id: Optional[int] = None
+    wp_post_url: Optional[str] = None
+    events: List[AutomationStatusEventOut] = Field(default_factory=list)

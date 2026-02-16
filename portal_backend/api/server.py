@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .migration_guard import should_verify_db_head_on_startup, verify_db_is_at_head
 from .routers import (
     client_site_access_router,
     clients_router,
@@ -37,6 +38,12 @@ app.include_router(site_credentials_router)
 app.include_router(client_site_access_router)
 app.include_router(submissions_router)
 app.include_router(jobs_router)
+
+
+@app.on_event("startup")
+def verify_schema_state_on_startup() -> None:
+    if should_verify_db_head_on_startup():
+        verify_db_is_at_head()
 
 
 @app.exception_handler(HTTPException)

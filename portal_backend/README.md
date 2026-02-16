@@ -22,6 +22,16 @@ uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 - Container startup is handled by `entrypoint.sh`.
 - Docker image uses `ENTRYPOINT ["/app/entrypoint.sh"]`.
 - For Dokploy, use the Dockerfile and do not override the run command.
+- Keep `REQUIRE_DB_AT_HEAD=true` (default) so API startup fails if DB is not at Alembic head.
+
+Dokploy settings that enforce migrations on every backend deploy:
+- Service root: `portal_backend/` (or Dockerfile path `portal_backend/Dockerfile` from repo root).
+- Build type: Dockerfile.
+- Dockerfile: `portal_backend/Dockerfile`.
+- Start command override: empty.
+- Entrypoint override: empty.
+- Required env: `DATABASE_URL` (live DB), optional `MIGRATION_LOCK_KEY`, `DB_WAIT_TIMEOUT_SECONDS`.
+- Verification: check deploy logs for `alembic upgrade head` and `Postgres is reachable`.
 
 ## One-way Google Sheets Sync (DB -> Sheets only)
 Use `scripts/sync_db_to_sheets.py` to export selected safe columns from Postgres to Google Sheets.

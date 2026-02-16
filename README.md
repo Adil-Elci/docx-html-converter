@@ -10,6 +10,7 @@ Migration ownership:
 - Only `portal_backend` runs migrations on deploy.
 - Converter never runs Alembic migrations.
 - Database container never runs Alembic migrations.
+- Backend deploys must run from `portal_backend/` Dockerfile entrypoint to execute `alembic upgrade head`.
 
 ## Portal Backend (quick run)
 ```bash

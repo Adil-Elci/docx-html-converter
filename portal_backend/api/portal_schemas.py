@@ -492,6 +492,7 @@ class AutomationGuestPostIn(BaseModel):
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
     client_id: Optional[UUID] = None
+    client_name: Optional[str] = None
     idempotency_key: Optional[str] = None
     execution_mode: str = "async"
     backlink_placement: str = "intro"
@@ -512,7 +513,7 @@ class AutomationGuestPostIn(BaseModel):
             raise ValueError("target_site must not be empty.")
         return cleaned
 
-    @validator("doc_url", "docx_file")
+    @validator("doc_url", "docx_file", "client_name")
     def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value

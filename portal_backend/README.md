@@ -70,7 +70,9 @@ Supported payload fields:
 - `execution_mode`: `sync`, `async`, `shadow` (default: `async`)
 - `doc_url`: required for `google-doc`
 - `docx_file`: required for `word-doc`/`docx-upload` (raw URL or HTML anchor snippet with `href=...`)
-- `client_id` (required for `async`/`shadow`, unless `AUTOMATION_DEFAULT_CLIENT_ID` is set)
+- `client_id` (preferred for `async`/`shadow`)
+- `client_name` (supported for `async`/`shadow`; must uniquely match one active client)
+- `client_id` or `client_name` is required for `async`/`shadow`, unless `AUTOMATION_DEFAULT_CLIENT_ID` is set
 - `idempotency_key` (optional but recommended for deduplication in async mode)
 - `backlink_placement` (optional, default: `intro`)
 - `post_status` (optional): `draft` or `publish`

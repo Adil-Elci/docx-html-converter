@@ -86,12 +86,40 @@ def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
 
 def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
     client_id = payload.client_id
+    client_name = (payload.client_name or "").strip()
+
+    if client_id is not None:
+        client = db.query(Client).filter(Client.id == client_id, Client.status == "active").first()
+        if not client:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client is not active.")
+        return client
+
+    if client_name:
+        candidates = (
+            db.query(Client)
+            .filter(Client.status == "active")
+            .order_by(Client.created_at.asc())
+            .all()
+        )
+        matches = [candidate for candidate in candidates if (candidate.name or "").strip().lower() == client_name.lower()]
+        if not matches:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No active client matches client_name '{client_name}'.",
+            )
+        if len(matches) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Multiple active clients match client_name '{client_name}'. Provide client_id instead.",
+            )
+        return matches[0]
+
     if client_id is None:
         fallback = os.getenv("AUTOMATION_DEFAULT_CLIENT_ID", "").strip()
         if not fallback:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="client_id is required for async/shadow mode or set AUTOMATION_DEFAULT_CLIENT_ID.",
+                detail="client_id or client_name is required for async/shadow mode, or set AUTOMATION_DEFAULT_CLIENT_ID.",
             )
         try:
             client_id = UUID(fallback)

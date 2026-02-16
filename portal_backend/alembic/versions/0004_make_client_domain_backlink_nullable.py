@@ -1,6 +1,6 @@
 """make client domain/backlink nullable
 
-Revision ID: 0004_client_domain_backlink_nullable
+Revision ID: 0004_client_domain_nullable
 Revises: 0003_contact_cols_clients
 Create Date: 2026-02-16 00:00:00.000000
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0004_client_domain_backlink_nullable"
+revision = "0004_client_domain_nullable"
 down_revision = "0003_contact_cols_clients"
 branch_labels = None
 depends_on = None

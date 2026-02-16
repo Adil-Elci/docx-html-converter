@@ -484,3 +484,107 @@ class AssetOut(BaseModel):
     storage_url: Optional[str]
     meta: Dict[str, Any]
     created_at: datetime
+
+
+class AutomationGuestPostIn(BaseModel):
+    source_type: str
+    target_site: str
+    doc_url: Optional[str] = None
+    docx_file: Optional[str] = None
+    client_id: Optional[UUID] = None
+    idempotency_key: Optional[str] = None
+    execution_mode: str = "async"
+    backlink_placement: str = "intro"
+    post_status: Optional[str] = None
+    author: Optional[int] = None
+
+    @validator("source_type")
+    def validate_source_type(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in {"google-doc", "word-doc", "docx-upload"}:
+            raise ValueError("source_type must be one of google-doc, word-doc, docx-upload.")
+        return cleaned
+
+    @validator("target_site")
+    def validate_target_site(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("target_site must not be empty.")
+        return cleaned
+
+    @validator("doc_url", "docx_file")
+    def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @validator("idempotency_key")
+    def optional_idempotency_key(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned[:200]
+
+    @validator("execution_mode")
+    def validate_execution_mode(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in {"sync", "async", "shadow"}:
+            raise ValueError("execution_mode must be sync, async, or shadow.")
+        return cleaned
+
+    @validator("backlink_placement")
+    def validate_backlink_placement(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in BACKLINK_PLACEMENTS:
+            raise ValueError("backlink_placement must be intro or conclusion.")
+        return cleaned
+
+    @validator("post_status")
+    def validate_post_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in POST_STATUSES:
+            raise ValueError("post_status must be draft or publish.")
+        return cleaned
+
+    @root_validator(skip_on_failure=True)
+    def validate_source_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        source_type = values.get("source_type")
+        doc_url = values.get("doc_url")
+        docx_file = values.get("docx_file")
+        if source_type == "google-doc" and not doc_url:
+            raise ValueError("doc_url is required for source_type=google-doc.")
+        if source_type in {"word-doc", "docx-upload"} and not docx_file:
+            raise ValueError("docx_file is required for source_type=word-doc/docx-upload.")
+        return values
+
+
+class AutomationGuestPostResultOut(BaseModel):
+    source_type: str
+    target_site: str
+    source_url: str
+    converter: Dict[str, Any]
+    generated_image_url: str
+    wp_media_id: int
+    wp_media_url: Optional[str]
+    wp_post_id: int
+    wp_post_url: Optional[str]
+    site_id: UUID
+    site_credential_id: UUID
+
+
+class AutomationGuestPostOut(BaseModel):
+    ok: bool = True
+    execution_mode: str
+    deduplicated: bool = False
+    submission_id: Optional[UUID] = None
+    job_id: Optional[UUID] = None
+    job_status: Optional[str] = None
+    shadow_dispatched: bool = False
+    result: Optional[AutomationGuestPostResultOut] = None

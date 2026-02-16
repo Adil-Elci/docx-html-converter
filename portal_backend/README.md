@@ -59,3 +59,40 @@ Optional:
 Recommended operations:
 - Schedule this script as a cron/worker job in Dokploy.
 - Share the Google Sheet with your team as viewer-only.
+
+## Make.com Replacement Webhook
+Endpoint:
+- `POST /automation/guest-post-webhook`
+
+Supported payload fields:
+- `source_type`: `google-doc`, `word-doc`, or `docx-upload`
+- `target_site`: domain/URL/site-id that maps to an active row in `sites`
+- `execution_mode`: `sync`, `async`, `shadow` (default: `async`)
+- `doc_url`: required for `google-doc`
+- `docx_file`: required for `word-doc`/`docx-upload` (raw URL or HTML anchor snippet with `href=...`)
+- `client_id` (required for `async`/`shadow`, unless `AUTOMATION_DEFAULT_CLIENT_ID` is set)
+- `idempotency_key` (optional but recommended for deduplication in async mode)
+- `backlink_placement` (optional, default: `intro`)
+- `post_status` (optional): `draft` or `publish`
+- `author` (optional): WordPress author ID override
+
+Execution behavior:
+- `sync`: processes immediately in request/response cycle.
+- `async`: queues in DB (`submissions` + `jobs`) and returns `job_id`.
+- `shadow`: same as `async`, and also forwards payload to `AUTOMATION_SHADOW_WEBHOOK_URL` if configured.
+
+Runtime env vars:
+- `AUTOMATION_CONVERTER_ENDPOINT` (default: `https://elci.live/convert`)
+- `LEONARDO_API_KEY` (required)
+- `LEONARDO_BASE_URL` (default: `https://cloud.leonardo.ai/api/rest/v1`)
+- `LEONARDO_MODEL_ID` (default: `1dd50843-d653-4516-a8e3-f0238ee453ff`)
+- `AUTOMATION_POST_AUTHOR_ID` (default: `4`)
+- `AUTOMATION_POST_STATUS` (default: `publish`)
+- `AUTOMATION_REQUEST_TIMEOUT_SECONDS` (default: `60`)
+- `AUTOMATION_IMAGE_POLL_TIMEOUT_SECONDS` (default: `90`)
+- `AUTOMATION_IMAGE_POLL_INTERVAL_SECONDS` (default: `2`)
+- `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
+- `AUTOMATION_WORKER_ENABLED` (default: `true`)
+- `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
+- `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)
+- `AUTOMATION_SHADOW_WEBHOOK_URL` (optional Make webhook URL for shadow mode)

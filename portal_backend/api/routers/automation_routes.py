@@ -1,0 +1,407 @@
+from __future__ import annotations
+
+import os
+from typing import Dict, Optional, Set, Tuple
+from urllib.parse import urlparse
+from uuid import UUID
+
+import requests
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from ..automation_service import (
+    AutomationError,
+    converter_target_from_site_url,
+    get_runtime_config,
+    resolve_source_url,
+    run_guest_post_pipeline,
+)
+from ..db import get_db
+from ..portal_models import Client, ClientSiteAccess, Job, Site, SiteCredential, Submission
+from ..portal_schemas import (
+    AutomationGuestPostIn,
+    AutomationGuestPostOut,
+    AutomationGuestPostResultOut,
+)
+
+router = APIRouter(prefix="/automation", tags=["automation"])
+
+
+def _normalized_host(value: str) -> Optional[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    with_scheme = raw if "://" in raw else f"https://{raw}"
+    host = (urlparse(with_scheme).hostname or "").strip().lower().rstrip(".")
+    return host or None
+
+
+def _host_variants(value: str) -> Set[str]:
+    host = _normalized_host(value)
+    if not host:
+        return set()
+    variants = {host}
+    if host.startswith("www."):
+        variants.add(host[4:])
+    else:
+        variants.add(f"www.{host}")
+    return variants
+
+
+def _resolve_site_by_target(db: Session, target_site: str) -> Site:
+    try:
+        site_uuid = UUID(target_site.strip())
+        site = db.query(Site).filter(Site.id == site_uuid, Site.status == "active").first()
+        if site:
+            return site
+    except ValueError:
+        pass
+
+    target_variants = _host_variants(target_site)
+    if not target_variants:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="target_site is invalid.")
+
+    sites = db.query(Site).filter(Site.status == "active").all()
+    for site in sites:
+        if _host_variants(site.site_url) & target_variants:
+            return site
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active site matches target_site.")
+
+
+def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
+    credential = (
+        db.query(SiteCredential)
+        .filter(SiteCredential.site_id == site_id, SiteCredential.enabled.is_(True))
+        .order_by(SiteCredential.created_at.desc())
+        .first()
+    )
+    if not credential:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No enabled site credential found for target site.",
+        )
+    return credential
+
+
+def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
+    client_id = payload.client_id
+    if client_id is None:
+        fallback = os.getenv("AUTOMATION_DEFAULT_CLIENT_ID", "").strip()
+        if not fallback:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="client_id is required for async/shadow mode or set AUTOMATION_DEFAULT_CLIENT_ID.",
+            )
+        try:
+            client_id = UUID(fallback)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AUTOMATION_DEFAULT_CLIENT_ID is invalid.",
+            ) from exc
+
+    client = db.query(Client).filter(Client.id == client_id, Client.status == "active").first()
+    if not client:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client is not active.")
+    return client
+
+
+def _require_client_site_access(db: Session, client_id: UUID, site_id: UUID) -> None:
+    access = (
+        db.query(ClientSiteAccess)
+        .filter(
+            ClientSiteAccess.client_id == client_id,
+            ClientSiteAccess.site_id == site_id,
+            ClientSiteAccess.enabled.is_(True),
+        )
+        .first()
+    )
+    if not access:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Client does not have enabled access to this site.",
+        )
+
+
+def _resolve_submission_source(source_type: str, source_url: str) -> Tuple[str, Optional[str], Optional[str]]:
+    if source_type == "google-doc":
+        return "google-doc", source_url, None
+    return "docx-upload", None, source_url
+
+
+def _resolve_converter_target(target_site: str, site_url: str) -> str:
+    target_host = _normalized_host(target_site)
+    if target_host:
+        return target_host
+    return converter_target_from_site_url(site_url)
+
+
+def _compose_submission_notes(idempotency_key: str, post_status: str, author_id: int) -> str:
+    return f"idempotency_key={idempotency_key};post_status={post_status};author_id={author_id}"
+
+
+def _extract_note_map(notes: Optional[str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not notes:
+        return out
+    for part in notes.split(";"):
+        item = part.strip()
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        out[key.strip().lower()] = value.strip()
+    return out
+
+
+def _build_idempotency_key(
+    *,
+    explicit_key: Optional[str],
+    client_id: UUID,
+    site_id: UUID,
+    source_type: str,
+    source_url: str,
+) -> str:
+    if explicit_key:
+        candidate = explicit_key.strip()
+    else:
+        candidate = f"{client_id}:{site_id}:{source_type}:{source_url}"
+    return candidate.replace(";", "_").replace("=", "_")[:200]
+
+
+def _find_existing_submission(
+    db: Session,
+    *,
+    client_id: UUID,
+    site_id: UUID,
+    source_type: str,
+    doc_url: Optional[str],
+    file_url: Optional[str],
+    idempotency_key: str,
+) -> Optional[Submission]:
+    query = db.query(Submission).filter(
+        Submission.client_id == client_id,
+        Submission.site_id == site_id,
+        Submission.source_type == source_type,
+    )
+    if doc_url is None:
+        query = query.filter(Submission.doc_url.is_(None))
+    else:
+        query = query.filter(Submission.doc_url == doc_url)
+    if file_url is None:
+        query = query.filter(Submission.file_url.is_(None))
+    else:
+        query = query.filter(Submission.file_url == file_url)
+
+    for submission in query.order_by(Submission.created_at.desc()).limit(20).all():
+        note_map = _extract_note_map(submission.notes)
+        if note_map.get("idempotency_key") == idempotency_key:
+            return submission
+    return None
+
+
+def _dispatch_shadow_webhook(payload: AutomationGuestPostIn) -> bool:
+    webhook_url = os.getenv("AUTOMATION_SHADOW_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return False
+    body = payload.dict()
+    try:
+        response = requests.post(webhook_url, json=body, timeout=10)
+    except requests.RequestException:
+        return False
+    return response.status_code < 400
+
+
+def _enqueue_job(
+    db: Session,
+    *,
+    payload: AutomationGuestPostIn,
+    source_type: str,
+    source_url: str,
+    site: Site,
+    client: Client,
+    post_status: str,
+    author_id: int,
+) -> Tuple[Submission, Job, bool]:
+    submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
+    idempotency_key = _build_idempotency_key(
+        explicit_key=payload.idempotency_key,
+        client_id=client.id,
+        site_id=site.id,
+        source_type=submission_source_type,
+        source_url=source_url,
+    )
+    notes = _compose_submission_notes(idempotency_key, post_status, author_id)
+
+    existing_submission = _find_existing_submission(
+        db,
+        client_id=client.id,
+        site_id=site.id,
+        source_type=submission_source_type,
+        doc_url=doc_url,
+        file_url=file_url,
+        idempotency_key=idempotency_key,
+    )
+    if existing_submission:
+        existing_job = (
+            db.query(Job)
+            .filter(Job.submission_id == existing_submission.id)
+            .order_by(Job.created_at.desc())
+            .first()
+        )
+        if existing_job:
+            if existing_job.job_status == "failed":
+                existing_job.job_status = "retrying"
+                existing_job.last_error = None
+                db.add(existing_job)
+                db.commit()
+                db.refresh(existing_job)
+            return existing_submission, existing_job, True
+        job = Job(
+            submission_id=existing_submission.id,
+            client_id=client.id,
+            site_id=site.id,
+            job_status="queued",
+            attempt_count=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return existing_submission, job, True
+
+    submission = Submission(
+        client_id=client.id,
+        site_id=site.id,
+        source_type=submission_source_type,
+        doc_url=doc_url,
+        file_url=file_url,
+        backlink_placement=payload.backlink_placement,
+        post_status=post_status,
+        status="queued",
+        notes=notes,
+    )
+    db.add(submission)
+    db.commit()
+    db.refresh(submission)
+
+    job = Job(
+        submission_id=submission.id,
+        client_id=client.id,
+        site_id=site.id,
+        job_status="queued",
+        attempt_count=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return submission, job, False
+
+
+@router.post("/guest-post-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)
+def process_guest_post_webhook(
+    payload: AutomationGuestPostIn,
+    db: Session = Depends(get_db),
+) -> AutomationGuestPostOut:
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    if not config["leonardo_api_key"]:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="LEONARDO_API_KEY is not set.")
+
+    post_status = payload.post_status or config["default_post_status"]
+    author_id = payload.author if payload.author is not None else config["default_author_id"]
+    if post_status not in {"draft", "publish"}:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTOMATION_POST_STATUS must be draft or publish.",
+        )
+    if author_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTOMATION_POST_AUTHOR_ID must be a positive integer.",
+        )
+
+    try:
+        normalized_source_type, source_url = resolve_source_url(
+            payload.source_type,
+            payload.doc_url,
+            payload.docx_file,
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    site = _resolve_site_by_target(db, payload.target_site)
+    credential = _resolve_enabled_credential(db, site.id)
+    converter_target_site = _resolve_converter_target(payload.target_site, site.site_url)
+
+    if payload.execution_mode in {"async", "shadow"}:
+        client = _resolve_client(db, payload)
+        _require_client_site_access(db, client.id, site.id)
+        submission, job, deduplicated = _enqueue_job(
+            db,
+            payload=payload,
+            source_type=normalized_source_type,
+            source_url=source_url,
+            site=site,
+            client=client,
+            post_status=post_status,
+            author_id=author_id,
+        )
+        shadow_dispatched = False
+        if payload.execution_mode == "shadow":
+            shadow_dispatched = _dispatch_shadow_webhook(payload)
+        return AutomationGuestPostOut(
+            ok=True,
+            execution_mode=payload.execution_mode,
+            deduplicated=deduplicated,
+            submission_id=submission.id,
+            job_id=job.id,
+            job_status=job.job_status,
+            shadow_dispatched=shadow_dispatched,
+            result=None,
+        )
+
+    try:
+        pipeline_result = run_guest_post_pipeline(
+            source_url=source_url,
+            target_site=converter_target_site,
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            existing_wp_post_id=None,
+            post_status=post_status,
+            author_id=author_id,
+            converter_endpoint=config["converter_endpoint"],
+            leonardo_api_key=config["leonardo_api_key"],
+            leonardo_base_url=config["leonardo_base_url"],
+            leonardo_model_id=config["leonardo_model_id"],
+            timeout_seconds=config["timeout_seconds"],
+            poll_timeout_seconds=config["poll_timeout_seconds"],
+            poll_interval_seconds=config["poll_interval_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    result = AutomationGuestPostResultOut(
+        source_type=normalized_source_type,
+        target_site=payload.target_site,
+        source_url=source_url,
+        converter=pipeline_result["converted"],
+        generated_image_url=pipeline_result["image_url"],
+        wp_media_id=int(pipeline_result["media_payload"]["id"]),
+        wp_media_url=pipeline_result["media_url"],
+        wp_post_id=int(pipeline_result["post_payload"]["id"]),
+        wp_post_url=pipeline_result["post_payload"].get("link"),
+        site_id=site.id,
+        site_credential_id=credential.id,
+    )
+    return AutomationGuestPostOut(
+        ok=True,
+        execution_mode="sync",
+        deduplicated=False,
+        shadow_dispatched=False,
+        result=result,
+    )

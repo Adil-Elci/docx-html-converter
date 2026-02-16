@@ -119,6 +119,8 @@ class AutomationJobWorker:
                 timeout_seconds=run_config["timeout_seconds"],
                 poll_timeout_seconds=run_config["poll_timeout_seconds"],
                 poll_interval_seconds=run_config["poll_interval_seconds"],
+                image_width=run_config["image_width"],
+                image_height=run_config["image_height"],
             )
             self._mark_success(
                 job_id,

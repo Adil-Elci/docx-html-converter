@@ -89,6 +89,8 @@ Runtime env vars:
 - `LEONARDO_API_KEY` (required)
 - `LEONARDO_BASE_URL` (default: `https://cloud.leonardo.ai/api/rest/v1`)
 - `LEONARDO_MODEL_ID` (default: `1dd50843-d653-4516-a8e3-f0238ee453ff`)
+- `AUTOMATION_IMAGE_WIDTH` (default: `1024`)
+- `AUTOMATION_IMAGE_HEIGHT` (default: `576`)
 - `AUTOMATION_POST_AUTHOR_ID` (default: `4`)
 - `AUTOMATION_POST_STATUS` (default: `publish`)
 - `AUTOMATION_REQUEST_TIMEOUT_SECONDS` (default: `60`)
@@ -100,6 +102,9 @@ Runtime env vars:
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)
 - `AUTOMATION_SHADOW_WEBHOOK_URL` (optional Make webhook URL for shadow mode)
 - `AUTOMATION_LOG_LEVEL` (default: `INFO`)
+
+Image upload behavior:
+- If WordPress returns HTTP `413` during media upload, the pipeline retries with progressively smaller generated image sizes (`768x432`, `640x360`, `512x288`) before failing.
 
 Debugging workflow (recommended):
 - Keep `execution_mode=async` in production; webhook returns `job_id` and `submission_id`.

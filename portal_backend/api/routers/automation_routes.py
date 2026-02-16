@@ -476,6 +476,8 @@ async def process_guest_post_webhook(
             timeout_seconds=config["timeout_seconds"],
             poll_timeout_seconds=config["poll_timeout_seconds"],
             poll_interval_seconds=config["poll_interval_seconds"],
+            image_width=config["image_width"],
+            image_height=config["image_height"],
         )
     except AutomationError as exc:
         logger.warning("automation.webhook.sync_failed error=%s", str(exc))

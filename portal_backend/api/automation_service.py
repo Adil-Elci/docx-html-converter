@@ -17,8 +17,8 @@ import requests
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"
 DEFAULT_LEONARDO_BASE_URL = "https://cloud.leonardo.ai/api/rest/v1"
 DEFAULT_LEONARDO_MODEL_ID = "1dd50843-d653-4516-a8e3-f0238ee453ff"
-DEFAULT_IMAGE_WIDTH = 1536
-DEFAULT_IMAGE_HEIGHT = 864
+DEFAULT_IMAGE_WIDTH = 1024
+DEFAULT_IMAGE_HEIGHT = 576
 DEFAULT_IMAGE_COUNT = 1
 DEFAULT_AUTHOR_ID = 4
 DEFAULT_POST_STATUS = "publish"
@@ -259,6 +259,11 @@ def wp_create_media_item(
         )
 
     if response.status_code >= 400:
+        if response.status_code == 413:
+            raise AutomationError(
+                "WordPress media upload failed, HTTP 413 (Request Entity Too Large). "
+                f"upload_bytes={len(data)} response={response.text[:300]}"
+            )
         raise AutomationError(f"WordPress media upload failed, HTTP {response.status_code}: {response.text[:500]}")
 
     try:
@@ -399,6 +404,8 @@ def run_guest_post_pipeline(
     timeout_seconds: int,
     poll_timeout_seconds: int,
     poll_interval_seconds: int,
+    image_width: int,
+    image_height: int,
 ) -> Dict[str, Any]:
     converted = call_converter(
         source_url=source_url,
@@ -407,30 +414,63 @@ def run_guest_post_pipeline(
         timeout_seconds=timeout_seconds,
     )
 
-    image_url = generate_image_via_leonardo(
-        prompt=converted["image_prompt"],
-        api_key=leonardo_api_key,
-        timeout_seconds=timeout_seconds,
-        poll_timeout_seconds=poll_timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-        model_id=leonardo_model_id,
-        base_url=leonardo_base_url,
-    )
-    image_bytes, file_name, content_type = download_binary_file(
-        image_url,
-        timeout_seconds=timeout_seconds,
-    )
-    media_payload = wp_create_media_item(
-        site_url=site_url,
-        wp_rest_base=wp_rest_base,
-        wp_username=wp_username,
-        wp_app_password=wp_app_password,
-        data=image_bytes,
-        file_name=file_name,
-        content_type=content_type,
-        title=converted["title"],
-        timeout_seconds=timeout_seconds,
-    )
+    sizes_to_try = [
+        (max(256, image_width), max(256, image_height)),
+        (768, 432),
+        (640, 360),
+        (512, 288),
+    ]
+    unique_sizes: list[tuple[int, int]] = []
+    for size in sizes_to_try:
+        if size not in unique_sizes:
+            unique_sizes.append(size)
+
+    image_url: str = ""
+    media_payload: Dict[str, Any] = {}
+    image_bytes: bytes = b""
+    file_name = ""
+    content_type = "application/octet-stream"
+    last_upload_error: Optional[AutomationError] = None
+
+    for idx, (width, height) in enumerate(unique_sizes):
+        image_url = generate_image_via_leonardo(
+            prompt=converted["image_prompt"],
+            api_key=leonardo_api_key,
+            timeout_seconds=timeout_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            model_id=leonardo_model_id,
+            width=width,
+            height=height,
+            base_url=leonardo_base_url,
+        )
+        image_bytes, file_name, content_type = download_binary_file(
+            image_url,
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            media_payload = wp_create_media_item(
+                site_url=site_url,
+                wp_rest_base=wp_rest_base,
+                wp_username=wp_username,
+                wp_app_password=wp_app_password,
+                data=image_bytes,
+                file_name=file_name,
+                content_type=content_type,
+                title=converted["title"],
+                timeout_seconds=timeout_seconds,
+            )
+            break
+        except AutomationError as exc:
+            error_text = str(exc)
+            if "HTTP 413" in error_text and idx < len(unique_sizes) - 1:
+                last_upload_error = exc
+                continue
+            raise
+    else:
+        if last_upload_error:
+            raise last_upload_error
+        raise AutomationError("WordPress media upload failed for all image size attempts.")
 
     if existing_wp_post_id:
         post_payload = wp_update_post(
@@ -494,6 +534,8 @@ def get_runtime_config() -> Dict[str, Any]:
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),
         "leonardo_base_url": os.getenv("LEONARDO_BASE_URL", DEFAULT_LEONARDO_BASE_URL).strip(),
         "leonardo_model_id": os.getenv("LEONARDO_MODEL_ID", DEFAULT_LEONARDO_MODEL_ID).strip(),
+        "image_width": read_int("AUTOMATION_IMAGE_WIDTH", DEFAULT_IMAGE_WIDTH),
+        "image_height": read_int("AUTOMATION_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT),
         "timeout_seconds": read_int("AUTOMATION_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
         "poll_timeout_seconds": read_int("AUTOMATION_IMAGE_POLL_TIMEOUT_SECONDS", DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS),
         "poll_interval_seconds": read_int(

@@ -22,3 +22,30 @@ uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 - Container startup is handled by `entrypoint.sh`.
 - Docker image uses `ENTRYPOINT ["/app/entrypoint.sh"]`.
 - For Dokploy, use the Dockerfile and do not override the run command.
+
+## One-way Google Sheets Sync (DB -> Sheets only)
+Use `scripts/sync_db_to_sheets.py` to export selected safe columns from Postgres to Google Sheets.
+
+Security behavior:
+- Export is one-way: Postgres -> Google Sheets.
+- No Sheet data is read back into the DB.
+- Sensitive credential data is excluded by allowlist.
+- `site_credentials` is not exported.
+
+Setup:
+```bash
+cd portal_backend
+pip install -r requirements.txt
+export DATABASE_URL="postgresql://<prod-user>:<prod-password>@<prod-host>:5432/<prod-db>"
+export GOOGLE_SHEETS_SPREADSHEET_ID="<spreadsheet_id>"
+export GOOGLE_SERVICE_ACCOUNT_FILE="/path/to/google-service-account.json"
+python scripts/sync_db_to_sheets.py
+```
+
+Optional:
+- `GOOGLE_SERVICE_ACCOUNT_JSON` instead of `GOOGLE_SERVICE_ACCOUNT_FILE`
+- `GOOGLE_SHEETS_EXPORT_TABLES=clients,sites,jobs` to export only a subset
+
+Recommended operations:
+- Schedule this script as a cron/worker job in Dokploy.
+- Share the Google Sheet with your team as viewer-only.

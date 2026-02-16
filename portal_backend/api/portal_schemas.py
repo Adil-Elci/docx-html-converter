@@ -31,10 +31,21 @@ class ClientCreate(BaseModel):
     name: str
     primary_domain: str
     backlink_url: str
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
     status: str = "active"
 
     @validator("name", "primary_domain", "backlink_url")
     def non_empty_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value must not be empty.")
+        return cleaned
+
+    @validator("email", "phone_number")
+    def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Value must not be empty.")
@@ -52,9 +63,11 @@ class ClientUpdate(BaseModel):
     name: Optional[str] = None
     primary_domain: Optional[str] = None
     backlink_url: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
     status: Optional[str] = None
 
-    @validator("name", "primary_domain", "backlink_url")
+    @validator("name", "primary_domain", "backlink_url", "email", "phone_number")
     def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
@@ -78,6 +91,8 @@ class ClientOut(BaseModel):
     name: str
     primary_domain: str
     backlink_url: str
+    email: Optional[str]
+    phone_number: Optional[str]
     status: str
     created_at: datetime
     updated_at: datetime

@@ -20,7 +20,17 @@ SENSITIVE_NAME_MARKERS = ("password", "secret", "token", "key", "credential", "a
 
 # One-way export allowlist. Credentials/secrets are intentionally excluded.
 SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
-    "clients": ["id", "name", "primary_domain", "backlink_url", "status", "created_at", "updated_at"],
+    "clients": [
+        "id",
+        "name",
+        "primary_domain",
+        "backlink_url",
+        "email",
+        "phone_number",
+        "status",
+        "created_at",
+        "updated_at",
+    ],
     "sites": [
         "id",
         "name",

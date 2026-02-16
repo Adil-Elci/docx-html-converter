@@ -24,6 +24,8 @@ class Client(Base):
     name = Column(Text, nullable=False)
     primary_domain = Column(Text, nullable=False)
     backlink_url = Column(Text, nullable=False)
+    email = Column(Text, nullable=True)
+    phone_number = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="active")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

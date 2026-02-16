@@ -20,6 +20,8 @@ def _client_to_out(client: Client) -> ClientOut:
         name=client.name,
         primary_domain=client.primary_domain,
         backlink_url=client.backlink_url,
+        email=client.email,
+        phone_number=client.phone_number,
         status=client.status,
         created_at=client.created_at,
         updated_at=client.updated_at,
@@ -47,6 +49,8 @@ def create_client(
         name=payload.name,
         primary_domain=payload.primary_domain,
         backlink_url=payload.backlink_url,
+        email=payload.email,
+        phone_number=payload.phone_number,
         status=payload.status,
     )
     db.add(client)
@@ -75,6 +79,10 @@ def update_client(
         client.primary_domain = payload.primary_domain
     if payload.backlink_url is not None:
         client.backlink_url = payload.backlink_url
+    if payload.email is not None:
+        client.email = payload.email
+    if payload.phone_number is not None:
+        client.phone_number = payload.phone_number
     if payload.status is not None:
         client.status = payload.status
 

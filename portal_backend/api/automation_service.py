@@ -66,6 +66,7 @@ def _request_json(
     headers: Optional[Dict[str, str]] = None,
     json_body: Optional[Dict[str, Any]] = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    allow_redirects: bool = True,
 ) -> Dict[str, Any]:
     try:
         response = requests.request(
@@ -74,18 +75,26 @@ def _request_json(
             headers=headers,
             json=json_body,
             timeout=timeout_seconds,
+            allow_redirects=allow_redirects,
         )
     except requests.RequestException as exc:
         raise AutomationError(f"Request failed for {url}: {exc}") from exc
+
+    if 300 <= response.status_code < 400:
+        location = response.headers.get("Location", "")
+        raise AutomationError(f"Unexpected redirect from {url} to {location}.")
 
     if response.status_code >= 400:
         body = response.text[:600]
         raise AutomationError(f"HTTP {response.status_code} from {url}: {body}")
 
     try:
-        return response.json()
+        payload = response.json()
     except ValueError as exc:
         raise AutomationError(f"Non-JSON response from {url}.") from exc
+    if not isinstance(payload, dict):
+        raise AutomationError(f"Expected JSON object from {url}, got {type(payload).__name__}.")
+    return payload
 
 
 def call_converter(source_url: str, target_site: str, converter_endpoint: str, timeout_seconds: int) -> Dict[str, Any]:
@@ -232,9 +241,22 @@ def wp_create_media_item(
     }
 
     try:
-        response = requests.post(media_url, headers=headers, data=data, timeout=timeout_seconds)
+        response = requests.post(
+            media_url,
+            headers=headers,
+            data=data,
+            timeout=timeout_seconds,
+            allow_redirects=False,
+        )
     except requests.RequestException as exc:
         raise AutomationError(f"WordPress media upload failed: {exc}") from exc
+
+    if 300 <= response.status_code < 400:
+        location = response.headers.get("Location", "")
+        raise AutomationError(
+            "WordPress media upload was redirected. "
+            f"Check site_url/wp_rest_base canonical host. redirect={location}"
+        )
 
     if response.status_code >= 400:
         raise AutomationError(f"WordPress media upload failed, HTTP {response.status_code}: {response.text[:500]}")
@@ -243,6 +265,13 @@ def wp_create_media_item(
         payload = response.json()
     except ValueError as exc:
         raise AutomationError("WordPress media upload returned non-JSON response.") from exc
+    if isinstance(payload, list):
+        raise AutomationError(
+            "WordPress media upload returned a JSON list instead of an object. "
+            "This usually means the request hit a listing route after redirect or wrong endpoint."
+        )
+    if not isinstance(payload, dict):
+        raise AutomationError(f"WordPress media upload returned unexpected payload type: {type(payload).__name__}.")
 
     media_id = payload.get("id")
     if not media_id:
@@ -259,6 +288,7 @@ def wp_create_media_item(
         },
         json_body={"title": title},
         timeout_seconds=timeout_seconds,
+        allow_redirects=False,
     )
     return payload
 
@@ -300,6 +330,7 @@ def wp_create_post(
         headers=headers,
         json_body=payload,
         timeout_seconds=timeout_seconds,
+        allow_redirects=False,
     )
 
 
@@ -341,6 +372,7 @@ def wp_update_post(
         headers=headers,
         json_body=payload,
         timeout_seconds=timeout_seconds,
+        allow_redirects=False,
     )
 
 

@@ -133,6 +133,13 @@ class AutomationJobWorker:
         except (AutomationError, RuntimeError) as exc:
             logger.warning("automation.worker.failed job_id=%s error=%s", job_id, str(exc))
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
+        except Exception as exc:
+            logger.exception("automation.worker.unexpected_error job_id=%s", job_id)
+            self._mark_failed_or_retry(
+                job_id,
+                max_attempts=max_attempts,
+                error_message=f"Unexpected error ({exc.__class__.__name__}): {exc}",
+            )
 
     def _load_job_payload(self, job_id: UUID) -> Dict[str, Any]:
         with self._sessionmaker() as session:

@@ -75,13 +75,13 @@ def update_client(
 
     if payload.name is not None:
         client.name = payload.name
-    if payload.primary_domain is not None:
+    if "primary_domain" in payload.__fields_set__:
         client.primary_domain = payload.primary_domain
-    if payload.backlink_url is not None:
+    if "backlink_url" in payload.__fields_set__:
         client.backlink_url = payload.backlink_url
-    if payload.email is not None:
+    if "email" in payload.__fields_set__:
         client.email = payload.email
-    if payload.phone_number is not None:
+    if "phone_number" in payload.__fields_set__:
         client.phone_number = payload.phone_number
     if payload.status is not None:
         client.status = payload.status

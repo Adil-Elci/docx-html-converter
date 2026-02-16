@@ -29,26 +29,26 @@ ASSET_PROVIDERS = {"leonardo", "openai", "other"}
 
 class ClientCreate(BaseModel):
     name: str
-    primary_domain: str
-    backlink_url: str
+    primary_domain: Optional[str] = None
+    backlink_url: Optional[str] = None
     email: Optional[str] = None
     phone_number: Optional[str] = None
     status: str = "active"
 
-    @validator("name", "primary_domain", "backlink_url")
+    @validator("name")
     def non_empty_text(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Value must not be empty.")
         return cleaned
 
-    @validator("email", "phone_number")
+    @validator("primary_domain", "backlink_url", "email", "phone_number")
     def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("Value must not be empty.")
+            return None
         return cleaned
 
     @validator("status")
@@ -67,13 +67,22 @@ class ClientUpdate(BaseModel):
     phone_number: Optional[str] = None
     status: Optional[str] = None
 
-    @validator("name", "primary_domain", "backlink_url", "email", "phone_number")
-    def optional_non_empty_text(cls, value: Optional[str]) -> Optional[str]:
+    @validator("name")
+    def optional_name(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Value must not be empty.")
+        return cleaned
+
+    @validator("primary_domain", "backlink_url", "email", "phone_number")
+    def optional_nullable_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
         return cleaned
 
     @validator("status")
@@ -89,8 +98,8 @@ class ClientUpdate(BaseModel):
 class ClientOut(BaseModel):
     id: UUID
     name: str
-    primary_domain: str
-    backlink_url: str
+    primary_domain: Optional[str]
+    backlink_url: Optional[str]
     email: Optional[str]
     phone_number: Optional[str]
     status: str

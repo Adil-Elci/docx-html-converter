@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import logging
 from typing import Dict, Optional, Set, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
 import requests
@@ -340,8 +340,17 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
         if not isinstance(parsed_json, dict):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="JSON body must be an object.")
         data = dict(parsed_json)
-    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-        form_data = await request.form()
+    elif "application/x-www-form-urlencoded" in content_type:
+        raw_body = (await request.body()).decode("utf-8", errors="replace")
+        data = dict(parse_qsl(raw_body, keep_blank_values=True))
+    elif "multipart/form-data" in content_type:
+        try:
+            form_data = await request.form()
+        except AssertionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="multipart parsing requires python-multipart to be installed.",
+            ) from exc
         data = {key: value for key, value in form_data.items()}
     else:
         # Fallback attempt to support callers with missing/incorrect content-type.
@@ -355,8 +364,8 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
                 )
             data = dict(parsed_json)
         else:
-            form_data = await request.form()
-            data = {key: value for key, value in form_data.items()}
+            decoded_body = raw_body.decode("utf-8", errors="replace")
+            data = dict(parse_qsl(decoded_body, keep_blank_values=True))
 
     try:
         return AutomationGuestPostIn(**data)

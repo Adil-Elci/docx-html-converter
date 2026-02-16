@@ -183,6 +183,8 @@ class SiteCredentialCreate(BaseModel):
     auth_type: str = "application_password"
     wp_username: str
     wp_app_password: str
+    author_name: Optional[str] = None
+    author_id: Optional[int] = None
     enabled: bool = True
 
     @validator("auth_type")
@@ -199,11 +201,30 @@ class SiteCredentialCreate(BaseModel):
             raise ValueError("Value must not be empty.")
         return cleaned
 
+    @validator("author_name")
+    def optional_author_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @validator("author_id")
+    def optional_positive_author_id(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("author_id must be a positive integer.")
+        return value
+
 
 class SiteCredentialUpdate(BaseModel):
     auth_type: Optional[str] = None
     wp_username: Optional[str] = None
     wp_app_password: Optional[str] = None
+    author_name: Optional[str] = None
+    author_id: Optional[int] = None
     enabled: Optional[bool] = None
 
     @validator("auth_type")
@@ -224,6 +245,23 @@ class SiteCredentialUpdate(BaseModel):
             raise ValueError("Value must not be empty.")
         return cleaned
 
+    @validator("author_name")
+    def optional_nullable_author_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @validator("author_id")
+    def optional_positive_author_id(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("author_id must be a positive integer.")
+        return value
+
 
 class SiteCredentialOut(BaseModel):
     id: UUID
@@ -231,6 +269,8 @@ class SiteCredentialOut(BaseModel):
     auth_type: str
     wp_username: str
     wp_app_password: str
+    author_name: Optional[str]
+    author_id: Optional[int]
     enabled: bool
     created_at: datetime
     updated_at: datetime
@@ -553,6 +593,14 @@ class AutomationGuestPostIn(BaseModel):
         if cleaned not in POST_STATUSES:
             raise ValueError("post_status must be draft or publish.")
         return cleaned
+
+    @validator("author")
+    def validate_author(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        if value <= 0:
+            raise ValueError("author must be a positive integer.")
+        return value
 
     @root_validator(skip_on_failure=True)
     def validate_source_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:

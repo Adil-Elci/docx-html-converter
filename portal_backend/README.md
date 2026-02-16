@@ -106,6 +106,11 @@ Runtime env vars:
 Image upload behavior:
 - If WordPress returns HTTP `413` during media upload, the pipeline retries with progressively smaller generated image sizes (`768x432`, `640x360`, `512x288`) before failing.
 
+Author selection precedence:
+- Webhook `author` field (if provided)
+- `site_credentials.author_id` (new per-site default)
+- `AUTOMATION_POST_AUTHOR_ID` env fallback
+
 Debugging workflow (recommended):
 - Keep `execution_mode=async` in production; webhook returns `job_id` and `submission_id`.
 - Query job status by idempotency key / job / submission:

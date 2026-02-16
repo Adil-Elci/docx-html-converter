@@ -60,6 +60,8 @@ class SiteCredential(Base):
     auth_type = Column(Text, nullable=False, default="application_password")
     wp_username = Column(Text, nullable=False)
     wp_app_password = Column(Text, nullable=False)
+    author_name = Column(Text, nullable=True)
+    author_id = Column(BigInteger, nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

@@ -89,6 +89,19 @@ def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
     return credential
 
 
+def _resolve_effective_author_id(
+    *,
+    payload_author: Optional[int],
+    credential_author_id: Optional[int],
+    fallback_author_id: int,
+) -> int:
+    if payload_author is not None:
+        return payload_author
+    if credential_author_id is not None and credential_author_id > 0:
+        return credential_author_id
+    return fallback_author_id
+
+
 def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
     client_id = payload.client_id
     client_name = (payload.client_name or "").strip()
@@ -398,16 +411,10 @@ async def process_guest_post_webhook(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="LEONARDO_API_KEY is not set.")
 
     post_status = payload.post_status or config["default_post_status"]
-    author_id = payload.author if payload.author is not None else config["default_author_id"]
     if post_status not in {"draft", "publish"}:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AUTOMATION_POST_STATUS must be draft or publish.",
-        )
-    if author_id <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AUTOMATION_POST_AUTHOR_ID must be a positive integer.",
         )
 
     try:
@@ -421,6 +428,16 @@ async def process_guest_post_webhook(
 
     site = _resolve_site_by_target(db, payload.target_site)
     credential = _resolve_enabled_credential(db, site.id)
+    author_id = _resolve_effective_author_id(
+        payload_author=payload.author,
+        credential_author_id=credential.author_id,
+        fallback_author_id=config["default_author_id"],
+    )
+    if author_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No valid author_id found. Set site_credentials.author_id or AUTOMATION_POST_AUTHOR_ID.",
+        )
     converter_target_site = _resolve_converter_target(payload.target_site, site.site_url)
 
     if payload.execution_mode in {"async", "shadow"}:

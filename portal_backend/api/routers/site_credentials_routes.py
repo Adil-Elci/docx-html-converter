@@ -21,6 +21,8 @@ def _credential_to_out(credential: SiteCredential) -> SiteCredentialOut:
         auth_type=credential.auth_type,
         wp_username=credential.wp_username,
         wp_app_password=credential.wp_app_password,
+        author_name=credential.author_name,
+        author_id=credential.author_id,
         enabled=credential.enabled,
         created_at=credential.created_at,
         updated_at=credential.updated_at,
@@ -56,6 +58,8 @@ def create_site_credential(
         auth_type=payload.auth_type,
         wp_username=payload.wp_username,
         wp_app_password=payload.wp_app_password,
+        author_name=payload.author_name,
+        author_id=payload.author_id,
         enabled=payload.enabled,
     )
     db.add(credential)
@@ -87,6 +91,10 @@ def update_site_credential(
         credential.wp_username = payload.wp_username
     if payload.wp_app_password is not None:
         credential.wp_app_password = payload.wp_app_password
+    if "author_name" in payload.__fields_set__:
+        credential.author_name = payload.author_name
+    if "author_id" in payload.__fields_set__:
+        credential.author_id = payload.author_id
     if payload.enabled is not None:
         credential.enabled = payload.enabled
 

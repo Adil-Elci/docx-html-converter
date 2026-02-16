@@ -175,9 +175,19 @@ class AutomationJobWorker:
             if post_status not in {"draft", "publish"}:
                 post_status = "publish"
 
-            author_id = _safe_int(parsed_notes.get("author_id"), default=_read_int_env("AUTOMATION_POST_AUTHOR_ID", 4))
+            credential_author_id_raw = credential.author_id
+            credential_author_id = None
+            if credential_author_id_raw is not None:
+                try:
+                    parsed_credential_author_id = int(credential_author_id_raw)
+                except (TypeError, ValueError):
+                    parsed_credential_author_id = 0
+                if parsed_credential_author_id > 0:
+                    credential_author_id = parsed_credential_author_id
+            default_author_id = credential_author_id or _read_int_env("AUTOMATION_POST_AUTHOR_ID", 4)
+            author_id = _safe_int(parsed_notes.get("author_id"), default=default_author_id)
             if author_id <= 0:
-                author_id = _read_int_env("AUTOMATION_POST_AUTHOR_ID", 4)
+                author_id = default_author_id
 
             converter_target_site = converter_target_from_site_url(site.site_url)
             if not converter_target_site:

@@ -106,7 +106,7 @@ Runtime env vars:
 - `AUTOMATION_CONVERTER_ENDPOINT` (default: `https://elci.live/convert`)
 - `LEONARDO_API_KEY` (required)
 - `LEONARDO_BASE_URL` (default: `https://cloud.leonardo.ai/api/rest/v1`)
-- `LEONARDO_MODEL_ID` (default: `1dd50843-d653-4516-a8e3-f0238ee453ff`)
+- Leonardo model is fixed to Flux Schnell (`1dd50843-d653-4516-a8e3-f0238ee453ff`)
 - `AUTOMATION_IMAGE_WIDTH` (default: `1024`)
 - `AUTOMATION_IMAGE_HEIGHT` (default: `576`)
 - `AUTOMATION_POST_AUTHOR_ID` (default: `4`)

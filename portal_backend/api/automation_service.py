@@ -16,6 +16,7 @@ import requests
 
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"
 DEFAULT_LEONARDO_BASE_URL = "https://cloud.leonardo.ai/api/rest/v1"
+# Leonardo Flux Schnell
 DEFAULT_LEONARDO_MODEL_ID = "1dd50843-d653-4516-a8e3-f0238ee453ff"
 DEFAULT_IMAGE_WIDTH = 1024
 DEFAULT_IMAGE_HEIGHT = 576
@@ -533,7 +534,7 @@ def get_runtime_config() -> Dict[str, Any]:
         "converter_endpoint": os.getenv("AUTOMATION_CONVERTER_ENDPOINT", DEFAULT_CONVERTER_ENDPOINT).strip(),
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),
         "leonardo_base_url": os.getenv("LEONARDO_BASE_URL", DEFAULT_LEONARDO_BASE_URL).strip(),
-        "leonardo_model_id": os.getenv("LEONARDO_MODEL_ID", DEFAULT_LEONARDO_MODEL_ID).strip(),
+        "leonardo_model_id": DEFAULT_LEONARDO_MODEL_ID,
         "image_width": read_int("AUTOMATION_IMAGE_WIDTH", DEFAULT_IMAGE_WIDTH),
         "image_height": read_int("AUTOMATION_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT),
         "timeout_seconds": read_int("AUTOMATION_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),

@@ -78,6 +78,23 @@ Optional filters:
 - `--only-missing` to skip rows that already have both author fields.
 - `--include-inactive-sites` if needed.
 
+## Sync WordPress Categories To DB
+Use `scripts/sync_wp_categories.py` to populate `site_categories` from each site's WordPress categories API.
+
+Setup:
+```bash
+cd portal_backend
+pip install -r requirements.txt
+export DATABASE_URL="postgresql://<prod-user>:<prod-password>@<prod-host>:5432/<prod-db>"
+python scripts/sync_wp_categories.py --dry-run
+python scripts/sync_wp_categories.py
+```
+
+Optional:
+- `--site-url https://eintragnews.de` to sync one site.
+- `--default-slugs guest-post,news,allgemein` to seed `site_default_categories` in slug order.
+- `--replace-defaults` (with `--default-slugs`) to disable existing defaults not in the matched list.
+
 ## Make.com Replacement Webhook
 Endpoint:
 - `POST /automation/guest-post-webhook`
@@ -128,6 +145,10 @@ Author selection precedence:
 - Webhook `author` field (if provided)
 - `site_credentials.author_id` (new per-site default)
 - `AUTOMATION_POST_AUTHOR_ID` env fallback
+
+Category selection:
+- If `site_default_categories` has enabled rows for the site, posts are created/updated with those WordPress category IDs in configured order.
+- If no defaults exist, category is left to WordPress/site defaults.
 
 Debugging workflow (recommended):
 - Keep `execution_mode=async` in production; webhook returns `job_id` and `submission_id`.

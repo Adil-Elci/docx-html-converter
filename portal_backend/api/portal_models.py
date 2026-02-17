@@ -67,6 +67,40 @@ class SiteCredential(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class SiteCategory(Base):
+    __tablename__ = "site_categories"
+    __table_args__ = (
+        UniqueConstraint("site_id", "wp_category_id", name="site_categories_site_wp_category_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    wp_category_id = Column(BigInteger, nullable=False)
+    name = Column(Text, nullable=False)
+    slug = Column(Text, nullable=True)
+    parent_wp_category_id = Column(BigInteger, nullable=True)
+    post_count = Column(Integer, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SiteDefaultCategory(Base):
+    __tablename__ = "site_default_categories"
+    __table_args__ = (
+        UniqueConstraint("site_id", "wp_category_id", name="site_default_categories_site_wp_category_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    wp_category_id = Column(BigInteger, nullable=False)
+    category_name = Column(Text, nullable=True)
+    position = Column(Integer, nullable=False, default=100)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class ClientSiteAccess(Base):
     __tablename__ = "client_site_access"
     __table_args__ = (

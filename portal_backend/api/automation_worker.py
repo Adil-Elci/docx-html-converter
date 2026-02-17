@@ -16,7 +16,7 @@ from .automation_service import (
     get_runtime_config,
     run_guest_post_pipeline,
 )
-from .portal_models import Asset, Job, JobEvent, Site, SiteCredential, Submission
+from .portal_models import Asset, Job, JobEvent, Site, SiteCredential, SiteDefaultCategory, Submission
 
 logger = logging.getLogger("portal_backend.automation")
 
@@ -112,6 +112,7 @@ class AutomationJobWorker:
                 existing_wp_post_id=payload["existing_wp_post_id"],
                 post_status=payload["post_status"],
                 author_id=payload["author_id"],
+                category_ids=payload["category_ids"],
                 converter_endpoint=run_config["converter_endpoint"],
                 leonardo_api_key=run_config["leonardo_api_key"],
                 leonardo_base_url=run_config["leonardo_base_url"],
@@ -194,6 +195,30 @@ class AutomationJobWorker:
                 converter_target_site = (urlparse(site.site_url).hostname or "").strip().lower()
             if not converter_target_site:
                 raise RuntimeError("Failed to resolve converter target_site from site_url.")
+            category_ids = [
+                int(row.wp_category_id)
+                for row in (
+                    session.query(SiteDefaultCategory)
+                    .filter(
+                        SiteDefaultCategory.site_id == site.id,
+                        SiteDefaultCategory.enabled.is_(True),
+                    )
+                    .order_by(
+                        SiteDefaultCategory.position.asc(),
+                        SiteDefaultCategory.created_at.asc(),
+                    )
+                    .all()
+                )
+                if row.wp_category_id is not None and int(row.wp_category_id) > 0
+            ]
+            # Preserve order while removing duplicates.
+            seen: set[int] = set()
+            ordered_category_ids: list[int] = []
+            for category_id in category_ids:
+                if category_id in seen:
+                    continue
+                seen.add(category_id)
+                ordered_category_ids.append(category_id)
 
             return {
                 "source_url": source_url,
@@ -205,6 +230,7 @@ class AutomationJobWorker:
                 "existing_wp_post_id": job.wp_post_id,
                 "post_status": post_status,
                 "author_id": author_id,
+                "category_ids": ordered_category_ids,
                 "attempt_count": int(job.attempt_count or 0),
             }
 

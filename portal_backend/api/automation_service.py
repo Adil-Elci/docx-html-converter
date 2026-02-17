@@ -312,6 +312,7 @@ def wp_create_post(
     featured_media_id: int,
     post_status: str,
     author_id: int,
+    category_ids: Optional[list[int]],
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     posts_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts"
@@ -330,6 +331,8 @@ def wp_create_post(
         "format": "standard",
         "date": datetime.now(timezone.utc).isoformat(),
     }
+    if category_ids:
+        payload["categories"] = category_ids
     return _request_json(
         "POST",
         posts_url,
@@ -354,6 +357,7 @@ def wp_update_post(
     featured_media_id: int,
     post_status: str,
     author_id: int,
+    category_ids: Optional[list[int]],
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     post_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts/{post_id}"
@@ -372,6 +376,8 @@ def wp_update_post(
         "format": "standard",
         "date": datetime.now(timezone.utc).isoformat(),
     }
+    if category_ids:
+        payload["categories"] = category_ids
     return _request_json(
         "POST",
         post_url,
@@ -398,6 +404,7 @@ def run_guest_post_pipeline(
     existing_wp_post_id: Optional[int],
     post_status: str,
     author_id: int,
+    category_ids: Optional[list[int]],
     converter_endpoint: str,
     leonardo_api_key: str,
     leonardo_base_url: str,
@@ -487,6 +494,7 @@ def run_guest_post_pipeline(
             featured_media_id=int(media_payload["id"]),
             post_status=post_status,
             author_id=author_id,
+            category_ids=category_ids,
             timeout_seconds=timeout_seconds,
         )
         post_event_type = "wp_post_updated"
@@ -503,6 +511,7 @@ def run_guest_post_pipeline(
             featured_media_id=int(media_payload["id"]),
             post_status=post_status,
             author_id=author_id,
+            category_ids=category_ids,
             timeout_seconds=timeout_seconds,
         )
         post_event_type = "wp_post_created"

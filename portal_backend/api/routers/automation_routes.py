@@ -19,7 +19,7 @@ from ..automation_service import (
     run_guest_post_pipeline,
 )
 from ..db import get_db
-from ..portal_models import Client, ClientSiteAccess, Job, JobEvent, Site, SiteCredential, Submission
+from ..portal_models import Client, ClientSiteAccess, Job, JobEvent, Site, SiteCredential, SiteDefaultCategory, Submission
 from ..portal_schemas import (
     AutomationGuestPostIn,
     AutomationGuestPostOut,
@@ -100,6 +100,33 @@ def _resolve_effective_author_id(
     if credential_author_id is not None and credential_author_id > 0:
         return credential_author_id
     return fallback_author_id
+
+
+def _resolve_default_category_ids(db: Session, site_id: UUID) -> list[int]:
+    rows = (
+        db.query(SiteDefaultCategory)
+        .filter(
+            SiteDefaultCategory.site_id == site_id,
+            SiteDefaultCategory.enabled.is_(True),
+        )
+        .order_by(
+            SiteDefaultCategory.position.asc(),
+            SiteDefaultCategory.created_at.asc(),
+        )
+        .all()
+    )
+    seen: set[int] = set()
+    ordered_ids: list[int] = []
+    for row in rows:
+        raw = row.wp_category_id
+        if raw is None:
+            continue
+        category_id = int(raw)
+        if category_id <= 0 or category_id in seen:
+            continue
+        seen.add(category_id)
+        ordered_ids.append(category_id)
+    return ordered_ids
 
 
 def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
@@ -428,6 +455,7 @@ async def process_guest_post_webhook(
 
     site = _resolve_site_by_target(db, payload.target_site)
     credential = _resolve_enabled_credential(db, site.id)
+    default_category_ids = _resolve_default_category_ids(db, site.id)
     author_id = _resolve_effective_author_id(
         payload_author=payload.author,
         credential_author_id=credential.author_id,
@@ -486,6 +514,7 @@ async def process_guest_post_webhook(
             existing_wp_post_id=None,
             post_status=post_status,
             author_id=author_id,
+            category_ids=default_category_ids,
             converter_endpoint=config["converter_endpoint"],
             leonardo_api_key=config["leonardo_api_key"],
             leonardo_base_url=config["leonardo_base_url"],

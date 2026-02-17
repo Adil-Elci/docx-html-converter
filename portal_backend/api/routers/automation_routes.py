@@ -19,7 +19,17 @@ from ..automation_service import (
     run_guest_post_pipeline,
 )
 from ..db import get_db
-from ..portal_models import Client, ClientSiteAccess, Job, JobEvent, Site, SiteCredential, SiteDefaultCategory, Submission
+from ..portal_models import (
+    Client,
+    ClientSiteAccess,
+    Job,
+    JobEvent,
+    Site,
+    SiteCategory,
+    SiteCredential,
+    SiteDefaultCategory,
+    Submission,
+)
 from ..portal_schemas import (
     AutomationGuestPostIn,
     AutomationGuestPostOut,
@@ -127,6 +137,37 @@ def _resolve_default_category_ids(db: Session, site_id: UUID) -> list[int]:
         seen.add(category_id)
         ordered_ids.append(category_id)
     return ordered_ids
+
+
+def _resolve_category_candidates(db: Session, site_id: UUID) -> list[Dict[str, object]]:
+    rows = (
+        db.query(SiteCategory)
+        .filter(
+            SiteCategory.site_id == site_id,
+            SiteCategory.enabled.is_(True),
+        )
+        .order_by(
+            SiteCategory.name.asc(),
+            SiteCategory.wp_category_id.asc(),
+        )
+        .all()
+    )
+    out: list[Dict[str, object]] = []
+    for row in rows:
+        raw = row.wp_category_id
+        if raw is None:
+            continue
+        category_id = int(raw)
+        if category_id <= 0:
+            continue
+        out.append(
+            {
+                "id": category_id,
+                "name": (row.name or "").strip(),
+                "slug": (row.slug or "").strip(),
+            }
+        )
+    return out
 
 
 def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
@@ -456,6 +497,7 @@ async def process_guest_post_webhook(
     site = _resolve_site_by_target(db, payload.target_site)
     credential = _resolve_enabled_credential(db, site.id)
     default_category_ids = _resolve_default_category_ids(db, site.id)
+    category_candidates = _resolve_category_candidates(db, site.id)
     author_id = _resolve_effective_author_id(
         payload_author=payload.author,
         credential_author_id=credential.author_id,
@@ -515,6 +557,7 @@ async def process_guest_post_webhook(
             post_status=post_status,
             author_id=author_id,
             category_ids=default_category_ids,
+            category_candidates=category_candidates,
             converter_endpoint=config["converter_endpoint"],
             leonardo_api_key=config["leonardo_api_key"],
             leonardo_base_url=config["leonardo_base_url"],
@@ -524,6 +567,12 @@ async def process_guest_post_webhook(
             poll_interval_seconds=config["poll_interval_seconds"],
             image_width=config["image_width"],
             image_height=config["image_height"],
+            category_llm_enabled=config["category_llm_enabled"],
+            category_llm_api_key=config["category_llm_api_key"],
+            category_llm_base_url=config["category_llm_base_url"],
+            category_llm_model=config["category_llm_model"],
+            category_llm_max_categories=config["category_llm_max_categories"],
+            category_llm_confidence_threshold=config["category_llm_confidence_threshold"],
         )
     except AutomationError as exc:
         logger.warning("automation.webhook.sync_failed error=%s", str(exc))

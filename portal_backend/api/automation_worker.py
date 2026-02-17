@@ -4,7 +4,7 @@ import os
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -16,7 +16,7 @@ from .automation_service import (
     get_runtime_config,
     run_guest_post_pipeline,
 )
-from .portal_models import Asset, Job, JobEvent, Site, SiteCredential, SiteDefaultCategory, Submission
+from .portal_models import Asset, Job, JobEvent, Site, SiteCategory, SiteCredential, SiteDefaultCategory, Submission
 
 logger = logging.getLogger("portal_backend.automation")
 
@@ -113,6 +113,7 @@ class AutomationJobWorker:
                 post_status=payload["post_status"],
                 author_id=payload["author_id"],
                 category_ids=payload["category_ids"],
+                category_candidates=payload["category_candidates"],
                 converter_endpoint=run_config["converter_endpoint"],
                 leonardo_api_key=run_config["leonardo_api_key"],
                 leonardo_base_url=run_config["leonardo_base_url"],
@@ -122,6 +123,12 @@ class AutomationJobWorker:
                 poll_interval_seconds=run_config["poll_interval_seconds"],
                 image_width=run_config["image_width"],
                 image_height=run_config["image_height"],
+                category_llm_enabled=run_config["category_llm_enabled"],
+                category_llm_api_key=run_config["category_llm_api_key"],
+                category_llm_base_url=run_config["category_llm_base_url"],
+                category_llm_model=run_config["category_llm_model"],
+                category_llm_max_categories=run_config["category_llm_max_categories"],
+                category_llm_confidence_threshold=run_config["category_llm_confidence_threshold"],
             )
             self._mark_success(
                 job_id,
@@ -130,6 +137,7 @@ class AutomationJobWorker:
                 media_url=pipeline_result["media_url"],
                 post_payload=pipeline_result["post_payload"],
                 post_event_type=pipeline_result["post_event_type"],
+                selected_category_ids=pipeline_result["selected_category_ids"],
                 leonardo_model_id=run_config["leonardo_model_id"],
             )
             logger.info("automation.worker.succeeded job_id=%s", job_id)
@@ -220,6 +228,33 @@ class AutomationJobWorker:
                 seen.add(category_id)
                 ordered_category_ids.append(category_id)
 
+            category_candidates: List[Dict[str, Any]] = []
+            for row in (
+                session.query(SiteCategory)
+                .filter(
+                    SiteCategory.site_id == site.id,
+                    SiteCategory.enabled.is_(True),
+                )
+                .order_by(
+                    SiteCategory.name.asc(),
+                    SiteCategory.wp_category_id.asc(),
+                )
+                .all()
+            ):
+                raw_id = row.wp_category_id
+                if raw_id is None:
+                    continue
+                category_id = int(raw_id)
+                if category_id <= 0:
+                    continue
+                category_candidates.append(
+                    {
+                        "id": category_id,
+                        "name": (row.name or "").strip(),
+                        "slug": (row.slug or "").strip(),
+                    }
+                )
+
             return {
                 "source_url": source_url,
                 "converter_target_site": converter_target_site,
@@ -231,6 +266,7 @@ class AutomationJobWorker:
                 "post_status": post_status,
                 "author_id": author_id,
                 "category_ids": ordered_category_ids,
+                "category_candidates": category_candidates,
                 "attempt_count": int(job.attempt_count or 0),
             }
 
@@ -249,6 +285,7 @@ class AutomationJobWorker:
         media_url: Optional[str],
         post_payload: Dict[str, Any],
         post_event_type: str,
+        selected_category_ids: List[int],
         leonardo_model_id: str,
     ) -> None:
         with self._sessionmaker() as session:
@@ -308,6 +345,7 @@ class AutomationJobWorker:
                     payload={
                         "wp_post_id": job.wp_post_id,
                         "wp_post_url": job.wp_post_url,
+                        "category_ids": selected_category_ids,
                     },
                 )
             )

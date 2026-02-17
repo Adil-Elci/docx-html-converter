@@ -131,6 +131,12 @@ Runtime env vars:
 - `AUTOMATION_REQUEST_TIMEOUT_SECONDS` (default: `60`)
 - `AUTOMATION_IMAGE_POLL_TIMEOUT_SECONDS` (default: `90`)
 - `AUTOMATION_IMAGE_POLL_INTERVAL_SECONDS` (default: `2`)
+- `AUTOMATION_CATEGORY_LLM_ENABLED` (default: `true`)
+- `AUTOMATION_CATEGORY_LLM_API_KEY` (optional, fallback to `OPENAI_API_KEY`)
+- `AUTOMATION_CATEGORY_LLM_BASE_URL` (default: `https://api.openai.com/v1`)
+- `AUTOMATION_CATEGORY_LLM_MODEL` (default: `gpt-4.1-mini`)
+- `AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES` (default: `2`)
+- `AUTOMATION_CATEGORY_LLM_CONFIDENCE_THRESHOLD` (default: `0.55`)
 - `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
 - `AUTOMATION_WORKER_ENABLED` (default: `true`)
 - `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
@@ -147,7 +153,8 @@ Author selection precedence:
 - `AUTOMATION_POST_AUTHOR_ID` env fallback
 
 Category selection:
-- If `site_default_categories` has enabled rows for the site, posts are created/updated with those WordPress category IDs in configured order.
+- If `AUTOMATION_CATEGORY_LLM_ENABLED=true` and `site_categories` are available for the site, the backend asks the LLM to pick category IDs from that allowed list.
+- If LLM selection fails/invalid/low confidence, it falls back to enabled `site_default_categories` in configured order.
 - If no defaults exist, category is left to WordPress/site defaults.
 
 Debugging workflow (recommended):

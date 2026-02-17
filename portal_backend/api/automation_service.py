@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import json
+import logging
 import mimetypes
 import os
 import re
@@ -8,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -26,6 +28,12 @@ DEFAULT_POST_STATUS = "publish"
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS = 90
 DEFAULT_IMAGE_POLL_INTERVAL_SECONDS = 2
+DEFAULT_CATEGORY_LLM_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_CATEGORY_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_CATEGORY_LLM_MAX_CATEGORIES = 2
+DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD = 0.55
+
+logger = logging.getLogger("portal_backend.automation")
 
 
 class AutomationError(RuntimeError):
@@ -96,6 +104,166 @@ def _request_json(
     if not isinstance(payload, dict):
         raise AutomationError(f"Expected JSON object from {url}, got {type(payload).__name__}.")
     return payload
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _strip_html_to_text(value: str) -> str:
+    if not value:
+        return ""
+    without_scripts = re.sub(r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>", " ", value, flags=re.IGNORECASE)
+    without_styles = re.sub(r"<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>", " ", without_scripts, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", without_styles)
+    compact = re.sub(r"\s+", " ", text).strip()
+    return compact
+
+
+def _build_category_selection_messages(
+    *,
+    title: str,
+    excerpt: str,
+    clean_html: str,
+    category_candidates: List[Dict[str, Any]],
+    max_categories: int,
+) -> List[Dict[str, str]]:
+    content_text = _strip_html_to_text(clean_html)
+    if len(content_text) > 6000:
+        content_text = content_text[:6000]
+
+    candidates_lines = []
+    for candidate in category_candidates:
+        wp_id = candidate.get("id")
+        name = str(candidate.get("name", "")).strip()
+        slug = str(candidate.get("slug", "")).strip()
+        if not isinstance(wp_id, int):
+            continue
+        candidates_lines.append(f'- id={wp_id}; name="{name}"; slug="{slug}"')
+
+    system_prompt = (
+        "You assign WordPress categories to posts. "
+        "Return only JSON with key category_ids (array of integers) and confidence (0..1). "
+        f"Select 1 to {max_categories} categories from the provided candidates only."
+    )
+    user_prompt = (
+        f"Post title:\n{title}\n\n"
+        f"Post excerpt:\n{excerpt}\n\n"
+        f"Post content (plain text):\n{content_text}\n\n"
+        f"Allowed categories:\n{chr(10).join(candidates_lines)}\n\n"
+        "Response JSON schema: {\"category_ids\":[int],\"confidence\":0.0}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _extract_llm_json_text(payload: Dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            message = first_choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content.strip()
+    raise AutomationError("Category LLM response missing message content.")
+
+
+def _select_categories_with_llm(
+    *,
+    title: str,
+    excerpt: str,
+    clean_html: str,
+    category_candidates: List[Dict[str, Any]],
+    api_key: str,
+    base_url: str,
+    model: str,
+    max_categories: int,
+    confidence_threshold: float,
+    timeout_seconds: int,
+) -> List[int]:
+    messages = _build_category_selection_messages(
+        title=title,
+        excerpt=excerpt,
+        clean_html=clean_html,
+        category_candidates=category_candidates,
+        max_categories=max_categories,
+    )
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    body = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=timeout_seconds,
+        )
+    except requests.RequestException as exc:
+        raise AutomationError(f"Category LLM request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise AutomationError(f"Category LLM HTTP {response.status_code}: {response.text[:400]}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError("Category LLM returned non-JSON response.") from exc
+    if not isinstance(payload, dict):
+        raise AutomationError("Category LLM returned unexpected payload type.")
+
+    raw_text = _extract_llm_json_text(payload)
+    try:
+        parsed = json.loads(raw_text)
+    except ValueError as exc:
+        raise AutomationError(f"Category LLM returned invalid JSON content: {raw_text[:200]}") from exc
+    if not isinstance(parsed, dict):
+        raise AutomationError("Category LLM content must be a JSON object.")
+
+    raw_ids = parsed.get("category_ids", [])
+    raw_confidence = parsed.get("confidence")
+    confidence = 1.0
+    if isinstance(raw_confidence, (int, float)):
+        confidence = float(raw_confidence)
+    if confidence < confidence_threshold:
+        raise AutomationError(
+            f"Category LLM confidence too low ({confidence:.2f} < {confidence_threshold:.2f})."
+        )
+
+    if not isinstance(raw_ids, list):
+        raise AutomationError("Category LLM category_ids must be an array.")
+    allowed_ids = {
+        int(candidate["id"])
+        for candidate in category_candidates
+        if isinstance(candidate.get("id"), int) and int(candidate["id"]) > 0
+    }
+    selected: List[int] = []
+    seen: set[int] = set()
+    for raw in raw_ids:
+        if not isinstance(raw, int):
+            continue
+        if raw not in allowed_ids or raw in seen:
+            continue
+        seen.add(raw)
+        selected.append(raw)
+        if len(selected) >= max_categories:
+            break
+
+    if not selected:
+        raise AutomationError("Category LLM did not return valid category IDs from allowed candidates.")
+    return selected
 
 
 def call_converter(source_url: str, target_site: str, converter_endpoint: str, timeout_seconds: int) -> Dict[str, Any]:
@@ -312,7 +480,7 @@ def wp_create_post(
     featured_media_id: int,
     post_status: str,
     author_id: int,
-    category_ids: Optional[list[int]],
+    category_ids: Optional[List[int]],
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     posts_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts"
@@ -357,7 +525,7 @@ def wp_update_post(
     featured_media_id: int,
     post_status: str,
     author_id: int,
-    category_ids: Optional[list[int]],
+    category_ids: Optional[List[int]],
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     post_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts/{post_id}"
@@ -404,7 +572,8 @@ def run_guest_post_pipeline(
     existing_wp_post_id: Optional[int],
     post_status: str,
     author_id: int,
-    category_ids: Optional[list[int]],
+    category_ids: Optional[List[int]],
+    category_candidates: Optional[List[Dict[str, Any]]],
     converter_endpoint: str,
     leonardo_api_key: str,
     leonardo_base_url: str,
@@ -414,6 +583,12 @@ def run_guest_post_pipeline(
     poll_interval_seconds: int,
     image_width: int,
     image_height: int,
+    category_llm_enabled: bool,
+    category_llm_api_key: str,
+    category_llm_base_url: str,
+    category_llm_model: str,
+    category_llm_max_categories: int,
+    category_llm_confidence_threshold: float,
 ) -> Dict[str, Any]:
     converted = call_converter(
         source_url=source_url,
@@ -480,6 +655,35 @@ def run_guest_post_pipeline(
             raise last_upload_error
         raise AutomationError("WordPress media upload failed for all image size attempts.")
 
+    selected_category_ids = list(category_ids or [])
+    if category_llm_enabled and category_candidates:
+        if category_llm_api_key:
+            try:
+                llm_selected_ids = _select_categories_with_llm(
+                    title=converted["title"],
+                    excerpt=converted["excerpt"],
+                    clean_html=converted["clean_html"],
+                    category_candidates=category_candidates,
+                    api_key=category_llm_api_key,
+                    base_url=category_llm_base_url,
+                    model=category_llm_model,
+                    max_categories=max(1, category_llm_max_categories),
+                    confidence_threshold=max(0.0, min(1.0, category_llm_confidence_threshold)),
+                    timeout_seconds=timeout_seconds,
+                )
+                selected_category_ids = llm_selected_ids
+            except AutomationError as exc:
+                logger.warning(
+                    "automation.category_llm.fallback reason=%s defaults_count=%s",
+                    str(exc),
+                    len(selected_category_ids),
+                )
+        else:
+            logger.warning(
+                "automation.category_llm.fallback reason=missing_api_key defaults_count=%s",
+                len(selected_category_ids),
+            )
+
     if existing_wp_post_id:
         post_payload = wp_update_post(
             site_url=site_url,
@@ -494,7 +698,7 @@ def run_guest_post_pipeline(
             featured_media_id=int(media_payload["id"]),
             post_status=post_status,
             author_id=author_id,
-            category_ids=category_ids,
+            category_ids=selected_category_ids,
             timeout_seconds=timeout_seconds,
         )
         post_event_type = "wp_post_updated"
@@ -511,7 +715,7 @@ def run_guest_post_pipeline(
             featured_media_id=int(media_payload["id"]),
             post_status=post_status,
             author_id=author_id,
-            category_ids=category_ids,
+            category_ids=selected_category_ids,
             timeout_seconds=timeout_seconds,
         )
         post_event_type = "wp_post_created"
@@ -528,6 +732,7 @@ def run_guest_post_pipeline(
         "media_url": media_url,
         "post_payload": post_payload,
         "post_event_type": post_event_type,
+        "selected_category_ids": selected_category_ids,
     }
 
 
@@ -538,6 +743,13 @@ def get_runtime_config() -> Dict[str, Any]:
             return int(raw)
         except ValueError as exc:
             raise AutomationError(f"{name} must be an integer, got '{raw}'.") from exc
+
+    def read_float(name: str, default: float) -> float:
+        raw = os.getenv(name, str(default)).strip()
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise AutomationError(f"{name} must be a number, got '{raw}'.") from exc
 
     return {
         "converter_endpoint": os.getenv("AUTOMATION_CONVERTER_ENDPOINT", DEFAULT_CONVERTER_ENDPOINT).strip(),
@@ -551,6 +763,21 @@ def get_runtime_config() -> Dict[str, Any]:
         "poll_interval_seconds": read_int(
             "AUTOMATION_IMAGE_POLL_INTERVAL_SECONDS",
             DEFAULT_IMAGE_POLL_INTERVAL_SECONDS,
+        ),
+        "category_llm_enabled": _read_bool_env("AUTOMATION_CATEGORY_LLM_ENABLED", True),
+        "category_llm_api_key": (
+            os.getenv("AUTOMATION_CATEGORY_LLM_API_KEY", "").strip()
+            or os.getenv("OPENAI_API_KEY", "").strip()
+        ),
+        "category_llm_base_url": os.getenv("AUTOMATION_CATEGORY_LLM_BASE_URL", DEFAULT_CATEGORY_LLM_BASE_URL).strip(),
+        "category_llm_model": os.getenv("AUTOMATION_CATEGORY_LLM_MODEL", DEFAULT_CATEGORY_LLM_MODEL).strip(),
+        "category_llm_max_categories": read_int(
+            "AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES",
+            DEFAULT_CATEGORY_LLM_MAX_CATEGORIES,
+        ),
+        "category_llm_confidence_threshold": read_float(
+            "AUTOMATION_CATEGORY_LLM_CONFIDENCE_THRESHOLD",
+            DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD,
         ),
         "default_author_id": read_int("AUTOMATION_POST_AUTHOR_ID", DEFAULT_AUTHOR_ID),
         "default_post_status": os.getenv("AUTOMATION_POST_STATUS", DEFAULT_POST_STATUS).strip().lower(),

@@ -28,8 +28,10 @@ DEFAULT_POST_STATUS = "publish"
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS = 90
 DEFAULT_IMAGE_POLL_INTERVAL_SECONDS = 2
-DEFAULT_CATEGORY_LLM_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_CATEGORY_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_CATEGORY_LLM_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_CATEGORY_LLM_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+DEFAULT_CATEGORY_LLM_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL = "claude-3-5-haiku-latest"
 DEFAULT_CATEGORY_LLM_MAX_CATEGORIES = 2
 DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD = 0.55
 
@@ -170,7 +172,46 @@ def _extract_llm_json_text(payload: Dict[str, Any]) -> str:
                 content = message.get("content")
                 if isinstance(content, str):
                     return content.strip()
+    content = payload.get("content")
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        if parts:
+            return "\n".join(parts).strip()
     raise AutomationError("Category LLM response missing message content.")
+
+
+def _parse_json_object_from_text(raw_text: str) -> Dict[str, Any]:
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except ValueError:
+        pass
+
+    first = cleaned.find("{")
+    last = cleaned.rfind("}")
+    if first >= 0 and last > first:
+        snippet = cleaned[first : last + 1]
+        try:
+            parsed = json.loads(snippet)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+
+    raise AutomationError(f"Category LLM returned invalid JSON content: {raw_text[:200]}")
 
 
 def _select_categories_with_llm(
@@ -193,21 +234,40 @@ def _select_categories_with_llm(
         category_candidates=category_candidates,
         max_categories=max_categories,
     )
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    body = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
+    provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
+    if provider_is_anthropic:
+        system_prompt = messages[0]["content"]
+        user_prompt = messages[1]["content"]
+        url = f"{base_url.rstrip('/')}/messages"
+        body = {
+            "model": model,
+            "temperature": 0.1,
+            "max_tokens": 512,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+    else:
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
 
     try:
         response = requests.post(
             url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             json=body,
             timeout=timeout_seconds,
         )
@@ -225,12 +285,7 @@ def _select_categories_with_llm(
         raise AutomationError("Category LLM returned unexpected payload type.")
 
     raw_text = _extract_llm_json_text(payload)
-    try:
-        parsed = json.loads(raw_text)
-    except ValueError as exc:
-        raise AutomationError(f"Category LLM returned invalid JSON content: {raw_text[:200]}") from exc
-    if not isinstance(parsed, dict):
-        raise AutomationError("Category LLM content must be a JSON object.")
+    parsed = _parse_json_object_from_text(raw_text)
 
     raw_ids = parsed.get("category_ids", [])
     raw_confidence = parsed.get("confidence")
@@ -751,6 +806,27 @@ def get_runtime_config() -> Dict[str, Any]:
         except ValueError as exc:
             raise AutomationError(f"{name} must be a number, got '{raw}'.") from exc
 
+    explicit_category_llm_key = os.getenv("AUTOMATION_CATEGORY_LLM_API_KEY", "").strip()
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    category_llm_api_key = explicit_category_llm_key or openai_api_key or anthropic_api_key
+
+    explicit_base_url = os.getenv("AUTOMATION_CATEGORY_LLM_BASE_URL", "").strip()
+    if explicit_base_url:
+        category_llm_base_url = explicit_base_url
+    elif anthropic_api_key and not openai_api_key:
+        category_llm_base_url = DEFAULT_CATEGORY_LLM_ANTHROPIC_BASE_URL
+    else:
+        category_llm_base_url = DEFAULT_CATEGORY_LLM_OPENAI_BASE_URL
+
+    explicit_model = os.getenv("AUTOMATION_CATEGORY_LLM_MODEL", "").strip()
+    if explicit_model:
+        category_llm_model = explicit_model
+    elif "anthropic" in category_llm_base_url.lower():
+        category_llm_model = DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL
+    else:
+        category_llm_model = DEFAULT_CATEGORY_LLM_OPENAI_MODEL
+
     return {
         "converter_endpoint": os.getenv("AUTOMATION_CONVERTER_ENDPOINT", DEFAULT_CONVERTER_ENDPOINT).strip(),
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),
@@ -765,12 +841,9 @@ def get_runtime_config() -> Dict[str, Any]:
             DEFAULT_IMAGE_POLL_INTERVAL_SECONDS,
         ),
         "category_llm_enabled": _read_bool_env("AUTOMATION_CATEGORY_LLM_ENABLED", True),
-        "category_llm_api_key": (
-            os.getenv("AUTOMATION_CATEGORY_LLM_API_KEY", "").strip()
-            or os.getenv("OPENAI_API_KEY", "").strip()
-        ),
-        "category_llm_base_url": os.getenv("AUTOMATION_CATEGORY_LLM_BASE_URL", DEFAULT_CATEGORY_LLM_BASE_URL).strip(),
-        "category_llm_model": os.getenv("AUTOMATION_CATEGORY_LLM_MODEL", DEFAULT_CATEGORY_LLM_MODEL).strip(),
+        "category_llm_api_key": category_llm_api_key,
+        "category_llm_base_url": category_llm_base_url,
+        "category_llm_model": category_llm_model,
         "category_llm_max_categories": read_int(
             "AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES",
             DEFAULT_CATEGORY_LLM_MAX_CATEGORIES,

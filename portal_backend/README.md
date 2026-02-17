@@ -60,6 +60,24 @@ Recommended operations:
 - Schedule this script as a cron/worker job in Dokploy.
 - Share the Google Sheet with your team as viewer-only.
 
+## Sync WordPress Authors To DB
+Use `scripts/sync_wp_authors.py` to populate `site_credentials.author_id` and `site_credentials.author_name` from each site's WordPress `/users/me` endpoint.
+
+Setup:
+```bash
+cd portal_backend
+pip install -r requirements.txt
+export DATABASE_URL="postgresql://<prod-user>:<prod-password>@<prod-host>:5432/<prod-db>"
+python scripts/sync_wp_authors.py --dry-run
+python scripts/sync_wp_authors.py
+```
+
+Optional filters:
+- `--site-url https://eintragnews.de` to sync one site (with/without `www` match).
+- `--credential-id <site_credentials_uuid>` to sync one credential.
+- `--only-missing` to skip rows that already have both author fields.
+- `--include-inactive-sites` if needed.
+
 ## Make.com Replacement Webhook
 Endpoint:
 - `POST /automation/guest-post-webhook`

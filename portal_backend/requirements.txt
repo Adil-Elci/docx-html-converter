@@ -9,6 +9,7 @@ psycopg2-binary
 requests
 python-multipart
 passlib[bcrypt]
+bcrypt==4.0.1
 pyjwt
 email-validator
 google-api-python-client

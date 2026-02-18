@@ -181,11 +181,24 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return;
-    const allowedSections = currentUser.role === "admin" ? ["admin", "guest-posts", "orders"] : ["guest-posts", "orders"];
+    if (currentUser.role === "admin") {
+      if (activeSection !== "admin" && activeSection !== "guest-posts" && activeSection !== "orders") {
+        setActiveSection("admin");
+      }
+      return;
+    }
+    const allowedSections = ["guest-posts", "orders"];
     if (!allowedSections.includes(activeSection)) {
-      setActiveSection(allowedSections[0]);
+      setActiveSection("guest-posts");
     }
   }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (currentUser.role === "admin") {
+      setActiveSection("admin");
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;

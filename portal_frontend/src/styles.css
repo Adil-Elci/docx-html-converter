@@ -67,13 +67,14 @@ body {
 }
 
 .auth-card {
-  width: min(460px, 100%);
+  width: min(760px, 100%);
 }
 
 .auth-card h1 {
   margin: 0 0 6px;
   font-size: 28px;
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .auth-form {
@@ -593,5 +594,9 @@ input:disabled {
 
   .source-toggle button {
     flex: 1;
+  }
+
+  .auth-card h1 {
+    white-space: normal;
   }
 }

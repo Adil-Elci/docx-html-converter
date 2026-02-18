@@ -607,9 +607,11 @@ export default function App() {
         </div>
 
         <div className="container">
-          <div className="hero">
-            {isAdminSection ? <h1>{t("heroAdminPanel")}</h1> : <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>}
-          </div>
+          {!isAdminSection ? (
+            <div className="hero">
+              <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
+            </div>
+          ) : null}
 
           {isAdminSection ? (
             <div className="stats-grid admin-kpi-grid">

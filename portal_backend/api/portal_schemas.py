@@ -64,6 +64,43 @@ class AuthLogoutOut(BaseModel):
     ok: bool = True
 
 
+class AuthPasswordResetRequestIn(BaseModel):
+    email: EmailStr
+
+    @validator("email")
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class AuthPasswordResetRequestOut(BaseModel):
+    ok: bool = True
+    message: str
+
+
+class AuthPasswordResetConfirmIn(BaseModel):
+    token: str = Field(min_length=20, max_length=512)
+    new_password: str = Field(min_length=8, max_length=256)
+
+    @validator("token")
+    def non_empty_token(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("token must not be empty.")
+        return cleaned
+
+    @validator("new_password")
+    def non_empty_password(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) < 8:
+            raise ValueError("new_password must be at least 8 characters.")
+        return cleaned
+
+
+class AuthPasswordResetConfirmOut(BaseModel):
+    ok: bool = True
+    message: str
+
+
 class AdminUserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=256)

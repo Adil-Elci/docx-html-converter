@@ -97,6 +97,12 @@ body {
   font-size: 13px;
 }
 
+.auth-reset-form {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 .auth-loading {
   font-size: 16px;
   color: var(--muted);

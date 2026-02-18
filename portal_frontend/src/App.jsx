@@ -19,6 +19,21 @@ const emptyLoginForm = () => ({
   password: "",
 });
 
+const emptyResetRequestForm = () => ({
+  email: "",
+});
+
+const emptyResetConfirmForm = () => ({
+  password: "",
+  confirm_password: "",
+});
+
+const getResetTokenFromUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  const token = (params.get("reset_token") || "").trim();
+  return token || "";
+};
+
 const emptyAdminUserForm = () => ({
   email: "",
   password: "",
@@ -49,6 +64,15 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loginForm, setLoginForm] = useState(emptyLoginForm());
   const [authError, setAuthError] = useState("");
+  const [showResetOption, setShowResetOption] = useState(false);
+  const [showResetRequestForm, setShowResetRequestForm] = useState(false);
+  const [resetRequestForm, setResetRequestForm] = useState(emptyResetRequestForm());
+  const [resetRequestSubmitting, setResetRequestSubmitting] = useState(false);
+  const [resetRequestMessage, setResetRequestMessage] = useState("");
+  const [resetToken, setResetToken] = useState(() => getResetTokenFromUrl());
+  const [resetConfirmForm, setResetConfirmForm] = useState(emptyResetConfirmForm());
+  const [resetConfirmSubmitting, setResetConfirmSubmitting] = useState(false);
+  const [resetConfirmMessage, setResetConfirmMessage] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -204,6 +228,10 @@ export default function App() {
 
       setCurrentUser(user);
       setLoginForm(emptyLoginForm());
+      setShowResetOption(false);
+      setShowResetRequestForm(false);
+      setResetRequestMessage("");
+      setResetConfirmMessage("");
       setActiveSection(user.role === "admin" ? "admin" : "guest-posts");
       setLoading(true);
       await loadAll();
@@ -216,10 +244,82 @@ export default function App() {
         setAuthError("");
       } else {
         setAuthError(message);
+        setShowResetOption(true);
       }
     } finally {
       setLoading(false);
       setAuthSubmitting(false);
+    }
+  };
+
+  const requestPasswordReset = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    setResetRequestMessage("");
+    const email = resetRequestForm.email.trim().toLowerCase();
+    if (!email) {
+      setAuthError(t("errorEmailRequired"));
+      return;
+    }
+    try {
+      setResetRequestSubmitting(true);
+      const response = await fetch(`${baseApiUrl}/auth/password-reset/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!response.ok) {
+        const detail = await readApiError(response, t("errorRequestFailed"));
+        throw new Error(detail || t("errorRequestFailed"));
+      }
+      const payload = await response.json();
+      setResetRequestMessage(payload?.message || t("passwordResetSent"));
+      setShowResetRequestForm(false);
+      setResetRequestForm(emptyResetRequestForm());
+    } catch (err) {
+      setAuthError(err?.message || t("errorRequestFailed"));
+    } finally {
+      setResetRequestSubmitting(false);
+    }
+  };
+
+  const confirmPasswordReset = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    setResetConfirmMessage("");
+    const password = (resetConfirmForm.password || "").trim();
+    const confirmPassword = (resetConfirmForm.confirm_password || "").trim();
+    if (!password || !confirmPassword) {
+      setAuthError(t("errorPasswordRequired"));
+      return;
+    }
+    if (password !== confirmPassword) {
+      setAuthError(t("errorPasswordMismatch"));
+      return;
+    }
+    try {
+      setResetConfirmSubmitting(true);
+      const response = await fetch(`${baseApiUrl}/auth/password-reset/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, new_password: password }),
+      });
+      if (!response.ok) {
+        const detail = await readApiError(response, t("errorRequestFailed"));
+        throw new Error(detail || t("errorRequestFailed"));
+      }
+      const payload = await response.json();
+      setResetConfirmMessage(payload?.message || t("passwordResetDone"));
+      setResetToken("");
+      setResetConfirmForm(emptyResetConfirmForm());
+      const params = new URLSearchParams(window.location.search);
+      params.delete("reset_token");
+      const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (err) {
+      setAuthError(err?.message || t("errorRequestFailed"));
+    } finally {
+      setResetConfirmSubmitting(false);
     }
   };
 
@@ -443,9 +543,23 @@ export default function App() {
         onThemeChange={setTheme}
         loginForm={loginForm}
         onLoginFormChange={setLoginForm}
-        onSubmit={handleLogin}
-        submitting={authSubmitting}
+        onLoginSubmit={handleLogin}
+        submittingLogin={authSubmitting}
         error={authError}
+        showResetOption={showResetOption}
+        onShowResetRequest={() => setShowResetRequestForm(true)}
+        showResetRequestForm={showResetRequestForm}
+        resetRequestForm={resetRequestForm}
+        onResetRequestFormChange={setResetRequestForm}
+        onResetRequestSubmit={requestPasswordReset}
+        submittingResetRequest={resetRequestSubmitting}
+        resetRequestMessage={resetRequestMessage}
+        resetToken={resetToken}
+        resetConfirmForm={resetConfirmForm}
+        onResetConfirmFormChange={setResetConfirmForm}
+        onResetConfirmSubmit={confirmPasswordReset}
+        submittingResetConfirm={resetConfirmSubmitting}
+        resetConfirmMessage={resetConfirmMessage}
       />
     );
   }
@@ -778,10 +892,26 @@ function AuthGate({
   onThemeChange,
   loginForm,
   onLoginFormChange,
-  onSubmit,
-  submitting,
+  onLoginSubmit,
+  submittingLogin,
   error,
+  showResetOption,
+  onShowResetRequest,
+  showResetRequestForm,
+  resetRequestForm,
+  onResetRequestFormChange,
+  onResetRequestSubmit,
+  submittingResetRequest,
+  resetRequestMessage,
+  resetToken,
+  resetConfirmForm,
+  onResetConfirmFormChange,
+  onResetConfirmSubmit,
+  submittingResetConfirm,
+  resetConfirmMessage,
 }) {
+  const inResetConfirmMode = Boolean(resetToken);
+
   return (
     <div className="auth-shell">
       <div className="auth-topbar">
@@ -791,40 +921,91 @@ function AuthGate({
 
       <div className="auth-card panel">
         <h1>{t("loginTitle")}</h1>
+        {inResetConfirmMode ? (
+          <form className="auth-form" onSubmit={onResetConfirmSubmit}>
+            <div>
+              <label>{t("newPassword")}</label>
+              <input
+                type="password"
+                value={resetConfirmForm.password}
+                onChange={(e) => onResetConfirmFormChange((prev) => ({ ...prev, password: e.target.value }))}
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            <div>
+              <label>{t("confirmPassword")}</label>
+              <input
+                type="password"
+                value={resetConfirmForm.confirm_password}
+                onChange={(e) => onResetConfirmFormChange((prev) => ({ ...prev, confirm_password: e.target.value }))}
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
+            {resetConfirmMessage ? <div className="success">{resetConfirmMessage}</div> : null}
+            <button className="btn" type="submit" disabled={submittingResetConfirm}>
+              {submittingResetConfirm ? t("submitting") : t("resetPassword")}
+            </button>
+          </form>
+        ) : (
+          <>
+            <form className="auth-form" onSubmit={onLoginSubmit}>
+              <div>
+                <label>{t("email")}</label>
+                <input
+                  type="email"
+                  value={loginForm.email}
+                  onChange={(e) => onLoginFormChange((prev) => ({ ...prev, email: e.target.value }))}
+                  placeholder="name@example.com"
+                  required
+                />
+              </div>
+              <div>
+                <label>{t("password")}</label>
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) => onLoginFormChange((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="••••••••"
+                  required
+                />
+              </div>
+              {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
+              {resetRequestMessage ? <div className="success">{resetRequestMessage}</div> : null}
+              <button className="btn" type="submit" disabled={submittingLogin}>
+                {submittingLogin ? t("loggingIn") : t("login")}
+              </button>
+            </form>
 
-        <form className="auth-form" onSubmit={onSubmit}>
-          <div>
-            <label>{t("email")}</label>
-            <input
-              type="email"
-              value={loginForm.email}
-              onChange={(e) => onLoginFormChange((prev) => ({ ...prev, email: e.target.value }))}
-              placeholder="name@example.com"
-              required
-            />
-          </div>
-          <div>
-            <label>{t("password")}</label>
-            <input
-              type="password"
-              value={loginForm.password}
-              onChange={(e) => onLoginFormChange((prev) => ({ ...prev, password: e.target.value }))}
-              placeholder="••••••••"
-              required
-            />
-          </div>
+            {showResetOption ? (
+              <div className="auth-help">
+                <button className="btn secondary" type="button" onClick={onShowResetRequest}>
+                  {t("forgotCredentials")}
+                </button>
+              </div>
+            ) : null}
 
-          {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
-
-          <button className="btn" type="submit" disabled={submitting}>
-            {submitting ? t("loggingIn") : t("login")}
-          </button>
-        </form>
-
-        <div className="auth-help">
-          <strong>{t("forgotCredentials")}</strong>
-          <p className="muted-text">{t("forgotCredentialsHelp")}</p>
-        </div>
+            {showResetRequestForm ? (
+              <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit}>
+                <div>
+                  <label>{t("resetEmailLabel")}</label>
+                  <input
+                    type="email"
+                    value={resetRequestForm.email}
+                    onChange={(e) => onResetRequestFormChange((prev) => ({ ...prev, email: e.target.value }))}
+                    placeholder="name@example.com"
+                    required
+                  />
+                </div>
+                <button className="btn secondary" type="submit" disabled={submittingResetRequest}>
+                  {submittingResetRequest ? t("submitting") : t("sendResetLink")}
+                </button>
+              </form>
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   );

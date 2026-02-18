@@ -18,6 +18,8 @@ New endpoints:
 - `POST /auth/login`
 - `POST /auth/logout`
 - `GET /auth/me`
+- `POST /auth/password-reset/request`
+- `POST /auth/password-reset/confirm`
 
 Required auth env:
 - `AUTH_JWT_SECRET` (required, long random secret)
@@ -27,6 +29,17 @@ Required auth env:
 - `AUTH_COOKIE_SAMESITE` (default: `lax`)
 - `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default: `300`)
 - `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default: `8`)
+- `AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES` (default: `60`)
+- `AUTH_PASSWORD_RESET_URL_BASE` (required for reset links, e.g. frontend domain)
+- SMTP settings for reset emails:
+  - `SMTP_HOST`
+  - `SMTP_PORT` (default `587`)
+  - `SMTP_USE_TLS` (default `true`)
+  - `SMTP_USE_SSL` (default `false`)
+  - `SMTP_USERNAME`
+  - `SMTP_PASSWORD`
+  - `SMTP_FROM_EMAIL`
+  - `SMTP_FROM_NAME` (default `Elci Solutions`)
 
 Bootstrap first admin user:
 ```bash

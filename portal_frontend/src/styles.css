@@ -245,6 +245,10 @@ body {
   gap: 14px;
 }
 
+.admin-kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .stat-card {
   background: linear-gradient(150deg, color-mix(in srgb, var(--panel-2) 82%, transparent), var(--panel));
   border: 1px solid var(--border);
@@ -485,6 +489,33 @@ input:disabled {
   grid-template-columns: 1fr 1.4fr;
 }
 
+.admin-dashboard-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-summary-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+}
+
+.admin-summary-card h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.admin-summary-number {
+  font-size: 22px;
+  line-height: 1;
+}
+
 .admin-create-form,
 .admin-users-list {
   display: grid;
@@ -571,7 +602,15 @@ input:disabled {
     grid-template-columns: 1fr;
   }
 
+  .admin-kpi-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-summary-grid {
     grid-template-columns: 1fr;
   }
 }

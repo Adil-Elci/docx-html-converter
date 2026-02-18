@@ -566,6 +566,14 @@ export default function App() {
 
   const isAdminSection = activeSection === "admin";
   const isOrders = activeSection === "orders";
+  const adminCount = adminUsers.filter((item) => item.role === "admin").length;
+  const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
+  const inactiveUserCount = adminUsers.filter((item) => !item.is_active).length;
+  const mappedClientUserCount = adminUsers.filter((item) => item.role === "client" && (item.client_ids || []).length > 0).length;
+  const unmappedClientUserCount = adminUsers.filter((item) => item.role === "client" && (item.client_ids || []).length === 0).length;
+  const activeCoveragePercent = clients.length
+    ? Math.round((mappedClientUserCount / Math.max(clientUserCount, 1)) * 100)
+    : 0;
 
   return (
     <div className="app-shell">
@@ -578,7 +586,7 @@ export default function App() {
 
       <div className="app-main">
         <div className="header">
-          <div className="title">{t("clientsPortal")}</div>
+          <div className="title">{isAdminSection ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
             <div className="user-chip">
               <span>{currentUser.email}</span>
@@ -603,25 +611,74 @@ export default function App() {
             {isAdminSection ? <h1>{t("heroAdminPanel")}</h1> : <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>}
           </div>
 
-          <div className="stats-grid">
-            <div className="stat-card">
-              <span className="stat-label">{t("statActiveSites")}</span>
-              <strong>{sites.length}</strong>
+          {isAdminSection ? (
+            <div className="stats-grid admin-kpi-grid">
+              <div className="stat-card">
+                <span className="stat-label">{t("statActiveSites")}</span>
+                <strong>{sites.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("statActiveClients")}</span>
+                <strong>{clients.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiTotalUsers")}</span>
+                <strong>{adminUsers.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiAdmins")}</span>
+                <strong>{adminCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiClientUsers")}</span>
+                <strong>{clientUserCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiInactiveUsers")}</span>
+                <strong>{inactiveUserCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiMappedClientUsers")}</span>
+                <strong>{mappedClientUserCount}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("kpiUnmappedClientUsers")}</span>
+                <strong>{unmappedClientUserCount}</strong>
+              </div>
             </div>
-            <div className="stat-card">
-              <span className="stat-label">{t("statActiveClients")}</span>
-              <strong>{clients.length}</strong>
+          ) : (
+            <div className="stats-grid">
+              <div className="stat-card">
+                <span className="stat-label">{t("statActiveSites")}</span>
+                <strong>{sites.length}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t("statActiveClients")}</span>
+                <strong>{clients.length}</strong>
+              </div>
             </div>
-          </div>
+          )}
 
           {loading ? <div className="panel muted-text">{t("loading")}</div> : null}
           {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="panel error">{error}</div> : null}
           {success ? <div className="panel success">{success}</div> : null}
 
           {isAdminSection ? (
-            <div className="panel form-panel">
-              <h2>{t("adminPanelTitle")}</h2>
-              <p className="muted-text">{t("adminPanelBody")}</p>
+            <div className="panel form-panel admin-dashboard-panel">
+              <div className="admin-summary-grid">
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminCoverageTitle")}</h3>
+                  <p className="muted-text">{t("adminCoverageBody")}</p>
+                  <strong className="admin-summary-number">{activeCoveragePercent}%</strong>
+                </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminHealthTitle")}</h3>
+                  <p className="muted-text">{t("adminHealthBody")}</p>
+                  <strong className="admin-summary-number">
+                    {inactiveUserCount === 0 ? t("adminHealthy") : t("adminNeedsAttention")}
+                  </strong>
+                </div>
+              </div>
 
               <div className="admin-grid">
                 <form className="admin-create-form" onSubmit={createAdminUser}>

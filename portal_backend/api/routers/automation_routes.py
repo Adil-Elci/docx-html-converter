@@ -42,6 +42,11 @@ router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _normalized_host(value: str) -> Optional[str]:
     raw = (value or "").strip()
     if not raw:
@@ -512,7 +517,15 @@ async def process_guest_post_webhook(
 
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
-        _require_client_site_access(db, client.id, site.id)
+        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+        if enforce_client_site_access:
+            _require_client_site_access(db, client.id, site.id)
+        else:
+            logger.info(
+                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
+                client.id,
+                site.id,
+            )
         submission, job, deduplicated = _enqueue_job(
             db,
             payload=payload,

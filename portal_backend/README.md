@@ -138,6 +138,7 @@ Runtime env vars:
 - `AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES` (default: `2`)
 - `AUTOMATION_CATEGORY_LLM_CONFIDENCE_THRESHOLD` (default: `0.55`)
 - `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
+- `AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS` (default: `false`; set `true` to require `client_site_access` mapping)
 - `AUTOMATION_WORKER_ENABLED` (default: `true`)
 - `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)

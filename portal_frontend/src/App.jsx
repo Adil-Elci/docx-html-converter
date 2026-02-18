@@ -4,93 +4,30 @@ import { getLabel } from "./i18n.js";
 
 const getInitialLanguage = () => localStorage.getItem("ui_language") || "en";
 
-const emptyClientForm = () => ({
-  name: "",
-  primary_domain: "",
-  backlink_url: "",
-  status: "active",
-});
-
-const emptySiteForm = () => ({
-  name: "",
-  site_url: "",
-  wp_rest_base: "/wp-json/wp/v2",
-  hosting_provider: "",
-  hosting_panel: "",
-  status: "active",
-});
-
-const emptyCredentialForm = () => ({
-  site_id: "",
-  auth_type: "application_password",
-  wp_username: "",
-  wp_app_password: "",
-  enabled: true,
-});
-
-const emptyAccessForm = () => ({
-  client_id: "",
-  site_id: "",
-  enabled: true,
-});
-
 const emptySubmissionForm = () => ({
-  client_id: "",
-  site_id: "",
-  source_type: "google-doc",
+  target_site: "",
+  client_name: "",
+  source_type: "",
   doc_url: "",
-  file_url: "",
-  backlink_placement: "intro",
-  post_status: "draft",
-  title: "",
-  raw_text: "",
-  notes: "",
-  status: "received",
-  rejection_reason: "",
+  docx_file: null,
+  anchor: "",
+  topic: "",
 });
 
-const emptyJobForm = () => ({
-  submission_id: "",
-  job_status: "queued",
-});
-
-const emptyEventForm = () => ({
-  event_type: "converter_called",
-  payload: "{}",
-});
-
-const emptyAssetForm = () => ({
-  asset_type: "featured_image",
-  provider: "openai",
-  source_url: "",
-  storage_url: "",
-  meta: "{}",
-});
+const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 
 export default function App() {
+  const [activeSection, setActiveSection] = useState("guest-posts");
   const [language, setLanguage] = useState(getInitialLanguage());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
-  const [siteCredentials, setSiteCredentials] = useState([]);
-  const [accessRows, setAccessRows] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
-  const [jobs, setJobs] = useState([]);
-  const [selectedJobId, setSelectedJobId] = useState("");
-  const [jobEvents, setJobEvents] = useState([]);
-  const [jobAssets, setJobAssets] = useState([]);
-
-  const [clientForm, setClientForm] = useState(emptyClientForm());
-  const [siteForm, setSiteForm] = useState(emptySiteForm());
-  const [credentialForm, setCredentialForm] = useState(emptyCredentialForm());
-  const [accessForm, setAccessForm] = useState(emptyAccessForm());
   const [submissionForm, setSubmissionForm] = useState(emptySubmissionForm());
-  const [jobForm, setJobForm] = useState(emptyJobForm());
-  const [eventForm, setEventForm] = useState(emptyEventForm());
-  const [assetForm, setAssetForm] = useState(emptyAssetForm());
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
@@ -107,762 +44,296 @@ export default function App() {
     loadAll().finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!selectedJobId) {
-      setJobEvents([]);
-      setJobAssets([]);
-      return;
-    }
-    loadJobDetails(selectedJobId);
-  }, [selectedJobId]);
-
   const loadAll = async () => {
     try {
       setError("");
-      const [clientsData, sitesData, credentialsData, accessData, submissionsData, jobsData] = await Promise.all([
-        api.get("/clients"),
-        api.get("/sites"),
-        api.get("/site-credentials"),
-        api.get("/client-site-access"),
-        api.get("/submissions"),
-        api.get("/jobs"),
-      ]);
-      setClients(clientsData || []);
-      setSites(sitesData || []);
-      setSiteCredentials(credentialsData || []);
-      setAccessRows(accessData || []);
-      setSubmissions(submissionsData || []);
-      setJobs(jobsData || []);
+      const [clientsData, sitesData] = await Promise.all([api.get("/clients"), api.get("/sites")]);
+      setClients((clientsData || []).filter((item) => item.status === "active"));
+      setSites((sitesData || []).filter((item) => item.status === "active"));
     } catch (err) {
       setError(err.message);
     }
   };
 
-  const loadJobDetails = async (jobId) => {
-    try {
-      setError("");
-      const [eventsData, assetsData] = await Promise.all([
-        api.get(`/jobs/${jobId}/events`),
-        api.get(`/jobs/${jobId}/assets`),
-      ]);
-      setJobEvents(eventsData || []);
-      setJobAssets(assetsData || []);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const createClient = async (event) => {
+  const submitGuestPost = async (event) => {
     event.preventDefault();
-    try {
-      await api.post("/clients", clientForm);
-      setClientForm(emptyClientForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+    setError("");
+    setSuccess("");
+    const effectiveSourceType = activeSection === "orders" ? "google-doc" : submissionForm.source_type;
 
-  const toggleClientStatus = async (client) => {
-    const nextStatus = client.status === "active" ? "inactive" : "active";
-    try {
-      await api.patch(`/clients/${client.id}`, { status: nextStatus });
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+    const targetSite = submissionForm.target_site.trim();
+    const clientName = submissionForm.client_name.trim();
 
-  const createSite = async (event) => {
-    event.preventDefault();
-    const payload = {
-      ...siteForm,
-      hosting_provider: siteForm.hosting_provider.trim() || null,
-      hosting_panel: siteForm.hosting_panel.trim() || null,
-    };
-    try {
-      await api.post("/sites", payload);
-      setSiteForm(emptySiteForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    if (!targetSite) {
+      setError(t("errorTargetRequired"));
+      return;
     }
-  };
-
-  const toggleSiteStatus = async (site) => {
-    const nextStatus = site.status === "active" ? "inactive" : "active";
-    try {
-      await api.patch(`/sites/${site.id}`, { status: nextStatus });
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    if (!clientName) {
+      setError(t("errorClientRequired"));
+      return;
     }
-  };
-
-  const createSiteCredential = async (event) => {
-    event.preventDefault();
-    try {
-      await api.post("/site-credentials", credentialForm);
-      setCredentialForm(emptyCredentialForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    if (!effectiveSourceType) {
+      setError(t("errorFileTypeRequired"));
+      return;
     }
-  };
 
-  const toggleCredentialEnabled = async (credential) => {
-    try {
-      await api.patch(`/site-credentials/${credential.id}`, { enabled: !credential.enabled });
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    if (effectiveSourceType === "google-doc" && !submissionForm.doc_url.trim()) {
+      setError(t("errorGoogleDocRequired"));
+      return;
     }
-  };
 
-  const createAccess = async (event) => {
-    event.preventDefault();
-    try {
-      await api.post("/client-site-access", accessForm);
-      setAccessForm(emptyAccessForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    if (effectiveSourceType === "word-doc" && !submissionForm.docx_file) {
+      setError(t("errorDocxRequired"));
+      return;
     }
-  };
 
-  const toggleAccessEnabled = async (access) => {
-    try {
-      await api.patch(`/client-site-access/${access.id}`, { enabled: !access.enabled });
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
+    const formData = new FormData();
+    formData.append("target_site", targetSite);
+    formData.append("client_name", clientName);
+    formData.append("source_type", effectiveSourceType);
+    formData.append("execution_mode", "async");
+    if (submissionForm.anchor.trim()) formData.append("anchor", submissionForm.anchor.trim());
+    if (submissionForm.topic.trim()) formData.append("topic", submissionForm.topic.trim());
+
+    if (effectiveSourceType === "google-doc") {
+      formData.append("doc_url", submissionForm.doc_url.trim());
+    } else if (submissionForm.docx_file) {
+      formData.append("docx_file", submissionForm.docx_file);
     }
-  };
 
-  const createSubmission = async (event) => {
-    event.preventDefault();
-    const payload = {
-      ...submissionForm,
-      doc_url: submissionForm.source_type === "google-doc" ? submissionForm.doc_url || null : null,
-      file_url: submissionForm.source_type === "docx-upload" ? submissionForm.file_url || null : null,
-      title: submissionForm.title || null,
-      raw_text: submissionForm.raw_text || null,
-      notes: submissionForm.notes || null,
-      rejection_reason: submissionForm.rejection_reason || null,
-    };
     try {
-      await api.post("/submissions", payload);
-      setSubmissionForm(emptySubmissionForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+      setSubmitting(true);
+      const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
 
-  const setSubmissionQueued = async (submission) => {
-    try {
-      await api.patch(`/submissions/${submission.id}`, { status: "queued" });
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const createJob = async (event) => {
-    event.preventDefault();
-    try {
-      await api.post("/jobs", jobForm);
-      setJobForm(emptyJobForm());
-      await loadAll();
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const setJobStatus = async (job, jobStatus) => {
-    try {
-      await api.patch(`/jobs/${job.id}`, { job_status: jobStatus });
-      await loadAll();
-      if (selectedJobId === job.id) {
-        await loadJobDetails(job.id);
+      const rawBody = await response.text();
+      let payload = null;
+      try {
+        payload = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        payload = null;
       }
+
+      if (!response.ok) {
+        const detail = payload?.detail || payload?.error || rawBody || t("errorRequestFailed");
+        throw new Error(detail);
+      }
+
+      const jobId = payload?.job_id || payload?.result?.job_id;
+      setSuccess(jobId ? t("successSubmittedWithJob").replace("{{jobId}}", jobId) : t("successSubmitted"));
+      setSubmissionForm((prev) => ({
+        ...emptySubmissionForm(),
+        target_site: prev.target_site,
+        client_name: prev.client_name,
+      }));
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSubmitting(false);
     }
   };
-
-  const addJobEvent = async (event) => {
-    event.preventDefault();
-    if (!selectedJobId) return;
-    try {
-      const parsedPayload = eventForm.payload.trim() ? JSON.parse(eventForm.payload) : {};
-      await api.post(`/jobs/${selectedJobId}/events`, {
-        event_type: eventForm.event_type,
-        payload: parsedPayload,
-      });
-      setEventForm(emptyEventForm());
-      await loadJobDetails(selectedJobId);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const addJobAsset = async (event) => {
-    event.preventDefault();
-    if (!selectedJobId) return;
-    try {
-      const parsedMeta = assetForm.meta.trim() ? JSON.parse(assetForm.meta) : {};
-      await api.post(`/jobs/${selectedJobId}/assets`, {
-        asset_type: assetForm.asset_type,
-        provider: assetForm.provider,
-        source_url: assetForm.source_url || null,
-        storage_url: assetForm.storage_url || null,
-        meta: parsedMeta,
-      });
-      setAssetForm(emptyAssetForm());
-      await loadJobDetails(selectedJobId);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const findClientName = (clientId) => clients.find((client) => client.id === clientId)?.name || clientId;
-  const findSiteName = (siteId) => sites.find((site) => site.id === siteId)?.name || siteId;
 
   if (loading) {
     return (
-      <div className="app">
-        <div className="header">
-          <div className="title">{t("appTitle")}</div>
+      <div className="app-shell">
+        <Sidebar t={t} activeSection={activeSection} onSectionChange={setActiveSection} />
+        <div className="app-main">
+          <div className="header">
+            <div className="title">{t("appTitle")}</div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="app">
-      <div className="header">
-        <div className="title">Schema Operations Console</div>
-        <div className="inline">
-          <LanguageToggle
-            language={language}
-            onChange={(next) => {
-              setLanguage(next);
-              localStorage.setItem("ui_language", next);
-            }}
-          />
-          <ThemeToggle theme={theme} onChange={setTheme} />
-          <button className="btn secondary" type="button" onClick={loadAll}>
-            Reload
-          </button>
-        </div>
-      </div>
+    <div className="app-shell">
+      <Sidebar t={t} activeSection={activeSection} onSectionChange={setActiveSection} />
 
-      <div className="container">
-        {error ? <div className="panel error">{error}</div> : null}
-
-        <div className="panel">
-          <h2>Clients</h2>
-          <form className="row two" onSubmit={createClient}>
-            <div>
-              <label>Name</label>
-              <input value={clientForm.name} onChange={(e) => setClientForm((prev) => ({ ...prev, name: e.target.value }))} />
-            </div>
-            <div>
-              <label>Primary Domain</label>
-              <input
-                value={clientForm.primary_domain}
-                onChange={(e) => setClientForm((prev) => ({ ...prev, primary_domain: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Backlink URL</label>
-              <input
-                value={clientForm.backlink_url}
-                onChange={(e) => setClientForm((prev) => ({ ...prev, backlink_url: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Status</label>
-              <select value={clientForm.status} onChange={(e) => setClientForm((prev) => ({ ...prev, status: e.target.value }))}>
-                <option value="active">active</option>
-                <option value="inactive">inactive</option>
-              </select>
-            </div>
-            <button className="btn" type="submit">
-              Create Client
-            </button>
-          </form>
-
-          <div className="list">
-            {clients.map((client) => (
-              <div key={client.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{client.name}</div>
-                    <div className="status">{client.primary_domain}</div>
-                  </div>
-                  <button className="btn small" type="button" onClick={() => toggleClientStatus(client)}>
-                    {client.status}
-                  </button>
-                </div>
-              </div>
-            ))}
+      <div className="app-main">
+        <div className="header">
+          <div className="title">{t("clientsPortal")}</div>
+          <div className="inline">
+            <LanguageToggle
+              language={language}
+              onChange={(next) => {
+                setLanguage(next);
+                localStorage.setItem("ui_language", next);
+              }}
+            />
+            <ThemeToggle theme={theme} onChange={setTheme} t={t} />
           </div>
         </div>
 
-        <div className="panel">
-          <h2>Sites</h2>
-          <form className="row two" onSubmit={createSite}>
-            <div>
-              <label>Name</label>
-              <input value={siteForm.name} onChange={(e) => setSiteForm((prev) => ({ ...prev, name: e.target.value }))} />
-            </div>
-            <div>
-              <label>Site URL</label>
-              <input value={siteForm.site_url} onChange={(e) => setSiteForm((prev) => ({ ...prev, site_url: e.target.value }))} />
-            </div>
-            <div>
-              <label>WP REST Base</label>
-              <input
-                value={siteForm.wp_rest_base}
-                onChange={(e) => setSiteForm((prev) => ({ ...prev, wp_rest_base: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Hosting Provider</label>
-              <input
-                value={siteForm.hosting_provider}
-                onChange={(e) => setSiteForm((prev) => ({ ...prev, hosting_provider: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Hosting Panel</label>
-              <input
-                value={siteForm.hosting_panel}
-                onChange={(e) => setSiteForm((prev) => ({ ...prev, hosting_panel: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Status</label>
-              <select value={siteForm.status} onChange={(e) => setSiteForm((prev) => ({ ...prev, status: e.target.value }))}>
-                <option value="active">active</option>
-                <option value="inactive">inactive</option>
-              </select>
-            </div>
-            <button className="btn" type="submit">
-              Create Site
-            </button>
-          </form>
-
-          <div className="list">
-            {sites.map((site) => (
-              <div key={site.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{site.name}</div>
-                    <div className="status">{site.site_url}</div>
-                    {site.hosting_provider || site.hosting_panel ? (
-                      <div className="status">
-                        {[site.hosting_provider, site.hosting_panel].filter(Boolean).join(" | ")}
-                      </div>
-                    ) : null}
-                  </div>
-                  <button className="btn small" type="button" onClick={() => toggleSiteStatus(site)}>
-                    {site.status}
-                  </button>
-                </div>
-              </div>
-            ))}
+        <div className="container">
+          <div className="hero">
+            <h1>{activeSection === "orders" ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
           </div>
-        </div>
 
-        <div className="panel">
-          <h2>Site Credentials</h2>
-          <form className="row two" onSubmit={createSiteCredential}>
-            <div>
-              <label>Site</label>
-              <select value={credentialForm.site_id} onChange={(e) => setCredentialForm((prev) => ({ ...prev, site_id: e.target.value }))}>
-                <option value="">Select</option>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.name}
-                  </option>
-                ))}
-              </select>
+          <div className="stats-grid">
+            <div className="stat-card">
+              <span className="stat-label">{t("statActiveSites")}</span>
+              <strong>{sites.length}</strong>
             </div>
-            <div>
-              <label>WordPress Username</label>
-              <input
-                value={credentialForm.wp_username}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, wp_username: e.target.value }))}
-              />
+            <div className="stat-card">
+              <span className="stat-label">{t("statActiveClients")}</span>
+              <strong>{clients.length}</strong>
             </div>
-            <div>
-              <label>Application Password</label>
-              <input
-                value={credentialForm.wp_app_password}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, wp_app_password: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label>Enabled</label>
-              <select
-                value={credentialForm.enabled ? "true" : "false"}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, enabled: e.target.value === "true" }))}
-              >
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            </div>
-            <button className="btn" type="submit">
-              Create Credential
-            </button>
-          </form>
-
-          <div className="list">
-            {siteCredentials.map((credential) => (
-              <div key={credential.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{credential.wp_username}</div>
-                    <div className="status">{findSiteName(credential.site_id)}</div>
-                  </div>
-                  <button className="btn small" type="button" onClick={() => toggleCredentialEnabled(credential)}>
-                    {credential.enabled ? "enabled" : "disabled"}
-                  </button>
-                </div>
-              </div>
-            ))}
           </div>
-        </div>
 
-        <div className="panel">
-          <h2>Client Site Access</h2>
-          <form className="row two" onSubmit={createAccess}>
-            <div>
-              <label>Client</label>
-              <select value={accessForm.client_id} onChange={(e) => setAccessForm((prev) => ({ ...prev, client_id: e.target.value }))}>
-                <option value="">Select</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>Site</label>
-              <select value={accessForm.site_id} onChange={(e) => setAccessForm((prev) => ({ ...prev, site_id: e.target.value }))}>
-                <option value="">Select</option>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>Enabled</label>
-              <select
-                value={accessForm.enabled ? "true" : "false"}
-                onChange={(e) => setAccessForm((prev) => ({ ...prev, enabled: e.target.value === "true" }))}
-              >
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
-            </div>
-            <button className="btn" type="submit">
-              Create Access
-            </button>
-          </form>
+          {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="panel error">{error}</div> : null}
+          {success ? <div className="panel success">{success}</div> : null}
 
-          <div className="list">
-            {accessRows.map((access) => (
-              <div key={access.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{findClientName(access.client_id)} {" -> "} {findSiteName(access.site_id)}</div>
-                    <div className="status">{access.id}</div>
-                  </div>
-                  <button className="btn small" type="button" onClick={() => toggleAccessEnabled(access)}>
-                    {access.enabled ? "enabled" : "disabled"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2>Submissions</h2>
-          <form className="row two" onSubmit={createSubmission}>
-            <div>
-              <label>Client</label>
-              <select
-                value={submissionForm.client_id}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, client_id: e.target.value }))}
-              >
-                <option value="">Select</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>Site</label>
-              <select
-                value={submissionForm.site_id}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, site_id: e.target.value }))}
-              >
-                <option value="">Select</option>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>Source Type</label>
-              <select
-                value={submissionForm.source_type}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, source_type: e.target.value }))}
-              >
-                <option value="google-doc">google-doc</option>
-                <option value="docx-upload">docx-upload</option>
-              </select>
-            </div>
-
-            {submissionForm.source_type === "google-doc" ? (
+          <div className="panel form-panel">
+            <h2>{activeSection === "orders" ? t("formOrder") : t("formSubmission")}</h2>
+            <form className="guest-form" onSubmit={submitGuestPost}>
               <div>
-                <label>Doc URL</label>
+                <label>{t("targetWebsite")}</label>
                 <input
-                  value={submissionForm.doc_url}
-                  onChange={(e) => setSubmissionForm((prev) => ({ ...prev, doc_url: e.target.value }))}
+                  list="target-site-options"
+                  value={submissionForm.target_site}
+                  onChange={(e) => setSubmissionForm((prev) => ({ ...prev, target_site: e.target.value }))}
+                  placeholder={t("placeholderTargetWebsite")}
+                  required
                 />
+                <datalist id="target-site-options">
+                  {sites.map((site) => (
+                    <option key={site.id} value={site.site_url}>
+                      {site.name}
+                    </option>
+                  ))}
+                </datalist>
               </div>
-            ) : (
+
               <div>
-                <label>File URL</label>
+                <label>{t("clientName")}</label>
                 <input
-                  value={submissionForm.file_url}
-                  onChange={(e) => setSubmissionForm((prev) => ({ ...prev, file_url: e.target.value }))}
+                  list="client-name-options"
+                  value={submissionForm.client_name}
+                  onChange={(e) => setSubmissionForm((prev) => ({ ...prev, client_name: e.target.value }))}
+                  placeholder={t("placeholderClientName")}
+                  required
                 />
+                <datalist id="client-name-options">
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.name} />
+                  ))}
+                </datalist>
               </div>
-            )}
 
-            <div>
-              <label>Backlink Placement</label>
-              <select
-                value={submissionForm.backlink_placement}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, backlink_placement: e.target.value }))}
-              >
-                <option value="intro">intro</option>
-                <option value="conclusion">conclusion</option>
-              </select>
-            </div>
-            <div>
-              <label>Post Status</label>
-              <select
-                value={submissionForm.post_status}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, post_status: e.target.value }))}
-              >
-                <option value="draft">draft</option>
-                <option value="publish">publish</option>
-              </select>
-            </div>
-            <div>
-              <label>Submission Status</label>
-              <select
-                value={submissionForm.status}
-                onChange={(e) => setSubmissionForm((prev) => ({ ...prev, status: e.target.value }))}
-              >
-                <option value="received">received</option>
-                <option value="validated">validated</option>
-                <option value="rejected">rejected</option>
-                <option value="queued">queued</option>
-              </select>
-            </div>
-            <div>
-              <label>Title</label>
-              <input value={submissionForm.title} onChange={(e) => setSubmissionForm((prev) => ({ ...prev, title: e.target.value }))} />
-            </div>
-            <div>
-              <label>Notes</label>
-              <textarea value={submissionForm.notes} onChange={(e) => setSubmissionForm((prev) => ({ ...prev, notes: e.target.value }))} />
-            </div>
-            <button className="btn" type="submit">
-              Create Submission
-            </button>
-          </form>
-
-          <div className="list">
-            {submissions.map((submission) => (
-              <div key={submission.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{submission.title || "(untitled submission)"}</div>
-                    <div className="status">
-                      {submission.status} | {findClientName(submission.client_id)} | {findSiteName(submission.site_id)}
-                    </div>
-                  </div>
-                  <button className="btn small" type="button" onClick={() => setSubmissionQueued(submission)}>
-                    set queued
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="panel">
-          <h2>Jobs</h2>
-          <form className="row two" onSubmit={createJob}>
-            <div>
-              <label>Submission</label>
-              <select value={jobForm.submission_id} onChange={(e) => setJobForm((prev) => ({ ...prev, submission_id: e.target.value }))}>
-                <option value="">Select</option>
-                {submissions.map((submission) => (
-                  <option key={submission.id} value={submission.id}>
-                    {submission.title || submission.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>Initial Job Status</label>
-              <select value={jobForm.job_status} onChange={(e) => setJobForm((prev) => ({ ...prev, job_status: e.target.value }))}>
-                <option value="queued">queued</option>
-                <option value="processing">processing</option>
-                <option value="succeeded">succeeded</option>
-                <option value="failed">failed</option>
-                <option value="retrying">retrying</option>
-              </select>
-            </div>
-            <button className="btn" type="submit">
-              Create Job
-            </button>
-          </form>
-
-          <div className="list">
-            {jobs.map((job) => (
-              <div key={job.id} className="list-item">
-                <div className="inline">
-                  <div>
-                    <div>{job.id}</div>
-                    <div className="status">{job.job_status} | submission {job.submission_id}</div>
-                  </div>
-                  <div className="inline">
-                    <button className="btn small" type="button" onClick={() => setJobStatus(job, "processing")}>processing</button>
-                    <button className="btn small" type="button" onClick={() => setJobStatus(job, "succeeded")}>succeeded</button>
-                    <button className="btn small" type="button" onClick={() => setJobStatus(job, "failed")}>failed</button>
-                    <button className="btn secondary small" type="button" onClick={() => setSelectedJobId(job.id)}>
-                      details
+              {activeSection !== "orders" ? (
+                <div>
+                  <label>{t("fileType")}</label>
+                  <div className="toggle source-toggle">
+                    <button
+                      type="button"
+                      className={submissionForm.source_type === "google-doc" ? "active" : ""}
+                      onClick={() => setSubmissionForm((prev) => ({ ...prev, source_type: "google-doc" }))}
+                    >
+                      {t("googleDoc")}
+                    </button>
+                    <button
+                      type="button"
+                      className={submissionForm.source_type === "word-doc" ? "active" : ""}
+                      onClick={() => setSubmissionForm((prev) => ({ ...prev, source_type: "word-doc" }))}
+                    >
+                      {t("docxFile")}
                     </button>
                   </div>
                 </div>
-              </div>
-            ))}
+              ) : null}
+
+              {activeSection !== "orders" && submissionForm.source_type === "google-doc" ? (
+                <div>
+                  <label>{t("googleDocLink")}</label>
+                  <input
+                    type="url"
+                    value={submissionForm.doc_url}
+                    onChange={(e) => setSubmissionForm((prev) => ({ ...prev, doc_url: e.target.value }))}
+                    placeholder={t("placeholderGoogleDoc")}
+                    required
+                  />
+                </div>
+              ) : submissionForm.source_type === "word-doc" ? (
+                <div>
+                  <label>{t("fileUpload")}</label>
+                  <input
+                    type="file"
+                    accept=".doc,.docx"
+                    required
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setSubmissionForm((prev) => ({ ...prev, docx_file: file }));
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {activeSection === "orders" ? (
+                <>
+                  <div>
+                    <label>{t("anchor")}</label>
+                    <input
+                      type="text"
+                      value={submissionForm.anchor}
+                      onChange={(e) => setSubmissionForm((prev) => ({ ...prev, anchor: e.target.value }))}
+                      placeholder={t("placeholderAnchor")}
+                    />
+                  </div>
+                  <div>
+                    <label>{t("topic")}</label>
+                    <input
+                      type="text"
+                      value={submissionForm.topic}
+                      onChange={(e) => setSubmissionForm((prev) => ({ ...prev, topic: e.target.value }))}
+                      placeholder={t("placeholderTopic")}
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              <button className="btn submit-btn" type="submit" disabled={submitting}>
+                {submitting ? t("submitting") : t("submit")}
+              </button>
+            </form>
           </div>
         </div>
-
-        {selectedJobId ? (
-          <div className="panel">
-            <h2>Job Details: {selectedJobId}</h2>
-            <div className="row two">
-              <form className="row" onSubmit={addJobEvent}>
-                <label>Add Event</label>
-                <select
-                  value={eventForm.event_type}
-                  onChange={(e) => setEventForm((prev) => ({ ...prev, event_type: e.target.value }))}
-                >
-                  <option value="converter_called">converter_called</option>
-                  <option value="converter_ok">converter_ok</option>
-                  <option value="image_prompt_ok">image_prompt_ok</option>
-                  <option value="image_generated">image_generated</option>
-                  <option value="wp_post_created">wp_post_created</option>
-                  <option value="wp_post_updated">wp_post_updated</option>
-                  <option value="failed">failed</option>
-                </select>
-                <label>Payload JSON</label>
-                <textarea
-                  value={eventForm.payload}
-                  onChange={(e) => setEventForm((prev) => ({ ...prev, payload: e.target.value }))}
-                />
-                <button className="btn" type="submit">
-                  Add Event
-                </button>
-              </form>
-
-              <form className="row" onSubmit={addJobAsset}>
-                <label>Add Asset</label>
-                <select
-                  value={assetForm.asset_type}
-                  onChange={(e) => setAssetForm((prev) => ({ ...prev, asset_type: e.target.value }))}
-                >
-                  <option value="featured_image">featured_image</option>
-                </select>
-                <label>Provider</label>
-                <select
-                  value={assetForm.provider}
-                  onChange={(e) => setAssetForm((prev) => ({ ...prev, provider: e.target.value }))}
-                >
-                  <option value="openai">openai</option>
-                  <option value="leonardo">leonardo</option>
-                  <option value="other">other</option>
-                </select>
-                <label>Source URL</label>
-                <input
-                  value={assetForm.source_url}
-                  onChange={(e) => setAssetForm((prev) => ({ ...prev, source_url: e.target.value }))}
-                />
-                <label>Storage URL</label>
-                <input
-                  value={assetForm.storage_url}
-                  onChange={(e) => setAssetForm((prev) => ({ ...prev, storage_url: e.target.value }))}
-                />
-                <label>Meta JSON</label>
-                <textarea value={assetForm.meta} onChange={(e) => setAssetForm((prev) => ({ ...prev, meta: e.target.value }))} />
-                <button className="btn" type="submit">
-                  Add Asset
-                </button>
-              </form>
-            </div>
-
-            <div className="row two">
-              <div>
-                <h3>Events</h3>
-                <div className="list">
-                  {jobEvents.map((eventItem) => (
-                    <div key={eventItem.id} className="list-item">
-                      <div className="status">{eventItem.event_type}</div>
-                      <pre>{JSON.stringify(eventItem.payload, null, 2)}</pre>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h3>Assets</h3>
-                <div className="list">
-                  {jobAssets.map((asset) => (
-                    <div key={asset.id} className="list-item">
-                      <div className="status">{asset.asset_type} | {asset.provider}</div>
-                      <div>{asset.source_url || "no source_url"}</div>
-                      <div>{asset.storage_url || "no storage_url"}</div>
-                      <pre>{JSON.stringify(asset.meta, null, 2)}</pre>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
+  );
+}
+
+function Sidebar({ t, activeSection, onSectionChange }) {
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <div className="brand-logo">e</div>
+        <div>
+          <strong>Elci Solutions</strong>
+          <span>Operations Hub</span>
+        </div>
+      </div>
+
+      <nav className="nav">
+        <button
+          type="button"
+          className={`nav-item ${activeSection === "guest-posts" ? "active" : ""}`}
+          onClick={() => onSectionChange("guest-posts")}
+        >
+          {t("navGuestPosts")}
+        </button>
+        <button
+          type="button"
+          className={`nav-item ${activeSection === "orders" ? "active" : ""}`}
+          onClick={() => onSectionChange("orders")}
+        >
+          {t("navOrders")}
+        </button>
+      </nav>
+    </aside>
   );
 }
 
@@ -896,14 +367,14 @@ function LanguageToggle({ language, onChange }) {
   );
 }
 
-function ThemeToggle({ theme, onChange }) {
+function ThemeToggle({ theme, onChange, t }) {
   return (
     <div className="theme-toggle">
       <button
         type="button"
         className={theme === "light" ? "active" : ""}
         onClick={() => onChange("light")}
-        aria-label="Light theme"
+        aria-label={t("lightTheme")}
       >
         <SunIcon />
       </button>
@@ -911,7 +382,7 @@ function ThemeToggle({ theme, onChange }) {
         type="button"
         className={theme === "system" ? "active" : ""}
         onClick={() => onChange("system")}
-        aria-label="System theme"
+        aria-label={t("systemTheme")}
       >
         <SystemIcon />
       </button>
@@ -919,7 +390,7 @@ function ThemeToggle({ theme, onChange }) {
         type="button"
         className={theme === "dark" ? "active" : ""}
         onClick={() => onChange("dark")}
-        aria-label="Dark theme"
+        aria-label={t("darkTheme")}
       >
         <MoonIcon />
       </button>

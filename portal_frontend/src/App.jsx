@@ -141,7 +141,12 @@ export default function App() {
         }
       } catch (err) {
         setCurrentUser(null);
-        setAuthError(err.message);
+        const message = err?.message || "";
+        if (message === "Load failed" || message === "Failed to fetch") {
+          setAuthError("");
+        } else {
+          setAuthError(message);
+        }
       } finally {
         setLoading(false);
         setAuthLoading(false);
@@ -184,8 +189,11 @@ export default function App() {
         body: JSON.stringify({ email, password }),
       });
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(t("errorWrongCredentials"));
+        }
         const message = await readApiError(response, t("errorRequestFailed"));
-        throw new Error(message);
+        throw new Error(message || t("errorRequestFailed"));
       }
 
       const payload = await response.json();
@@ -203,7 +211,12 @@ export default function App() {
         await loadAdminUsers(user);
       }
     } catch (err) {
-      setAuthError(err.message);
+      const message = err?.message || "";
+      if (message === "Load failed" || message === "Failed to fetch") {
+        setAuthError("");
+      } else {
+        setAuthError(message);
+      }
     } finally {
       setLoading(false);
       setAuthSubmitting(false);
@@ -778,7 +791,6 @@ function AuthGate({
 
       <div className="auth-card panel">
         <h1>{t("loginTitle")}</h1>
-        <p className="muted-text">{t("loginSubtitle")}</p>
 
         <form className="auth-form" onSubmit={onSubmit}>
           <div>
@@ -802,12 +814,17 @@ function AuthGate({
             />
           </div>
 
-          {error ? <div className="error">{error}</div> : null}
+          {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
 
           <button className="btn" type="submit" disabled={submitting}>
             {submitting ? t("loggingIn") : t("login")}
           </button>
         </form>
+
+        <div className="auth-help">
+          <strong>{t("forgotCredentials")}</strong>
+          <p className="muted-text">{t("forgotCredentialsHelp")}</p>
+        </div>
       </div>
     </div>
   );

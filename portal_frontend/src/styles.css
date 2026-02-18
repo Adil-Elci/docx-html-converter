@@ -48,15 +48,19 @@ body {
 
 .auth-shell {
   min-height: 100vh;
-  padding: 22px;
+  padding: 72px 22px 22px;
   display: grid;
   align-content: center;
   justify-items: center;
   gap: 18px;
+  position: relative;
 }
 
 .auth-topbar {
-  width: min(780px, 100%);
+  position: absolute;
+  top: 16px;
+  right: 22px;
+  width: auto;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -76,6 +80,21 @@ body {
   margin-top: 16px;
   display: grid;
   gap: 14px;
+}
+
+.auth-help {
+  margin-top: 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.auth-help strong {
+  font-size: 13px;
+}
+
+.auth-help p {
+  margin: 0;
+  font-size: 13px;
 }
 
 .auth-loading {

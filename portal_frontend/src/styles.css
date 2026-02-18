@@ -571,6 +571,20 @@ input:disabled {
   padding: 10px;
 }
 
+.admin-entity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-entity-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel-3) 60%, transparent);
+  display: grid;
+  gap: 4px;
+}
+
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;

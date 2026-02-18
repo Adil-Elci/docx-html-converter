@@ -182,7 +182,13 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
     if (currentUser.role === "admin") {
-      if (activeSection !== "admin" && activeSection !== "guest-posts" && activeSection !== "orders") {
+      if (
+        activeSection !== "admin"
+        && activeSection !== "websites"
+        && activeSection !== "clients"
+        && activeSection !== "guest-posts"
+        && activeSection !== "orders"
+      ) {
         setActiveSection("admin");
       }
       return;
@@ -578,6 +584,8 @@ export default function App() {
   }
 
   const isAdminSection = activeSection === "admin";
+  const isWebsitesSection = activeSection === "websites";
+  const isClientsSection = activeSection === "clients";
   const isOrders = activeSection === "orders";
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
   const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
@@ -620,7 +628,7 @@ export default function App() {
         </div>
 
         <div className="container">
-          {!isAdminSection ? (
+          {!isAdminSection && !isWebsitesSection && !isClientsSection ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
             </div>
@@ -661,7 +669,7 @@ export default function App() {
                 <strong>{unmappedClientUserCount}</strong>
               </div>
             </div>
-          ) : (
+          ) : !isWebsitesSection && !isClientsSection ? (
             <div className="stats-grid">
               <div className="stat-card">
                 <span className="stat-label">{t("statActiveSites")}</span>
@@ -672,7 +680,7 @@ export default function App() {
                 <strong>{clients.length}</strong>
               </div>
             </div>
-          )}
+          ) : null}
 
           {loading ? <div className="panel muted-text">{t("loading")}</div> : null}
           {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="panel error">{error}</div> : null}
@@ -696,6 +704,30 @@ export default function App() {
               </div>
 
               {adminLoading ? <p className="muted-text">{t("loading")}</p> : null}
+            </div>
+          ) : isWebsitesSection ? (
+            <div className="panel form-panel">
+              <h2>{t("navWebsites")}</h2>
+              <div className="admin-entity-list">
+                {sites.map((site) => (
+                  <div key={site.id} className="admin-entity-card">
+                    <strong>{site.name}</strong>
+                    <span className="muted-text">{site.site_url}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : isClientsSection ? (
+            <div className="panel form-panel">
+              <h2>{t("navClients")}</h2>
+              <div className="admin-entity-list">
+                {clients.map((client) => (
+                  <div key={client.id} className="admin-entity-card">
+                    <strong>{client.name}</strong>
+                    <span className="muted-text">{client.email || client.phone_number || "-"}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="panel form-panel">
@@ -949,6 +981,8 @@ function Sidebar({ t, userRole, activeSection, onSectionChange }) {
   const sections = userRole === "admin"
     ? [
         { id: "admin", label: t("navAdmin") },
+        { id: "websites", label: t("navWebsites") },
+        { id: "clients", label: t("navClients") },
         { id: "guest-posts", label: t("navGuestPosts") },
         { id: "orders", label: t("navOrders") },
       ]

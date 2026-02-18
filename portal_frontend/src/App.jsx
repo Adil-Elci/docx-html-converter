@@ -167,7 +167,7 @@ export default function App() {
         setCurrentUser(null);
         const message = err?.message || "";
         if (message === "Load failed" || message === "Failed to fetch") {
-          setAuthError("");
+          setAuthError(t("errorBackendUnreachable"));
         } else {
           setAuthError(message);
         }
@@ -241,7 +241,7 @@ export default function App() {
     } catch (err) {
       const message = err?.message || "";
       if (message === "Load failed" || message === "Failed to fetch") {
-        setAuthError("");
+        setAuthError(t("errorBackendUnreachable"));
       } else {
         setAuthError(message);
         setShowResetOption(true);

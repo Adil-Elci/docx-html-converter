@@ -680,69 +680,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="admin-grid">
-                <form className="admin-create-form" onSubmit={createAdminUser}>
-                  <h3>{t("adminCreateUserTitle")}</h3>
-                  <div>
-                    <label>{t("email")}</label>
-                    <input
-                      type="email"
-                      value={adminUserForm.email}
-                      onChange={(e) => setAdminUserForm((prev) => ({ ...prev, email: e.target.value }))}
-                      placeholder="name@example.com"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label>{t("password")}</label>
-                    <input
-                      type="password"
-                      value={adminUserForm.password}
-                      onChange={(e) => setAdminUserForm((prev) => ({ ...prev, password: e.target.value }))}
-                      placeholder="••••••••"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label>{t("roleLabel")}</label>
-                    <select
-                      value={adminUserForm.role}
-                      onChange={(e) => setAdminUserForm((prev) => ({ ...prev, role: e.target.value }))}
-                    >
-                      <option value="client">{t("roleClient")}</option>
-                      <option value="admin">{t("roleAdmin")}</option>
-                    </select>
-                  </div>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={adminUserForm.is_active}
-                      onChange={(e) => setAdminUserForm((prev) => ({ ...prev, is_active: e.target.checked }))}
-                    />
-                    <span>{t("activeLabel")}</span>
-                  </label>
-
-                  {adminUserForm.role === "client" ? (
-                    <div className="client-checklist">
-                      <span className="list-label">{t("assignClients")}</span>
-                      {clients.map((client) => (
-                        <label key={client.id} className="checkbox-row">
-                          <input
-                            type="checkbox"
-                            checked={(adminUserForm.client_ids || []).includes(client.id)}
-                            onChange={() => toggleCreateUserClient(client.id)}
-                          />
-                          <span>{client.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <button className="btn" type="submit" disabled={adminSubmitting}>
-                    {adminSubmitting ? t("saving") : t("createUser")}
-                  </button>
-                </form>
-
+              <div className="admin-grid admin-grid-single">
                 <div className="admin-users-list">
                   <h3>{t("adminUsersListTitle")}</h3>
                   {adminLoading ? <p className="muted-text">{t("loading")}</p> : null}

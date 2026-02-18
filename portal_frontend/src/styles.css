@@ -489,6 +489,10 @@ input:disabled {
   grid-template-columns: 1fr 1.4fr;
 }
 
+.admin-grid-single {
+  grid-template-columns: 1fr;
+}
+
 .admin-dashboard-panel {
   display: grid;
   gap: 14px;

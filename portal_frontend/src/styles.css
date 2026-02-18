@@ -67,7 +67,9 @@ body {
 }
 
 .auth-card {
-  width: min(760px, 100%);
+  width: fit-content;
+  max-width: min(760px, calc(100vw - 44px));
+  margin-inline: auto;
 }
 
 .auth-card h1 {

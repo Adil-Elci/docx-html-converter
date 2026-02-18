@@ -11,6 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from ..auth import (
+    ensure_client_access,
+    ensure_site_access,
+    get_current_user,
+    get_optional_current_user,
+)
 from ..automation_service import (
     AutomationError,
     converter_target_from_site_url,
@@ -29,6 +35,7 @@ from ..portal_models import (
     SiteCredential,
     SiteDefaultCategory,
     Submission,
+    User,
 )
 from ..portal_schemas import (
     AutomationGuestPostIn,
@@ -466,6 +473,7 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
 async def process_guest_post_webhook(
     request: Request,
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ) -> AutomationGuestPostOut:
     payload = await _parse_automation_payload(request)
     logger.info(
@@ -517,6 +525,9 @@ async def process_guest_post_webhook(
 
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
+        if current_user is not None and current_user.role != "admin":
+            ensure_client_access(db, current_user, client.id)
+            ensure_site_access(db, current_user, site.id)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         if enforce_client_site_access:
             _require_client_site_access(db, client.id, site.id)
@@ -559,6 +570,8 @@ async def process_guest_post_webhook(
         )
 
     try:
+        if current_user is not None and current_user.role != "admin" and payload.execution_mode == "sync":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Clients cannot run sync execution mode.")
         pipeline_result = run_guest_post_pipeline(
             source_url=source_url,
             target_site=converter_target_site,
@@ -668,6 +681,7 @@ def get_automation_status(
     job_id: Optional[UUID] = Query(default=None),
     submission_id: Optional[UUID] = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> AutomationStatusOut:
     if not any([idempotency_key, job_id, submission_id]):
         raise HTTPException(
@@ -679,6 +693,9 @@ def get_automation_status(
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
+        if current_user.role != "admin":
+            ensure_client_access(db, current_user, job.client_id)
+            ensure_site_access(db, current_user, job.site_id)
         submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
         if not submission:
             return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
@@ -688,6 +705,9 @@ def get_automation_status(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if not submission:
             return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
+        if current_user.role != "admin":
+            ensure_client_access(db, current_user, submission.client_id)
+            ensure_site_access(db, current_user, submission.site_id)
         return _status_from_submission(db, submission, idempotency_key=idempotency_key)
 
     cleaned_key = (idempotency_key or "").strip()
@@ -704,6 +724,9 @@ def get_automation_status(
     for submission in candidates:
         note_map = _extract_note_map(submission.notes)
         if note_map.get("idempotency_key") == cleaned_key:
+            if current_user.role != "admin":
+                ensure_client_access(db, current_user, submission.client_id)
+                ensure_site_access(db, current_user, submission.site_id)
             return _status_from_submission(db, submission, idempotency_key=cleaned_key)
 
     return AutomationStatusOut(found=False, idempotency_key=cleaned_key)

@@ -13,6 +13,57 @@ alembic upgrade head
 uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## Auth Foundation (Phase 1)
+New endpoints:
+- `POST /auth/login`
+- `POST /auth/logout`
+- `GET /auth/me`
+
+Required auth env:
+- `AUTH_JWT_SECRET` (required, long random secret)
+- `AUTH_JWT_ALGORITHM` (default: `HS256`)
+- `AUTH_ACCESS_TOKEN_TTL_MINUTES` (default: `10080`)
+- `AUTH_COOKIE_SECURE` (default: `false`)
+- `AUTH_COOKIE_SAMESITE` (default: `lax`)
+- `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default: `300`)
+- `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default: `8`)
+
+Bootstrap first admin user:
+```bash
+cd portal_backend
+python scripts/create_admin_user.py --email admin@example.com --password "replace_me_123"
+```
+
+## RBAC Enforcement (Phase 2)
+Role model:
+- `admin`: full access to management routes
+- `client`: scoped access only to mapped clients/sites (`client_users` + `client_site_access`)
+
+Enforced behavior:
+- Admin-only routes:
+  - `POST/PATCH /clients`
+  - `POST/PATCH /sites`
+  - `GET/POST/PATCH /site-credentials*`
+  - `GET/POST/PATCH /client-site-access*`
+  - `POST/PATCH /jobs*` and `POST /jobs/{id}/events`, `POST /jobs/{id}/assets`
+- Client-scoped routes:
+  - `GET /clients`, `GET /sites`
+  - `GET/POST/PATCH /submissions*`
+  - `GET /jobs*`, `GET /jobs/{id}*`
+  - `GET /automation/status`
+- `POST /automation/guest-post-webhook` remains compatible for unauthenticated external callers (Ninja/Make), but authenticated client users are scoped to their allowed client/site mappings and cannot run `execution_mode=sync`.
+
+## Admin User Management + Hardening (Phase 4)
+Admin-only endpoints:
+- `GET /admin/users`
+- `POST /admin/users`
+- `PATCH /admin/users/{user_id}`
+
+Notes:
+- `POST/PATCH /auth/login` now has in-memory rate limiting by `IP + email` key.
+- Last active admin cannot be demoted/deactivated (`409` guard).
+- Client-role users can be mapped to clients via `client_ids` in admin user payloads.
+
 ## Migration Ownership
 - `portal_backend` is the only service that runs migrations.
 - Deploy startup runs: wait for Postgres, advisory lock, `alembic upgrade head`, unlock, start API.

@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user, require_admin, user_client_ids
 from ..db import get_db
-from ..portal_models import Client
+from ..portal_models import Client, User
 from ..portal_schemas import ClientCreate, ClientOut, ClientUpdate
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -32,8 +33,14 @@ def _client_to_out(client: Client) -> ClientOut:
 def list_clients(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[ClientOut]:
     query = db.query(Client)
+    if current_user.role != "admin":
+        allowed_ids = user_client_ids(db, current_user)
+        if not allowed_ids:
+            return []
+        query = query.filter(Client.id.in_(allowed_ids))
     if status_filter:
         query = query.filter(Client.status == status_filter.strip().lower())
     clients = query.order_by(Client.created_at.desc()).all()
@@ -44,6 +51,7 @@ def list_clients(
 def create_client(
     payload: ClientCreate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> ClientOut:
     client = Client(
         name=payload.name,
@@ -68,6 +76,7 @@ def update_client(
     client_id: UUID,
     payload: ClientUpdate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> ClientOut:
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:

@@ -6,8 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
 from ..db import get_db
-from ..portal_models import Asset, Job, JobEvent, Submission
+from ..portal_models import Asset, Job, JobEvent, Submission, User
 from ..portal_schemas import (
     AssetCreate,
     AssetOut,
@@ -81,13 +82,23 @@ def list_jobs(
     site_id: Optional[UUID] = Query(default=None),
     job_status: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[JobOut]:
     query = db.query(Job)
+    if current_user.role != "admin":
+        allowed_client_ids = user_client_ids(db, current_user)
+        if not allowed_client_ids:
+            return []
+        query = query.filter(Job.client_id.in_(allowed_client_ids))
     if submission_id is not None:
         query = query.filter(Job.submission_id == submission_id)
     if client_id is not None:
+        if current_user.role != "admin":
+            ensure_client_access(db, current_user, client_id)
         query = query.filter(Job.client_id == client_id)
     if site_id is not None:
+        if current_user.role != "admin":
+            ensure_site_access(db, current_user, site_id)
         query = query.filter(Job.site_id == site_id)
     if job_status:
         query = query.filter(Job.job_status == job_status.strip().lower())
@@ -99,6 +110,7 @@ def list_jobs(
 def create_job(
     payload: JobCreate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> JobOut:
     submission = _get_submission_or_404(db, payload.submission_id)
 
@@ -132,8 +144,12 @@ def create_job(
 def get_job(
     job_id: UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> JobOut:
     job = _get_job_or_404(db, job_id)
+    if current_user.role != "admin":
+        ensure_client_access(db, current_user, job.client_id)
+        ensure_site_access(db, current_user, job.site_id)
     return _job_to_out(job)
 
 
@@ -142,6 +158,7 @@ def update_job(
     job_id: UUID,
     payload: JobUpdate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> JobOut:
     job = _get_job_or_404(db, job_id)
 
@@ -166,8 +183,12 @@ def update_job(
 def list_job_events(
     job_id: UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[JobEventOut]:
-    _get_job_or_404(db, job_id)
+    job = _get_job_or_404(db, job_id)
+    if current_user.role != "admin":
+        ensure_client_access(db, current_user, job.client_id)
+        ensure_site_access(db, current_user, job.site_id)
     events = db.query(JobEvent).filter(JobEvent.job_id == job_id).order_by(JobEvent.created_at.asc()).all()
     return [_event_to_out(event) for event in events]
 
@@ -177,6 +198,7 @@ def create_job_event(
     job_id: UUID,
     payload: JobEventCreate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> JobEventOut:
     _get_job_or_404(db, job_id)
 
@@ -195,8 +217,12 @@ def create_job_event(
 def list_job_assets(
     job_id: UUID,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[AssetOut]:
-    _get_job_or_404(db, job_id)
+    job = _get_job_or_404(db, job_id)
+    if current_user.role != "admin":
+        ensure_client_access(db, current_user, job.client_id)
+        ensure_site_access(db, current_user, job.site_id)
     assets = db.query(Asset).filter(Asset.job_id == job_id).order_by(Asset.created_at.asc()).all()
     return [_asset_to_out(asset) for asset in assets]
 
@@ -206,6 +232,7 @@ def create_job_asset(
     job_id: UUID,
     payload: AssetCreate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> AssetOut:
     _get_job_or_404(db, job_id)
 

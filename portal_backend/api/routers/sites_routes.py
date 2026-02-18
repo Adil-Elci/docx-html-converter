@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user, require_admin, user_accessible_site_ids
 from ..db import get_db
-from ..portal_models import Site
+from ..portal_models import Site, User
 from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
 
 router = APIRouter(prefix="/sites", tags=["sites"])
@@ -32,8 +33,14 @@ def _site_to_out(site: Site) -> SiteOut:
 def list_sites(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> List[SiteOut]:
     query = db.query(Site)
+    if current_user.role != "admin":
+        allowed_site_ids = user_accessible_site_ids(db, current_user)
+        if not allowed_site_ids:
+            return []
+        query = query.filter(Site.id.in_(allowed_site_ids))
     if status_filter:
         query = query.filter(Site.status == status_filter.strip().lower())
     sites = query.order_by(Site.created_at.desc()).all()
@@ -44,6 +51,7 @@ def list_sites(
 def create_site(
     payload: SiteCreate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> SiteOut:
     site = Site(
         name=payload.name,
@@ -68,6 +76,7 @@ def update_site(
     site_id: UUID,
     payload: SiteUpdate,
     db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ) -> SiteOut:
     site = db.query(Site).filter(Site.id == site_id).first()
     if not site:

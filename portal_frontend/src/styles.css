@@ -46,6 +46,43 @@ body {
   color: var(--ink);
 }
 
+.auth-shell {
+  min-height: 100vh;
+  padding: 22px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 18px;
+}
+
+.auth-topbar {
+  width: min(780px, 100%);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.auth-card {
+  width: min(460px, 100%);
+}
+
+.auth-card h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+.auth-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.auth-loading {
+  font-size: 16px;
+  color: var(--muted);
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -216,6 +253,11 @@ body {
   font-size: 22px;
 }
 
+.form-panel h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
 label {
   display: block;
   margin-bottom: 6px;
@@ -267,6 +309,32 @@ input:disabled {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.header-actions {
+  justify-content: flex-end;
+}
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-3) 72%, transparent);
+  font-size: 12px;
+}
+
+.role-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 56%, transparent);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: #fff;
+  font-weight: 700;
 }
 
 .btn {
@@ -378,6 +446,68 @@ input:disabled {
   font-weight: 600;
 }
 
+.muted-text {
+  color: var(--muted);
+}
+
+.admin-grid {
+  margin-top: 14px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1.4fr;
+}
+
+.admin-create-form,
+.admin-users-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-user-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel-3) 60%, transparent);
+  display: grid;
+  gap: 10px;
+}
+
+.admin-user-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-user-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.list-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.client-checklist {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -410,6 +540,10 @@ input:disabled {
   }
 
   .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-grid {
     grid-template-columns: 1fr;
   }
 }

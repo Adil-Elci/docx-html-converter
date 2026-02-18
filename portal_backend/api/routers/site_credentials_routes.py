@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..auth import require_admin
 from ..db import get_db
 from ..portal_models import Site, SiteCredential
 from ..portal_schemas import SiteCredentialCreate, SiteCredentialOut, SiteCredentialUpdate
 
-router = APIRouter(prefix="/site-credentials", tags=["site_credentials"])
+router = APIRouter(prefix="/site-credentials", tags=["site_credentials"], dependencies=[Depends(require_admin)])
 
 
 def _credential_to_out(credential: SiteCredential) -> SiteCredentialOut:

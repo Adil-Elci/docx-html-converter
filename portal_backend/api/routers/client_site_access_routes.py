@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..auth import require_admin
 from ..db import get_db
 from ..portal_models import Client, ClientSiteAccess, Site
 from ..portal_schemas import ClientSiteAccessCreate, ClientSiteAccessOut, ClientSiteAccessUpdate
 
-router = APIRouter(prefix="/client-site-access", tags=["client_site_access"])
+router = APIRouter(prefix="/client-site-access", tags=["client_site_access"], dependencies=[Depends(require_admin)])
 
 
 def _access_to_out(access: ClientSiteAccess) -> ClientSiteAccessOut:

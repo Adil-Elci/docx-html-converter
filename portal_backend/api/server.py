@@ -14,6 +14,8 @@ from .automation_worker import AutomationJobWorker
 from .db import get_sessionmaker
 from .migration_guard import should_verify_db_head_on_startup, verify_db_is_at_head
 from .routers import (
+    admin_users_router,
+    auth_router,
     automation_router,
     client_site_access_router,
     clients_router,
@@ -39,6 +41,8 @@ if cors_origins:
     )
 
 app.include_router(clients_router)
+app.include_router(auth_router)
+app.include_router(admin_users_router)
 app.include_router(automation_router)
 app.include_router(sites_router)
 app.include_router(site_credentials_router)

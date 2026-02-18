@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, EmailStr, Field, root_validator, validator
 
 CLIENT_STATUSES = {"active", "inactive"}
 SITE_STATUSES = {"active", "inactive"}
@@ -25,6 +25,98 @@ EVENT_TYPES = {
 }
 ASSET_TYPES = {"featured_image"}
 ASSET_PROVIDERS = {"leonardo", "openai", "other"}
+USER_ROLES = {"admin", "client"}
+
+
+class UserOut(BaseModel):
+    id: UUID
+    email: EmailStr
+    role: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AuthLoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=256)
+
+    @validator("email")
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+    @validator("password")
+    def non_empty_password(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("password must not be empty.")
+        return cleaned
+
+
+class AuthLoginOut(BaseModel):
+    ok: bool = True
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+class AuthLogoutOut(BaseModel):
+    ok: bool = True
+
+
+class AdminUserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=256)
+    role: str = "client"
+    is_active: bool = True
+    client_ids: List[UUID] = Field(default_factory=list)
+
+    @validator("email")
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+    @validator("password")
+    def validate_password(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) < 8:
+            raise ValueError("password must be at least 8 characters.")
+        return cleaned
+
+    @validator("role")
+    def validate_role(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in USER_ROLES:
+            raise ValueError("role must be admin or client.")
+        return cleaned
+
+
+class AdminUserUpdate(BaseModel):
+    password: Optional[str] = Field(default=None, min_length=8, max_length=256)
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    client_ids: Optional[List[UUID]] = None
+
+    @validator("password")
+    def optional_password(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if len(cleaned) < 8:
+            raise ValueError("password must be at least 8 characters.")
+        return cleaned
+
+    @validator("role")
+    def optional_role(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in USER_ROLES:
+            raise ValueError("role must be admin or client.")
+        return cleaned
+
+
+class AdminUserOut(UserOut):
+    client_ids: List[UUID] = Field(default_factory=list)
 
 
 class ClientCreate(BaseModel):

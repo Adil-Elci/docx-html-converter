@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from ..auth import get_current_user, require_admin, user_accessible_site_ids
 from ..db import get_db
@@ -13,6 +15,11 @@ from ..portal_models import Site, SiteCredential, User
 from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
 
 router = APIRouter(prefix="/sites", tags=["sites"])
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _site_to_out(site: Site) -> SiteOut:
@@ -38,10 +45,12 @@ def list_sites(
 ) -> List[SiteOut]:
     query = db.query(Site)
     if current_user.role != "admin":
-        allowed_site_ids = user_accessible_site_ids(db, current_user)
-        if not allowed_site_ids:
-            return []
-        query = query.filter(Site.id.in_(allowed_site_ids))
+        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+        if enforce_client_site_access:
+            allowed_site_ids = user_accessible_site_ids(db, current_user)
+            if not allowed_site_ids:
+                return []
+            query = query.filter(Site.id.in_(allowed_site_ids))
     if status_filter:
         query = query.filter(Site.status == status_filter.strip().lower())
     if ready_only:
@@ -50,6 +59,10 @@ def list_sites(
             .filter(
                 SiteCredential.site_id == Site.id,
                 SiteCredential.enabled.is_(True),
+                SiteCredential.wp_username.isnot(None),
+                SiteCredential.wp_app_password.isnot(None),
+                func.length(func.btrim(SiteCredential.wp_username)) > 0,
+                func.length(func.btrim(SiteCredential.wp_app_password)) > 0,
             )
             .exists()
         )

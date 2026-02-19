@@ -93,6 +93,7 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showSubmissionSuccessModal, setShowSubmissionSuccessModal] = useState(false);
@@ -238,6 +239,43 @@ export default function App() {
       setRejectingJobId("");
     }
   };
+
+  const postMultipartWithProgress = (url, formData) => (
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url, true);
+      xhr.withCredentials = true;
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const nextProgress = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        setUploadProgress(nextProgress);
+      };
+
+      xhr.onerror = () => {
+        reject(new Error(t("errorBackendUnreachable")));
+      };
+
+      xhr.onload = () => {
+        const text = xhr.responseText || "";
+        let payload = null;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch {
+          payload = null;
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(payload || {});
+          return;
+        }
+        const message = payload?.detail || payload?.error || text || t("errorRequestFailed");
+        reject(new Error(message));
+      };
+
+      xhr.send(formData);
+    })
+  );
 
   const getDraftReviewUrl = (item) => {
     const jobId = (item?.job_id || "").toString().trim();
@@ -549,18 +587,23 @@ export default function App() {
 
     try {
       setSubmitting(true);
-      const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
-        method: "POST",
-        credentials: "include",
-        body: formData,
-      });
+      if (effectiveSourceType === "word-doc" && submissionForm.docx_file) {
+        setUploadProgress(0);
+        await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
+        setUploadProgress(100);
+      } else {
+        const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
+          method: "POST",
+          credentials: "include",
+          body: formData,
+        });
 
-      if (!response.ok) {
-        const detail = await readApiError(response, t("errorRequestFailed"));
-        throw new Error(detail);
+        if (!response.ok) {
+          const detail = await readApiError(response, t("errorRequestFailed"));
+          throw new Error(detail);
+        }
+        await response.json().catch(() => ({}));
       }
-
-      await response.json().catch(() => ({}));
       setShowSubmissionSuccessModal(true);
       setSubmissionForm((prev) => ({
         ...emptySubmissionForm(),
@@ -570,6 +613,7 @@ export default function App() {
       setError(err.message);
     } finally {
       setSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
@@ -1096,6 +1140,17 @@ export default function App() {
                 <button className="btn submit-btn" type="submit" disabled={submitting}>
                   {submitting ? t("submitting") : t("submitForReview")}
                 </button>
+                {submitting && submissionForm.source_type === "word-doc" && uploadProgress !== null ? (
+                  <div className="upload-meter" aria-live="polite">
+                    <div className="upload-meter-row">
+                      <span>{t("uploadingFile")}</span>
+                      <strong>{uploadProgress}%</strong>
+                    </div>
+                    <div className="upload-meter-track">
+                      <div className="upload-meter-fill" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                  </div>
+                ) : null}
               </form>
             </div>
           )}

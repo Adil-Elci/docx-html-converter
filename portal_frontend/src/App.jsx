@@ -90,6 +90,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [showSubmissionSuccessModal, setShowSubmissionSuccessModal] = useState(false);
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
@@ -187,6 +188,15 @@ export default function App() {
     } finally {
       setPublishingJobId("");
     }
+  };
+
+  const getDraftReviewUrl = (item) => {
+    const siteUrl = (item?.site_url || "").trim().replace(/\/+$/, "");
+    const postId = item?.wp_post_id;
+    if (siteUrl && postId) {
+      return `${siteUrl}/wp-admin/post.php?post=${encodeURIComponent(postId)}&action=edit`;
+    }
+    return (item?.wp_post_url || "").trim();
   };
 
   useEffect(() => {
@@ -501,9 +511,8 @@ export default function App() {
         throw new Error(detail);
       }
 
-      const payload = await response.json().catch(() => ({}));
-      const jobId = payload?.job_id || payload?.result?.job_id;
-      setSuccess(jobId ? t("successSubmittedWithJob").replace("{{jobId}}", jobId) : t("successSubmitted"));
+      await response.json().catch(() => ({}));
+      setShowSubmissionSuccessModal(true);
       setSubmissionForm((prev) => ({
         ...emptySubmissionForm(),
         target_site: prev.target_site,
@@ -836,15 +845,17 @@ export default function App() {
                 </p>
               ) : null}
               <div className="pending-list">
-                {(isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).map((item) => (
+                {(isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).map((item) => {
+                  const draftReviewUrl = getDraftReviewUrl(item);
+                  return (
                   <div key={item.job_id} className="pending-item">
                     <div className="pending-meta">
                       <strong>{item.client_name}</strong>
                       <span className="muted-text">{item.site_name}</span>
                     </div>
                     <div className="pending-actions">
-                      {item.wp_post_url ? (
-                        <a className="btn secondary" href={item.wp_post_url} target="_blank" rel="noreferrer">
+                      {draftReviewUrl ? (
+                        <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
                           {t("viewDraft")}
                         </a>
                       ) : (
@@ -860,7 +871,8 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -981,6 +993,26 @@ export default function App() {
             </div>
           )}
         </div>
+      </div>
+      <SubmissionSuccessModal
+        t={t}
+        open={showSubmissionSuccessModal}
+        onClose={() => setShowSubmissionSuccessModal(false)}
+      />
+    </div>
+  );
+}
+
+function SubmissionSuccessModal({ t, open, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="submission-success-title">
+      <div className="modal-card panel">
+        <h3 id="submission-success-title">{t("submissionSuccessTitle")}</h3>
+        <p className="muted-text">{t("submissionSuccessBody")}</p>
+        <button className="btn" type="button" onClick={onClose}>
+          {t("close")}
+        </button>
       </div>
     </div>
   );

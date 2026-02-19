@@ -306,6 +306,38 @@ body {
   box-shadow: var(--shadow);
 }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 8, 24, 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 1200;
+  padding: 20px;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 520px;
+  display: grid;
+  gap: 12px;
+}
+
+.modal-card h3 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.modal-card p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.modal-card .btn {
+  width: fit-content;
+}
+
 .form-panel h2 {
   margin: 0 0 16px;
   font-size: 22px;

@@ -446,13 +446,13 @@ export default function App() {
 
     const effectiveSourceType = submissionForm.source_type;
     const targetSite = submissionForm.target_site.trim();
-    const clientName = submissionForm.client_name.trim();
+    const resolvedClientName = ((clients[0]?.name) || "").trim();
 
     if (!targetSite) {
       setError(t("errorTargetRequired"));
       return;
     }
-    if (!clientName) {
+    if (!resolvedClientName) {
       setError(t("errorClientRequired"));
       return;
     }
@@ -473,7 +473,7 @@ export default function App() {
 
     const formData = new FormData();
     formData.append("target_site", targetSite);
-    formData.append("client_name", clientName);
+    formData.append("client_name", resolvedClientName);
     formData.append("request_kind", isOrders ? "order" : "guest_post");
     formData.append("source_type", effectiveSourceType);
     formData.append("execution_mode", "async");
@@ -505,7 +505,6 @@ export default function App() {
       setSubmissionForm((prev) => ({
         ...emptySubmissionForm(),
         target_site: prev.target_site,
-        client_name: prev.client_name,
       }));
     } catch (err) {
       setError(err.message);
@@ -669,6 +668,7 @@ export default function App() {
   const isAdminPendingOrders = isAdminUser && activeSection === "orders";
   const isAdminPendingSection = isAdminPendingGuestPosts || isAdminPendingOrders;
   const isOrders = activeSection === "orders";
+  const resolvedClientName = ((clients[0]?.name) || "").trim();
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
   const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
   const inactiveUserCount = adminUsers.filter((item) => !item.is_active).length;
@@ -692,8 +692,14 @@ export default function App() {
           <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
             <div className="user-chip">
-              <span>{currentUser.email}</span>
-              <span className="role-pill">{currentUser.role === "admin" ? t("roleAdmin") : t("roleClient")}</span>
+              {currentUser.role === "client" ? (
+                <span>{`Hey '${resolvedClientName || t("roleClient")}'!`}</span>
+              ) : (
+                <>
+                  <span>{currentUser.email}</span>
+                  <span className="role-pill">{t("roleAdmin")}</span>
+                </>
+              )}
             </div>
             <LanguageToggle
               language={language}
@@ -866,22 +872,6 @@ export default function App() {
                       <option key={site.id} value={site.site_url}>
                         {site.name}
                       </option>
-                    ))}
-                  </datalist>
-                </div>
-
-                <div>
-                  <label>{t("clientName")}</label>
-                  <input
-                    list="client-name-options"
-                    value={submissionForm.client_name}
-                    onChange={(e) => setSubmissionForm((prev) => ({ ...prev, client_name: e.target.value }))}
-                    placeholder={t("placeholderClientName")}
-                    required
-                  />
-                  <datalist id="client-name-options">
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.name} />
                     ))}
                   </datalist>
                 </div>

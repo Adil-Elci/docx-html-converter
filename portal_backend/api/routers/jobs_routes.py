@@ -21,9 +21,19 @@ from ..portal_schemas import (
     JobUpdate,
     PendingJobOut,
     PendingJobPublishOut,
+    PendingJobRejectIn,
+    PendingJobRejectOut,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+REJECTION_REASON_LABELS = {
+    "quality_below_standard": "Content quality below publishing standard",
+    "policy_or_compliance_issue": "Policy or compliance issue",
+    "seo_or_link_issue": "SEO or link placement issue",
+    "format_or_structure_issue": "Formatting or structure issue",
+    "other": "Other",
+}
 
 
 def _job_to_out(job: Job) -> JobOut:
@@ -320,6 +330,61 @@ def publish_pending_job(
     db.commit()
     db.refresh(job)
     return PendingJobPublishOut(job=_job_to_out(job))
+
+
+@router.post("/{job_id}/reject", response_model=PendingJobRejectOut)
+def reject_pending_job(
+    job_id: UUID,
+    payload: PendingJobRejectIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> PendingJobRejectOut:
+    job = _get_job_or_404(db, job_id)
+    if not bool(job.requires_admin_approval):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This job does not require admin approval.")
+    if job.job_status != "pending_approval":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job is not pending admin approval.")
+
+    submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found for job.")
+
+    reason_code = payload.reason_code.strip().lower()
+    reason_label = REJECTION_REASON_LABELS.get(reason_code, "Other")
+    reason_text = payload.other_reason.strip() if payload.other_reason else ""
+    reason_summary = reason_label if not reason_text else f"{reason_label}: {reason_text}"
+
+    now = datetime.now(timezone.utc)
+    submission.status = "rejected"
+    submission.rejection_reason = reason_summary
+    submission.updated_at = now
+    db.add(submission)
+
+    job.job_status = "rejected"
+    job.last_error = f"Rejected by admin ({current_user.email}): {reason_summary}"
+    job.updated_at = now
+    db.add(job)
+
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="failed",
+            payload={
+                "action": "admin_reject",
+                "reason_code": reason_code,
+                "reason_label": reason_label,
+                "reason_text": reason_text or None,
+                "reason_summary": reason_summary,
+                "rejected_by": str(current_user.id),
+                "rejected_by_email": current_user.email,
+                "rejected_at": now.isoformat(),
+            },
+        )
+    )
+
+    db.commit()
+    db.refresh(job)
+    return PendingJobRejectOut(job=_job_to_out(job))
 
 
 @router.get("/{job_id}/events", response_model=List[JobEventOut])

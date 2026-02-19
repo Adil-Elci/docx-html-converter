@@ -14,6 +14,11 @@ const emptySubmissionForm = () => ({
   topic: "",
 });
 
+const emptyRejectForm = () => ({
+  reason_code: "quality_below_standard",
+  other_reason: "",
+});
+
 const emptyLoginForm = () => ({
   email: "",
   password: "",
@@ -105,6 +110,9 @@ export default function App() {
   const [pendingOrders, setPendingOrders] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
+  const [rejectingJobId, setRejectingJobId] = useState("");
+  const [openRejectJobId, setOpenRejectJobId] = useState("");
+  const [rejectForms, setRejectForms] = useState({});
   const [showSiteSuggestions, setShowSiteSuggestions] = useState(false);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
@@ -187,6 +195,47 @@ export default function App() {
       setError(err.message);
     } finally {
       setPublishingJobId("");
+    }
+  };
+
+  const getRejectForm = (jobId) => rejectForms[jobId] || emptyRejectForm();
+
+  const setRejectFormField = (jobId, field, value) => {
+    setRejectForms((prev) => ({
+      ...prev,
+      [jobId]: {
+        ...getRejectForm(jobId),
+        [field]: value,
+      },
+    }));
+  };
+
+  const rejectPendingJob = async (jobId, requestKind) => {
+    try {
+      const draft = getRejectForm(jobId);
+      if (draft.reason_code === "other" && !(draft.other_reason || "").trim()) {
+        setError(t("rejectOtherReasonRequired"));
+        return;
+      }
+      setRejectingJobId(jobId);
+      setError("");
+      setSuccess("");
+      await api.post(`/jobs/${jobId}/reject`, {
+        reason_code: draft.reason_code,
+        other_reason: draft.reason_code === "other" ? draft.other_reason.trim() : null,
+      });
+      await loadPendingJobs(requestKind);
+      setOpenRejectJobId("");
+      setRejectForms((prev) => {
+        const next = { ...prev };
+        delete next[jobId];
+        return next;
+      });
+      setSuccess(t("adminRejectedSuccess"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRejectingJobId("");
     }
   };
 
@@ -865,11 +914,69 @@ export default function App() {
                         className="btn"
                         type="button"
                         onClick={() => publishPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
-                        disabled={!item.wp_post_id || publishingJobId === item.job_id}
+                        disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id}
                       >
                         {publishingJobId === item.job_id ? t("publishing") : t("publish")}
                       </button>
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        onClick={() => {
+                          setOpenRejectJobId((prev) => (prev === item.job_id ? "" : item.job_id));
+                          setRejectForms((prev) => ({
+                            ...prev,
+                            [item.job_id]: prev[item.job_id] || emptyRejectForm(),
+                          }));
+                        }}
+                        disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id}
+                      >
+                        {t("reject")}
+                      </button>
                     </div>
+                    {openRejectJobId === item.job_id ? (
+                      <div className="pending-reject-panel">
+                        <label>{t("rejectReasonLabel")}</label>
+                        <select
+                          value={getRejectForm(item.job_id).reason_code}
+                          onChange={(e) => setRejectFormField(item.job_id, "reason_code", e.target.value)}
+                        >
+                          <option value="quality_below_standard">{t("rejectReasonQuality")}</option>
+                          <option value="policy_or_compliance_issue">{t("rejectReasonPolicy")}</option>
+                          <option value="seo_or_link_issue">{t("rejectReasonSeo")}</option>
+                          <option value="format_or_structure_issue">{t("rejectReasonFormat")}</option>
+                          <option value="other">{t("rejectReasonOther")}</option>
+                        </select>
+                        {getRejectForm(item.job_id).reason_code === "other" ? (
+                          <div>
+                            <label>{t("rejectOtherLabel")}</label>
+                            <textarea
+                              rows={3}
+                              value={getRejectForm(item.job_id).other_reason}
+                              onChange={(e) => setRejectFormField(item.job_id, "other_reason", e.target.value)}
+                              placeholder={t("rejectOtherPlaceholder")}
+                            />
+                          </div>
+                        ) : null}
+                        <div className="pending-reject-actions">
+                          <button
+                            className="btn secondary"
+                            type="button"
+                            onClick={() => setOpenRejectJobId("")}
+                            disabled={rejectingJobId === item.job_id}
+                          >
+                            {t("close")}
+                          </button>
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => rejectPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                            disabled={rejectingJobId === item.job_id}
+                          >
+                            {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                   );
                 })}
@@ -998,21 +1105,30 @@ export default function App() {
         t={t}
         open={showSubmissionSuccessModal}
         onClose={() => setShowSubmissionSuccessModal(false)}
+        onCreateAnother={() => {
+          setShowSubmissionSuccessModal(false);
+          setActiveSection("guest-posts");
+        }}
       />
     </div>
   );
 }
 
-function SubmissionSuccessModal({ t, open, onClose }) {
+function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
   if (!open) return null;
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="submission-success-title">
       <div className="modal-card panel">
         <h3 id="submission-success-title">{t("submissionSuccessTitle")}</h3>
         <p className="muted-text">{t("submissionSuccessBody")}</p>
-        <button className="btn" type="button" onClick={onClose}>
-          {t("close")}
-        </button>
+        <div className="modal-actions">
+          <button className="btn secondary" type="button" onClick={onClose}>
+            {t("close")}
+          </button>
+          <button className="btn" type="button" onClick={onCreateAnother}>
+            {t("createAnotherPost")}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -195,7 +195,7 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint(
-            "job_status IN ('queued','processing','pending_approval','succeeded','failed','retrying')",
+            "job_status IN ('queued','processing','pending_approval','rejected','succeeded','failed','retrying')",
             name="jobs_job_status_check",
         ),
     )

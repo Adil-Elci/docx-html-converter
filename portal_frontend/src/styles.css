@@ -338,6 +338,12 @@ body {
   width: fit-content;
 }
 
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .form-panel h2 {
   margin: 0 0 16px;
   font-size: 22px;
@@ -718,6 +724,7 @@ input:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -730,6 +737,21 @@ input:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.pending-reject-panel {
+  width: 100%;
+  margin-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.pending-reject-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 @media (max-width: 1080px) {

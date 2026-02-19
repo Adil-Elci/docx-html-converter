@@ -14,7 +14,7 @@ BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
 REQUEST_KINDS = {"guest_post", "order"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
-JOB_STATUSES = {"queued", "processing", "pending_approval", "succeeded", "failed", "retrying"}
+JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying"}
 EVENT_TYPES = {
     "converter_called",
     "converter_ok",
@@ -590,7 +590,7 @@ class JobCreate(BaseModel):
     def validate_job_status(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/pending_approval/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying.")
         return cleaned
 
 
@@ -610,7 +610,7 @@ class JobUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/pending_approval/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying.")
         return cleaned
 
 
@@ -842,5 +842,42 @@ class PendingJobOut(BaseModel):
 
 
 class PendingJobPublishOut(BaseModel):
+    ok: bool = True
+    job: JobOut
+
+
+class PendingJobRejectIn(BaseModel):
+    reason_code: str
+    other_reason: Optional[str] = None
+
+    @validator("reason_code")
+    def validate_reason_code(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        allowed = {
+            "quality_below_standard",
+            "policy_or_compliance_issue",
+            "seo_or_link_issue",
+            "format_or_structure_issue",
+            "other",
+        }
+        if cleaned not in allowed:
+            raise ValueError("Unsupported rejection reason.")
+        return cleaned
+
+    @validator("other_reason")
+    def validate_other_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @root_validator(skip_on_failure=True)
+    def require_other_reason_when_other(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        if values.get("reason_code") == "other" and not values.get("other_reason"):
+            raise ValueError("other_reason is required when reason_code is other.")
+        return values
+
+
+class PendingJobRejectOut(BaseModel):
     ok: bool = True
     job: JobOut

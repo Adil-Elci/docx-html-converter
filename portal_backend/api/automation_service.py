@@ -635,6 +635,31 @@ def wp_publish_post(
     )
 
 
+def wp_update_post_featured_media(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    post_id: int,
+    featured_media_id: int,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    post_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts/{post_id}"
+    headers = {
+        "Authorization": _wp_auth_header(wp_username, wp_app_password),
+        "Content-Type": "application/json",
+    }
+    return _request_json(
+        "POST",
+        post_url,
+        headers=headers,
+        json_body={"featured_media": featured_media_id},
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
 def wp_get_post(
     *,
     site_url: str,

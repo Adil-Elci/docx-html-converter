@@ -60,6 +60,8 @@ const emptyAdminUserForm = () => ({
 const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs"];
+const CLIENT_SECTIONS = ["guest-posts", "orders"];
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -74,6 +76,17 @@ const normalizeHost = (raw) => {
 
 const clientPortalHost = normalizeHost(import.meta.env.VITE_CLIENT_PORTAL_HOST) || defaultClientPortalHost;
 const adminPortalHost = normalizeHost(import.meta.env.VITE_ADMIN_PORTAL_HOST) || defaultAdminPortalHost;
+
+const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "guest-posts");
+
+const getAllowedSectionsForRole = (role) => (role === "admin" ? ADMIN_SECTIONS : CLIENT_SECTIONS);
+
+const getStoredSectionForRole = (role) => localStorage.getItem(`active_section_${role}`) || "";
+
+const resolveSectionForRole = (role, section) => {
+  const allowed = getAllowedSectionsForRole(role);
+  return allowed.includes(section) ? section : getDefaultSectionForRole(role);
+};
 
 async function readApiError(response, fallbackMessage) {
   const rawBody = await response.text();
@@ -127,6 +140,7 @@ export default function App() {
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
   const [rejectingJobId, setRejectingJobId] = useState("");
+  const [regeneratingImageJobId, setRegeneratingImageJobId] = useState("");
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
   const [showSiteSuggestions, setShowSiteSuggestions] = useState(false);
@@ -182,8 +196,8 @@ export default function App() {
     }
   };
 
-  const loadPendingJobs = async () => {
-    if (currentUser?.role !== "admin") return;
+  const loadPendingJobs = async (forUser = currentUser) => {
+    if (forUser?.role !== "admin") return;
     try {
       setPendingLoading(true);
       const items = await api.get("/jobs/pending");
@@ -248,6 +262,21 @@ export default function App() {
       setError(err.message);
     } finally {
       setRejectingJobId("");
+    }
+  };
+
+  const regeneratePendingJobImage = async (jobId) => {
+    try {
+      setRegeneratingImageJobId(jobId);
+      setError("");
+      setSuccess("");
+      await api.post(`/jobs/${jobId}/regenerate-image`, {});
+      await loadPendingJobs();
+      setSuccess(t("adminImageRegeneratedSuccess"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRegeneratingImageJobId("");
     }
   };
 
@@ -316,10 +345,12 @@ export default function App() {
         }
         const user = await response.json();
         setCurrentUser(user);
+        setActiveSection(resolveSectionForRole(user.role, getStoredSectionForRole(user.role)));
         setLoading(true);
         await loadAll(user);
         if (user.role === "admin") {
           await loadAdminUsers(user);
+          await loadPendingJobs(user);
         }
       } catch (err) {
         setCurrentUser(null);
@@ -339,29 +370,16 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return;
-    if (currentUser.role === "admin") {
-      if (
-        activeSection !== "admin"
-        && activeSection !== "websites"
-        && activeSection !== "clients"
-        && activeSection !== "pending-jobs"
-      ) {
-        setActiveSection("admin");
-      }
-      return;
-    }
-    const allowedSections = ["guest-posts", "orders"];
+    const allowedSections = getAllowedSectionsForRole(currentUser.role);
     if (!allowedSections.includes(activeSection)) {
-      setActiveSection("guest-posts");
+      setActiveSection(getDefaultSectionForRole(currentUser.role));
     }
   }, [currentUser, activeSection]);
 
   useEffect(() => {
     if (!currentUser) return;
-    if (currentUser.role === "admin") {
-      setActiveSection("admin");
-    }
-  }, [currentUser]);
+    localStorage.setItem(`active_section_${currentUser.role}`, activeSection);
+  }, [currentUser, activeSection]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -439,11 +457,12 @@ export default function App() {
       setShowResetRequestForm(false);
       setResetRequestMessage("");
       setResetConfirmMessage("");
-      setActiveSection(user.role === "admin" ? "admin" : "guest-posts");
+      setActiveSection(resolveSectionForRole(user.role, getStoredSectionForRole(user.role)));
       setLoading(true);
       await loadAll(user);
       if (user.role === "admin") {
         await loadAdminUsers(user);
+        await loadPendingJobs(user);
       }
     } catch (err) {
       const message = err?.message || "";
@@ -817,6 +836,7 @@ export default function App() {
         userRole={currentUser.role}
         activeSection={activeSection}
         onSectionChange={setActiveSection}
+        pendingJobsCount={pendingJobs.length}
       />
 
       <div className="app-main">
@@ -844,7 +864,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="container">
+        <div className={`container ${isAdminPendingSection ? "container-wide" : ""}`.trim()}>
           {!isAdminUser && !isWebsitesSection && !isClientsSection ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
@@ -982,15 +1002,23 @@ export default function App() {
                             <span className="muted-text small-text">{t("draftLinkUnavailable")}</span>
                           )}
                           <button
+                            className="btn secondary"
+                            type="button"
+                            onClick={() => regeneratePendingJobImage(item.job_id)}
+                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
+                          >
+                            {regeneratingImageJobId === item.job_id ? t("regeneratingImage") : t("regeneratePostImage")}
+                          </button>
+                          <button
                             className="btn"
                             type="button"
                             onClick={() => publishPendingJob(item.job_id)}
-                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id}
+                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
                           >
                             {publishingJobId === item.job_id ? t("publishing") : t("publish")}
                           </button>
                           <button
-                            className="btn secondary"
+                            className="btn danger"
                             type="button"
                             onClick={() => {
                               setOpenRejectJobId((prev) => (prev === item.job_id ? "" : item.job_id));
@@ -999,7 +1027,7 @@ export default function App() {
                                 [item.job_id]: prev[item.job_id] || emptyRejectForm(),
                               }));
                             }}
-                            disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id}
+                            disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
                           >
                             {t("reject")}
                           </button>
@@ -1039,10 +1067,10 @@ export default function App() {
                               {t("close")}
                             </button>
                             <button
-                              className="btn"
+                              className="btn danger"
                               type="button"
                               onClick={() => rejectPendingJob(item.job_id)}
-                              disabled={rejectingJobId === item.job_id}
+                              disabled={rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
                             >
                               {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
                             </button>
@@ -1352,13 +1380,13 @@ function AuthGate({
   );
 }
 
-function Sidebar({ t, userRole, activeSection, onSectionChange }) {
+function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0 }) {
   const sections = userRole === "admin"
     ? [
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
-        { id: "pending-jobs", label: t("navPendingJobs") },
+        { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
       ]
     : [
         { id: "guest-posts", label: t("navGuestPosts") },
@@ -1383,7 +1411,8 @@ function Sidebar({ t, userRole, activeSection, onSectionChange }) {
             className={`nav-item ${activeSection === section.id ? "active" : ""}`}
             onClick={() => onSectionChange(section.id)}
           >
-            {section.label}
+            <span>{section.label}</span>
+            {typeof section.badge === "number" ? <span className="nav-badge">{section.badge}</span> : null}
           </button>
         ))}
       </nav>

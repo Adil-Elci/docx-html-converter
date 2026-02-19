@@ -11,7 +11,17 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
-from ..automation_service import AutomationError, get_runtime_config, wp_get_media, wp_get_post, wp_publish_post
+from ..automation_service import (
+    AutomationError,
+    download_binary_file,
+    generate_image_via_leonardo,
+    get_runtime_config,
+    wp_create_media_item,
+    wp_get_media,
+    wp_get_post,
+    wp_publish_post,
+    wp_update_post_featured_media,
+)
 from ..db import get_db
 from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
@@ -24,6 +34,7 @@ from ..portal_schemas import (
     JobUpdate,
     PendingJobOut,
     PendingJobPublishOut,
+    PendingJobRegenerateImageOut,
     PendingJobRejectIn,
     PendingJobRejectOut,
 )
@@ -166,6 +177,43 @@ def _pick_featured_image_url(post_payload: dict) -> str:
                     if isinstance(rendered, str) and rendered.strip():
                         return rendered.strip()
     return ""
+
+
+def _extract_post_title(post_payload: dict, fallback: str = "") -> str:
+    title_value = post_payload.get("title")
+    if isinstance(title_value, dict):
+        rendered = title_value.get("rendered")
+        if isinstance(rendered, str) and rendered.strip():
+            return rendered.strip()
+    if isinstance(title_value, str) and title_value.strip():
+        return title_value.strip()
+    return fallback.strip()
+
+
+def _resolve_job_image_prompt(db: Session, job_id: UUID, *, fallback_title: str = "") -> str:
+    row = (
+        db.query(JobEvent.payload)
+        .filter(
+            JobEvent.job_id == job_id,
+            JobEvent.event_type == "image_prompt_ok",
+        )
+        .order_by(JobEvent.created_at.desc())
+        .first()
+    )
+    payload = row[0] if row else None
+    if isinstance(payload, dict):
+        raw_prompt = payload.get("image_prompt")
+        if isinstance(raw_prompt, str) and raw_prompt.strip():
+            return raw_prompt.strip()
+
+    fallback_title = fallback_title.strip()
+    if fallback_title:
+        return f"Featured image for article titled: {fallback_title}"
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="No image prompt found for this job. Re-run automation for this submission first.",
+    )
 
 
 @router.get("", response_model=List[JobOut])
@@ -421,6 +469,192 @@ def publish_pending_job(
     db.commit()
     db.refresh(job)
     return PendingJobPublishOut(job=_job_to_out(job))
+
+
+@router.post("/{job_id}/regenerate-image", response_model=PendingJobRegenerateImageOut)
+def regenerate_pending_job_image(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> PendingJobRegenerateImageOut:
+    job = _get_job_or_404(db, job_id)
+    if not bool(job.requires_admin_approval):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This job does not require admin approval.")
+    if job.job_status != "pending_approval":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job is not pending admin approval.")
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+    credential = _get_enabled_credential_for_site(db, site.id)
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    if not config.get("leonardo_api_key"):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="LEONARDO_API_KEY is not configured.")
+
+    try:
+        post_payload = wp_get_post(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    post_title = _extract_post_title(post_payload, fallback=f"Draft #{int(job.wp_post_id)}")
+    image_prompt = _resolve_job_image_prompt(db, job.id, fallback_title=post_title)
+    previous_featured_media_id = post_payload.get("featured_media")
+    if not isinstance(previous_featured_media_id, int):
+        previous_featured_media_id = None
+
+    sizes_to_try = [
+        (max(256, int(config["image_width"])), max(256, int(config["image_height"]))),
+        (768, 432),
+        (640, 360),
+        (512, 288),
+    ]
+    unique_sizes: list[tuple[int, int]] = []
+    for size in sizes_to_try:
+        if size not in unique_sizes:
+            unique_sizes.append(size)
+
+    image_url: str = ""
+    media_payload: dict = {}
+    last_upload_error: Optional[AutomationError] = None
+
+    for idx, (width, height) in enumerate(unique_sizes):
+        try:
+            image_url = generate_image_via_leonardo(
+                prompt=image_prompt,
+                api_key=config["leonardo_api_key"],
+                timeout_seconds=config["timeout_seconds"],
+                poll_timeout_seconds=config["poll_timeout_seconds"],
+                poll_interval_seconds=config["poll_interval_seconds"],
+                model_id=config["leonardo_model_id"],
+                width=width,
+                height=height,
+                base_url=config["leonardo_base_url"],
+            )
+            image_bytes, file_name, content_type = download_binary_file(
+                image_url,
+                timeout_seconds=config["timeout_seconds"],
+            )
+            media_payload = wp_create_media_item(
+                site_url=site.site_url,
+                wp_rest_base=site.wp_rest_base,
+                wp_username=credential.wp_username,
+                wp_app_password=credential.wp_app_password,
+                data=image_bytes,
+                file_name=file_name,
+                content_type=content_type,
+                title=post_title,
+                timeout_seconds=config["timeout_seconds"],
+            )
+            break
+        except AutomationError as exc:
+            if "HTTP 413" in str(exc) and idx < len(unique_sizes) - 1:
+                last_upload_error = exc
+                continue
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    else:
+        if last_upload_error is not None:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(last_upload_error)) from last_upload_error
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to upload regenerated image.")
+
+    new_featured_media_id = media_payload.get("id")
+    if not isinstance(new_featured_media_id, int):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="WordPress media upload did not return media ID.")
+
+    try:
+        updated_post_payload = wp_update_post_featured_media(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            featured_media_id=new_featured_media_id,
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    guid_value = media_payload.get("guid")
+    media_url = media_payload.get("source_url")
+    if not media_url and isinstance(guid_value, dict):
+        rendered = guid_value.get("rendered")
+        if isinstance(rendered, str):
+            media_url = rendered
+    wp_post_url = updated_post_payload.get("link")
+
+    now = datetime.now(timezone.utc)
+    if isinstance(wp_post_url, str) and wp_post_url.strip():
+        job.wp_post_url = wp_post_url.strip()
+    job.updated_at = now
+    db.add(job)
+
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="image_generated",
+            payload={
+                "action": "admin_regenerate_image",
+                "source_url": image_url,
+                "prompt": image_prompt,
+                "previous_featured_media_id": previous_featured_media_id,
+                "new_featured_media_id": new_featured_media_id,
+                "regenerated_by": str(current_user.id),
+                "regenerated_by_email": current_user.email,
+                "regenerated_at": now.isoformat(),
+            },
+        )
+    )
+    db.add(
+        Asset(
+            job_id=job.id,
+            asset_type="featured_image",
+            provider="leonardo",
+            source_url=image_url,
+            storage_url=media_url if isinstance(media_url, str) else None,
+            meta={
+                "model_id": config["leonardo_model_id"],
+                "action": "admin_regenerate_image",
+                "regenerated_by": str(current_user.id),
+            },
+        )
+    )
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="wp_post_updated",
+            payload={
+                "action": "admin_regenerate_image",
+                "wp_post_id": int(job.wp_post_id),
+                "wp_post_url": job.wp_post_url,
+                "previous_featured_media_id": previous_featured_media_id,
+                "new_featured_media_id": new_featured_media_id,
+                "regenerated_by": str(current_user.id),
+                "regenerated_by_email": current_user.email,
+                "regenerated_at": now.isoformat(),
+            },
+        )
+    )
+
+    db.commit()
+    db.refresh(job)
+    return PendingJobRegenerateImageOut(
+        job=_job_to_out(job),
+        wp_media_id=new_featured_media_id,
+        wp_media_url=media_url if isinstance(media_url, str) else None,
+    )
 
 
 @router.get("/{job_id}/draft-preview", response_class=HTMLResponse)

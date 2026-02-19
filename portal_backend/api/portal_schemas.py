@@ -867,6 +867,13 @@ class PendingJobPublishOut(BaseModel):
     job: JobOut
 
 
+class PendingJobRegenerateImageOut(BaseModel):
+    ok: bool = True
+    job: JobOut
+    wp_media_id: int
+    wp_media_url: Optional[str] = None
+
+
 class PendingJobRejectIn(BaseModel):
     reason_code: str
     other_reason: Optional[str] = None

@@ -193,6 +193,10 @@ body {
 
 .nav-item {
   border: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   text-align: left;
   padding: 12px 14px;
   color: var(--muted);
@@ -213,6 +217,27 @@ body {
   color: #fff;
   background: linear-gradient(135deg, #2a66ec 0%, #3f84ff 100%);
   box-shadow: 0 12px 24px rgba(32, 101, 255, 0.34);
+}
+
+.nav-badge {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--panel-3) 84%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nav-item.active .nav-badge {
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 .app-main {
@@ -246,6 +271,11 @@ body {
   justify-items: center;
 }
 
+.container-wide {
+  max-width: none;
+  width: 100%;
+}
+
 .hero,
 .stats-grid,
 .form-panel {
@@ -254,7 +284,7 @@ body {
 }
 
 .pending-panel {
-  max-width: 1120px;
+  max-width: none;
 }
 
 .hero h1 {
@@ -485,6 +515,11 @@ input:disabled {
   background: color-mix(in srgb, var(--panel-3) 80%, transparent);
   border: 1px solid var(--border);
   color: var(--ink);
+}
+
+.btn.danger {
+  background: linear-gradient(135deg, #c83554 0%, #e3476a 100%);
+  color: #fff;
 }
 
 .submit-btn {

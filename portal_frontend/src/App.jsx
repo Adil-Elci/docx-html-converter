@@ -1021,8 +1021,8 @@ function Sidebar({ t, userRole, activeSection, onSectionChange }) {
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
-        { id: "guest-posts", label: t("navGuestPosts") },
-        { id: "orders", label: t("navOrders") },
+        { id: "guest-posts", label: t("navPendingGuestPosts") },
+        { id: "orders", label: t("navPendingOrders") },
       ]
     : [
         { id: "guest-posts", label: t("navGuestPosts") },

@@ -136,8 +136,8 @@ export const translations = {
     confirmPassword: "Confirm Password",
     resetPassword: "Reset Password",
     passwordResetDone: "Password reset successful. You can now log in.",
-    forgotPasswordLinePrefix: "Forgot your password? you can reset it",
-    forgotPasswordHere: "here",
+    resetPasswordHere: "Reset password here",
+    resetRequestInstruction: "Please enter your registered Email",
   },
   de: {
     appTitle: "Kundenportal",
@@ -276,8 +276,8 @@ export const translations = {
     confirmPassword: "Passwort bestätigen",
     resetPassword: "Passwort zurücksetzen",
     passwordResetDone: "Passwort erfolgreich zurückgesetzt. Du kannst dich jetzt anmelden.",
-    forgotPasswordLinePrefix: "Passwort vergessen? Du kannst es",
-    forgotPasswordHere: "hier zurücksetzen",
+    resetPasswordHere: "Passwort hier zurücksetzen",
+    resetRequestInstruction: "Bitte gib deine registrierte E-Mail ein",
   },
 };
 

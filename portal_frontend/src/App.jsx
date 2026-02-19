@@ -39,6 +39,11 @@ const getResetTokenFromUrl = () => {
   return token || "";
 };
 
+const getResetModeFromUrl = () => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("mode") === "reset-request";
+};
+
 const emptyAdminUserForm = () => ({
   email: "",
   password: "",
@@ -79,6 +84,7 @@ export default function App() {
   const [resetConfirmForm, setResetConfirmForm] = useState(emptyResetConfirmForm());
   const [resetConfirmSubmitting, setResetConfirmSubmitting] = useState(false);
   const [resetConfirmMessage, setResetConfirmMessage] = useState("");
+  const [resetMode, setResetMode] = useState(() => getResetModeFromUrl());
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -305,7 +311,6 @@ export default function App() {
       }
       const payload = await response.json();
       setResetRequestMessage(payload?.message || t("passwordResetSent"));
-      setShowResetRequestForm(false);
       setResetRequestForm(emptyResetRequestForm());
     } catch (err) {
       setAuthError(err?.message || t("errorRequestFailed"));
@@ -342,9 +347,11 @@ export default function App() {
       const payload = await response.json();
       setResetConfirmMessage(payload?.message || t("passwordResetDone"));
       setResetToken("");
+      setResetMode(false);
       setResetConfirmForm(emptyResetConfirmForm());
       const params = new URLSearchParams(window.location.search);
       params.delete("reset_token");
+      params.delete("mode");
       const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
       window.history.replaceState({}, "", next);
     } catch (err) {
@@ -582,8 +589,15 @@ export default function App() {
         onLoginSubmit={handleLogin}
         submittingLogin={authSubmitting}
         error={authError}
-        onShowResetRequest={() => setShowResetRequestForm(true)}
-        showResetRequestForm={showResetRequestForm}
+        onShowResetRequest={() => {
+          const params = new URLSearchParams(window.location.search);
+          params.set("mode", "reset-request");
+          window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+          setResetMode(true);
+          setShowResetRequestForm(true);
+        }}
+        showResetRequestForm={showResetRequestForm || resetMode}
+        resetMode={resetMode}
         resetRequestForm={resetRequestForm}
         onResetRequestFormChange={setResetRequestForm}
         onResetRequestSubmit={requestPasswordReset}
@@ -882,6 +896,7 @@ function AuthGate({
   error,
   onShowResetRequest,
   showResetRequestForm,
+  resetMode,
   resetRequestForm,
   onResetRequestFormChange,
   onResetRequestSubmit,
@@ -895,6 +910,7 @@ function AuthGate({
   resetConfirmMessage,
 }) {
   const inResetConfirmMode = Boolean(resetToken);
+  const inResetRequestMode = Boolean(resetMode) && !inResetConfirmMode;
 
   return (
     <div className="auth-shell">
@@ -933,6 +949,25 @@ function AuthGate({
               {submittingResetConfirm ? t("submitting") : t("resetPassword")}
             </button>
           </form>
+        ) : inResetRequestMode ? (
+          <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit} noValidate>
+            <div>
+              <label>{t("resetEmailLabel")}</label>
+              <input
+                type="email"
+                value={resetRequestForm.email}
+                onChange={(e) => onResetRequestFormChange((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="name@example.com"
+                required
+              />
+              <p className="muted-text small-text">{t("resetRequestInstruction")}</p>
+            </div>
+            {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
+            {resetRequestMessage ? <div className="success">{resetRequestMessage}</div> : null}
+            <button className="btn secondary" type="submit" disabled={submittingResetRequest}>
+              {submittingResetRequest ? t("submitting") : t("sendResetLink")}
+            </button>
+          </form>
         ) : (
           <>
             <form className="auth-form" onSubmit={onLoginSubmit} noValidate>
@@ -962,9 +997,8 @@ function AuthGate({
                   placeholder={loginFieldErrors.password ? t("errorPasswordRequired") : "••••••••"}
                 />
                 <div className="auth-forgot-row">
-                  <span className="muted-text small-text">{t("forgotPasswordLinePrefix")}</span>{" "}
                   <button className="link-button" type="button" onClick={onShowResetRequest}>
-                    {t("forgotPasswordHere")}
+                    {t("resetPasswordHere")}
                   </button>
                 </div>
               </div>
@@ -974,24 +1008,6 @@ function AuthGate({
                 {submittingLogin ? t("loggingIn") : t("login")}
               </button>
             </form>
-
-            {showResetRequestForm ? (
-              <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit} noValidate>
-                <div>
-                  <label>{t("resetEmailLabel")}</label>
-                  <input
-                    type="email"
-                    value={resetRequestForm.email}
-                    onChange={(e) => onResetRequestFormChange((prev) => ({ ...prev, email: e.target.value }))}
-                    placeholder="name@example.com"
-                    required
-                  />
-                </div>
-                <button className="btn secondary" type="submit" disabled={submittingResetRequest}>
-                  {submittingResetRequest ? t("submitting") : t("sendResetLink")}
-                </button>
-              </form>
-            ) : null}
           </>
         )}
       </div>

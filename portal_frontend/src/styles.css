@@ -100,6 +100,32 @@ body {
   font-size: 13px;
 }
 
+.auth-forgot-row {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.small-text {
+  font-size: 12px;
+}
+
+.link-button {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  font-family: inherit;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: color-mix(in srgb, var(--accent) 85%, white);
+}
+
 .auth-reset-form {
   margin-top: 10px;
   padding-top: 12px;

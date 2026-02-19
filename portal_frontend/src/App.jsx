@@ -71,7 +71,6 @@ export default function App() {
   const [loginFieldErrors, setLoginFieldErrors] = useState(emptyLoginFieldErrors());
   const [loginFieldShake, setLoginFieldShake] = useState(emptyLoginFieldErrors());
   const [authError, setAuthError] = useState("");
-  const [showResetOption, setShowResetOption] = useState(false);
   const [showResetRequestForm, setShowResetRequestForm] = useState(false);
   const [resetRequestForm, setResetRequestForm] = useState(emptyResetRequestForm());
   const [resetRequestSubmitting, setResetRequestSubmitting] = useState(false);
@@ -262,7 +261,6 @@ export default function App() {
       setLoginForm(emptyLoginForm());
       setLoginFieldErrors(emptyLoginFieldErrors());
       setLoginFieldShake(emptyLoginFieldErrors());
-      setShowResetOption(false);
       setShowResetRequestForm(false);
       setResetRequestMessage("");
       setResetConfirmMessage("");
@@ -278,7 +276,6 @@ export default function App() {
         setAuthError(t("errorBackendUnreachable"));
       } else {
         setAuthError(message);
-        setShowResetOption(true);
       }
     } finally {
       setLoading(false);
@@ -585,7 +582,6 @@ export default function App() {
         onLoginSubmit={handleLogin}
         submittingLogin={authSubmitting}
         error={authError}
-        showResetOption={showResetOption}
         onShowResetRequest={() => setShowResetRequestForm(true)}
         showResetRequestForm={showResetRequestForm}
         resetRequestForm={resetRequestForm}
@@ -884,7 +880,6 @@ function AuthGate({
   onLoginSubmit,
   submittingLogin,
   error,
-  showResetOption,
   onShowResetRequest,
   showResetRequestForm,
   resetRequestForm,
@@ -966,6 +961,12 @@ function AuthGate({
                   }}
                   placeholder={loginFieldErrors.password ? t("errorPasswordRequired") : "••••••••"}
                 />
+                <div className="auth-forgot-row">
+                  <span className="muted-text small-text">{t("forgotPasswordLinePrefix")}</span>{" "}
+                  <button className="link-button" type="button" onClick={onShowResetRequest}>
+                    {t("forgotPasswordHere")}
+                  </button>
+                </div>
               </div>
               {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
               {resetRequestMessage ? <div className="success">{resetRequestMessage}</div> : null}
@@ -973,14 +974,6 @@ function AuthGate({
                 {submittingLogin ? t("loggingIn") : t("login")}
               </button>
             </form>
-
-            {showResetOption ? (
-              <div className="auth-help">
-                <button className="btn secondary" type="button" onClick={onShowResetRequest}>
-                  {t("forgotCredentials")}
-                </button>
-              </div>
-            ) : null}
 
             {showResetRequestForm ? (
               <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit} noValidate>

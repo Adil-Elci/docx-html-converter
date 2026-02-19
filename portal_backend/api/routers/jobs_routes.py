@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
-from ..automation_service import AutomationError, get_runtime_config, wp_get_post, wp_publish_post
+from ..automation_service import AutomationError, get_runtime_config, wp_get_media, wp_get_post, wp_publish_post
 from ..db import get_db
 from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
@@ -133,6 +133,30 @@ def _sanitize_html_for_preview(value: str) -> str:
         return ""
     without_scripts = re.sub(r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>", "", value, flags=re.IGNORECASE)
     return re.sub(r"\son\w+\s*=\s*(['\"]).*?\1", "", without_scripts, flags=re.IGNORECASE)
+
+
+def _pick_featured_image_url(post_payload: dict) -> str:
+    for key in ("jetpack_featured_media_url", "featured_media_url"):
+        value = post_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    embedded = post_payload.get("_embedded")
+    if isinstance(embedded, dict):
+        featured = embedded.get("wp:featuredmedia")
+        if isinstance(featured, list):
+            for item in featured:
+                if not isinstance(item, dict):
+                    continue
+                source_url = item.get("source_url")
+                if isinstance(source_url, str) and source_url.strip():
+                    return source_url.strip()
+                guid = item.get("guid")
+                if isinstance(guid, dict):
+                    rendered = guid.get("rendered")
+                    if isinstance(rendered, str) and rendered.strip():
+                        return rendered.strip()
+    return ""
 
 
 @router.get("", response_model=List[JobOut])
@@ -394,6 +418,25 @@ def preview_pending_job_draft(
         excerpt_html = str(post_payload["excerpt"].get("rendered") or "")
     excerpt_html = _sanitize_html_for_preview(excerpt_html)
 
+    featured_image_url = _pick_featured_image_url(post_payload)
+    if not featured_image_url:
+        featured_media_id = post_payload.get("featured_media")
+        if isinstance(featured_media_id, int) and featured_media_id > 0:
+            try:
+                media_payload = wp_get_media(
+                    site_url=site.site_url,
+                    wp_rest_base=site.wp_rest_base,
+                    wp_username=credential.wp_username,
+                    wp_app_password=credential.wp_app_password,
+                    media_id=featured_media_id,
+                    timeout_seconds=config["timeout_seconds"],
+                )
+                maybe_url = media_payload.get("source_url")
+                if isinstance(maybe_url, str) and maybe_url.strip():
+                    featured_image_url = maybe_url.strip()
+            except AutomationError:
+                featured_image_url = ""
+
     status_value = str(post_payload.get("status") or "unknown")
     slug_value = str(post_payload.get("slug") or "")
     site_url = (site.site_url or "").strip()
@@ -445,6 +488,16 @@ def preview_pending_job_draft(
       border-left: 4px solid #93c5fd;
       background: #f8fbff;
     }}
+    .featured-image {{
+      margin: 0 0 18px;
+    }}
+    .featured-image img {{
+      max-width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 10px;
+      border: 1px solid #dbe2ef;
+    }}
   </style>
 </head>
 <body>
@@ -456,6 +509,7 @@ def preview_pending_job_draft(
       <div>Slug: <code>{escape(slug_value)}</code></div>
     </div>
     <h1>{escape(title)}</h1>
+    {"<div class='featured-image'><img src='" + escape(featured_image_url) + "' alt='Featured image' /></div>" if featured_image_url else ""}
     {"<div class='excerpt'>" + excerpt_html + "</div>" if excerpt_html else ""}
     <article>{content_html}</article>
   </div>

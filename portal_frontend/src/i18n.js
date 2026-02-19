@@ -129,7 +129,7 @@ export const translations = {
     systemTheme: "System theme",
     darkTheme: "Dark theme",
     forgotCredentials: "Forgot email or password?",
-    resetEmailLabel: "Registered Email Address",
+    resetEmailLabel: "Please enter your registered email",
     sendResetLink: "Send Reset Link",
     passwordResetSent: "If the email exists, a reset link has been sent.",
     newPassword: "New Password",

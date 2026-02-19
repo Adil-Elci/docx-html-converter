@@ -943,8 +943,8 @@ export default function App() {
                   return (
                   <div key={item.job_id} className="pending-item">
                     <div className="pending-meta">
-                      <strong>{item.client_name}</strong>
-                      <span className="muted-text">{item.site_name}</span>
+                      <strong>{`${t("createdByLabel")}: ${item.client_name}`}</strong>
+                      <span className="muted-text">{`${t("targetWebsiteLabel")}: ${item.site_url || item.site_name}`}</span>
                     </div>
                     <div className="pending-actions">
                       {draftReviewUrl ? (

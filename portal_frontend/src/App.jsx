@@ -156,6 +156,14 @@ export default function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      document.title = "Elci Solutions Portal";
+      return;
+    }
+    document.title = currentUser.role === "admin" ? "Admin Portal | Elci Solutions" : "Clients Portal | Elci Solutions";
+  }, [currentUser]);
+
   const loadAll = async (forUser = currentUser) => {
     try {
       setError("");

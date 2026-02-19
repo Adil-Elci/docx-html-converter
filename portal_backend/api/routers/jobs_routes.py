@@ -797,8 +797,71 @@ def preview_pending_job_draft(
     <h1>{escape(title)}</h1>
     {"<div class='featured-image'><img src='" + escape(featured_image_url) + "' alt='Featured image' /></div>" if featured_image_url else ""}
     {"<div class='excerpt'>" + excerpt_html + "</div>" if excerpt_html else ""}
-    <article>{content_html}</article>
+    <article id="draft-article">{content_html}</article>
   </div>
+  <script>
+    (function () {{
+      const article = document.getElementById("draft-article");
+      if (!article) return;
+
+      const slugify = (value) => (value || "")
+        .toLowerCase()
+        .replace(/<[^>]*>/g, "")
+        .replace(/[^a-z0-9\\u00c0-\\u024f\\u1e00-\\u1eff]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+      const headingBySlug = new Map();
+      const headings = Array.from(article.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+      headings.forEach((heading, index) => {{
+        const textSlug = slugify(heading.textContent || "");
+        if (!heading.id) {{
+          heading.id = textSlug ? `section-${{textSlug}}` : `section-${{index + 1}}`;
+        }}
+        if (textSlug && !headingBySlug.has(textSlug)) {{
+          headingBySlug.set(textSlug, heading);
+        }}
+      }});
+
+      const isExternal = (href) =>
+        href.startsWith("http://") ||
+        href.startsWith("https://") ||
+        href.startsWith("mailto:") ||
+        href.startsWith("tel:");
+
+      const normalizeAnchor = (raw) => (raw || "").replace(/^#/, "").trim();
+
+      const links = Array.from(article.querySelectorAll("a[href]"));
+      links.forEach((link) => {{
+        const href = (link.getAttribute("href") || "").trim();
+        if (!href || isExternal(href)) return;
+
+        const hashTarget = href.includes("#") ? normalizeAnchor(href.split("#").pop()) : "";
+        const textTarget = slugify(link.textContent || "");
+        const idTarget = hashTarget || `section-${{textTarget}}`;
+        let headingTarget = hashTarget ? document.getElementById(hashTarget) : null;
+        if (!headingTarget && textTarget) {{
+          headingTarget = headingBySlug.get(textTarget) || null;
+        }}
+        if (!headingTarget && idTarget) {{
+          headingTarget = document.getElementById(idTarget);
+        }}
+
+        if (!headingTarget) {{
+          link.removeAttribute("href");
+          link.style.textDecoration = "none";
+          link.style.cursor = "default";
+          return;
+        }}
+
+        link.setAttribute("href", `#${{headingTarget.id}}`);
+        link.addEventListener("click", (event) => {{
+          event.preventDefault();
+          headingTarget.scrollIntoView({{ behavior: "smooth", block: "start" }});
+          window.history.replaceState(null, "", `#${{headingTarget.id}}`);
+        }});
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """

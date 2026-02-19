@@ -253,6 +253,10 @@ body {
   width: 100%;
 }
 
+.pending-panel {
+  max-width: 1120px;
+}
+
 .hero h1 {
   margin: 0;
   font-size: 42px;
@@ -783,7 +787,7 @@ input:disabled {
   align-items: center;
   gap: 6px;
   justify-content: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .pending-reject-panel {
@@ -878,6 +882,10 @@ input:disabled {
   .pending-item-row {
     grid-template-columns: 1fr;
     align-items: flex-start;
+  }
+
+  .pending-actions {
+    flex-wrap: wrap;
   }
 
   .auth-card h1 {

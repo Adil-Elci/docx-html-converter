@@ -929,7 +929,7 @@ export default function App() {
               </div>
             </div>
           ) : isAdminPendingSection ? (
-            <div className="panel form-panel">
+            <div className="panel form-panel pending-panel">
               <h2>{isAdminPendingGuestPosts ? t("navPendingGuestPosts") : t("navPendingOrders")}</h2>
               {pendingLoading ? <p className="muted-text">{t("loading")}</p> : null}
               {!pendingLoading && (isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).length === 0 ? (

@@ -95,7 +95,14 @@ def _get_job_or_404(db: Session, job_id: UUID) -> Job:
     return job
 
 
-def _pending_job_to_out(job: Job, submission: Submission, client: Client, site: Site) -> PendingJobOut:
+def _pending_job_to_out(
+    job: Job,
+    submission: Submission,
+    client: Client,
+    site: Site,
+    *,
+    content_title: Optional[str] = None,
+) -> PendingJobOut:
     return PendingJobOut(
         job_id=job.id,
         submission_id=submission.id,
@@ -105,6 +112,7 @@ def _pending_job_to_out(job: Job, submission: Submission, client: Client, site: 
         site_id=site.id,
         site_name=(site.name or "").strip(),
         site_url=(site.site_url or "").strip(),
+        content_title=(content_title or "").strip() or None,
         job_status=job.job_status,
         wp_post_id=job.wp_post_id,
         wp_post_url=job.wp_post_url,
@@ -218,7 +226,45 @@ def list_pending_jobs(
         query = query.filter(Submission.request_kind == kind_filter)
 
     rows = query.order_by(Job.updated_at.desc(), Job.created_at.desc()).all()
-    return [_pending_job_to_out(job, submission, client, site) for job, submission, client, site in rows]
+    if not rows:
+        return []
+
+    job_ids = [job.id for job, _, _, _ in rows]
+    event_rows = (
+        db.query(JobEvent.job_id, JobEvent.payload)
+        .filter(
+            JobEvent.job_id.in_(job_ids),
+            JobEvent.event_type == "converter_ok",
+        )
+        .order_by(JobEvent.created_at.desc())
+        .all()
+    )
+
+    title_map: dict[UUID, str] = {}
+    for job_id_value, payload in event_rows:
+        if job_id_value in title_map:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        raw_title = payload.get("title")
+        if isinstance(raw_title, str) and raw_title.strip():
+            title_map[job_id_value] = raw_title.strip()
+
+    out: List[PendingJobOut] = []
+    for job, submission, client, site in rows:
+        title_value = title_map.get(job.id)
+        if not title_value and isinstance(submission.title, str):
+            title_value = submission.title.strip() or None
+        out.append(
+            _pending_job_to_out(
+                job,
+                submission,
+                client,
+                site,
+                content_title=title_value,
+            )
+        )
+    return out
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)

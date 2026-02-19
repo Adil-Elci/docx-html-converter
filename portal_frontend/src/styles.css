@@ -742,32 +742,48 @@ input:disabled {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.pending-list {
+.pending-list-table {
   display: grid;
   gap: 10px;
 }
 
-.pending-item {
+.pending-list-header,
+.pending-item-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1.6fr 1.4fr 1.7fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.pending-list-header {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+
+.pending-item-wrap {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel-3) 60%, transparent);
   padding: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
 }
 
-.pending-meta {
-  display: grid;
-  gap: 4px;
+.pending-item-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pending-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .pending-reject-panel {
@@ -855,8 +871,12 @@ input:disabled {
     flex: 1;
   }
 
-  .pending-item {
-    flex-direction: column;
+  .pending-list-header {
+    display: none;
+  }
+
+  .pending-item-row {
+    grid-template-columns: 1fr;
     align-items: flex-start;
   }
 

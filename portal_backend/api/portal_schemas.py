@@ -834,6 +834,7 @@ class PendingJobOut(BaseModel):
     site_id: UUID
     site_name: str
     site_url: str
+    content_title: Optional[str] = None
     job_status: str
     wp_post_id: Optional[int]
     wp_post_url: Optional[str]

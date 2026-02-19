@@ -937,91 +937,98 @@ export default function App() {
                   {isAdminPendingGuestPosts ? t("pendingGuestPostsEmpty") : t("pendingOrdersEmpty")}
                 </p>
               ) : null}
-              <div className="pending-list">
+              <div className="pending-list-table">
+                <div className="pending-list-header">
+                  <span>{t("createdByLabel")}</span>
+                  <span>{t("targetWebsiteLabel")}</span>
+                  <span>{t("contentTitleLabel")}</span>
+                  <span>{t("actionsLabel")}</span>
+                </div>
                 {(isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).map((item) => {
                   const draftReviewUrl = getDraftReviewUrl(item);
                   return (
-                  <div key={item.job_id} className="pending-item">
-                    <div className="pending-meta">
-                      <strong>{`${t("createdByLabel")}: ${item.client_name}`}</strong>
-                      <span className="muted-text">{`${t("targetWebsiteLabel")}: ${item.site_url || item.site_name}`}</span>
-                    </div>
-                    <div className="pending-actions">
-                      {draftReviewUrl ? (
-                        <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
-                          {t("viewDraft")}
-                        </a>
-                      ) : (
-                        <span className="muted-text small-text">{t("draftLinkUnavailable")}</span>
-                      )}
-                      <button
-                        className="btn"
-                        type="button"
-                        onClick={() => publishPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
-                        disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id}
-                      >
-                        {publishingJobId === item.job_id ? t("publishing") : t("publish")}
-                      </button>
-                      <button
-                        className="btn secondary"
-                        type="button"
-                        onClick={() => {
-                          setOpenRejectJobId((prev) => (prev === item.job_id ? "" : item.job_id));
-                          setRejectForms((prev) => ({
-                            ...prev,
-                            [item.job_id]: prev[item.job_id] || emptyRejectForm(),
-                          }));
-                        }}
-                        disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id}
-                      >
-                        {t("reject")}
-                      </button>
-                    </div>
-                    {openRejectJobId === item.job_id ? (
-                      <div className="pending-reject-panel">
-                        <label>{t("rejectReasonLabel")}</label>
-                        <select
-                          value={getRejectForm(item.job_id).reason_code}
-                          onChange={(e) => setRejectFormField(item.job_id, "reason_code", e.target.value)}
-                        >
-                          <option value="quality_below_standard">{t("rejectReasonQuality")}</option>
-                          <option value="policy_or_compliance_issue">{t("rejectReasonPolicy")}</option>
-                          <option value="seo_or_link_issue">{t("rejectReasonSeo")}</option>
-                          <option value="format_or_structure_issue">{t("rejectReasonFormat")}</option>
-                          <option value="other">{t("rejectReasonOther")}</option>
-                        </select>
-                        {getRejectForm(item.job_id).reason_code === "other" ? (
-                          <div>
-                            <label>{t("rejectOtherLabel")}</label>
-                            <textarea
-                              rows={3}
-                              value={getRejectForm(item.job_id).other_reason}
-                              onChange={(e) => setRejectFormField(item.job_id, "other_reason", e.target.value)}
-                              placeholder={t("rejectOtherPlaceholder")}
-                            />
-                          </div>
-                        ) : null}
-                        <div className="pending-reject-actions">
-                          <button
-                            className="btn secondary"
-                            type="button"
-                            onClick={() => setOpenRejectJobId("")}
-                            disabled={rejectingJobId === item.job_id}
-                          >
-                            {t("close")}
-                          </button>
+                    <div key={item.job_id} className="pending-item-wrap">
+                      <div className="pending-item-row">
+                        <span>{item.client_name}</span>
+                        <span>{item.site_url || item.site_name}</span>
+                        <span>{item.content_title || t("contentTitleFallback")}</span>
+                        <div className="pending-actions">
+                          {draftReviewUrl ? (
+                            <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
+                              {t("viewDraft")}
+                            </a>
+                          ) : (
+                            <span className="muted-text small-text">{t("draftLinkUnavailable")}</span>
+                          )}
                           <button
                             className="btn"
                             type="button"
-                            onClick={() => rejectPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
-                            disabled={rejectingJobId === item.job_id}
+                            onClick={() => publishPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id}
                           >
-                            {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
+                            {publishingJobId === item.job_id ? t("publishing") : t("publish")}
+                          </button>
+                          <button
+                            className="btn secondary"
+                            type="button"
+                            onClick={() => {
+                              setOpenRejectJobId((prev) => (prev === item.job_id ? "" : item.job_id));
+                              setRejectForms((prev) => ({
+                                ...prev,
+                                [item.job_id]: prev[item.job_id] || emptyRejectForm(),
+                              }));
+                            }}
+                            disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id}
+                          >
+                            {t("reject")}
                           </button>
                         </div>
                       </div>
-                    ) : null}
-                  </div>
+                      {openRejectJobId === item.job_id ? (
+                        <div className="pending-reject-panel">
+                          <label>{t("rejectReasonLabel")}</label>
+                          <select
+                            value={getRejectForm(item.job_id).reason_code}
+                            onChange={(e) => setRejectFormField(item.job_id, "reason_code", e.target.value)}
+                          >
+                            <option value="quality_below_standard">{t("rejectReasonQuality")}</option>
+                            <option value="policy_or_compliance_issue">{t("rejectReasonPolicy")}</option>
+                            <option value="seo_or_link_issue">{t("rejectReasonSeo")}</option>
+                            <option value="format_or_structure_issue">{t("rejectReasonFormat")}</option>
+                            <option value="other">{t("rejectReasonOther")}</option>
+                          </select>
+                          {getRejectForm(item.job_id).reason_code === "other" ? (
+                            <div>
+                              <label>{t("rejectOtherLabel")}</label>
+                              <textarea
+                                rows={3}
+                                value={getRejectForm(item.job_id).other_reason}
+                                onChange={(e) => setRejectFormField(item.job_id, "other_reason", e.target.value)}
+                                placeholder={t("rejectOtherPlaceholder")}
+                              />
+                            </div>
+                          ) : null}
+                          <div className="pending-reject-actions">
+                            <button
+                              className="btn secondary"
+                              type="button"
+                              onClick={() => setOpenRejectJobId("")}
+                              disabled={rejectingJobId === item.job_id}
+                            >
+                              {t("close")}
+                            </button>
+                            <button
+                              className="btn"
+                              type="button"
+                              onClick={() => rejectPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                              disabled={rejectingJobId === item.job_id}
+                            >
+                              {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>

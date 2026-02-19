@@ -627,10 +627,11 @@ async def process_guest_post_webhook(
 
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
+        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
-            ensure_site_access(db, current_user, site.id)
-        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+            if enforce_client_site_access:
+                ensure_site_access(db, current_user, site.id)
         if enforce_client_site_access:
             _require_client_site_access(db, client.id, site.id)
         else:

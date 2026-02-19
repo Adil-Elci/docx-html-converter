@@ -19,6 +19,11 @@ const emptyLoginForm = () => ({
   password: "",
 });
 
+const emptyLoginFieldErrors = () => ({
+  email: false,
+  password: false,
+});
+
 const emptyResetRequestForm = () => ({
   email: "",
 });
@@ -63,6 +68,8 @@ export default function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [loginForm, setLoginForm] = useState(emptyLoginForm());
+  const [loginFieldErrors, setLoginFieldErrors] = useState(emptyLoginFieldErrors());
+  const [loginFieldShake, setLoginFieldShake] = useState(emptyLoginFieldErrors());
   const [authError, setAuthError] = useState("");
   const [showResetOption, setShowResetOption] = useState(false);
   const [showResetRequestForm, setShowResetRequestForm] = useState(false);
@@ -218,8 +225,14 @@ export default function App() {
     setAuthError("");
     const email = loginForm.email.trim().toLowerCase();
     const password = loginForm.password;
-    if (!email || !password) {
-      setAuthError(t("errorLoginRequired"));
+    const nextErrors = {
+      email: !email,
+      password: !password,
+    };
+    if (nextErrors.email || nextErrors.password) {
+      setLoginFieldErrors(nextErrors);
+      setLoginFieldShake(nextErrors);
+      setTimeout(() => setLoginFieldShake(emptyLoginFieldErrors()), 350);
       return;
     }
 
@@ -247,6 +260,8 @@ export default function App() {
 
       setCurrentUser(user);
       setLoginForm(emptyLoginForm());
+      setLoginFieldErrors(emptyLoginFieldErrors());
+      setLoginFieldShake(emptyLoginFieldErrors());
       setShowResetOption(false);
       setShowResetRequestForm(false);
       setResetRequestMessage("");
@@ -562,6 +577,11 @@ export default function App() {
         onThemeChange={setTheme}
         loginForm={loginForm}
         onLoginFormChange={setLoginForm}
+        loginFieldErrors={loginFieldErrors}
+        loginFieldShake={loginFieldShake}
+        onClearLoginFieldError={(field) => {
+          setLoginFieldErrors((prev) => ({ ...prev, [field]: false }));
+        }}
         onLoginSubmit={handleLogin}
         submittingLogin={authSubmitting}
         error={authError}
@@ -858,6 +878,9 @@ function AuthGate({
   onThemeChange,
   loginForm,
   onLoginFormChange,
+  loginFieldErrors,
+  loginFieldShake,
+  onClearLoginFieldError,
   onLoginSubmit,
   submittingLogin,
   error,
@@ -888,7 +911,7 @@ function AuthGate({
       <div className="auth-card panel">
         <h1>{t("loginTitle")}</h1>
         {inResetConfirmMode ? (
-          <form className="auth-form" onSubmit={onResetConfirmSubmit}>
+          <form className="auth-form" onSubmit={onResetConfirmSubmit} noValidate>
             <div>
               <label>{t("newPassword")}</label>
               <input
@@ -917,15 +940,18 @@ function AuthGate({
           </form>
         ) : (
           <>
-            <form className="auth-form" onSubmit={onLoginSubmit}>
+            <form className="auth-form" onSubmit={onLoginSubmit} noValidate>
               <div>
                 <label>{t("email")}</label>
                 <input
                   type="email"
                   value={loginForm.email}
-                  onChange={(e) => onLoginFormChange((prev) => ({ ...prev, email: e.target.value }))}
-                  placeholder="name@example.com"
-                  required
+                  className={`${loginFieldErrors.email ? "input-error" : ""} ${loginFieldShake.email ? "input-shake" : ""}`.trim()}
+                  onChange={(e) => {
+                    onLoginFormChange((prev) => ({ ...prev, email: e.target.value }));
+                    if (e.target.value.trim()) onClearLoginFieldError("email");
+                  }}
+                  placeholder={loginFieldErrors.email ? t("errorEmailRequired") : "name@example.com"}
                 />
               </div>
               <div>
@@ -933,9 +959,12 @@ function AuthGate({
                 <input
                   type="password"
                   value={loginForm.password}
-                  onChange={(e) => onLoginFormChange((prev) => ({ ...prev, password: e.target.value }))}
-                  placeholder="••••••••"
-                  required
+                  className={`${loginFieldErrors.password ? "input-error" : ""} ${loginFieldShake.password ? "input-shake" : ""}`.trim()}
+                  onChange={(e) => {
+                    onLoginFormChange((prev) => ({ ...prev, password: e.target.value }));
+                    if (e.target.value.trim()) onClearLoginFieldError("password");
+                  }}
+                  placeholder={loginFieldErrors.password ? t("errorPasswordRequired") : "••••••••"}
                 />
               </div>
               {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
@@ -954,7 +983,7 @@ function AuthGate({
             ) : null}
 
             {showResetRequestForm ? (
-              <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit}>
+              <form className="auth-form auth-reset-form" onSubmit={onResetRequestSubmit} noValidate>
                 <div>
                   <label>{t("resetEmailLabel")}</label>
                   <input

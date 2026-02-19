@@ -159,6 +159,7 @@ class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
         CheckConstraint("source_type IN ('google-doc','docx-upload')", name="submissions_source_type_check"),
+        CheckConstraint("request_kind IN ('guest_post','order')", name="submissions_request_kind_check"),
         CheckConstraint("backlink_placement IN ('intro','conclusion')", name="submissions_backlink_placement_check"),
         CheckConstraint("post_status IN ('draft','publish')", name="submissions_post_status_check"),
         CheckConstraint(
@@ -175,6 +176,7 @@ class Submission(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
     site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id"), nullable=False)
+    request_kind = Column(Text, nullable=False, default="guest_post")
     source_type = Column(Text, nullable=False)
     doc_url = Column(Text, nullable=True)
     file_url = Column(Text, nullable=True)
@@ -193,7 +195,7 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint(
-            "job_status IN ('queued','processing','succeeded','failed','retrying')",
+            "job_status IN ('queued','processing','pending_approval','succeeded','failed','retrying')",
             name="jobs_job_status_check",
         ),
     )
@@ -203,6 +205,9 @@ class Job(Base):
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
     site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id"), nullable=False)
     job_status = Column(Text, nullable=False, default="queued")
+    requires_admin_approval = Column(Boolean, nullable=False, default=False)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
     wp_post_id = Column(BigInteger, nullable=True)

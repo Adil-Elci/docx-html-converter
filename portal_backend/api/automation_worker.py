@@ -183,6 +183,8 @@ class AutomationJobWorker:
             post_status = parsed_notes.get("post_status", "publish").strip().lower()
             if post_status not in {"draft", "publish"}:
                 post_status = "publish"
+            if bool(job.requires_admin_approval):
+                post_status = "draft"
 
             credential_author_id_raw = credential.author_id
             credential_author_id = None
@@ -300,7 +302,7 @@ class AutomationJobWorker:
             if isinstance(wp_post_url, str) and wp_post_url.strip():
                 job.wp_post_url = wp_post_url.strip()
 
-            job.job_status = "succeeded"
+            job.job_status = "pending_approval" if bool(job.requires_admin_approval) else "succeeded"
             job.last_error = None
             session.add(job)
 
@@ -346,6 +348,7 @@ class AutomationJobWorker:
                         "wp_post_id": job.wp_post_id,
                         "wp_post_url": job.wp_post_url,
                         "category_ids": selected_category_ids,
+                        "pending_admin_approval": bool(job.requires_admin_approval),
                     },
                 )
             )

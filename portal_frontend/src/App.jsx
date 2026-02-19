@@ -100,6 +100,10 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminSubmitting, setAdminSubmitting] = useState(false);
   const [adminSavingUserId, setAdminSavingUserId] = useState("");
+  const [pendingGuestPosts, setPendingGuestPosts] = useState([]);
+  const [pendingOrders, setPendingOrders] = useState([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [publishingJobId, setPublishingJobId] = useState("");
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
@@ -148,6 +152,38 @@ export default function App() {
       setError(err.message);
     } finally {
       setAdminLoading(false);
+    }
+  };
+
+  const loadPendingJobs = async (requestKind) => {
+    if (currentUser?.role !== "admin") return;
+    try {
+      setPendingLoading(true);
+      const items = await api.get(`/jobs/pending?request_kind=${requestKind}`);
+      if (requestKind === "order") {
+        setPendingOrders(items || []);
+      } else {
+        setPendingGuestPosts(items || []);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPendingLoading(false);
+    }
+  };
+
+  const publishPendingJob = async (jobId, requestKind) => {
+    try {
+      setPublishingJobId(jobId);
+      setError("");
+      setSuccess("");
+      await api.post(`/jobs/${jobId}/publish`, {});
+      await loadPendingJobs(requestKind);
+      setSuccess(t("adminPublishedSuccess"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPublishingJobId("");
     }
   };
 
@@ -223,6 +259,17 @@ export default function App() {
     if (activeSection !== "admin") return;
     if (adminUsers.length > 0) return;
     loadAdminUsers(currentUser);
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection === "guest-posts") {
+      loadPendingJobs("guest_post");
+      return;
+    }
+    if (activeSection === "orders") {
+      loadPendingJobs("order");
+    }
   }, [currentUser, activeSection]);
 
   const handleLogin = async (event) => {
@@ -427,6 +474,7 @@ export default function App() {
     const formData = new FormData();
     formData.append("target_site", targetSite);
     formData.append("client_name", clientName);
+    formData.append("request_kind", isOrders ? "order" : "guest_post");
     formData.append("source_type", effectiveSourceType);
     formData.append("execution_mode", "async");
     if (submissionForm.anchor.trim()) formData.append("anchor", submissionForm.anchor.trim());
@@ -616,6 +664,10 @@ export default function App() {
   const isAdminSection = activeSection === "admin";
   const isWebsitesSection = activeSection === "websites";
   const isClientsSection = activeSection === "clients";
+  const isAdminUser = currentUser.role === "admin";
+  const isAdminPendingGuestPosts = isAdminUser && activeSection === "guest-posts";
+  const isAdminPendingOrders = isAdminUser && activeSection === "orders";
+  const isAdminPendingSection = isAdminPendingGuestPosts || isAdminPendingOrders;
   const isOrders = activeSection === "orders";
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
   const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
@@ -637,7 +689,7 @@ export default function App() {
 
       <div className="app-main">
         <div className="header">
-          <div className="title">{isAdminSection ? t("heroAdminPanel") : t("clientsPortal")}</div>
+          <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
             <div className="user-chip">
               <span>{currentUser.email}</span>
@@ -658,7 +710,7 @@ export default function App() {
         </div>
 
         <div className="container">
-          {!isAdminSection && !isWebsitesSection && !isClientsSection ? (
+          {!isAdminUser && !isWebsitesSection && !isClientsSection ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
             </div>
@@ -699,7 +751,7 @@ export default function App() {
                 <strong>{unmappedClientUserCount}</strong>
               </div>
             </div>
-          ) : !isWebsitesSection && !isClientsSection ? (
+          ) : !isAdminUser && !isWebsitesSection && !isClientsSection ? (
             <div className="stats-grid">
               <div className="stat-card">
                 <span className="stat-label">{t("statActiveSites")}</span>
@@ -755,6 +807,43 @@ export default function App() {
                   <div key={client.id} className="admin-entity-card">
                     <strong>{client.name}</strong>
                     <span className="muted-text">{client.email || client.phone_number || "-"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : isAdminPendingSection ? (
+            <div className="panel form-panel">
+              <h2>{isAdminPendingGuestPosts ? t("navPendingGuestPosts") : t("navPendingOrders")}</h2>
+              {pendingLoading ? <p className="muted-text">{t("loading")}</p> : null}
+              {!pendingLoading && (isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).length === 0 ? (
+                <p className="muted-text">
+                  {isAdminPendingGuestPosts ? t("pendingGuestPostsEmpty") : t("pendingOrdersEmpty")}
+                </p>
+              ) : null}
+              <div className="pending-list">
+                {(isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).map((item) => (
+                  <div key={item.job_id} className="pending-item">
+                    <div className="pending-meta">
+                      <strong>{item.client_name}</strong>
+                      <span className="muted-text">{item.site_name}</span>
+                    </div>
+                    <div className="pending-actions">
+                      {item.wp_post_url ? (
+                        <a className="btn secondary" href={item.wp_post_url} target="_blank" rel="noreferrer">
+                          {t("viewDraft")}
+                        </a>
+                      ) : (
+                        <span className="muted-text small-text">{t("draftLinkUnavailable")}</span>
+                      )}
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => publishPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                        disabled={!item.wp_post_id || publishingJobId === item.job_id}
+                      >
+                        {publishingJobId === item.job_id ? t("publishing") : t("publish")}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

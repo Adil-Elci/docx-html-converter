@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -7,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
+from ..automation_service import AutomationError, get_runtime_config, wp_publish_post
 from ..db import get_db
-from ..portal_models import Asset, Job, JobEvent, Submission, User
+from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
     AssetCreate,
     AssetOut,
@@ -17,6 +19,8 @@ from ..portal_schemas import (
     JobEventOut,
     JobOut,
     JobUpdate,
+    PendingJobOut,
+    PendingJobPublishOut,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -29,6 +33,9 @@ def _job_to_out(job: Job) -> JobOut:
         client_id=job.client_id,
         site_id=job.site_id,
         job_status=job.job_status,
+        requires_admin_approval=bool(job.requires_admin_approval),
+        approved_by=job.approved_by,
+        approved_at=job.approved_at,
         attempt_count=job.attempt_count,
         last_error=job.last_error,
         wp_post_id=job.wp_post_id,
@@ -75,6 +82,24 @@ def _get_job_or_404(db: Session, job_id: UUID) -> Job:
     return job
 
 
+def _pending_job_to_out(job: Job, submission: Submission, client: Client, site: Site) -> PendingJobOut:
+    return PendingJobOut(
+        job_id=job.id,
+        submission_id=submission.id,
+        request_kind=submission.request_kind,
+        client_id=client.id,
+        client_name=(client.name or "").strip(),
+        site_id=site.id,
+        site_name=(site.name or "").strip(),
+        site_url=(site.site_url or "").strip(),
+        job_status=job.job_status,
+        wp_post_id=job.wp_post_id,
+        wp_post_url=job.wp_post_url,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
 @router.get("", response_model=List[JobOut])
 def list_jobs(
     submission_id: Optional[UUID] = Query(default=None),
@@ -106,6 +131,37 @@ def list_jobs(
     return [_job_to_out(job) for job in jobs]
 
 
+@router.get("/pending", response_model=List[PendingJobOut])
+def list_pending_jobs(
+    request_kind: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> List[PendingJobOut]:
+    kind_filter: Optional[str] = None
+    if request_kind is not None:
+        cleaned = request_kind.strip().lower()
+        if cleaned not in {"guest_post", "order"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="request_kind must be guest_post or order.")
+        kind_filter = cleaned
+
+    query = (
+        db.query(Job, Submission, Client, Site)
+        .join(Submission, Submission.id == Job.submission_id)
+        .join(Client, Client.id == Job.client_id)
+        .join(Site, Site.id == Job.site_id)
+        .filter(
+            Job.requires_admin_approval.is_(True),
+            Job.job_status == "pending_approval",
+            Job.wp_post_id.isnot(None),
+        )
+    )
+    if kind_filter:
+        query = query.filter(Submission.request_kind == kind_filter)
+
+    rows = query.order_by(Job.updated_at.desc(), Job.created_at.desc()).all()
+    return [_pending_job_to_out(job, submission, client, site) for job, submission, client, site in rows]
+
+
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 def create_job(
     payload: JobCreate,
@@ -128,6 +184,9 @@ def create_job(
         client_id=client_id,
         site_id=site_id,
         job_status=payload.job_status,
+        requires_admin_approval=payload.requires_admin_approval,
+        approved_by=payload.approved_by,
+        approved_at=payload.approved_at,
         attempt_count=payload.attempt_count,
         last_error=payload.last_error,
         wp_post_id=payload.wp_post_id,
@@ -164,6 +223,12 @@ def update_job(
 
     if payload.job_status is not None:
         job.job_status = payload.job_status
+    if payload.requires_admin_approval is not None:
+        job.requires_admin_approval = payload.requires_admin_approval
+    if payload.approved_by is not None:
+        job.approved_by = payload.approved_by
+    if payload.approved_at is not None:
+        job.approved_at = payload.approved_at
     if payload.attempt_count is not None:
         job.attempt_count = payload.attempt_count
     if payload.last_error is not None:
@@ -177,6 +242,84 @@ def update_job(
     db.commit()
     db.refresh(job)
     return _job_to_out(job)
+
+
+@router.post("/{job_id}/publish", response_model=PendingJobPublishOut)
+def publish_pending_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> PendingJobPublishOut:
+    job = _get_job_or_404(db, job_id)
+    if not bool(job.requires_admin_approval):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This job does not require admin approval.")
+    if job.job_status != "pending_approval":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job is not pending admin approval.")
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post to publish.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+    credential = (
+        db.query(SiteCredential)
+        .filter(
+            SiteCredential.site_id == site.id,
+            SiteCredential.enabled.is_(True),
+        )
+        .order_by(SiteCredential.created_at.desc())
+        .first()
+    )
+    if not credential:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No enabled site credential found for job site.")
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    try:
+        post_payload = wp_publish_post(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    now = datetime.now(timezone.utc)
+    wp_post_url = post_payload.get("link")
+    if isinstance(wp_post_url, str) and wp_post_url.strip():
+        job.wp_post_url = wp_post_url.strip()
+    submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
+    if submission:
+        submission.post_status = "publish"
+        submission.updated_at = now
+        db.add(submission)
+    job.job_status = "succeeded"
+    job.approved_by = current_user.id
+    job.approved_at = now
+    job.updated_at = now
+    db.add(job)
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="wp_post_updated",
+            payload={
+                "action": "admin_publish",
+                "wp_post_id": int(job.wp_post_id),
+                "wp_post_url": job.wp_post_url,
+                "approved_by": str(current_user.id),
+                "approved_at": now.isoformat(),
+            },
+        )
+    )
+    db.commit()
+    db.refresh(job)
+    return PendingJobPublishOut(job=_job_to_out(job))
 
 
 @router.get("/{job_id}/events", response_model=List[JobEventOut])

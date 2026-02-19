@@ -633,6 +633,33 @@ input:disabled {
   gap: 4px;
 }
 
+.pending-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pending-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-3) 60%, transparent);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pending-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.pending-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -701,6 +728,11 @@ input:disabled {
 
   .source-toggle button {
     flex: 1;
+  }
+
+  .pending-item {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .auth-card h1 {

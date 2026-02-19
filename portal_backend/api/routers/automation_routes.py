@@ -300,6 +300,7 @@ def _find_existing_submission(
     *,
     client_id: UUID,
     site_id: UUID,
+    request_kind: str,
     source_type: str,
     doc_url: Optional[str],
     file_url: Optional[str],
@@ -308,6 +309,7 @@ def _find_existing_submission(
     query = db.query(Submission).filter(
         Submission.client_id == client_id,
         Submission.site_id == site_id,
+        Submission.request_kind == request_kind,
         Submission.source_type == source_type,
     )
     if doc_url is None:
@@ -343,11 +345,13 @@ def _enqueue_job(
     db: Session,
     *,
     payload: AutomationGuestPostIn,
+    request_kind: str,
     source_type: str,
     source_url: str,
     site: Site,
     client: Client,
     post_status: str,
+    requires_admin_approval: bool,
     author_id: int,
 ) -> Tuple[Submission, Job, bool]:
     submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
@@ -364,6 +368,7 @@ def _enqueue_job(
         db,
         client_id=client.id,
         site_id=site.id,
+        request_kind=request_kind,
         source_type=submission_source_type,
         doc_url=doc_url,
         file_url=file_url,
@@ -377,6 +382,10 @@ def _enqueue_job(
             .first()
         )
         if existing_job:
+            existing_job.requires_admin_approval = requires_admin_approval
+            if requires_admin_approval:
+                existing_job.approved_by = None
+                existing_job.approved_at = None
             if existing_job.job_status == "failed":
                 existing_job.job_status = "retrying"
                 existing_job.last_error = None
@@ -389,6 +398,9 @@ def _enqueue_job(
             client_id=client.id,
             site_id=site.id,
             job_status="queued",
+            requires_admin_approval=requires_admin_approval,
+            approved_by=None,
+            approved_at=None,
             attempt_count=0,
         )
         db.add(job)
@@ -399,6 +411,7 @@ def _enqueue_job(
     submission = Submission(
         client_id=client.id,
         site_id=site.id,
+        request_kind=request_kind,
         source_type=submission_source_type,
         doc_url=doc_url,
         file_url=file_url,
@@ -416,6 +429,9 @@ def _enqueue_job(
         client_id=client.id,
         site_id=site.id,
         job_status="queued",
+        requires_admin_approval=requires_admin_approval,
+        approved_by=None,
+        approved_at=None,
         attempt_count=0,
     )
     db.add(job)
@@ -497,6 +513,11 @@ async def process_guest_post_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AUTOMATION_POST_STATUS must be draft or publish.",
         )
+    request_kind = payload.request_kind
+    is_authenticated_client = current_user is not None and current_user.role != "admin"
+    requires_admin_approval = is_authenticated_client
+    if requires_admin_approval:
+        post_status = "draft"
 
     try:
         normalized_source_type, source_url = resolve_source_url(
@@ -540,11 +561,13 @@ async def process_guest_post_webhook(
         submission, job, deduplicated = _enqueue_job(
             db,
             payload=payload,
+            request_kind=request_kind,
             source_type=normalized_source_type,
             source_url=source_url,
             site=site,
             client=client,
             post_status=post_status,
+            requires_admin_approval=requires_admin_approval,
             author_id=author_id,
         )
         shadow_dispatched = False

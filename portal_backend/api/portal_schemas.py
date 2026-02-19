@@ -12,8 +12,9 @@ AUTH_TYPES = {"application_password"}
 SOURCE_TYPES = {"google-doc", "docx-upload"}
 BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
+REQUEST_KINDS = {"guest_post", "order"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
-JOB_STATUSES = {"queued", "processing", "succeeded", "failed", "retrying"}
+JOB_STATUSES = {"queued", "processing", "pending_approval", "succeeded", "failed", "retrying"}
 EVENT_TYPES = {
     "converter_called",
     "converter_ok",
@@ -427,6 +428,7 @@ class ClientSiteAccessOut(BaseModel):
 class SubmissionCreate(BaseModel):
     client_id: UUID
     site_id: UUID
+    request_kind: str = "guest_post"
     source_type: str
     doc_url: Optional[str] = None
     file_url: Optional[str] = None
@@ -437,6 +439,13 @@ class SubmissionCreate(BaseModel):
     notes: Optional[str] = None
     status: str = "received"
     rejection_reason: Optional[str] = None
+
+    @validator("request_kind")
+    def validate_request_kind(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in REQUEST_KINDS:
+            raise ValueError("request_kind must be guest_post or order.")
+        return cleaned
 
     @validator("source_type")
     def validate_source_type(cls, value: str) -> str:
@@ -487,6 +496,7 @@ class SubmissionCreate(BaseModel):
 class SubmissionUpdate(BaseModel):
     client_id: Optional[UUID] = None
     site_id: Optional[UUID] = None
+    request_kind: Optional[str] = None
     source_type: Optional[str] = None
     doc_url: Optional[str] = None
     file_url: Optional[str] = None
@@ -497,6 +507,15 @@ class SubmissionUpdate(BaseModel):
     notes: Optional[str] = None
     status: Optional[str] = None
     rejection_reason: Optional[str] = None
+
+    @validator("request_kind")
+    def validate_request_kind(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in REQUEST_KINDS:
+            raise ValueError("request_kind must be guest_post or order.")
+        return cleaned
 
     @validator("source_type")
     def validate_source_type(cls, value: Optional[str]) -> Optional[str]:
@@ -539,6 +558,7 @@ class SubmissionOut(BaseModel):
     id: UUID
     client_id: UUID
     site_id: UUID
+    request_kind: str
     source_type: str
     doc_url: Optional[str]
     file_url: Optional[str]
@@ -558,6 +578,9 @@ class JobCreate(BaseModel):
     client_id: Optional[UUID] = None
     site_id: Optional[UUID] = None
     job_status: str = "queued"
+    requires_admin_approval: bool = False
+    approved_by: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
     attempt_count: int = 0
     last_error: Optional[str] = None
     wp_post_id: Optional[int] = None
@@ -567,12 +590,15 @@ class JobCreate(BaseModel):
     def validate_job_status(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/succeeded/failed/retrying.")
         return cleaned
 
 
 class JobUpdate(BaseModel):
     job_status: Optional[str] = None
+    requires_admin_approval: Optional[bool] = None
+    approved_by: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
     attempt_count: Optional[int] = None
     last_error: Optional[str] = None
     wp_post_id: Optional[int] = None
@@ -584,7 +610,7 @@ class JobUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/succeeded/failed/retrying.")
         return cleaned
 
 
@@ -594,6 +620,9 @@ class JobOut(BaseModel):
     client_id: UUID
     site_id: UUID
     job_status: str
+    requires_admin_approval: bool
+    approved_by: Optional[UUID]
+    approved_at: Optional[datetime]
     attempt_count: int
     last_error: Optional[str]
     wp_post_id: Optional[int]
@@ -658,6 +687,7 @@ class AssetOut(BaseModel):
 class AutomationGuestPostIn(BaseModel):
     source_type: str
     target_site: str
+    request_kind: str = "guest_post"
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
     client_id: Optional[UUID] = None
@@ -667,6 +697,13 @@ class AutomationGuestPostIn(BaseModel):
     backlink_placement: str = "intro"
     post_status: Optional[str] = None
     author: Optional[int] = None
+
+    @validator("request_kind")
+    def validate_request_kind(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in REQUEST_KINDS:
+            raise ValueError("request_kind must be guest_post or order.")
+        return cleaned
 
     @validator("source_type")
     def validate_source_type(cls, value: str) -> str:
@@ -786,3 +823,24 @@ class AutomationStatusOut(BaseModel):
     wp_post_id: Optional[int] = None
     wp_post_url: Optional[str] = None
     events: List[AutomationStatusEventOut] = Field(default_factory=list)
+
+
+class PendingJobOut(BaseModel):
+    job_id: UUID
+    submission_id: UUID
+    request_kind: str
+    client_id: UUID
+    client_name: str
+    site_id: UUID
+    site_name: str
+    site_url: str
+    job_status: str
+    wp_post_id: Optional[int]
+    wp_post_url: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class PendingJobPublishOut(BaseModel):
+    ok: bool = True
+    job: JobOut

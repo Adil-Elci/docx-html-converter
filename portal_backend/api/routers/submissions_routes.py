@@ -26,6 +26,7 @@ def _submission_to_out(submission: Submission) -> SubmissionOut:
         id=submission.id,
         client_id=submission.client_id,
         site_id=submission.site_id,
+        request_kind=submission.request_kind,
         source_type=submission.source_type,
         doc_url=submission.doc_url,
         file_url=submission.file_url,
@@ -141,6 +142,7 @@ def create_submission(
     submission = Submission(
         client_id=payload.client_id,
         site_id=payload.site_id,
+        request_kind=payload.request_kind,
         source_type=payload.source_type,
         doc_url=payload.doc_url,
         file_url=payload.file_url,
@@ -202,6 +204,8 @@ def update_submission(
         submission.site_id = payload.site_id
     if payload.source_type is not None:
         submission.source_type = payload.source_type
+    if payload.request_kind is not None:
+        submission.request_kind = payload.request_kind
     if payload.doc_url is not None:
         submission.doc_url = payload.doc_url
     if payload.file_url is not None:

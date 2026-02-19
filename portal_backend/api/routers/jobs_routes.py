@@ -48,6 +48,7 @@ def _job_to_out(job: Job) -> JobOut:
         job_status=job.job_status,
         requires_admin_approval=bool(job.requires_admin_approval),
         approved_by=job.approved_by,
+        approved_by_name_snapshot=job.approved_by_name_snapshot,
         approved_at=job.approved_at,
         attempt_count=job.attempt_count,
         last_error=job.last_error,
@@ -291,6 +292,7 @@ def create_job(
         job_status=payload.job_status,
         requires_admin_approval=payload.requires_admin_approval,
         approved_by=payload.approved_by,
+        approved_by_name_snapshot=payload.approved_by_name_snapshot,
         approved_at=payload.approved_at,
         attempt_count=payload.attempt_count,
         last_error=payload.last_error,
@@ -332,6 +334,8 @@ def update_job(
         job.requires_admin_approval = payload.requires_admin_approval
     if payload.approved_by is not None:
         job.approved_by = payload.approved_by
+    if payload.approved_by_name_snapshot is not None:
+        job.approved_by_name_snapshot = payload.approved_by_name_snapshot
     if payload.approved_at is not None:
         job.approved_at = payload.approved_at
     if payload.attempt_count is not None:
@@ -396,6 +400,7 @@ def publish_pending_job(
         db.add(submission)
     job.job_status = "succeeded"
     job.approved_by = current_user.id
+    job.approved_by_name_snapshot = (current_user.full_name or "").strip() or current_user.email
     job.approved_at = now
     job.updated_at = now
     db.add(job)
@@ -408,6 +413,7 @@ def publish_pending_job(
                 "wp_post_id": int(job.wp_post_id),
                 "wp_post_url": job.wp_post_url,
                 "approved_by": str(current_user.id),
+                "approved_by_name": job.approved_by_name_snapshot,
                 "approved_at": now.isoformat(),
             },
         )

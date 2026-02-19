@@ -39,6 +39,7 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(Text, nullable=False, unique=True)
+    full_name = Column(Text, nullable=True)
     password_hash = Column(Text, nullable=False)
     role = Column(Text, nullable=False, default="client")
     is_active = Column(Boolean, nullable=False, default=True)
@@ -207,6 +208,7 @@ class Job(Base):
     job_status = Column(Text, nullable=False, default="queued")
     requires_admin_approval = Column(Boolean, nullable=False, default=False)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_by_name_snapshot = Column(Text, nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)

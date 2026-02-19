@@ -450,6 +450,7 @@ def _enqueue_job(
             existing_job.requires_admin_approval = requires_admin_approval
             if requires_admin_approval:
                 existing_job.approved_by = None
+                existing_job.approved_by_name_snapshot = None
                 existing_job.approved_at = None
             if existing_job.job_status == "failed":
                 existing_job.job_status = "retrying"
@@ -465,6 +466,7 @@ def _enqueue_job(
             job_status="queued",
             requires_admin_approval=requires_admin_approval,
             approved_by=None,
+            approved_by_name_snapshot=None,
             approved_at=None,
             attempt_count=0,
         )
@@ -496,6 +498,7 @@ def _enqueue_job(
         job_status="queued",
         requires_admin_approval=requires_admin_approval,
         approved_by=None,
+        approved_by_name_snapshot=None,
         approved_at=None,
         attempt_count=0,
     )

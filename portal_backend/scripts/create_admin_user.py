@@ -17,13 +17,22 @@ from api.db import get_sessionmaker  # noqa: E402
 from api.portal_models import User  # noqa: E402
 
 
-def _upsert_admin_user(session: Session, *, email: str, password: str, force_reset_password: bool) -> str:
+def _upsert_admin_user(
+    session: Session,
+    *,
+    email: str,
+    password: str,
+    full_name: str,
+    force_reset_password: bool,
+) -> str:
     normalized_email = email.strip().lower()
+    normalized_full_name = full_name.strip()
     user = session.query(User).filter(User.email == normalized_email).first()
 
     if user is None:
         user = User(
             email=normalized_email,
+            full_name=normalized_full_name or None,
             password_hash=hash_password(password),
             role="admin",
             is_active=True,
@@ -38,6 +47,9 @@ def _upsert_admin_user(session: Session, *, email: str, password: str, force_res
         changed = True
     if not user.is_active:
         user.is_active = True
+        changed = True
+    if normalized_full_name and user.full_name != normalized_full_name:
+        user.full_name = normalized_full_name
         changed = True
     if force_reset_password:
         user.password_hash = hash_password(password)
@@ -54,6 +66,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create or update an admin user for portal auth.")
     parser.add_argument("--email", required=True, help="Admin email.")
     parser.add_argument("--password", required=True, help="Admin password.")
+    parser.add_argument("--full-name", default="", help="Admin display name (optional).")
     parser.add_argument(
         "--force-reset-password",
         action="store_true",
@@ -65,6 +78,7 @@ def main() -> int:
     if not email:
         raise RuntimeError("--email must not be empty.")
     password = args.password.strip()
+    full_name = args.full_name.strip()
     if len(password) < 8:
         raise RuntimeError("--password must be at least 8 characters.")
 
@@ -74,6 +88,7 @@ def main() -> int:
             session,
             email=email,
             password=password,
+            full_name=full_name,
             force_reset_password=args.force_reset_password,
         )
         print(result)
@@ -84,4 +99,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

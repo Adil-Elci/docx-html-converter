@@ -59,6 +59,7 @@ def _user_to_out(db: Session, user: User) -> AdminUserOut:
     return AdminUserOut(
         id=user.id,
         email=user.email,
+        full_name=user.full_name,
         role=user.role,
         is_active=user.is_active,
         created_at=user.created_at,
@@ -79,6 +80,7 @@ def create_admin_user(payload: AdminUserCreate, db: Session = Depends(get_db)) -
 
     user = User(
         email=str(payload.email).strip().lower(),
+        full_name=payload.full_name,
         password_hash=hash_password(payload.password),
         role=payload.role,
         is_active=payload.is_active,
@@ -127,6 +129,8 @@ def update_admin_user(
 
     if payload.role is not None:
         user.role = payload.role
+    if "full_name" in payload.__fields_set__:
+        user.full_name = payload.full_name
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.password is not None:

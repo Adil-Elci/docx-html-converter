@@ -32,6 +32,7 @@ USER_ROLES = {"admin", "client"}
 class UserOut(BaseModel):
     id: UUID
     email: EmailStr
+    full_name: Optional[str]
     role: str
     is_active: bool
     created_at: datetime
@@ -104,6 +105,7 @@ class AuthPasswordResetConfirmOut(BaseModel):
 
 class AdminUserCreate(BaseModel):
     email: EmailStr
+    full_name: Optional[str] = None
     password: str = Field(min_length=8, max_length=256)
     role: str = "client"
     is_active: bool = True
@@ -127,8 +129,16 @@ class AdminUserCreate(BaseModel):
             raise ValueError("role must be admin or client.")
         return cleaned
 
+    @validator("full_name")
+    def optional_full_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
 
 class AdminUserUpdate(BaseModel):
+    full_name: Optional[str] = None
     password: Optional[str] = Field(default=None, min_length=8, max_length=256)
     role: Optional[str] = None
     is_active: Optional[bool] = None
@@ -151,6 +161,13 @@ class AdminUserUpdate(BaseModel):
         if cleaned not in USER_ROLES:
             raise ValueError("role must be admin or client.")
         return cleaned
+
+    @validator("full_name")
+    def optional_nullable_full_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AdminUserOut(UserOut):
@@ -580,6 +597,7 @@ class JobCreate(BaseModel):
     job_status: str = "queued"
     requires_admin_approval: bool = False
     approved_by: Optional[UUID] = None
+    approved_by_name_snapshot: Optional[str] = None
     approved_at: Optional[datetime] = None
     attempt_count: int = 0
     last_error: Optional[str] = None
@@ -598,6 +616,7 @@ class JobUpdate(BaseModel):
     job_status: Optional[str] = None
     requires_admin_approval: Optional[bool] = None
     approved_by: Optional[UUID] = None
+    approved_by_name_snapshot: Optional[str] = None
     approved_at: Optional[datetime] = None
     attempt_count: Optional[int] = None
     last_error: Optional[str] = None
@@ -622,6 +641,7 @@ class JobOut(BaseModel):
     job_status: str
     requires_admin_approval: bool
     approved_by: Optional[UUID]
+    approved_by_name_snapshot: Optional[str]
     approved_at: Optional[datetime]
     attempt_count: int
     last_error: Optional[str]

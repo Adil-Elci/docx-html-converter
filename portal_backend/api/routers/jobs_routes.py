@@ -822,43 +822,71 @@ def preview_pending_job_draft(
         }}
       }});
 
-      const isExternal = (href) =>
-        href.startsWith("http://") ||
-        href.startsWith("https://") ||
-        href.startsWith("mailto:") ||
-        href.startsWith("tel:");
+      const normalizeAnchor = (raw) => decodeURIComponent((raw || "").replace(/^#/, "").trim()).toLowerCase();
 
-      const normalizeAnchor = (raw) => (raw || "").replace(/^#/, "").trim();
+      const isMailOrPhone = (href) => href.startsWith("mailto:") || href.startsWith("tel:");
+
+      const resolveHeadingTarget = (link) => {{
+        const href = (link.getAttribute("href") || "").trim();
+        if (!href || isMailOrPhone(href)) return null;
+
+        let hashTarget = "";
+        try {{
+          const parsed = new URL(href, window.location.href);
+          hashTarget = normalizeAnchor(parsed.hash);
+        }} catch {{
+          hashTarget = href.includes("#") ? normalizeAnchor(href.split("#").pop()) : "";
+        }}
+
+        const textTarget = slugify(link.textContent || "");
+        let headingTarget = null;
+
+        if (hashTarget) {{
+          headingTarget =
+            document.getElementById(hashTarget) ||
+            document.getElementById(`section-${{hashTarget}}`) ||
+            headingBySlug.get(hashTarget) ||
+            null;
+        }}
+
+        if (!headingTarget && textTarget) {{
+          headingTarget =
+            headingBySlug.get(textTarget) ||
+            document.getElementById(textTarget) ||
+            document.getElementById(`section-${{textTarget}}`) ||
+            null;
+        }}
+
+        return headingTarget;
+      }};
+
+      const scrollToHeading = (headingTarget) => {{
+        headingTarget.scrollIntoView({{ behavior: "smooth", block: "start" }});
+        window.history.replaceState(null, "", `#${{headingTarget.id}}`);
+      }};
 
       const links = Array.from(article.querySelectorAll("a[href]"));
       links.forEach((link) => {{
+        const headingTarget = resolveHeadingTarget(link);
         const href = (link.getAttribute("href") || "").trim();
-        if (!href || isExternal(href)) return;
-
-        const hashTarget = href.includes("#") ? normalizeAnchor(href.split("#").pop()) : "";
-        const textTarget = slugify(link.textContent || "");
-        const idTarget = hashTarget || `section-${{textTarget}}`;
-        let headingTarget = hashTarget ? document.getElementById(hashTarget) : null;
-        if (!headingTarget && textTarget) {{
-          headingTarget = headingBySlug.get(textTarget) || null;
-        }}
-        if (!headingTarget && idTarget) {{
-          headingTarget = document.getElementById(idTarget);
-        }}
-
         if (!headingTarget) {{
-          link.removeAttribute("href");
-          link.style.textDecoration = "none";
-          link.style.cursor = "default";
+          if (href.includes("#")) {{
+            link.removeAttribute("href");
+            link.style.textDecoration = "none";
+            link.style.cursor = "default";
+          }}
           return;
         }}
-
         link.setAttribute("href", `#${{headingTarget.id}}`);
-        link.addEventListener("click", (event) => {{
-          event.preventDefault();
-          headingTarget.scrollIntoView({{ behavior: "smooth", block: "start" }});
-          window.history.replaceState(null, "", `#${{headingTarget.id}}`);
-        }});
+      }});
+
+      article.addEventListener("click", (event) => {{
+        const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+        if (!link || !article.contains(link)) return;
+        const headingTarget = resolveHeadingTarget(link);
+        if (!headingTarget) return;
+        event.preventDefault();
+        scrollToHeading(headingTarget);
       }});
     }})();
   </script>

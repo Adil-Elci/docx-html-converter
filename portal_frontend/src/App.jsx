@@ -123,8 +123,7 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminSubmitting, setAdminSubmitting] = useState(false);
   const [adminSavingUserId, setAdminSavingUserId] = useState("");
-  const [pendingGuestPosts, setPendingGuestPosts] = useState([]);
-  const [pendingOrders, setPendingOrders] = useState([]);
+  const [pendingJobs, setPendingJobs] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
   const [rejectingJobId, setRejectingJobId] = useState("");
@@ -183,16 +182,12 @@ export default function App() {
     }
   };
 
-  const loadPendingJobs = async (requestKind) => {
+  const loadPendingJobs = async () => {
     if (currentUser?.role !== "admin") return;
     try {
       setPendingLoading(true);
-      const items = await api.get(`/jobs/pending?request_kind=${requestKind}`);
-      if (requestKind === "order") {
-        setPendingOrders(items || []);
-      } else {
-        setPendingGuestPosts(items || []);
-      }
+      const items = await api.get("/jobs/pending");
+      setPendingJobs(items || []);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -200,13 +195,13 @@ export default function App() {
     }
   };
 
-  const publishPendingJob = async (jobId, requestKind) => {
+  const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
       setError("");
       setSuccess("");
       await api.post(`/jobs/${jobId}/publish`, {});
-      await loadPendingJobs(requestKind);
+      await loadPendingJobs();
       setSuccess(t("adminPublishedSuccess"));
     } catch (err) {
       setError(err.message);
@@ -227,7 +222,7 @@ export default function App() {
     }));
   };
 
-  const rejectPendingJob = async (jobId, requestKind) => {
+  const rejectPendingJob = async (jobId) => {
     try {
       const draft = getRejectForm(jobId);
       if (draft.reason_code === "other" && !(draft.other_reason || "").trim()) {
@@ -241,7 +236,7 @@ export default function App() {
         reason_code: draft.reason_code,
         other_reason: draft.reason_code === "other" ? draft.other_reason.trim() : null,
       });
-      await loadPendingJobs(requestKind);
+      await loadPendingJobs();
       setOpenRejectJobId("");
       setRejectForms((prev) => {
         const next = { ...prev };
@@ -349,8 +344,7 @@ export default function App() {
         activeSection !== "admin"
         && activeSection !== "websites"
         && activeSection !== "clients"
-        && activeSection !== "guest-posts"
-        && activeSection !== "orders"
+        && activeSection !== "pending-jobs"
       ) {
         setActiveSection("admin");
       }
@@ -396,13 +390,8 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
-    if (activeSection === "guest-posts") {
-      loadPendingJobs("guest_post");
-      return;
-    }
-    if (activeSection === "orders") {
-      loadPendingJobs("order");
-    }
+    if (activeSection !== "pending-jobs") return;
+    loadPendingJobs();
   }, [currentUser, activeSection]);
 
   const handleLogin = async (event) => {
@@ -802,9 +791,7 @@ export default function App() {
   const isWebsitesSection = activeSection === "websites";
   const isClientsSection = activeSection === "clients";
   const isAdminUser = currentUser.role === "admin";
-  const isAdminPendingGuestPosts = isAdminUser && activeSection === "guest-posts";
-  const isAdminPendingOrders = isAdminUser && activeSection === "orders";
-  const isAdminPendingSection = isAdminPendingGuestPosts || isAdminPendingOrders;
+  const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isOrders = activeSection === "orders";
   const resolvedClientName = ((clients[0]?.name) || "").trim();
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
@@ -837,14 +824,11 @@ export default function App() {
           <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
             <div className="user-chip">
-              {currentUser.role === "client" ? (
-                <span>{`Hey ${resolvedClientName || t("roleClient")}!`}</span>
-              ) : (
-                <>
-                  <span>{currentUser.email}</span>
-                  <span className="role-pill">{t("roleAdmin")}</span>
-                </>
-              )}
+              <span>{`Hey ${
+                currentUser.role === "admin"
+                  ? (currentUser.full_name || currentUser.email)
+                  : (resolvedClientName || t("roleClient"))
+              }!`}</span>
             </div>
             <LanguageToggle
               language={language}
@@ -964,11 +948,11 @@ export default function App() {
             </div>
           ) : isAdminPendingSection ? (
             <div className="panel form-panel pending-panel">
-              <h2>{isAdminPendingGuestPosts ? t("navPendingGuestPosts") : t("navPendingOrders")}</h2>
+              <h2>{t("navPendingJobs")}</h2>
               {pendingLoading ? <p className="muted-text">{t("loading")}</p> : null}
-              {!pendingLoading && (isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).length === 0 ? (
+              {!pendingLoading && pendingJobs.length === 0 ? (
                 <p className="muted-text">
-                  {isAdminPendingGuestPosts ? t("pendingGuestPostsEmpty") : t("pendingOrdersEmpty")}
+                  {t("pendingJobsEmpty")}
                 </p>
               ) : null}
               <div className="pending-list-table">
@@ -976,16 +960,19 @@ export default function App() {
                   <span>{t("createdByLabel")}</span>
                   <span>{t("targetWebsiteLabel")}</span>
                   <span>{t("contentTitleLabel")}</span>
+                  <span>{t("jobTypeLabel")}</span>
                   <span>{t("actionsLabel")}</span>
                 </div>
-                {(isAdminPendingGuestPosts ? pendingGuestPosts : pendingOrders).map((item) => {
+                {pendingJobs.map((item) => {
                   const draftReviewUrl = getDraftReviewUrl(item);
+                  const requestKind = item.request_kind === "order" ? "order" : "guest_post";
                   return (
                     <div key={item.job_id} className="pending-item-wrap">
                       <div className="pending-item-row">
                         <span>{item.client_name}</span>
                         <span>{item.site_url || item.site_name}</span>
                         <span>{item.content_title || t("contentTitleFallback")}</span>
+                        <span>{requestKind === "order" ? t("jobTypeOrder") : t("jobTypeGuestPost")}</span>
                         <div className="pending-actions">
                           {draftReviewUrl ? (
                             <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
@@ -997,7 +984,7 @@ export default function App() {
                           <button
                             className="btn"
                             type="button"
-                            onClick={() => publishPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                            onClick={() => publishPendingJob(item.job_id)}
                             disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id}
                           >
                             {publishingJobId === item.job_id ? t("publishing") : t("publish")}
@@ -1054,7 +1041,7 @@ export default function App() {
                             <button
                               className="btn"
                               type="button"
-                              onClick={() => rejectPendingJob(item.job_id, isAdminPendingGuestPosts ? "guest_post" : "order")}
+                              onClick={() => rejectPendingJob(item.job_id)}
                               disabled={rejectingJobId === item.job_id}
                             >
                               {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
@@ -1371,8 +1358,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange }) {
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
-        { id: "guest-posts", label: t("navPendingGuestPosts") },
-        { id: "orders", label: t("navPendingOrders") },
+        { id: "pending-jobs", label: t("navPendingJobs") },
       ]
     : [
         { id: "guest-posts", label: t("navGuestPosts") },

@@ -754,7 +754,7 @@ input:disabled {
 .pending-list-header,
 .pending-item-row {
   display: grid;
-  grid-template-columns: 1.2fr 1.6fr 1.4fr 1.7fr;
+  grid-template-columns: 1.1fr 1.5fr 1.3fr 0.9fr 1.9fr;
   gap: 10px;
   align-items: center;
 }

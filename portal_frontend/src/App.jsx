@@ -104,6 +104,7 @@ export default function App() {
   const [pendingOrders, setPendingOrders] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
+  const [showSiteSuggestions, setShowSiteSuggestions] = useState(false);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
@@ -678,6 +679,13 @@ export default function App() {
   const activeCoveragePercent = clients.length
     ? Math.round((mappedClientUserCount / Math.max(clientUserCount, 1)) * 100)
     : 0;
+  const siteQuery = (submissionForm.target_site || "").trim().toLowerCase();
+  const filteredSites = sites.filter((site) => {
+    if (!siteQuery) return true;
+    const url = (site.site_url || "").toLowerCase();
+    const name = (site.name || "").toLowerCase();
+    return url.includes(siteQuery) || name.includes(siteQuery);
+  });
 
   return (
     <div className="app-shell">
@@ -861,20 +869,38 @@ export default function App() {
               <form className="guest-form" onSubmit={submitGuestPost}>
                 <div>
                   <label>{t("targetWebsite")}</label>
-                  <input
-                    list="target-site-options"
-                    value={submissionForm.target_site}
-                    onChange={(e) => setSubmissionForm((prev) => ({ ...prev, target_site: e.target.value }))}
-                    placeholder={t("placeholderTargetWebsite")}
-                    required
-                  />
-                  <datalist id="target-site-options">
-                    {sites.map((site) => (
-                      <option key={site.id} value={site.site_url}>
-                        {site.name}
-                      </option>
-                    ))}
-                  </datalist>
+                  <div className="site-suggest-wrap">
+                    <input
+                      value={submissionForm.target_site}
+                      onFocus={() => setShowSiteSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowSiteSuggestions(false), 120)}
+                      onChange={(e) => {
+                        setSubmissionForm((prev) => ({ ...prev, target_site: e.target.value }));
+                        setShowSiteSuggestions(true);
+                      }}
+                      placeholder={t("placeholderTargetWebsite")}
+                      required
+                    />
+                    {showSiteSuggestions && filteredSites.length > 0 ? (
+                      <div className="site-suggest-list">
+                        {filteredSites.slice(0, 30).map((site) => (
+                          <button
+                            key={site.id}
+                            type="button"
+                            className="site-suggest-item"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              setSubmissionForm((prev) => ({ ...prev, target_site: site.site_url }));
+                              setShowSiteSuggestions(false);
+                            }}
+                          >
+                            <span>{site.site_url}</span>
+                            <span className="muted-text small-text">{site.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
                 {!isOrders ? (

@@ -960,7 +960,6 @@ function AuthGate({
                 placeholder="name@example.com"
                 required
               />
-              <p className="muted-text small-text">{t("resetRequestInstruction")}</p>
             </div>
             {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="error">{error}</div> : null}
             {resetRequestMessage ? <div className="success">{resetRequestMessage}</div> : null}

@@ -997,8 +997,9 @@ function AuthGate({
                   placeholder={loginFieldErrors.password ? t("errorPasswordRequired") : "••••••••"}
                 />
                 <div className="auth-forgot-row">
+                  <span className="muted-text small-text">{t("resetPasswordPrefix")}</span>
                   <button className="link-button" type="button" onClick={onShowResetRequest}>
-                    {t("resetPasswordHere")}
+                    {t("hereWord")}
                   </button>
                 </div>
               </div>

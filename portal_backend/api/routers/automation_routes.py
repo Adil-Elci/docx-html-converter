@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import os
 import logging
+import mimetypes
+import time
+from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
+from uuid import uuid4
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -47,11 +52,70 @@ from ..portal_schemas import (
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
+_UPLOAD_DIR = Path(os.getenv("AUTOMATION_UPLOAD_DIR", "/tmp/automation_uploads")).resolve()
+_UPLOAD_TTL_SECONDS = int(os.getenv("AUTOMATION_UPLOAD_TTL_SECONDS", str(48 * 3600)))
+_UPLOAD_MAX_BYTES = int(os.getenv("AUTOMATION_UPLOAD_MAX_BYTES", str(30 * 1024 * 1024)))
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name, "true" if default else "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _request_origin_base_url(request: Request) -> str:
+    forced = (os.getenv("AUTOMATION_PUBLIC_BASE_URL") or "").strip()
+    if forced:
+        return forced.rstrip("/")
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").strip()
+    scheme = forwarded_proto.split(",")[0].strip() if forwarded_proto else request.url.scheme
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc or "").strip()
+    if not host:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to resolve public upload URL base.")
+    return f"{scheme}://{host}"
+
+
+def _cleanup_stale_uploads() -> None:
+    if not _UPLOAD_DIR.exists():
+        return
+    now = time.time()
+    for path in _UPLOAD_DIR.glob("*"):
+        if not path.is_file():
+            continue
+        try:
+            if now - path.stat().st_mtime > _UPLOAD_TTL_SECONDS:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+async def _materialize_multipart_docx_file(data: Dict[str, object], request: Request) -> Dict[str, object]:
+    raw_file = data.get("docx_file")
+    if not isinstance(raw_file, UploadFile):
+        return data
+
+    file_name = (raw_file.filename or "").strip()
+    extension = Path(file_name).suffix.lower()
+    if extension not in {".doc", ".docx"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="docx_file must be a .doc or .docx file.")
+
+    body = await raw_file.read()
+    if not body:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="docx_file upload is empty.")
+    if len(body) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Uploaded file is too large.")
+
+    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_uploads()
+
+    token_name = f"{uuid4().hex}{extension}"
+    stored_path = (_UPLOAD_DIR / token_name).resolve()
+    if stored_path.parent != _UPLOAD_DIR:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid upload path.")
+    stored_path.write_bytes(body)
+
+    public_base_url = _request_origin_base_url(request)
+    data["docx_file"] = f"{public_base_url}/automation/uploads/{token_name}"
+    return data
 
 
 def _normalized_host(value: str) -> Optional[str]:
@@ -461,6 +525,7 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
                 detail="multipart parsing requires python-multipart to be installed.",
             ) from exc
         data = {key: value for key, value in form_data.items()}
+        data = await _materialize_multipart_docx_file(data, request)
     else:
         # Fallback attempt to support callers with missing/incorrect content-type.
         raw_body = await request.body()
@@ -483,6 +548,21 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"error": "validation_error", "details": exc.errors()},
         ) from exc
+
+
+@router.get("/uploads/{file_name}")
+def get_automation_upload(file_name: str) -> FileResponse:
+    safe_name = Path(file_name).name
+    if safe_name != file_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file name.")
+    extension = Path(safe_name).suffix.lower()
+    if extension not in {".doc", ".docx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file extension.")
+    file_path = (_UPLOAD_DIR / safe_name).resolve()
+    if file_path.parent != _UPLOAD_DIR or not file_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uploaded file not found.")
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(path=file_path, media_type=media_type, filename=safe_name)
 
 
 @router.post("/guest-post-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)

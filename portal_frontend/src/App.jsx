@@ -116,10 +116,11 @@ export default function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const loadAll = async () => {
+  const loadAll = async (forUser = currentUser) => {
     try {
       setError("");
-      const [clientsData, sitesData] = await Promise.all([api.get("/clients"), api.get("/sites")]);
+      const sitesPath = forUser?.role === "client" ? "/sites?status=active&ready_only=true" : "/sites";
+      const [clientsData, sitesData] = await Promise.all([api.get("/clients"), api.get(sitesPath)]);
       setClients((clientsData || []).filter((item) => item.status === "active"));
       setSites((sitesData || []).filter((item) => item.status === "active"));
     } catch (err) {
@@ -207,7 +208,7 @@ export default function App() {
         const user = await response.json();
         setCurrentUser(user);
         setLoading(true);
-        await loadAll();
+        await loadAll(user);
         if (user.role === "admin") {
           await loadAdminUsers(user);
         }
@@ -319,7 +320,7 @@ export default function App() {
       setResetConfirmMessage("");
       setActiveSection(user.role === "admin" ? "admin" : "guest-posts");
       setLoading(true);
-      await loadAll();
+      await loadAll(user);
       if (user.role === "admin") {
         await loadAdminUsers(user);
       }
@@ -693,7 +694,7 @@ export default function App() {
           <div className="inline header-actions">
             <div className="user-chip">
               {currentUser.role === "client" ? (
-                <span>{`Hey '${resolvedClientName || t("roleClient")}'!`}</span>
+                <span>{`Hey ${resolvedClientName || t("roleClient")}!`}</span>
               ) : (
                 <>
                   <span>{currentUser.email}</span>
@@ -948,7 +949,7 @@ export default function App() {
                 ) : null}
 
                 <button className="btn submit-btn" type="submit" disabled={submitting}>
-                  {submitting ? t("submitting") : t("submit")}
+                  {submitting ? t("submitting") : t("submitForReview")}
                 </button>
               </form>
             </div>

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, require_admin, user_accessible_site_ids
 from ..db import get_db
-from ..portal_models import Site, User
+from ..portal_models import Site, SiteCredential, User
 from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
 
 router = APIRouter(prefix="/sites", tags=["sites"])
@@ -32,6 +32,7 @@ def _site_to_out(site: Site) -> SiteOut:
 @router.get("", response_model=List[SiteOut])
 def list_sites(
     status_filter: Optional[str] = Query(default=None, alias="status"),
+    ready_only: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> List[SiteOut]:
@@ -43,6 +44,15 @@ def list_sites(
         query = query.filter(Site.id.in_(allowed_site_ids))
     if status_filter:
         query = query.filter(Site.status == status_filter.strip().lower())
+    if ready_only:
+        query = query.filter(
+            db.query(SiteCredential.id)
+            .filter(
+                SiteCredential.site_id == Site.id,
+                SiteCredential.enabled.is_(True),
+            )
+            .exists()
+        )
     sites = query.order_by(Site.created_at.desc()).all()
     return [_site_to_out(site) for site in sites]
 

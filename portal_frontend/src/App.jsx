@@ -58,6 +58,22 @@ const emptyAdminUserForm = () => ({
 });
 
 const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
+const defaultClientPortalHost = "clientsportal.elci.live";
+const defaultAdminPortalHost = "adminportal.elci.live";
+
+const normalizeHost = (raw) => {
+  const value = (raw || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = value.includes("://") ? new URL(value) : new URL(`https://${value}`);
+    return (parsed.host || "").trim().toLowerCase();
+  } catch {
+    return value.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").trim().toLowerCase();
+  }
+};
+
+const clientPortalHost = normalizeHost(import.meta.env.VITE_CLIENT_PORTAL_HOST) || defaultClientPortalHost;
+const adminPortalHost = normalizeHost(import.meta.env.VITE_ADMIN_PORTAL_HOST) || defaultAdminPortalHost;
 
 async function readApiError(response, fallbackMessage) {
   const rawBody = await response.text();
@@ -351,6 +367,24 @@ export default function App() {
     if (currentUser.role === "admin") {
       setActiveSection("admin");
     }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (!adminPortalHost || !clientPortalHost || adminPortalHost === clientPortalHost) return;
+    const currentHost = (window.location.hostname || "").trim().toLowerCase();
+    if (!currentHost) return;
+
+    let targetHost = "";
+    if (currentUser.role === "admin" && currentHost === clientPortalHost) {
+      targetHost = adminPortalHost;
+    } else if (currentUser.role !== "admin" && currentHost === adminPortalHost) {
+      targetHost = clientPortalHost;
+    }
+    if (!targetHost || targetHost === currentHost) return;
+
+    const nextUrl = `${window.location.protocol}//${targetHost}${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.replace(nextUrl);
   }, [currentUser]);
 
   useEffect(() => {

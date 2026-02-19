@@ -109,11 +109,24 @@ def _password_reset_ttl_minutes() -> int:
     return _read_int_env("AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES", 60, 5)
 
 
-def _password_reset_url_base() -> str:
-    value = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE") or "").strip()
-    if not value:
-        raise RuntimeError("AUTH_PASSWORD_RESET_URL_BASE is not set.")
-    return value
+def _password_reset_url_base_for_role(user_role: str) -> str:
+    role = (user_role or "").strip().lower()
+    admin_base = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE_ADMIN") or "").strip()
+    client_base = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE_CLIENT") or "").strip()
+    legacy_base = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE") or "").strip()
+
+    if role == "admin":
+        if admin_base:
+            return admin_base
+        if legacy_base:
+            return legacy_base
+        raise RuntimeError("AUTH_PASSWORD_RESET_URL_BASE_ADMIN (or AUTH_PASSWORD_RESET_URL_BASE fallback) is not set.")
+
+    if client_base:
+        return client_base
+    if legacy_base:
+        return legacy_base
+    raise RuntimeError("AUTH_PASSWORD_RESET_URL_BASE_CLIENT (or AUTH_PASSWORD_RESET_URL_BASE fallback) is not set.")
 
 
 def _hash_reset_token(raw_token: str) -> str:
@@ -272,7 +285,7 @@ def request_password_reset(
     db.add(reset_record)
     db.flush()
 
-    reset_link = f"{_password_reset_url_base()}?reset_token={raw_token}"
+    reset_link = f"{_password_reset_url_base_for_role(user.role)}?reset_token={raw_token}"
     try:
         _send_password_reset_email(to_email=user.email, reset_link=reset_link)
     except Exception:

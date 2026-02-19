@@ -14,6 +14,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from sqlalchemy.orm import Session
 
 from ..auth import (
@@ -90,7 +91,7 @@ def _cleanup_stale_uploads() -> None:
 
 async def _materialize_multipart_docx_file(data: Dict[str, object], request: Request) -> Dict[str, object]:
     raw_file = data.get("docx_file")
-    if not isinstance(raw_file, UploadFile):
+    if not isinstance(raw_file, (UploadFile, StarletteUploadFile)):
         return data
 
     file_name = (raw_file.filename or "").strip()

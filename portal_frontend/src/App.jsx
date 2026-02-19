@@ -240,10 +240,10 @@ export default function App() {
   };
 
   const getDraftReviewUrl = (item) => {
-    const siteUrl = (item?.site_url || "").trim().replace(/\/+$/, "");
-    const postId = item?.wp_post_id;
-    if (siteUrl && postId) {
-      return `${siteUrl}/wp-admin/post.php?post=${encodeURIComponent(postId)}&action=edit`;
+    const jobId = (item?.job_id || "").toString().trim();
+    const apiBase = (baseApiUrl || "").trim().replace(/\/+$/, "");
+    if (jobId) {
+      return apiBase ? `${apiBase}/jobs/${encodeURIComponent(jobId)}/draft-preview` : `/jobs/${encodeURIComponent(jobId)}/draft-preview`;
     }
     return (item?.wp_post_url || "").trim();
   };

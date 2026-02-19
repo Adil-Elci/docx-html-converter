@@ -635,6 +635,29 @@ def wp_publish_post(
     )
 
 
+def wp_get_post(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    post_id: int,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    post_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts/{post_id}?context=edit"
+    headers = {
+        "Authorization": _wp_auth_header(wp_username, wp_app_password),
+        "Content-Type": "application/json",
+    }
+    return _request_json(
+        "GET",
+        post_url,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
 def converter_target_from_site_url(site_url: str) -> str:
     parsed = urlparse(site_url.strip())
     return (parsed.netloc or parsed.path).strip().lower()

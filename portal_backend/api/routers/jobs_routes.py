@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import escape
+import re
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
-from ..automation_service import AutomationError, get_runtime_config, wp_publish_post
+from ..automation_service import AutomationError, get_runtime_config, wp_get_post, wp_publish_post
 from ..db import get_db
 from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
@@ -108,6 +111,28 @@ def _pending_job_to_out(job: Job, submission: Submission, client: Client, site: 
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+def _get_enabled_credential_for_site(db: Session, site_id: UUID) -> SiteCredential:
+    credential = (
+        db.query(SiteCredential)
+        .filter(
+            SiteCredential.site_id == site_id,
+            SiteCredential.enabled.is_(True),
+        )
+        .order_by(SiteCredential.created_at.desc())
+        .first()
+    )
+    if not credential:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No enabled site credential found for job site.")
+    return credential
+
+
+def _sanitize_html_for_preview(value: str) -> str:
+    if not value:
+        return ""
+    without_scripts = re.sub(r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>", "", value, flags=re.IGNORECASE)
+    return re.sub(r"\son\w+\s*=\s*(['\"]).*?\1", "", without_scripts, flags=re.IGNORECASE)
 
 
 @router.get("", response_model=List[JobOut])
@@ -271,17 +296,7 @@ def publish_pending_job(
     site = db.query(Site).filter(Site.id == job.site_id).first()
     if not site:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
-    credential = (
-        db.query(SiteCredential)
-        .filter(
-            SiteCredential.site_id == site.id,
-            SiteCredential.enabled.is_(True),
-        )
-        .order_by(SiteCredential.created_at.desc())
-        .first()
-    )
-    if not credential:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No enabled site credential found for job site.")
+    credential = _get_enabled_credential_for_site(db, site.id)
 
     try:
         config = get_runtime_config()
@@ -330,6 +345,124 @@ def publish_pending_job(
     db.commit()
     db.refresh(job)
     return PendingJobPublishOut(job=_job_to_out(job))
+
+
+@router.get("/{job_id}/draft-preview", response_class=HTMLResponse)
+def preview_pending_job_draft(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> HTMLResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+    credential = _get_enabled_credential_for_site(db, site.id)
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    try:
+        post_payload = wp_get_post(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    title = ""
+    if isinstance(post_payload.get("title"), dict):
+        title = str(post_payload["title"].get("rendered") or "").strip()
+    title = title or f"Draft #{job.wp_post_id}"
+
+    content_html = ""
+    if isinstance(post_payload.get("content"), dict):
+        content_html = str(post_payload["content"].get("rendered") or "")
+    content_html = _sanitize_html_for_preview(content_html)
+
+    excerpt_html = ""
+    if isinstance(post_payload.get("excerpt"), dict):
+        excerpt_html = str(post_payload["excerpt"].get("rendered") or "")
+    excerpt_html = _sanitize_html_for_preview(excerpt_html)
+
+    status_value = str(post_payload.get("status") or "unknown")
+    slug_value = str(post_payload.get("slug") or "")
+    site_url = (site.site_url or "").strip()
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{escape(title)} - Draft Preview</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fb;
+      color: #0f172a;
+      line-height: 1.6;
+    }}
+    .wrap {{
+      max-width: 920px;
+      margin: 24px auto;
+      background: #fff;
+      border: 1px solid #dbe2ef;
+      border-radius: 12px;
+      padding: 24px;
+    }}
+    .meta {{
+      display: grid;
+      gap: 4px;
+      margin-bottom: 16px;
+      color: #475569;
+      font-size: 14px;
+    }}
+    .meta code {{
+      background: #eef2ff;
+      border: 1px solid #dbe2ef;
+      border-radius: 6px;
+      padding: 1px 6px;
+    }}
+    h1 {{
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 32px;
+      line-height: 1.15;
+    }}
+    .excerpt {{
+      margin-bottom: 18px;
+      padding: 12px;
+      border-left: 4px solid #93c5fd;
+      background: #f8fbff;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="meta">
+      <div>Site: <code>{escape(site_url)}</code></div>
+      <div>Post ID: <code>{int(job.wp_post_id)}</code></div>
+      <div>Status: <code>{escape(status_value)}</code></div>
+      <div>Slug: <code>{escape(slug_value)}</code></div>
+    </div>
+    <h1>{escape(title)}</h1>
+    {"<div class='excerpt'>" + excerpt_html + "</div>" if excerpt_html else ""}
+    <article>{content_html}</article>
+  </div>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html, status_code=status.HTTP_200_OK)
 
 
 @router.post("/{job_id}/reject", response_model=PendingJobRejectOut)

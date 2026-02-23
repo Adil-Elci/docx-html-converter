@@ -251,7 +251,7 @@ export default function App() {
     if (!publishingSite) return t("errorTargetRequired");
     if (!clientName) return t("errorClientRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
-    const sourceType = (block.source_type || "").trim();
+    const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
     if (!sourceType) return t("errorFileTypeRequired");
     if (sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
     if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
@@ -263,21 +263,24 @@ export default function App() {
 
   const buildSubmissionFormData = (block, { orders, clientName }) => {
     const formData = new FormData();
+    const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
     formData.append("publishing_site", block.publishing_site.trim());
     formData.append("client_name", clientName);
-    const targetSiteId = (block.target_site_id || "").trim();
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetSiteId)) {
-      formData.append("target_site_id", targetSiteId);
+    if (orders) {
+      const targetSiteId = (block.target_site_id || "").trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetSiteId)) {
+        formData.append("target_site_id", targetSiteId);
+      }
+      if ((block.target_site_url || "").trim()) formData.append("target_site_url", block.target_site_url.trim());
     }
-    if ((block.target_site_url || "").trim()) formData.append("target_site_url", block.target_site_url.trim());
     formData.append("request_kind", orders ? "order" : "guest_post");
-    formData.append("source_type", block.source_type);
+    formData.append("source_type", sourceType);
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
-    if (block.source_type === "google-doc") {
+    if (sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
-    } else if (block.docx_file) {
+    } else if (sourceType === "word-doc" && block.docx_file) {
       formData.append("docx_file", block.docx_file);
     }
     return formData;
@@ -806,7 +809,7 @@ export default function App() {
     }
     const resolvedClientName = ((clients[0]?.name) || "").trim();
     const blocks = submissionBlocks;
-    const requiresTargetSiteSelection = getClientTargetSites().length > 0;
+    const requiresTargetSiteSelection = isOrders;
     for (let index = 0; index < blocks.length; index += 1) {
       const validationError = getSubmissionBlockError(blocks[index], {
         orders: isOrders,
@@ -828,7 +831,8 @@ export default function App() {
           clientName: resolvedClientName,
         });
         try {
-          if (block.source_type === "word-doc" && block.docx_file) {
+          const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
+          if (effectiveSourceType === "word-doc" && block.docx_file) {
             setUploadProgressBlockId(block.id);
             setUploadProgress(0);
             await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
@@ -1363,7 +1367,7 @@ export default function App() {
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
 
-                          {clientTargetSitesCount > 0 ? (
+                          {isOrders ? (
                             <div>
                               <label>{t("targetSiteForBacklink")}</label>
                               <select
@@ -1400,11 +1404,7 @@ export default function App() {
                                 <p className="muted-text small-text">{selectedClientTargetSite.target_site_url}</p>
                               ) : null}
                             </div>
-                          ) : (
-                            <div className="panel muted-text small-text">
-                              {t("clientTargetSitesMissingHint")}
-                            </div>
-                          )}
+                          ) : null}
 
                           <div>
                             <label>{t("targetWebsite")}</label>
@@ -1444,27 +1444,29 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div>
-                            <label>{t("fileType")}</label>
-                            <div className="toggle source-toggle">
-                              <button
-                                type="button"
-                                className={block.source_type === "google-doc" ? "active" : ""}
-                                onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
-                              >
-                                {t("googleDoc")}
-                              </button>
-                              <button
-                                type="button"
-                                className={block.source_type === "word-doc" ? "active" : ""}
-                                onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
-                              >
-                                {t("docxFile")}
-                              </button>
+                          {!isOrders ? (
+                            <div>
+                              <label>{t("fileType")}</label>
+                              <div className="toggle source-toggle">
+                                <button
+                                  type="button"
+                                  className={block.source_type === "google-doc" ? "active" : ""}
+                                  onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
+                                >
+                                  {t("googleDoc")}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={block.source_type === "word-doc" ? "active" : ""}
+                                  onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
+                                >
+                                  {t("docxFile")}
+                                </button>
+                              </div>
                             </div>
-                          </div>
+                          ) : null}
 
-                          {block.source_type === "google-doc" ? (
+                          {(isOrders || block.source_type === "google-doc") ? (
                             <div>
                               <label>{t("googleDocLink")}</label>
                               <input
@@ -1475,7 +1477,7 @@ export default function App() {
                                 required
                               />
                             </div>
-                          ) : block.source_type === "word-doc" ? (
+                          ) : !isOrders && block.source_type === "word-doc" ? (
                             <div>
                               <label>{t("fileUpload")}</label>
                               <input

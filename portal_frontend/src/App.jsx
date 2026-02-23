@@ -1267,149 +1267,159 @@ export default function App() {
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.target_site);
+                    const showAddControl = blockIndex === submissionBlocks.length - 1;
+                    const showRemoveControl = blockIndex > 0;
                     return (
-                      <div key={block.id} className="submission-block panel">
-                        <div className="submission-block-header">
-                          <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
-                          {submissionBlocks.length > 1 ? (
-                            <button
-                              className="btn secondary"
-                              type="button"
-                              onClick={() => removeSubmissionBlock(block.id)}
-                              disabled={submitting}
-                            >
-                              {t("removeBlock")}
-                            </button>
+                      <div key={block.id} className="submission-block-wrap">
+                        <div className="submission-block panel">
+                          <div className="submission-block-header">
+                            <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
+                          </div>
+
+                          <div>
+                            <label>{t("targetWebsite")}</label>
+                            <div className="site-suggest-wrap">
+                              <input
+                                value={block.target_site}
+                                onFocus={() => setSiteSuggestionsBlockId(block.id)}
+                                onBlur={() => setTimeout(() => {
+                                  setSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
+                                }, 120)}
+                                onChange={(e) => {
+                                  setSubmissionBlockField(block.id, "target_site", e.target.value);
+                                  setSiteSuggestionsBlockId(block.id);
+                                }}
+                                placeholder={t("placeholderTargetWebsite")}
+                                required
+                              />
+                              {siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0 ? (
+                                <div className="site-suggest-list">
+                                  {blockFilteredSites.slice(0, 30).map((site) => (
+                                    <button
+                                      key={site.id}
+                                      type="button"
+                                      className="site-suggest-item"
+                                      onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        setSubmissionBlockField(block.id, "target_site", site.site_url);
+                                        setSiteSuggestionsBlockId(null);
+                                      }}
+                                    >
+                                      <span>{site.site_url}</span>
+                                      <span className="muted-text small-text">{site.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div>
+                            <label>{t("fileType")}</label>
+                            <div className="toggle source-toggle">
+                              <button
+                                type="button"
+                                className={block.source_type === "google-doc" ? "active" : ""}
+                                onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
+                              >
+                                {t("googleDoc")}
+                              </button>
+                              <button
+                                type="button"
+                                className={block.source_type === "word-doc" ? "active" : ""}
+                                onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
+                              >
+                                {t("docxFile")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {block.source_type === "google-doc" ? (
+                            <div>
+                              <label>{t("googleDocLink")}</label>
+                              <input
+                                type="url"
+                                value={block.doc_url}
+                                onChange={(e) => setSubmissionBlockField(block.id, "doc_url", e.target.value)}
+                                placeholder={t("placeholderGoogleDoc")}
+                                required
+                              />
+                            </div>
+                          ) : block.source_type === "word-doc" ? (
+                            <div>
+                              <label>{t("fileUpload")}</label>
+                              <input
+                                type="file"
+                                accept=".doc,.docx"
+                                required
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0] || null;
+                                  setSubmissionBlockField(block.id, "docx_file", file);
+                                }}
+                              />
+                            </div>
+                          ) : null}
+
+                          {isOrders ? (
+                            <>
+                              <div>
+                                <label>{t("anchor")}</label>
+                                <input
+                                  type="text"
+                                  value={block.anchor}
+                                  onChange={(e) => setSubmissionBlockField(block.id, "anchor", e.target.value)}
+                                  placeholder={t("placeholderAnchor")}
+                                />
+                              </div>
+                              <div>
+                                <label>{t("topic")}</label>
+                                <input
+                                  type="text"
+                                  value={block.topic}
+                                  onChange={(e) => setSubmissionBlockField(block.id, "topic", e.target.value)}
+                                  placeholder={t("placeholderTopic")}
+                                />
+                              </div>
+                            </>
+                          ) : null}
+
+                          {submitting && uploadProgressBlockId === block.id && uploadProgress !== null ? (
+                            <div className="upload-meter" aria-live="polite">
+                              <div className="upload-meter-row">
+                                <span>{t("uploadingFile")}</span>
+                                <strong>{uploadProgress}%</strong>
+                              </div>
+                              <div className="upload-meter-track">
+                                <div className="upload-meter-fill" style={{ width: `${uploadProgress}%` }} />
+                              </div>
+                            </div>
                           ) : null}
                         </div>
 
-                        <div>
-                          <label>{t("targetWebsite")}</label>
-                          <div className="site-suggest-wrap">
-                            <input
-                              value={block.target_site}
-                              onFocus={() => setSiteSuggestionsBlockId(block.id)}
-                              onBlur={() => setTimeout(() => {
-                                setSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
-                              }, 120)}
-                              onChange={(e) => {
-                                setSubmissionBlockField(block.id, "target_site", e.target.value);
-                                setSiteSuggestionsBlockId(block.id);
-                              }}
-                              placeholder={t("placeholderTargetWebsite")}
-                              required
-                            />
-                            {siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0 ? (
-                              <div className="site-suggest-list">
-                                {blockFilteredSites.slice(0, 30).map((site) => (
-                                  <button
-                                    key={site.id}
-                                    type="button"
-                                    className="site-suggest-item"
-                                    onMouseDown={(event) => {
-                                      event.preventDefault();
-                                      setSubmissionBlockField(block.id, "target_site", site.site_url);
-                                      setSiteSuggestionsBlockId(null);
-                                    }}
-                                  >
-                                    <span>{site.site_url}</span>
-                                    <span className="muted-text small-text">{site.name}</span>
-                                  </button>
-                                ))}
-                              </div>
+                        {(showAddControl || showRemoveControl) ? (
+                          <div className="submission-block-controls">
+                            {showRemoveControl ? (
+                              <button
+                                className="btn secondary block-control-btn"
+                                type="button"
+                                aria-label={t("removeBlock")}
+                                onClick={() => removeSubmissionBlock(block.id)}
+                                disabled={submitting}
+                              >
+                                -
+                              </button>
                             ) : null}
-                          </div>
-                        </div>
-
-                        <div>
-                          <label>{t("fileType")}</label>
-                          <div className="toggle source-toggle">
-                            <button
-                              type="button"
-                              className={block.source_type === "google-doc" ? "active" : ""}
-                              onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
-                            >
-                              {t("googleDoc")}
-                            </button>
-                            <button
-                              type="button"
-                              className={block.source_type === "word-doc" ? "active" : ""}
-                              onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
-                            >
-                              {t("docxFile")}
-                            </button>
-                          </div>
-                        </div>
-
-                        {block.source_type === "google-doc" ? (
-                          <div>
-                            <label>{t("googleDocLink")}</label>
-                            <input
-                              type="url"
-                              value={block.doc_url}
-                              onChange={(e) => setSubmissionBlockField(block.id, "doc_url", e.target.value)}
-                              placeholder={t("placeholderGoogleDoc")}
-                              required
-                            />
-                          </div>
-                        ) : block.source_type === "word-doc" ? (
-                          <div>
-                            <label>{t("fileUpload")}</label>
-                            <input
-                              type="file"
-                              accept=".doc,.docx"
-                              required
-                              onChange={(e) => {
-                                const file = e.target.files?.[0] || null;
-                                setSubmissionBlockField(block.id, "docx_file", file);
-                              }}
-                            />
-                          </div>
-                        ) : null}
-
-                        {isOrders ? (
-                          <>
-                            <div>
-                              <label>{t("anchor")}</label>
-                              <input
-                                type="text"
-                                value={block.anchor}
-                                onChange={(e) => setSubmissionBlockField(block.id, "anchor", e.target.value)}
-                                placeholder={t("placeholderAnchor")}
-                              />
-                            </div>
-                            <div>
-                              <label>{t("topic")}</label>
-                              <input
-                                type="text"
-                                value={block.topic}
-                                onChange={(e) => setSubmissionBlockField(block.id, "topic", e.target.value)}
-                                placeholder={t("placeholderTopic")}
-                              />
-                            </div>
-                          </>
-                        ) : null}
-
-                        <div className="submission-block-actions">
-                          <button
-                            className="btn secondary"
-                            type="button"
-                            onClick={() => addSubmissionBlock(block.id)}
-                            disabled={submitting}
-                          >
-                            {t("addAnotherBlock")}
-                          </button>
-                        </div>
-
-                        {submitting && uploadProgressBlockId === block.id && uploadProgress !== null ? (
-                          <div className="upload-meter" aria-live="polite">
-                            <div className="upload-meter-row">
-                              <span>{t("uploadingFile")}</span>
-                              <strong>{uploadProgress}%</strong>
-                            </div>
-                            <div className="upload-meter-track">
-                              <div className="upload-meter-fill" style={{ width: `${uploadProgress}%` }} />
-                            </div>
+                            {showAddControl ? (
+                              <button
+                                className="btn block-control-btn"
+                                type="button"
+                                aria-label={t("addAnotherBlock")}
+                                onClick={() => addSubmissionBlock(block.id)}
+                                disabled={submitting}
+                              >
+                                +
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>

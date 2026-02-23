@@ -461,6 +461,11 @@ input:disabled {
   gap: 14px;
 }
 
+.submission-block-wrap {
+  display: grid;
+  gap: 8px;
+}
+
 .submission-block {
   display: grid;
   gap: 14px;
@@ -483,6 +488,24 @@ input:disabled {
 .submission-block-actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.submission-block-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.block-control-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .inline {

@@ -6,6 +6,8 @@ const getInitialLanguage = () => localStorage.getItem("ui_language") || "en";
 
 const emptySubmissionForm = () => ({
   publishing_site: "",
+  target_site_id: "",
+  target_site_url: "",
   client_name: "",
   source_type: "",
   doc_url: "",
@@ -14,9 +16,10 @@ const emptySubmissionForm = () => ({
   topic: "",
 });
 
-const createSubmissionBlock = (id) => ({
+const createSubmissionBlock = (id, defaults = {}) => ({
   id,
   ...emptySubmissionForm(),
+  ...defaults,
 });
 
 const emptyRejectForm = () => ({
@@ -160,9 +163,37 @@ export default function App() {
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
+  const getClientTargetSites = () => {
+    const client = clients[0];
+    if (!client) return [];
+    const explicit = Array.isArray(client.target_sites) ? client.target_sites.filter(Boolean) : [];
+    if (explicit.length) return explicit;
+    if ((client.primary_domain || "").trim() || (client.backlink_url || "").trim()) {
+      return [
+        {
+          id: "legacy-primary",
+          target_site_domain: (client.primary_domain || "").trim() || null,
+          target_site_url: (client.backlink_url || "").trim() || null,
+          is_primary: true,
+        },
+      ];
+    }
+    return [];
+  };
+
+  const getDefaultSubmissionTargetSite = () => {
+    const rows = getClientTargetSites();
+    if (!rows.length) return {};
+    const primary = rows.find((row) => row?.is_primary) || rows[0];
+    return {
+      target_site_id: String(primary.id || ""),
+      target_site_url: (primary.target_site_url || "").trim(),
+    };
+  };
+
   const resetSubmissionBlocks = () => {
     nextSubmissionBlockIdRef.current = 2;
-    setSubmissionBlocks([createSubmissionBlock(1)]);
+    setSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     setSiteSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
   };
@@ -172,7 +203,10 @@ export default function App() {
     setSites([]);
     setError("");
     setSuccess("");
-    resetSubmissionBlocks();
+    nextSubmissionBlockIdRef.current = 2;
+    setSubmissionBlocks([createSubmissionBlock(1)]);
+    setSiteSuggestionsBlockId(null);
+    setUploadProgressBlockId(null);
     setShowSubmissionSuccessModal(false);
     setShowSubmissionErrorModal(false);
     setSubmissionErrorCode("");
@@ -187,7 +221,7 @@ export default function App() {
     setSubmissionBlocks((prev) => {
       const nextId = nextSubmissionBlockIdRef.current;
       nextSubmissionBlockIdRef.current += 1;
-      const nextBlock = createSubmissionBlock(nextId);
+      const nextBlock = createSubmissionBlock(nextId, getDefaultSubmissionTargetSite());
       const insertIndex = prev.findIndex((block) => block.id === afterBlockId);
       if (insertIndex < 0) return [...prev, nextBlock];
       return [...prev.slice(0, insertIndex + 1), nextBlock, ...prev.slice(insertIndex + 1)];
@@ -198,7 +232,7 @@ export default function App() {
     setSubmissionBlocks((prev) => {
       if (prev.length <= 1) return prev;
       const next = prev.filter((block) => block.id !== blockId);
-      return next.length ? next : [createSubmissionBlock(1)];
+      return next.length ? next : [createSubmissionBlock(1, getDefaultSubmissionTargetSite())];
     });
     setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setUploadProgressBlockId((prev) => (prev === blockId ? null : prev));
@@ -212,10 +246,11 @@ export default function App() {
     setShowSubmissionErrorModal(true);
   };
 
-  const getSubmissionBlockError = (block, { orders, clientName }) => {
+  const getSubmissionBlockError = (block, { orders, clientName, requiresTargetSite }) => {
     const publishingSite = (block.publishing_site || "").trim();
     if (!publishingSite) return t("errorTargetRequired");
     if (!clientName) return t("errorClientRequired");
+    if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
     const sourceType = (block.source_type || "").trim();
     if (!sourceType) return t("errorFileTypeRequired");
     if (sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
@@ -230,6 +265,11 @@ export default function App() {
     const formData = new FormData();
     formData.append("publishing_site", block.publishing_site.trim());
     formData.append("client_name", clientName);
+    const targetSiteId = (block.target_site_id || "").trim();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetSiteId)) {
+      formData.append("target_site_id", targetSiteId);
+    }
+    if ((block.target_site_url || "").trim()) formData.append("target_site_url", block.target_site_url.trim());
     formData.append("request_kind", orders ? "order" : "guest_post");
     formData.append("source_type", block.source_type);
     formData.append("execution_mode", "async");
@@ -242,6 +282,29 @@ export default function App() {
     }
     return formData;
   };
+
+  useEffect(() => {
+    if (currentUser?.role !== "client") return;
+    const targetSites = getClientTargetSites();
+    if (!targetSites.length) return;
+    const validIds = new Set(targetSites.map((row) => String(row.id || "")).filter(Boolean));
+    const primary = targetSites.find((row) => row?.is_primary) || targetSites[0];
+    setSubmissionBlocks((prev) => prev.map((block) => {
+      const currentId = String(block.target_site_id || "");
+      if (currentId && validIds.has(currentId)) {
+        const selected = targetSites.find((row) => String(row.id || "") === currentId);
+        return selected
+          ? { ...block, target_site_url: (selected.target_site_url || "").trim() }
+          : block;
+      }
+      return {
+        ...block,
+        target_site_id: String(primary.id || ""),
+        target_site_url: (primary.target_site_url || "").trim(),
+      };
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, currentUser?.role]);
 
   useEffect(() => {
     if (theme === "system") {
@@ -743,10 +806,12 @@ export default function App() {
     }
     const resolvedClientName = ((clients[0]?.name) || "").trim();
     const blocks = submissionBlocks;
+    const requiresTargetSiteSelection = getClientTargetSites().length > 0;
     for (let index = 0; index < blocks.length; index += 1) {
       const validationError = getSubmissionBlockError(blocks[index], {
         orders: isOrders,
         clientName: resolvedClientName,
+        requiresTargetSite: requiresTargetSiteSelection,
       });
       if (validationError) {
         setError(`Block ${index + 1}: ${validationError}`);
@@ -963,7 +1028,26 @@ export default function App() {
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isOrders = activeSection === "orders";
   const isGuestPostsSection = activeSection === "guest-posts";
-  const resolvedClientName = ((clients[0]?.name) || "").trim();
+  const activeClient = clients[0] || null;
+  const resolvedClientName = ((activeClient?.name) || "").trim();
+  const clientTargetSites = getClientTargetSites();
+  const clientTargetSitesCount = clientTargetSites.length;
+  const clientTargetSitePreview = clientTargetSites
+    .slice(0, 4)
+    .map((row) => {
+      const rawUrl = (row?.target_site_url || "").trim();
+      const rawDomain = (row?.target_site_domain || "").trim();
+      if (rawDomain) return rawDomain;
+      if (!rawUrl) return "";
+      try {
+        const parsed = rawUrl.includes("://") ? new URL(rawUrl) : new URL(`https://${rawUrl}`);
+        return (parsed.hostname || "").replace(/^www\./i, "");
+      } catch {
+        return rawUrl.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "");
+      }
+    })
+    .filter(Boolean)
+    .join(" • ");
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
   const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
   const inactiveUserCount = adminUsers.filter((item) => !item.is_active).length;
@@ -1111,6 +1195,8 @@ export default function App() {
               t={t}
               clientName={resolvedClientName}
               siteCount={sites.length}
+              targetSiteCount={clientTargetSitesCount}
+              targetSitePreview={clientTargetSitePreview}
               readySitesLabel={readySitesLabel}
               suggestedGuestPostsMonthly={suggestedGuestPostsMonthly}
               suggestedOrdersMonthly={suggestedOrdersMonthly}
@@ -1267,6 +1353,7 @@ export default function App() {
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
+                    const selectedClientTargetSite = clientTargetSites.find((row) => String(row.id || "") === String(block.target_site_id || ""));
                     const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
                     return (
@@ -1275,6 +1362,49 @@ export default function App() {
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
+
+                          {clientTargetSitesCount > 0 ? (
+                            <div>
+                              <label>{t("targetSiteForBacklink")}</label>
+                              <select
+                                value={block.target_site_id || ""}
+                                onChange={(e) => {
+                                  const nextId = e.target.value;
+                                  const nextTarget = clientTargetSites.find((row) => String(row.id || "") === nextId);
+                                  setSubmissionBlocks((prev) => prev.map((item) => (
+                                    item.id === block.id
+                                      ? {
+                                          ...item,
+                                          target_site_id: nextId,
+                                          target_site_url: (nextTarget?.target_site_url || "").trim(),
+                                        }
+                                      : item
+                                  )));
+                                }}
+                                required
+                              >
+                                <option value="">{t("selectTargetSite")}</option>
+                                {clientTargetSites.map((row) => {
+                                  const optionId = String(row.id || "");
+                                  const domainLabel = (row.target_site_domain || "").trim();
+                                  const urlLabel = (row.target_site_url || "").trim();
+                                  const label = domainLabel || urlLabel || optionId;
+                                  return (
+                                    <option key={optionId} value={optionId}>
+                                      {row.is_primary ? `${label} (${t("primaryLabel")})` : label}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              {selectedClientTargetSite?.target_site_url ? (
+                                <p className="muted-text small-text">{selectedClientTargetSite.target_site_url}</p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="panel muted-text small-text">
+                              {t("clientTargetSitesMissingHint")}
+                            </div>
+                          )}
 
                           <div>
                             <label>{t("targetWebsite")}</label>
@@ -1502,6 +1632,8 @@ function ClientDashboardPanel({
   t,
   clientName,
   siteCount,
+  targetSiteCount,
+  targetSitePreview,
   readySitesLabel,
   suggestedGuestPostsMonthly,
   suggestedOrdersMonthly,
@@ -1527,6 +1659,17 @@ function ClientDashboardPanel({
           <span className="stat-label">{t("clientDashboardReadyTargets")}</span>
           <strong>{siteCount}</strong>
           <p className="muted-text">{readySitesLabel}</p>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardTargetSitesTitle")}</h3>
+          <p className="muted-text">
+            {targetSiteCount > 0
+              ? `${targetSiteCount} ${t("clientDashboardTargetSitesCountLabel")}`
+              : t("clientDashboardTargetSitesEmpty")}
+          </p>
+          {targetSitePreview ? <p className="muted-text client-dashboard-sites-preview">{targetSitePreview}</p> : null}
+          <p className="muted-text">{t("clientDashboardTargetSitesBody")}</p>
         </div>
 
         <div className="client-dashboard-card">

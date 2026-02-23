@@ -33,6 +33,7 @@ from ..automation_service import (
 from ..db import get_db
 from ..portal_models import (
     Client,
+    ClientTargetSite,
     ClientSiteAccess,
     Job,
     JobEvent,
@@ -298,6 +299,40 @@ def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
     return client
 
 
+def _resolve_client_target_site(
+    db: Session,
+    *,
+    client: Client,
+    payload: AutomationGuestPostIn,
+) -> Optional[ClientTargetSite]:
+    rows = (
+        db.query(ClientTargetSite)
+        .filter(ClientTargetSite.client_id == client.id)
+        .order_by(ClientTargetSite.is_primary.desc(), ClientTargetSite.created_at.asc())
+        .all()
+    )
+    if not rows:
+        return None
+
+    if payload.target_site_id is not None:
+        for row in rows:
+            if row.id == payload.target_site_id:
+                if payload.target_site_url and (row.target_site_url or "").strip() != payload.target_site_url:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_url does not match target_site_id.")
+                return row
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_id is not assigned to this client.")
+
+    if payload.target_site_url:
+        requested_url = payload.target_site_url.strip()
+        for row in rows:
+            if (row.target_site_url or "").strip() == requested_url:
+                return row
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_url is not assigned to this client.")
+
+    primary = next((row for row in rows if bool(row.is_primary)), None)
+    return primary or rows[0]
+
+
 def _require_client_site_access(db: Session, client_id: UUID, site_id: UUID) -> None:
     access = (
         db.query(ClientSiteAccess)
@@ -328,8 +363,29 @@ def _resolve_converter_publishing_site(publishing_site: str, site_url: str) -> s
     return converter_publishing_site_from_site_url(site_url)
 
 
-def _compose_submission_notes(idempotency_key: str, post_status: str, author_id: int) -> str:
-    return f"idempotency_key={idempotency_key};post_status={post_status};author_id={author_id}"
+def _safe_note_value(value: object) -> str:
+    return str(value).replace(";", "_").replace("=", "_").strip()
+
+
+def _compose_submission_notes(
+    idempotency_key: str,
+    post_status: str,
+    author_id: int,
+    *,
+    client_target_site: Optional[ClientTargetSite] = None,
+) -> str:
+    parts = [
+        f"idempotency_key={_safe_note_value(idempotency_key)}",
+        f"post_status={_safe_note_value(post_status)}",
+        f"author_id={_safe_note_value(author_id)}",
+    ]
+    if client_target_site is not None:
+        parts.append(f"client_target_site_id={_safe_note_value(client_target_site.id)}")
+        if client_target_site.target_site_domain:
+            parts.append(f"client_target_site_domain={_safe_note_value(client_target_site.target_site_domain)}")
+        if client_target_site.target_site_url:
+            parts.append(f"client_target_site_url={_safe_note_value(client_target_site.target_site_url)}")
+    return ";".join(parts)
 
 
 def _extract_note_map(notes: Optional[str]) -> Dict[str, str]:
@@ -418,6 +474,7 @@ def _enqueue_job(
     post_status: str,
     requires_admin_approval: bool,
     author_id: int,
+    client_target_site: Optional[ClientTargetSite],
 ) -> Tuple[Submission, Job, bool]:
     submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
     idempotency_key = _build_idempotency_key(
@@ -427,7 +484,12 @@ def _enqueue_job(
         source_type=submission_source_type,
         source_url=source_url,
     )
-    notes = _compose_submission_notes(idempotency_key, post_status, author_id)
+    notes = _compose_submission_notes(
+        idempotency_key,
+        post_status,
+        author_id,
+        client_target_site=client_target_site,
+    )
 
     existing_submission = _find_existing_submission(
         db,
@@ -630,6 +692,7 @@ async def process_guest_post_webhook(
 
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
+        client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
@@ -654,6 +717,7 @@ async def process_guest_post_webhook(
             post_status=post_status,
             requires_admin_approval=requires_admin_approval,
             author_id=author_id,
+            client_target_site=client_target_site,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":

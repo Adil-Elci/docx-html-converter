@@ -31,6 +31,30 @@ class Client(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class ClientTargetSite(Base):
+    __tablename__ = "client_target_sites"
+    __table_args__ = (
+        CheckConstraint(
+            "(target_site_domain IS NOT NULL) OR (target_site_url IS NOT NULL)",
+            name="client_target_sites_target_required_check",
+        ),
+        UniqueConstraint(
+            "client_id",
+            "target_site_domain",
+            "target_site_url",
+            name="client_target_sites_client_target_unique",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
+    target_site_domain = Column(Text, nullable=True)
+    target_site_url = Column(Text, nullable=True)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (

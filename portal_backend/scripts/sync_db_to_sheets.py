@@ -65,6 +65,15 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "updated_at",
     ],
     "client_publishing_site_access": ["id", "client_id", "publishing_site_id", "enabled", "created_at", "updated_at"],
+    "client_target_sites": [
+        "id",
+        "client_id",
+        "target_site_domain",
+        "target_site_url",
+        "is_primary",
+        "created_at",
+        "updated_at",
+    ],
     "submissions": [
         "id",
         "client_id",

@@ -174,10 +174,40 @@ class AdminUserOut(UserOut):
     client_ids: List[UUID] = Field(default_factory=list)
 
 
+class ClientTargetSiteIn(BaseModel):
+    target_site_domain: Optional[str] = None
+    target_site_url: Optional[str] = None
+    is_primary: bool = False
+
+    @validator("target_site_domain", "target_site_url")
+    def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @root_validator(skip_on_failure=True)
+    def require_domain_or_url(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        if not values.get("target_site_domain") and not values.get("target_site_url"):
+            raise ValueError("At least one of target_site_domain or target_site_url is required.")
+        return values
+
+
+class ClientTargetSiteOut(BaseModel):
+    id: UUID
+    client_id: UUID
+    target_site_domain: Optional[str]
+    target_site_url: Optional[str]
+    is_primary: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class ClientCreate(BaseModel):
     name: str
     primary_domain: Optional[str] = None
     backlink_url: Optional[str] = None
+    target_sites: List[ClientTargetSiteIn] = Field(default_factory=list)
     email: Optional[str] = None
     phone_number: Optional[str] = None
     status: str = "active"
@@ -210,6 +240,7 @@ class ClientUpdate(BaseModel):
     name: Optional[str] = None
     primary_domain: Optional[str] = None
     backlink_url: Optional[str] = None
+    target_sites: Optional[List[ClientTargetSiteIn]] = None
     email: Optional[str] = None
     phone_number: Optional[str] = None
     status: Optional[str] = None
@@ -247,6 +278,7 @@ class ClientOut(BaseModel):
     name: str
     primary_domain: Optional[str]
     backlink_url: Optional[str]
+    target_sites: List[ClientTargetSiteOut] = Field(default_factory=list)
     email: Optional[str]
     phone_number: Optional[str]
     status: str
@@ -712,6 +744,8 @@ class AutomationGuestPostIn(BaseModel):
     docx_file: Optional[str] = None
     client_id: Optional[UUID] = None
     client_name: Optional[str] = None
+    target_site_id: Optional[UUID] = None
+    target_site_url: Optional[str] = None
     idempotency_key: Optional[str] = None
     execution_mode: str = "async"
     backlink_placement: str = "intro"
@@ -739,7 +773,7 @@ class AutomationGuestPostIn(BaseModel):
             raise ValueError("publishing_site must not be empty.")
         return cleaned
 
-    @validator("doc_url", "docx_file", "client_name")
+    @validator("doc_url", "docx_file", "client_name", "target_site_url")
     def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value

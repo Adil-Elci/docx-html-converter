@@ -93,7 +93,7 @@ class SiteCredential(Base):
     __tablename__ = "publishing_site_credentials"
     __table_args__ = (
         CheckConstraint("auth_type IN ('application_password')", name="publishing_site_credentials_auth_type_check"),
-        UniqueConstraint("site_id", "wp_username", name="publishing_site_credentials_site_username_unique"),
+        UniqueConstraint("publishing_site_id", "wp_username", name="publishing_site_credentials_site_username_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -111,7 +111,7 @@ class SiteCredential(Base):
 class SiteCategory(Base):
     __tablename__ = "publishing_site_categories"
     __table_args__ = (
-        UniqueConstraint("site_id", "wp_category_id", name="publishing_site_categories_site_wp_category_unique"),
+        UniqueConstraint("publishing_site_id", "wp_category_id", name="publishing_site_categories_site_wp_category_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -129,7 +129,7 @@ class SiteCategory(Base):
 class SiteDefaultCategory(Base):
     __tablename__ = "publishing_site_default_categories"
     __table_args__ = (
-        UniqueConstraint("site_id", "wp_category_id", name="publishing_site_default_categories_site_wp_category_unique"),
+        UniqueConstraint("publishing_site_id", "wp_category_id", name="publishing_site_default_categories_site_wp_category_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -145,7 +145,7 @@ class SiteDefaultCategory(Base):
 class ClientSiteAccess(Base):
     __tablename__ = "client_publishing_site_access"
     __table_args__ = (
-        UniqueConstraint("client_id", "site_id", name="client_publishing_site_access_client_publishing_site_unique"),
+        UniqueConstraint("client_id", "publishing_site_id", name="client_publishing_site_access_client_publishing_site_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

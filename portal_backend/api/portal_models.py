@@ -192,8 +192,9 @@ class Submission(Base):
             name="submissions_status_check",
         ),
         CheckConstraint(
-            "(source_type = 'google-doc' AND doc_url IS NOT NULL AND file_url IS NULL) "
-            "OR (source_type = 'docx-upload' AND file_url IS NOT NULL AND doc_url IS NULL)",
+            "((request_kind = 'order' AND doc_url IS NULL AND file_url IS NULL) "
+            "OR (source_type = 'google-doc' AND doc_url IS NOT NULL AND file_url IS NULL) "
+            "OR (source_type = 'docx-upload' AND file_url IS NOT NULL AND doc_url IS NULL))",
             name="submissions_source_payload_check",
         ),
     )

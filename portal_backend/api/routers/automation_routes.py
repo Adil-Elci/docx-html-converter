@@ -356,6 +356,10 @@ def _resolve_submission_source(source_type: str, source_url: str) -> Tuple[str, 
     return "docx-upload", None, source_url
 
 
+def _payload_has_source_document(payload: AutomationGuestPostIn) -> bool:
+    return bool((payload.doc_url or "").strip() or (payload.docx_file or "").strip())
+
+
 def _resolve_converter_publishing_site(publishing_site: str, site_url: str) -> str:
     publishing_host = _normalized_host(publishing_site)
     if publishing_host:
@@ -373,6 +377,9 @@ def _compose_submission_notes(
     author_id: int,
     *,
     client_target_site: Optional[ClientTargetSite] = None,
+    anchor: Optional[str] = None,
+    topic: Optional[str] = None,
+    manual_order: bool = False,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -385,6 +392,12 @@ def _compose_submission_notes(
             parts.append(f"client_target_site_domain={_safe_note_value(client_target_site.target_site_domain)}")
         if client_target_site.target_site_url:
             parts.append(f"client_target_site_url={_safe_note_value(client_target_site.target_site_url)}")
+    if anchor:
+        parts.append(f"anchor={_safe_note_value(anchor)}")
+    if topic:
+        parts.append(f"topic={_safe_note_value(topic)}")
+    if manual_order:
+        parts.append("manual_order=true")
     return ";".join(parts)
 
 
@@ -468,7 +481,7 @@ def _enqueue_job(
     payload: AutomationGuestPostIn,
     request_kind: str,
     source_type: str,
-    source_url: str,
+    source_url: Optional[str],
     site: Site,
     client: Client,
     post_status: str,
@@ -476,19 +489,31 @@ def _enqueue_job(
     author_id: int,
     client_target_site: Optional[ClientTargetSite],
 ) -> Tuple[Submission, Job, bool]:
-    submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
+    manual_order = request_kind == "order" and not (source_url or "").strip()
+    if manual_order:
+        submission_source_type = "google-doc"
+        doc_url = None
+        file_url = None
+    else:
+        if source_url is None:
+            raise RuntimeError("source_url is required for non-manual submissions.")
+        submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
+    idempotency_source = (source_url or "").strip() or f"order:{(payload.anchor or '').strip()}:{(payload.topic or '').strip()}"
     idempotency_key = _build_idempotency_key(
         explicit_key=payload.idempotency_key,
         client_id=client.id,
         site_id=site.id,
         source_type=submission_source_type,
-        source_url=source_url,
+        source_url=idempotency_source,
     )
     notes = _compose_submission_notes(
         idempotency_key,
         post_status,
         author_id,
         client_target_site=client_target_site,
+        anchor=payload.anchor,
+        topic=payload.topic,
+        manual_order=manual_order,
     )
 
     existing_submission = _find_existing_submission(
@@ -509,14 +534,25 @@ def _enqueue_job(
             .first()
         )
         if existing_job:
+            changed_existing_job = False
             existing_job.requires_admin_approval = requires_admin_approval
+            changed_existing_job = True
             if requires_admin_approval:
                 existing_job.approved_by = None
                 existing_job.approved_by_name_snapshot = None
                 existing_job.approved_at = None
+            if manual_order and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
+                existing_job.job_status = "pending_approval"
+                existing_job.last_error = None
+                changed_existing_job = True
             if existing_job.job_status == "failed":
                 existing_job.job_status = "retrying"
                 existing_job.last_error = None
+                db.add(existing_job)
+                db.commit()
+                db.refresh(existing_job)
+                return existing_submission, existing_job, True
+            if changed_existing_job:
                 db.add(existing_job)
                 db.commit()
                 db.refresh(existing_job)
@@ -525,7 +561,7 @@ def _enqueue_job(
             submission_id=existing_submission.id,
             client_id=client.id,
             site_id=site.id,
-            job_status="queued",
+            job_status="pending_approval" if manual_order else "queued",
             requires_admin_approval=requires_admin_approval,
             approved_by=None,
             approved_by_name_snapshot=None,
@@ -557,7 +593,7 @@ def _enqueue_job(
         submission_id=submission.id,
         client_id=client.id,
         site_id=site.id,
-        job_status="queued",
+        job_status="pending_approval" if manual_order else "queued",
         requires_admin_approval=requires_admin_approval,
         approved_by=None,
         approved_by_name_snapshot=None,
@@ -645,6 +681,56 @@ async def process_guest_post_webhook(
         payload.publishing_site,
         payload.idempotency_key,
     )
+    request_kind = payload.request_kind
+    manual_order = request_kind == "order" and not _payload_has_source_document(payload)
+    if manual_order and payload.execution_mode == "sync":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Orders without a document require async or shadow mode.")
+
+    site = _resolve_publishing_site(db, payload.publishing_site)
+
+    if manual_order and payload.execution_mode in {"async", "shadow"}:
+        client = _resolve_client(db, payload)
+        client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
+        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+        if current_user is not None and current_user.role != "admin":
+            ensure_client_access(db, current_user, client.id)
+            if enforce_client_site_access:
+                ensure_site_access(db, current_user, site.id)
+        if enforce_client_site_access:
+            _require_client_site_access(db, client.id, site.id)
+        else:
+            logger.info(
+                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
+                client.id,
+                site.id,
+            )
+        submission, job, deduplicated = _enqueue_job(
+            db,
+            payload=payload,
+            request_kind=request_kind,
+            source_type="google-doc",
+            source_url=None,
+            site=site,
+            client=client,
+            post_status="draft",
+            requires_admin_approval=True,
+            author_id=0,
+            client_target_site=client_target_site,
+        )
+        shadow_dispatched = False
+        if payload.execution_mode == "shadow":
+            shadow_dispatched = _dispatch_shadow_webhook(payload)
+        return AutomationGuestPostOut(
+            ok=True,
+            execution_mode=payload.execution_mode,
+            deduplicated=deduplicated,
+            submission_id=submission.id,
+            job_id=job.id,
+            job_status=job.job_status,
+            shadow_dispatched=shadow_dispatched,
+            result=None,
+        )
+
     try:
         config = get_runtime_config()
     except AutomationError as exc:
@@ -659,7 +745,6 @@ async def process_guest_post_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AUTOMATION_POST_STATUS must be draft or publish.",
         )
-    request_kind = payload.request_kind
     is_authenticated_client = current_user is not None and current_user.role != "admin"
     requires_admin_approval = is_authenticated_client
     if requires_admin_approval:
@@ -674,7 +759,6 @@ async def process_guest_post_webhook(
     except AutomationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    site = _resolve_publishing_site(db, payload.publishing_site)
     credential = _resolve_enabled_credential(db, site.id)
     default_category_ids = _resolve_default_category_ids(db, site.id)
     category_candidates = _resolve_category_candidates(db, site.id)

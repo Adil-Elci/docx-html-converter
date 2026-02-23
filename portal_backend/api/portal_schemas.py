@@ -742,6 +742,8 @@ class AutomationGuestPostIn(BaseModel):
     request_kind: str = "guest_post"
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
+    anchor: Optional[str] = None
+    topic: Optional[str] = None
     client_id: Optional[UUID] = None
     client_name: Optional[str] = None
     target_site_id: Optional[UUID] = None
@@ -773,7 +775,7 @@ class AutomationGuestPostIn(BaseModel):
             raise ValueError("publishing_site must not be empty.")
         return cleaned
 
-    @validator("doc_url", "docx_file", "client_name", "target_site_url")
+    @validator("doc_url", "docx_file", "client_name", "target_site_url", "anchor", "topic")
     def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
@@ -824,9 +826,16 @@ class AutomationGuestPostIn(BaseModel):
 
     @root_validator(skip_on_failure=True)
     def validate_source_fields(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        request_kind = (values.get("request_kind") or "").strip().lower()
         source_type = values.get("source_type")
         doc_url = values.get("doc_url")
         docx_file = values.get("docx_file")
+        anchor = values.get("anchor")
+        topic = values.get("topic")
+        if request_kind == "order" and not doc_url and not docx_file:
+            if not anchor and not topic:
+                raise ValueError("anchor or topic is required for request_kind=order when no document is provided.")
+            return values
         if source_type == "google-doc" and not doc_url:
             raise ValueError("doc_url is required for source_type=google-doc.")
         if source_type in {"word-doc", "docx-upload"} and not docx_file:

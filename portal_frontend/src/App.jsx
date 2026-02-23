@@ -251,9 +251,9 @@ export default function App() {
     if (!publishingSite) return t("errorTargetRequired");
     if (!clientName) return t("errorClientRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
-    const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
-    if (!sourceType) return t("errorFileTypeRequired");
-    if (sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
+    const sourceType = orders ? "" : (block.source_type || "").trim();
+    if (!orders && !sourceType) return t("errorFileTypeRequired");
+    if (!orders && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
     if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
     if (orders && !(block.anchor || "").trim() && !(block.topic || "").trim()) {
       return t("errorOrderAnchorOrTopicRequired");
@@ -278,7 +278,7 @@ export default function App() {
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
-    if (sourceType === "google-doc") {
+    if (!orders && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
     } else if (sourceType === "word-doc" && block.docx_file) {
       formData.append("docx_file", block.docx_file);
@@ -1466,7 +1466,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {(isOrders || block.source_type === "google-doc") ? (
+                          {!isOrders && block.source_type === "google-doc" ? (
                             <div>
                               <label>{t("googleDocLink")}</label>
                               <input

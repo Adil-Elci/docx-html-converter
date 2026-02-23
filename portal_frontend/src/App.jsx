@@ -66,7 +66,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs"];
-const CLIENT_SECTIONS = ["guest-posts", "orders"];
+const CLIENT_SECTIONS = ["dashboard", "guest-posts", "orders"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
 
@@ -84,7 +84,7 @@ const normalizeHost = (raw) => {
 const clientPortalHost = normalizeHost(import.meta.env.VITE_CLIENT_PORTAL_HOST) || defaultClientPortalHost;
 const adminPortalHost = normalizeHost(import.meta.env.VITE_ADMIN_PORTAL_HOST) || defaultAdminPortalHost;
 
-const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "guest-posts");
+const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "dashboard");
 
 const getAllowedSectionsForRole = (role) => (role === "admin" ? ADMIN_SECTIONS : CLIENT_SECTIONS);
 
@@ -960,7 +960,9 @@ export default function App() {
   const isClientsSection = activeSection === "clients";
   const isAdminUser = currentUser.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
+  const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isOrders = activeSection === "orders";
+  const isGuestPostsSection = activeSection === "guest-posts";
   const resolvedClientName = ((clients[0]?.name) || "").trim();
   const adminCount = adminUsers.filter((item) => item.role === "admin").length;
   const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
@@ -979,6 +981,28 @@ export default function App() {
       return url.includes(normalizedQuery) || name.includes(normalizedQuery);
     });
   };
+  const suggestedGuestPostsMonthly = Math.max(4, Math.min(36, sites.length * 2));
+  const suggestedOrdersMonthly = Math.max(2, Math.min(18, Math.ceil(Math.max(sites.length, 1) / 2)));
+  const weeklyCadenceText = sites.length >= 14
+    ? t("clientDashboardCadenceLarge")
+    : sites.length >= 6
+      ? t("clientDashboardCadenceMedium")
+      : t("clientDashboardCadenceSmall");
+  const siteDomainSamples = sites
+    .map((site) => {
+      const raw = (site.site_url || "").trim();
+      if (!raw) return "";
+      try {
+        const url = raw.includes("://") ? new URL(raw) : new URL(`https://${raw}`);
+        return (url.hostname || "").replace(/^www\./i, "");
+      } catch {
+        return raw.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "");
+      }
+    })
+    .filter(Boolean);
+  const uniqueSiteDomains = Array.from(new Set(siteDomainSamples));
+  const siteMixPreview = uniqueSiteDomains.slice(0, 4).join(" • ");
+  const readySitesLabel = sites.length > 0 ? t("clientDashboardReadySitesYes") : t("clientDashboardReadySitesNo");
 
   return (
     <div className="app-shell">
@@ -1016,7 +1040,7 @@ export default function App() {
         </div>
 
         <div className={`container ${isAdminPendingSection ? "container-wide" : ""}`.trim()}>
-          {!isAdminUser && !isWebsitesSection && !isClientsSection ? (
+          {!isAdminUser && (isGuestPostsSection || isOrders) ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
             </div>
@@ -1057,17 +1081,6 @@ export default function App() {
                 <strong>{unmappedClientUserCount}</strong>
               </div>
             </div>
-          ) : !isAdminUser && !isWebsitesSection && !isClientsSection ? (
-            <div className="stats-grid">
-              <div className="stat-card">
-                <span className="stat-label">{t("statActiveSites")}</span>
-                <strong>{sites.length}</strong>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">{t("statActiveClients")}</span>
-                <strong>{clients.length}</strong>
-              </div>
-            </div>
           ) : null}
 
           {loading ? <div className="panel muted-text">{t("loading")}</div> : null}
@@ -1093,6 +1106,20 @@ export default function App() {
 
               {adminLoading ? <p className="muted-text">{t("loading")}</p> : null}
             </div>
+          ) : isClientDashboardSection ? (
+            <ClientDashboardPanel
+              t={t}
+              clientName={resolvedClientName}
+              siteCount={sites.length}
+              readySitesLabel={readySitesLabel}
+              suggestedGuestPostsMonthly={suggestedGuestPostsMonthly}
+              suggestedOrdersMonthly={suggestedOrdersMonthly}
+              weeklyCadenceText={weeklyCadenceText}
+              siteMixPreview={siteMixPreview}
+              uniqueDomainCount={uniqueSiteDomains.length}
+              onOpenGuestPosts={() => setActiveSection("guest-posts")}
+              onOpenOrders={() => setActiveSection("orders")}
+            />
           ) : isWebsitesSection ? (
             <div className="panel form-panel">
               <h2>{t("navWebsites")}</h2>
@@ -1461,6 +1488,96 @@ function SubmissionErrorModal({ t, open, errorCode, errorMessage, onClose }) {
   );
 }
 
+function ClientDashboardPanel({
+  t,
+  clientName,
+  siteCount,
+  readySitesLabel,
+  suggestedGuestPostsMonthly,
+  suggestedOrdersMonthly,
+  weeklyCadenceText,
+  siteMixPreview,
+  uniqueDomainCount,
+  onOpenGuestPosts,
+  onOpenOrders,
+}) {
+  return (
+    <div className="panel form-panel client-dashboard-panel">
+      <div className="client-dashboard-hero">
+        <h2>{t("navClientDashboard")}</h2>
+        <p className="muted-text">
+          {clientName
+            ? `${t("clientDashboardWelcomePrefix")} ${clientName}. ${t("clientDashboardWelcomeBody")}`
+            : t("clientDashboardWelcomeBody")}
+        </p>
+      </div>
+
+      <div className="client-dashboard-grid">
+        <div className="client-dashboard-card client-dashboard-highlight">
+          <span className="stat-label">{t("clientDashboardReadyTargets")}</span>
+          <strong>{siteCount}</strong>
+          <p className="muted-text">{readySitesLabel}</p>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardMomentumTitle")}</h3>
+          <p className="muted-text">{t("clientDashboardMomentumBody")}</p>
+          <div className="client-dashboard-metrics">
+            <div>
+              <span className="stat-label">{t("navGuestPosts")}</span>
+              <strong>{suggestedGuestPostsMonthly}</strong>
+            </div>
+            <div>
+              <span className="stat-label">{t("navOrders")}</span>
+              <strong>{suggestedOrdersMonthly}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardCadenceTitle")}</h3>
+          <p className="muted-text">{weeklyCadenceText}</p>
+          <p className="muted-text">{t("clientDashboardCadenceSupport")}</p>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardBatchTitle")}</h3>
+          <p className="muted-text">{t("clientDashboardBatchBody")}</p>
+          <ul className="client-dashboard-list">
+            <li>{t("clientDashboardBatchTip1")}</li>
+            <li>{t("clientDashboardBatchTip2")}</li>
+            <li>{t("clientDashboardBatchTip3")}</li>
+          </ul>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardMixTitle")}</h3>
+          <p className="muted-text">{t("clientDashboardMixBody")}</p>
+          <div className="client-dashboard-actions">
+            <button className="btn" type="button" onClick={onOpenGuestPosts}>
+              {t("clientDashboardCreateGuestPostsCta")}
+            </button>
+            <button className="btn secondary" type="button" onClick={onOpenOrders}>
+              {t("clientDashboardCreateOrdersCta")}
+            </button>
+          </div>
+        </div>
+
+        <div className="client-dashboard-card">
+          <h3>{t("clientDashboardCoverageTitle")}</h3>
+          <p className="muted-text">
+            {uniqueDomainCount > 0
+              ? `${uniqueDomainCount} ${t("clientDashboardCoverageDomainsLabel")}`
+              : t("clientDashboardCoverageFallback")}
+          </p>
+          {siteMixPreview ? <p className="muted-text client-dashboard-sites-preview">{siteMixPreview}</p> : null}
+          <p className="muted-text">{t("clientDashboardCoverageBody")}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AuthGate({
   t,
   language,
@@ -1605,6 +1722,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
       ]
     : [
+        { id: "dashboard", label: t("navClientDashboard") },
         { id: "guest-posts", label: t("navGuestPosts") },
         { id: "orders", label: t("navOrders") },
       ];

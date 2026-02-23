@@ -25,7 +25,7 @@ from ..auth import (
 )
 from ..automation_service import (
     AutomationError,
-    converter_target_from_site_url,
+    converter_publishing_site_from_site_url,
     get_runtime_config,
     resolve_source_url,
     run_guest_post_pipeline,
@@ -140,25 +140,25 @@ def _host_variants(value: str) -> Set[str]:
     return variants
 
 
-def _resolve_site_by_target(db: Session, target_site: str) -> Site:
+def _resolve_publishing_site(db: Session, publishing_site: str) -> Site:
     try:
-        site_uuid = UUID(target_site.strip())
+        site_uuid = UUID(publishing_site.strip())
         site = db.query(Site).filter(Site.id == site_uuid, Site.status == "active").first()
         if site:
             return site
     except ValueError:
         pass
 
-    target_variants = _host_variants(target_site)
-    if not target_variants:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="target_site is invalid.")
+    publishing_site_variants = _host_variants(publishing_site)
+    if not publishing_site_variants:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="publishing_site is invalid.")
 
     sites = db.query(Site).filter(Site.status == "active").all()
     for site in sites:
-        if _host_variants(site.site_url) & target_variants:
+        if _host_variants(site.site_url) & publishing_site_variants:
             return site
 
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active site matches target_site.")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active site matches publishing_site.")
 
 
 def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
@@ -171,7 +171,7 @@ def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
     if not credential:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No enabled site credential found for target site.",
+            detail="No enabled site credential found for publishing site.",
         )
     return credential
 
@@ -321,11 +321,11 @@ def _resolve_submission_source(source_type: str, source_url: str) -> Tuple[str, 
     return "docx-upload", None, source_url
 
 
-def _resolve_converter_target(target_site: str, site_url: str) -> str:
-    target_host = _normalized_host(target_site)
-    if target_host:
-        return target_host
-    return converter_target_from_site_url(site_url)
+def _resolve_converter_publishing_site(publishing_site: str, site_url: str) -> str:
+    publishing_host = _normalized_host(publishing_site)
+    if publishing_host:
+        return publishing_host
+    return converter_publishing_site_from_site_url(site_url)
 
 
 def _compose_submission_notes(idempotency_key: str, post_status: str, author_id: int) -> str:
@@ -577,10 +577,10 @@ async def process_guest_post_webhook(
 ) -> AutomationGuestPostOut:
     payload = await _parse_automation_payload(request)
     logger.info(
-        "automation.webhook.received mode=%s source_type=%s target_site=%s idempotency_key=%s",
+        "automation.webhook.received mode=%s source_type=%s publishing_site=%s idempotency_key=%s",
         payload.execution_mode,
         payload.source_type,
-        payload.target_site,
+        payload.publishing_site,
         payload.idempotency_key,
     )
     try:
@@ -612,7 +612,7 @@ async def process_guest_post_webhook(
     except AutomationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    site = _resolve_site_by_target(db, payload.target_site)
+    site = _resolve_publishing_site(db, payload.publishing_site)
     credential = _resolve_enabled_credential(db, site.id)
     default_category_ids = _resolve_default_category_ids(db, site.id)
     category_candidates = _resolve_category_candidates(db, site.id)
@@ -626,7 +626,7 @@ async def process_guest_post_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="No valid author_id found. Set site_credentials.author_id or AUTOMATION_POST_AUTHOR_ID.",
         )
-    converter_target_site = _resolve_converter_target(payload.target_site, site.site_url)
+    converter_publishing_site = _resolve_converter_publishing_site(payload.publishing_site, site.site_url)
 
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
@@ -682,7 +682,7 @@ async def process_guest_post_webhook(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Clients cannot run sync execution mode.")
         pipeline_result = run_guest_post_pipeline(
             source_url=source_url,
-            target_site=converter_target_site,
+            publishing_site=converter_publishing_site,
             site_url=site.site_url,
             wp_rest_base=site.wp_rest_base,
             wp_username=credential.wp_username,
@@ -714,7 +714,7 @@ async def process_guest_post_webhook(
 
     result = AutomationGuestPostResultOut(
         source_type=normalized_source_type,
-        target_site=payload.target_site,
+        publishing_site=payload.publishing_site,
         source_url=source_url,
         converter=pipeline_result["converted"],
         generated_image_url=pipeline_result["image_url"],

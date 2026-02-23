@@ -16,7 +16,7 @@ class ConvertOptions(BaseModel):
 
 
 class ConvertRequest(BaseModel):
-    target_site: str
+    publishing_site: str
     source_url: HttpUrl
     post_status: str = "draft"
     language: str = "de"
@@ -25,11 +25,11 @@ class ConvertRequest(BaseModel):
     client_url: Optional[str] = None
     options: ConvertOptions = Field(default_factory=ConvertOptions)
 
-    @validator("target_site")
-    def validate_target_site(cls, value: str) -> str:
+    @validator("publishing_site")
+    def validate_publishing_site(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("target_site is required.")
+            raise ValueError("publishing_site is required.")
         return cleaned
 
     @validator("post_status")
@@ -90,7 +90,7 @@ class ConvertDebug(BaseModel):
 
 class ConvertResponse(BaseModel):
     ok: bool
-    target_site: str
+    publishing_site: str
     source_url: str
     source_type: str
     source_filename: str

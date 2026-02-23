@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .automation_service import (
     AutomationError,
-    converter_target_from_site_url,
+    converter_publishing_site_from_site_url,
     get_runtime_config,
     run_guest_post_pipeline,
 )
@@ -98,13 +98,13 @@ class AutomationJobWorker:
                 "converter_called",
                 {
                     "source_url": payload["source_url"],
-                    "target_site": payload["converter_target_site"],
+                    "publishing_site": payload["converter_publishing_site"],
                     "attempt": payload["attempt_count"],
                 },
             )
             pipeline_result = run_guest_post_pipeline(
                 source_url=payload["source_url"],
-                target_site=payload["converter_target_site"],
+                publishing_site=payload["converter_publishing_site"],
                 site_url=payload["site_url"],
                 wp_rest_base=payload["wp_rest_base"],
                 wp_username=payload["wp_username"],
@@ -200,11 +200,11 @@ class AutomationJobWorker:
             if author_id <= 0:
                 author_id = default_author_id
 
-            converter_target_site = converter_target_from_site_url(site.site_url)
-            if not converter_target_site:
-                converter_target_site = (urlparse(site.site_url).hostname or "").strip().lower()
-            if not converter_target_site:
-                raise RuntimeError("Failed to resolve converter target_site from site_url.")
+            converter_publishing_site = converter_publishing_site_from_site_url(site.site_url)
+            if not converter_publishing_site:
+                converter_publishing_site = (urlparse(site.site_url).hostname or "").strip().lower()
+            if not converter_publishing_site:
+                raise RuntimeError("Failed to resolve converter publishing_site from site_url.")
             category_ids = [
                 int(row.wp_category_id)
                 for row in (
@@ -259,7 +259,7 @@ class AutomationJobWorker:
 
             return {
                 "source_url": source_url,
-                "converter_target_site": converter_target_site,
+                "converter_publishing_site": converter_publishing_site,
                 "site_url": site.site_url,
                 "wp_rest_base": site.wp_rest_base,
                 "wp_username": credential.wp_username,

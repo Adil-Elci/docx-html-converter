@@ -321,11 +321,11 @@ def _select_categories_with_llm(
     return selected
 
 
-def call_converter(source_url: str, target_site: str, converter_endpoint: str, timeout_seconds: int) -> Dict[str, Any]:
+def call_converter(source_url: str, publishing_site: str, converter_endpoint: str, timeout_seconds: int) -> Dict[str, Any]:
     response = _request_json(
         "POST",
         converter_endpoint,
-        json_body={"source_url": source_url, "target_site": target_site},
+        json_body={"source_url": source_url, "publishing_site": publishing_site},
         timeout_seconds=timeout_seconds,
     )
     required = ("title", "slug", "clean_html", "excerpt", "image_prompt")
@@ -706,7 +706,7 @@ def wp_get_media(
     )
 
 
-def converter_target_from_site_url(site_url: str) -> str:
+def converter_publishing_site_from_site_url(site_url: str) -> str:
     parsed = urlparse(site_url.strip())
     return (parsed.netloc or parsed.path).strip().lower()
 
@@ -714,7 +714,7 @@ def converter_target_from_site_url(site_url: str) -> str:
 def run_guest_post_pipeline(
     *,
     source_url: str,
-    target_site: str,
+    publishing_site: str,
     site_url: str,
     wp_rest_base: str,
     wp_username: str,
@@ -742,7 +742,7 @@ def run_guest_post_pipeline(
 ) -> Dict[str, Any]:
     converted = call_converter(
         source_url=source_url,
-        target_site=target_site,
+        publishing_site=publishing_site,
         converter_endpoint=converter_endpoint,
         timeout_seconds=timeout_seconds,
     )

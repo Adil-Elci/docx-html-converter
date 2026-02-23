@@ -5,7 +5,7 @@ import { getLabel } from "./i18n.js";
 const getInitialLanguage = () => localStorage.getItem("ui_language") || "en";
 
 const emptySubmissionForm = () => ({
-  target_site: "",
+  publishing_site: "",
   client_name: "",
   source_type: "",
   doc_url: "",
@@ -213,8 +213,8 @@ export default function App() {
   };
 
   const getSubmissionBlockError = (block, { orders, clientName }) => {
-    const targetSite = (block.target_site || "").trim();
-    if (!targetSite) return t("errorTargetRequired");
+    const publishingSite = (block.publishing_site || "").trim();
+    if (!publishingSite) return t("errorTargetRequired");
     if (!clientName) return t("errorClientRequired");
     const sourceType = (block.source_type || "").trim();
     if (!sourceType) return t("errorFileTypeRequired");
@@ -228,7 +228,7 @@ export default function App() {
 
   const buildSubmissionFormData = (block, { orders, clientName }) => {
     const formData = new FormData();
-    formData.append("target_site", block.target_site.trim());
+    formData.append("publishing_site", block.publishing_site.trim());
     formData.append("client_name", clientName);
     formData.append("request_kind", orders ? "order" : "guest_post");
     formData.append("source_type", block.source_type);
@@ -1266,7 +1266,7 @@ export default function App() {
               <form className="guest-form" onSubmit={submitGuestPost}>
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
-                    const blockFilteredSites = getFilteredSitesForQuery(block.target_site);
+                    const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
                     const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
                     return (
@@ -1280,13 +1280,13 @@ export default function App() {
                             <label>{t("targetWebsite")}</label>
                             <div className="site-suggest-wrap">
                               <input
-                                value={block.target_site}
+                                value={block.publishing_site}
                                 onFocus={() => setSiteSuggestionsBlockId(block.id)}
                                 onBlur={() => setTimeout(() => {
                                   setSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
                                 }, 120)}
                                 onChange={(e) => {
-                                  setSubmissionBlockField(block.id, "target_site", e.target.value);
+                                  setSubmissionBlockField(block.id, "publishing_site", e.target.value);
                                   setSiteSuggestionsBlockId(block.id);
                                 }}
                                 placeholder={t("placeholderTargetWebsite")}
@@ -1301,7 +1301,7 @@ export default function App() {
                                       className="site-suggest-item"
                                       onMouseDown={(event) => {
                                         event.preventDefault();
-                                        setSubmissionBlockField(block.id, "target_site", site.site_url);
+                                        setSubmissionBlockField(block.id, "publishing_site", site.site_url);
                                         setSiteSuggestionsBlockId(null);
                                       }}
                                     >

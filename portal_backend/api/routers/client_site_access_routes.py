@@ -12,7 +12,7 @@ from ..db import get_db
 from ..portal_models import Client, ClientSiteAccess, Site
 from ..portal_schemas import ClientSiteAccessCreate, ClientSiteAccessOut, ClientSiteAccessUpdate
 
-router = APIRouter(prefix="/client-site-access", tags=["client_site_access"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/client-site-access", tags=["client_publishing_site_access"], dependencies=[Depends(require_admin)])
 
 
 def _access_to_out(access: ClientSiteAccess) -> ClientSiteAccessOut:
@@ -55,7 +55,7 @@ def create_client_site_access(
 
     site = db.query(Site).filter(Site.id == payload.site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found.")
 
     row = ClientSiteAccess(
         client_id=payload.client_id,
@@ -67,7 +67,7 @@ def create_client_site_access(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Client-site mapping already exists.") from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Client-publishing-site mapping already exists.") from exc
     db.refresh(row)
     return _access_to_out(row)
 

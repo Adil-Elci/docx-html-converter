@@ -73,14 +73,14 @@ class PasswordResetToken(Base):
 
 
 class Site(Base):
-    __tablename__ = "sites"
+    __tablename__ = "publishing_sites"
     __table_args__ = (
-        CheckConstraint("status IN ('active','inactive')", name="sites_status_check"),
+        CheckConstraint("status IN ('active','inactive')", name="publishing_sites_status_check"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
-    site_url = Column(Text, nullable=False, unique=True)
+    site_url = Column("publishing_site_url", Text, nullable=False, unique=True)
     wp_rest_base = Column(Text, nullable=False, default="/wp-json/wp/v2")
     hosting_provider = Column(Text, nullable=True)
     hosting_panel = Column(Text, nullable=True)
@@ -90,14 +90,14 @@ class Site(Base):
 
 
 class SiteCredential(Base):
-    __tablename__ = "site_credentials"
+    __tablename__ = "publishing_site_credentials"
     __table_args__ = (
-        CheckConstraint("auth_type IN ('application_password')", name="site_credentials_auth_type_check"),
-        UniqueConstraint("site_id", "wp_username", name="site_credentials_site_username_unique"),
+        CheckConstraint("auth_type IN ('application_password')", name="publishing_site_credentials_auth_type_check"),
+        UniqueConstraint("site_id", "wp_username", name="publishing_site_credentials_site_username_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     auth_type = Column(Text, nullable=False, default="application_password")
     wp_username = Column(Text, nullable=False)
     wp_app_password = Column(Text, nullable=False)
@@ -109,13 +109,13 @@ class SiteCredential(Base):
 
 
 class SiteCategory(Base):
-    __tablename__ = "site_categories"
+    __tablename__ = "publishing_site_categories"
     __table_args__ = (
-        UniqueConstraint("site_id", "wp_category_id", name="site_categories_site_wp_category_unique"),
+        UniqueConstraint("site_id", "wp_category_id", name="publishing_site_categories_site_wp_category_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     wp_category_id = Column(BigInteger, nullable=False)
     name = Column(Text, nullable=False)
     slug = Column(Text, nullable=True)
@@ -127,13 +127,13 @@ class SiteCategory(Base):
 
 
 class SiteDefaultCategory(Base):
-    __tablename__ = "site_default_categories"
+    __tablename__ = "publishing_site_default_categories"
     __table_args__ = (
-        UniqueConstraint("site_id", "wp_category_id", name="site_default_categories_site_wp_category_unique"),
+        UniqueConstraint("site_id", "wp_category_id", name="publishing_site_default_categories_site_wp_category_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     wp_category_id = Column(BigInteger, nullable=False)
     category_name = Column(Text, nullable=True)
     position = Column(Integer, nullable=False, default=100)
@@ -143,14 +143,14 @@ class SiteDefaultCategory(Base):
 
 
 class ClientSiteAccess(Base):
-    __tablename__ = "client_site_access"
+    __tablename__ = "client_publishing_site_access"
     __table_args__ = (
-        UniqueConstraint("client_id", "site_id", name="client_site_access_client_site_unique"),
+        UniqueConstraint("client_id", "site_id", name="client_publishing_site_access_client_publishing_site_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -176,7 +176,7 @@ class Submission(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id"), nullable=False)
     request_kind = Column(Text, nullable=False, default="guest_post")
     source_type = Column(Text, nullable=False)
     doc_url = Column(Text, nullable=True)
@@ -204,7 +204,7 @@ class Job(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     submission_id = Column(UUID(as_uuid=True), ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
-    site_id = Column(UUID(as_uuid=True), ForeignKey("sites.id"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id"), nullable=False)
     job_status = Column(Text, nullable=False, default="queued")
     requires_admin_approval = Column(Boolean, nullable=False, default=False)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

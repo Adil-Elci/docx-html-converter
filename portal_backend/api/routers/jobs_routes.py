@@ -417,7 +417,7 @@ def publish_pending_job(
 
     site = db.query(Site).filter(Site.id == job.site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
     credential = _get_enabled_credential_for_site(db, site.id)
 
     try:
@@ -487,7 +487,7 @@ def regenerate_pending_job_image(
 
     site = db.query(Site).filter(Site.id == job.site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
     credential = _get_enabled_credential_for_site(db, site.id)
 
     try:
@@ -669,7 +669,7 @@ def preview_pending_job_draft(
 
     site = db.query(Site).filter(Site.id == job.site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found for job.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
     credential = _get_enabled_credential_for_site(db, site.id)
 
     try:

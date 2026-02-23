@@ -45,7 +45,7 @@ This service runs locally and converts guest post documents into WordPress-ready
 The Google Doc must be publicly accessible ("Anyone with the link can view"). If it is not, the service returns a clear 422 error explaining the permission issue.
 
 ## Validation rules
-- `target_site` must be `audit-net.de`.
+- `publishing_site` must be `audit-net.de`.
 - `post_status` must be `draft` or `publish`.
 - `language` must be `de`.
 - `source_url` must be a valid `http://` or `https://` URL and must not point to localhost or private IP ranges.
@@ -74,13 +74,13 @@ Accepts JSON or multipart form data.
 ```bash
 curl -X POST http://localhost:8000/convert \
   -H "Content-Type: application/json" \
-  -d '{"target_site":"audit-net.de","source_url":"https://docs.google.com/document/d/GOOGLE_DOC_ID/edit"}'
+  -d '{"publishing_site":"audit-net.de","source_url":"https://docs.google.com/document/d/GOOGLE_DOC_ID/edit"}'
 ```
 
 #### Example: multipart
 ```bash
 curl -X POST http://localhost:8000/convert \
-  -F "target_site=audit-net.de" \
+  -F "publishing_site=audit-net.de" \
   -F "source_url=https://docs.google.com/document/d/GOOGLE_DOC_ID/edit" \
   -F 'options={"remove_images":true,"fix_headings":true}'
 ```
@@ -89,7 +89,7 @@ curl -X POST http://localhost:8000/convert \
 ```json
 {
   "ok": true,
-  "target_site": "audit-net.de",
+  "publishing_site": "audit-net.de",
   "source_url": "https://docs.google.com/document/d/GOOGLE_DOC_ID/edit",
   "source_type": "google_doc",
   "source_filename": "google_doc_GOOGLE_DOC_ID.docx",
@@ -126,7 +126,7 @@ pytest
 
 ## Make.com mapping notes
 **Make sends:**
-- `target_site` (required)
+- `publishing_site` (required)
 - `source_url` (required)
 - `post_status` (optional)
 - `language` (optional)
@@ -136,7 +136,7 @@ pytest
 - `options` (optional object or JSON string)
 
 **Make receives:**
-- `ok`, `target_site`, `source_url`, `source_type`, `source_filename`
+- `ok`, `publishing_site`, `source_url`, `source_type`, `source_filename`
 - `title`, `slug`, `excerpt`, `meta_description`, `clean_html`
 - `image_prompt`, `warnings`, `debug`
 

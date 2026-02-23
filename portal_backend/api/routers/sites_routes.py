@@ -14,7 +14,7 @@ from ..db import get_db
 from ..portal_models import Site, SiteCredential, User
 from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
 
-router = APIRouter(prefix="/sites", tags=["sites"])
+router = APIRouter(prefix="/sites", tags=["publishing_sites"])
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -89,7 +89,7 @@ def create_site(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Site URL already exists.") from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Publishing site URL already exists.") from exc
     db.refresh(site)
     return _site_to_out(site)
 
@@ -103,7 +103,7 @@ def update_site(
 ) -> SiteOut:
     site = db.query(Site).filter(Site.id == site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found.")
 
     if payload.name is not None:
         site.name = payload.name
@@ -123,6 +123,6 @@ def update_site(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Site URL already exists.") from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Publishing site URL already exists.") from exc
     db.refresh(site)
     return _site_to_out(site)

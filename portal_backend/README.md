@@ -50,7 +50,7 @@ python scripts/create_admin_user.py --email admin@example.com --password "replac
 ## RBAC Enforcement (Phase 2)
 Role model:
 - `admin`: full access to management routes
-- `client`: scoped access only to mapped clients/sites (`client_users` + `client_site_access`)
+- `client`: scoped access only to mapped clients/publishing sites (`client_users` + `client_publishing_site_access`)
 
 Enforced behavior:
 - Admin-only routes:
@@ -104,7 +104,7 @@ Security behavior:
 - Export is one-way: Postgres -> Google Sheets.
 - No Sheet data is read back into the DB.
 - Sensitive credential data is excluded by allowlist.
-- `site_credentials` is not exported.
+- `publishing_site_credentials` is not exported.
 
 Setup:
 ```bash
@@ -118,14 +118,14 @@ python scripts/sync_db_to_sheets.py
 
 Optional:
 - `GOOGLE_SERVICE_ACCOUNT_JSON` instead of `GOOGLE_SERVICE_ACCOUNT_FILE`
-- `GOOGLE_SHEETS_EXPORT_TABLES=clients,sites,jobs` to export only a subset
+- `GOOGLE_SHEETS_EXPORT_TABLES=clients,publishing_sites,jobs` to export only a subset
 
 Recommended operations:
 - Schedule this script as a cron/worker job in Dokploy.
 - Share the Google Sheet with your team as viewer-only.
 
 ## Sync WordPress Authors To DB
-Use `scripts/sync_wp_authors.py` to populate `site_credentials.author_id` and `site_credentials.author_name` from each site's WordPress `/users/me` endpoint.
+Use `scripts/sync_wp_authors.py` to populate `publishing_site_credentials.author_id` and `publishing_site_credentials.author_name` from each publishing site's WordPress `/users/me` endpoint.
 
 Setup:
 ```bash
@@ -138,12 +138,12 @@ python scripts/sync_wp_authors.py
 
 Optional filters:
 - `--site-url https://eintragnews.de` to sync one site (with/without `www` match).
-- `--credential-id <site_credentials_uuid>` to sync one credential.
+- `--credential-id <publishing_site_credentials_uuid>` to sync one credential.
 - `--only-missing` to skip rows that already have both author fields.
 - `--include-inactive-sites` if needed.
 
 ## Sync WordPress Categories To DB
-Use `scripts/sync_wp_categories.py` to populate `site_categories` from each site's WordPress categories API.
+Use `scripts/sync_wp_categories.py` to populate `publishing_site_categories` from each publishing site's WordPress categories API.
 
 Setup:
 ```bash
@@ -156,7 +156,7 @@ python scripts/sync_wp_categories.py
 
 Optional:
 - `--site-url https://eintragnews.de` to sync one site.
-- `--default-slugs guest-post,news,allgemein` to seed `site_default_categories` in slug order.
+- `--default-slugs guest-post,news,allgemein` to seed `publishing_site_default_categories` in slug order.
 - `--replace-defaults` (with `--default-slugs`) to disable existing defaults not in the matched list.
 
 ## Make.com Replacement Webhook
@@ -166,7 +166,7 @@ Endpoint:
 
 Supported payload fields:
 - `source_type`: `google-doc`, `word-doc`, or `docx-upload`
-- `target_site`: domain/URL/site-id that maps to an active row in `sites`
+- `publishing_site`: domain/URL/site-id that maps to an active row in `publishing_sites`
 - `execution_mode`: `sync`, `async`, `shadow` (default: `async`)
 - `doc_url`: required for `google-doc`
 - `docx_file`: required for `word-doc`/`docx-upload` (raw URL or HTML anchor snippet with `href=...`)
@@ -202,7 +202,7 @@ Runtime env vars:
 - `AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES` (default: `2`)
 - `AUTOMATION_CATEGORY_LLM_CONFIDENCE_THRESHOLD` (default: `0.55`)
 - `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
-- `AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS` (default: `false`; set `true` to require `client_site_access` mapping)
+- `AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS` (default: `false`; set `true` to require `client_publishing_site_access` mapping)
 - `AUTOMATION_WORKER_ENABLED` (default: `true`)
 - `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)
@@ -214,13 +214,13 @@ Image upload behavior:
 
 Author selection precedence:
 - Webhook `author` field (if provided)
-- `site_credentials.author_id` (new per-site default)
+- `publishing_site_credentials.author_id` (new per-publishing-site default)
 - `AUTOMATION_POST_AUTHOR_ID` env fallback
 
 Category selection:
-- If `AUTOMATION_CATEGORY_LLM_ENABLED=true` and `site_categories` are available for the site, the backend asks the LLM to pick category IDs from that allowed list.
+- If `AUTOMATION_CATEGORY_LLM_ENABLED=true` and `publishing_site_categories` are available for the publishing site, the backend asks the LLM to pick category IDs from that allowed list.
 - Supported providers: OpenAI (`/chat/completions`) and Anthropic (`/messages`).
-- If LLM selection fails/invalid/low confidence, it falls back to enabled `site_default_categories` in configured order.
+- If LLM selection fails/invalid/low confidence, it falls back to enabled `publishing_site_default_categories` in configured order.
 - If no defaults exist, category is left to WordPress/site defaults.
 
 Debugging workflow (recommended):

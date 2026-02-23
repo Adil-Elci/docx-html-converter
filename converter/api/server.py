@@ -6,7 +6,7 @@ python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 
 Request example (JSON):
 {
-  "target_site": "audit-net.de",
+  "publishing_site": "audit-net.de",
   "source_url": "https://docs.google.com/document/d/GOOGLE_DOC_ID/edit",
   "post_status": "draft",
   "client_id": "client-123",
@@ -25,7 +25,7 @@ Request example (JSON):
 Response example:
 {
   "ok": true,
-  "target_site": "audit-net.de",
+  "publishing_site": "audit-net.de",
   "source_url": "https://docs.google.com/document/d/GOOGLE_DOC_ID/edit",
   "source_type": "google_doc",
   "source_filename": "google_doc_GOOGLE_DOC_ID.docx",
@@ -47,11 +47,11 @@ Response example:
 Example curl (JSON):
 curl -X POST http://localhost:8000/convert \
   -H "Content-Type: application/json" \
-  -d '{"target_site":"audit-net.de","source_url":"https://docs.google.com/document/d/GOOGLE_DOC_ID/edit"}'
+  -d '{"publishing_site":"audit-net.de","source_url":"https://docs.google.com/document/d/GOOGLE_DOC_ID/edit"}'
 
 Example curl (multipart):
 curl -X POST http://localhost:8000/convert \
-  -F "target_site=audit-net.de" \
+  -F "publishing_site=audit-net.de" \
   -F "source_url=https://docs.google.com/document/d/GOOGLE_DOC_ID/edit" \
   -F 'options={"remove_images":true,"fix_headings":true}'
 
@@ -164,7 +164,7 @@ async def convert(request: Request) -> JSONResponse:
 async def preview(request: Request) -> HTMLResponse:
     query = request.query_params
     data: Dict[str, Any] = {
-        "target_site": query.get("target_site", ""),
+        "publishing_site": query.get("publishing_site", ""),
         "source_url": query.get("source_url", ""),
         "language": query.get("language", "de"),
         "post_status": "draft",
@@ -211,7 +211,7 @@ def convert_core(parsed: ConvertRequest) -> ConvertResponse:
         "convert_start",
         extra={
             "event": "convert_start",
-            "target_site": parsed.target_site,
+            "publishing_site": parsed.publishing_site,
             "source_type": source_type,
             "source_url": str(parsed.source_url),
             "client_id": parsed.client_id,
@@ -283,7 +283,7 @@ def convert_core(parsed: ConvertRequest) -> ConvertResponse:
 
     response = ConvertResponse(
         ok=True,
-        target_site=parsed.target_site,
+        publishing_site=parsed.publishing_site,
         source_url=str(parsed.source_url),
         source_type=source_type,
         source_filename=source_filename,
@@ -301,7 +301,7 @@ def convert_core(parsed: ConvertRequest) -> ConvertResponse:
         "convert_success",
         extra={
             "event": "convert_success",
-            "target_site": parsed.target_site,
+            "publishing_site": parsed.publishing_site,
             "source_type": source_type,
             "download_ms": timing["download_ms"],
             "convert_ms": timing["convert_ms"],
@@ -368,7 +368,7 @@ def build_request_from_form(data: Dict[str, Any]) -> ConvertRequest:
     options_data = parse_options_from_form(cleaned)
 
     req_data: Dict[str, Any] = {
-        "target_site": cleaned.get("target_site", ""),
+        "publishing_site": cleaned.get("publishing_site", ""),
         "source_url": cleaned.get("source_url", ""),
         "post_status": cleaned.get("post_status", "draft"),
         "language": cleaned.get("language", "de"),
@@ -419,11 +419,11 @@ def option_fields() -> List[str]:
 
 
 def normalize_request(req: ConvertRequest) -> ConvertRequest:
-    target_site = req.target_site.strip()
+    publishing_site = req.publishing_site.strip()
     source_url = str(req.source_url).strip()
 
-    if not target_site:
-        raise HTTPException(status_code=400, detail="target_site is required.")
+    if not publishing_site:
+        raise HTTPException(status_code=400, detail="publishing_site is required.")
     if not source_url:
         raise HTTPException(status_code=400, detail="source_url is required.")
 
@@ -431,7 +431,7 @@ def normalize_request(req: ConvertRequest) -> ConvertRequest:
     language = req.language.strip() or "de"
 
     updates = {
-        "target_site": target_site,
+        "publishing_site": publishing_site,
         "source_url": source_url,
         "post_status": post_status,
         "language": language,

@@ -12,7 +12,7 @@ from ..db import get_db
 from ..portal_models import Site, SiteCredential
 from ..portal_schemas import SiteCredentialCreate, SiteCredentialOut, SiteCredentialUpdate
 
-router = APIRouter(prefix="/site-credentials", tags=["site_credentials"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/site-credentials", tags=["publishing_site_credentials"], dependencies=[Depends(require_admin)])
 
 
 def _credential_to_out(credential: SiteCredential) -> SiteCredentialOut:
@@ -52,7 +52,7 @@ def create_site_credential(
 ) -> SiteCredentialOut:
     site = db.query(Site).filter(Site.id == payload.site_id).first()
     if not site:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found.")
 
     credential = SiteCredential(
         site_id=payload.site_id,
@@ -70,7 +70,7 @@ def create_site_credential(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Credential for this username already exists on the site.",
+            detail="Credential for this username already exists on the publishing site.",
         ) from exc
     db.refresh(credential)
     return _credential_to_out(credential)
@@ -106,7 +106,7 @@ def update_site_credential(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Credential for this username already exists on the site.",
+            detail="Credential for this username already exists on the publishing site.",
         ) from exc
     db.refresh(credential)
     return _credential_to_out(credential)

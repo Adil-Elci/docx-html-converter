@@ -9,7 +9,7 @@ SAMPLE_DOCX_URL = "https://example.com/sample.docx"
 
 def run_request(source_url: str):
     payload = {
-        "target_site": "example.com",
+        "publishing_site": "example.com",
         "source_url": source_url,
         "post_status": "draft",
         "language": "de",

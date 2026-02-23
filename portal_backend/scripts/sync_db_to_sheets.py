@@ -31,10 +31,10 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "created_at",
         "updated_at",
     ],
-    "sites": [
+    "publishing_sites": [
         "id",
         "name",
-        "site_url",
+        "publishing_site_url",
         "wp_rest_base",
         "hosting_provider",
         "hosting_panel",
@@ -42,9 +42,9 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "created_at",
         "updated_at",
     ],
-    "site_categories": [
+    "publishing_site_categories": [
         "id",
-        "site_id",
+        "publishing_site_id",
         "wp_category_id",
         "name",
         "slug",
@@ -54,9 +54,9 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "created_at",
         "updated_at",
     ],
-    "site_default_categories": [
+    "publishing_site_default_categories": [
         "id",
-        "site_id",
+        "publishing_site_id",
         "wp_category_id",
         "category_name",
         "position",
@@ -64,11 +64,11 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "created_at",
         "updated_at",
     ],
-    "client_site_access": ["id", "client_id", "site_id", "enabled", "created_at", "updated_at"],
+    "client_publishing_site_access": ["id", "client_id", "publishing_site_id", "enabled", "created_at", "updated_at"],
     "submissions": [
         "id",
         "client_id",
-        "site_id",
+        "publishing_site_id",
         "source_type",
         "backlink_placement",
         "post_status",
@@ -81,7 +81,7 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "id",
         "submission_id",
         "client_id",
-        "site_id",
+        "publishing_site_id",
         "job_status",
         "attempt_count",
         "wp_post_id",

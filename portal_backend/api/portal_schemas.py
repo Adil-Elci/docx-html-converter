@@ -706,7 +706,7 @@ class AssetOut(BaseModel):
 
 class AutomationGuestPostIn(BaseModel):
     source_type: str
-    target_site: str
+    publishing_site: str
     request_kind: str = "guest_post"
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
@@ -732,11 +732,11 @@ class AutomationGuestPostIn(BaseModel):
             raise ValueError("source_type must be one of google-doc, word-doc, docx-upload.")
         return cleaned
 
-    @validator("target_site")
-    def validate_target_site(cls, value: str) -> str:
+    @validator("publishing_site")
+    def validate_publishing_site(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("target_site must not be empty.")
+            raise ValueError("publishing_site must not be empty.")
         return cleaned
 
     @validator("doc_url", "docx_file", "client_name")
@@ -802,7 +802,7 @@ class AutomationGuestPostIn(BaseModel):
 
 class AutomationGuestPostResultOut(BaseModel):
     source_type: str
-    target_site: str
+    publishing_site: str
     source_url: str
     converter: Dict[str, Any]
     generated_image_url: str

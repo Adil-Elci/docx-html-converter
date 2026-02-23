@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { getLabel } from "./i18n.js";
 
@@ -12,6 +12,11 @@ const emptySubmissionForm = () => ({
   docx_file: null,
   anchor: "",
   topic: "",
+});
+
+const createSubmissionBlock = (id) => ({
+  id,
+  ...emptySubmissionForm(),
 });
 
 const emptyRejectForm = () => ({
@@ -62,6 +67,8 @@ const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs"];
 const CLIENT_SECTIONS = ["guest-posts", "orders"];
+const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
+const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -126,10 +133,14 @@ export default function App() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showSubmissionSuccessModal, setShowSubmissionSuccessModal] = useState(false);
+  const [showSubmissionErrorModal, setShowSubmissionErrorModal] = useState(false);
+  const [submissionErrorCode, setSubmissionErrorCode] = useState("");
+  const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
-  const [submissionForm, setSubmissionForm] = useState(emptySubmissionForm());
+  const nextSubmissionBlockIdRef = useRef(2);
+  const [submissionBlocks, setSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminUserForm, setAdminUserForm] = useState(emptyAdminUserForm());
   const [adminUserEdits, setAdminUserEdits] = useState({});
@@ -143,9 +154,94 @@ export default function App() {
   const [regeneratingImageJobId, setRegeneratingImageJobId] = useState("");
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
-  const [showSiteSuggestions, setShowSiteSuggestions] = useState(false);
+  const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
+  const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
+  const inactivityTimerRef = useRef(null);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
+
+  const resetSubmissionBlocks = () => {
+    nextSubmissionBlockIdRef.current = 2;
+    setSubmissionBlocks([createSubmissionBlock(1)]);
+    setSiteSuggestionsBlockId(null);
+    setUploadProgressBlockId(null);
+  };
+
+  const resetClientSubmissionState = () => {
+    setClients([]);
+    setSites([]);
+    setError("");
+    setSuccess("");
+    resetSubmissionBlocks();
+    setShowSubmissionSuccessModal(false);
+    setShowSubmissionErrorModal(false);
+    setSubmissionErrorCode("");
+    setSubmissionErrorMessage("");
+  };
+
+  const setSubmissionBlockField = (blockId, field, value) => {
+    setSubmissionBlocks((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
+  };
+
+  const addSubmissionBlock = (afterBlockId) => {
+    setSubmissionBlocks((prev) => {
+      const nextId = nextSubmissionBlockIdRef.current;
+      nextSubmissionBlockIdRef.current += 1;
+      const nextBlock = createSubmissionBlock(nextId);
+      const insertIndex = prev.findIndex((block) => block.id === afterBlockId);
+      if (insertIndex < 0) return [...prev, nextBlock];
+      return [...prev.slice(0, insertIndex + 1), nextBlock, ...prev.slice(insertIndex + 1)];
+    });
+  };
+
+  const removeSubmissionBlock = (blockId) => {
+    setSubmissionBlocks((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((block) => block.id !== blockId);
+      return next.length ? next : [createSubmissionBlock(1)];
+    });
+    setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
+    setUploadProgressBlockId((prev) => (prev === blockId ? null : prev));
+  };
+
+  const openSubmissionErrorSupportModal = ({ statusCode, message, blockIndex }) => {
+    const code = statusCode ? `HTTP_${statusCode}` : "CLIENT_SUBMIT_UNKNOWN";
+    const prefix = typeof blockIndex === "number" ? `Block ${blockIndex + 1}: ` : "";
+    setSubmissionErrorCode(code);
+    setSubmissionErrorMessage(`${prefix}${message || t("errorRequestFailed")}`);
+    setShowSubmissionErrorModal(true);
+  };
+
+  const getSubmissionBlockError = (block, { orders, clientName }) => {
+    const targetSite = (block.target_site || "").trim();
+    if (!targetSite) return t("errorTargetRequired");
+    if (!clientName) return t("errorClientRequired");
+    const sourceType = (block.source_type || "").trim();
+    if (!sourceType) return t("errorFileTypeRequired");
+    if (sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
+    if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
+    if (orders && !(block.anchor || "").trim() && !(block.topic || "").trim()) {
+      return t("errorOrderAnchorOrTopicRequired");
+    }
+    return "";
+  };
+
+  const buildSubmissionFormData = (block, { orders, clientName }) => {
+    const formData = new FormData();
+    formData.append("target_site", block.target_site.trim());
+    formData.append("client_name", clientName);
+    formData.append("request_kind", orders ? "order" : "guest_post");
+    formData.append("source_type", block.source_type);
+    formData.append("execution_mode", "async");
+    if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
+    if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
+    if (block.source_type === "google-doc") {
+      formData.append("doc_url", (block.doc_url || "").trim());
+    } else if (block.docx_file) {
+      formData.append("docx_file", block.docx_file);
+    }
+    return formData;
+  };
 
   useEffect(() => {
     if (theme === "system") {
@@ -301,7 +397,9 @@ export default function App() {
       };
 
       xhr.onerror = () => {
-        reject(new Error(t("errorBackendUnreachable")));
+        const networkError = new Error(t("errorBackendUnreachable"));
+        networkError.statusCode = 0;
+        reject(networkError);
       };
 
       xhr.onload = () => {
@@ -318,7 +416,9 @@ export default function App() {
           return;
         }
         const message = payload?.detail || payload?.error || text || t("errorRequestFailed");
-        reject(new Error(message));
+        const requestError = new Error(message);
+        requestError.statusCode = xhr.status;
+        reject(requestError);
       };
 
       xhr.send(formData);
@@ -419,6 +519,61 @@ export default function App() {
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+      return;
+    }
+
+    const timeoutMs = currentUser.role === "admin" ? ADMIN_IDLE_LOGOUT_MS : CLIENT_IDLE_LOGOUT_MS;
+
+    const clearInactivityTimer = () => {
+      if (!inactivityTimerRef.current) return;
+      window.clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    };
+
+    const forceLogoutForInactivity = async () => {
+      try {
+        await fetch(`${baseApiUrl}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+        });
+      } catch {
+        // Best-effort logout; local state is still cleared.
+      }
+
+      setCurrentUser(null);
+      setAdminUsers([]);
+      setAdminUserEdits({});
+      setAdminUserForm(emptyAdminUserForm());
+      resetClientSubmissionState();
+      setAuthError("Logged out due to inactivity.");
+    };
+
+    const resetInactivityTimer = () => {
+      clearInactivityTimer();
+      inactivityTimerRef.current = window.setTimeout(forceLogoutForInactivity, timeoutMs);
+    };
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    }
+
+    resetInactivityTimer();
+
+    return () => {
+      clearInactivityTimer();
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, resetInactivityTimer);
+      }
+    };
+  }, [currentUser]);
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -568,102 +723,88 @@ export default function App() {
       // Best-effort logout; local state is still cleared.
     }
     setCurrentUser(null);
-    setClients([]);
-    setSites([]);
     setAdminUsers([]);
     setAdminUserEdits({});
     setAdminUserForm(emptyAdminUserForm());
-    setError("");
-    setSuccess("");
-    setSubmissionForm(emptySubmissionForm());
+    resetClientSubmissionState();
   };
 
   const submitGuestPost = async (event) => {
     event.preventDefault();
     setError("");
     setSuccess("");
+    setShowSubmissionErrorModal(false);
+    setSubmissionErrorCode("");
+    setSubmissionErrorMessage("");
 
     if (activeSection === "admin") {
       setError(t("errorSelectClientSection"));
       return;
     }
-
-    if (activeSection === "orders") {
-      setError(t("ordersNotConnected"));
-      return;
-    }
-
-    const effectiveSourceType = submissionForm.source_type;
-    const targetSite = submissionForm.target_site.trim();
     const resolvedClientName = ((clients[0]?.name) || "").trim();
-
-    if (!targetSite) {
-      setError(t("errorTargetRequired"));
-      return;
-    }
-    if (!resolvedClientName) {
-      setError(t("errorClientRequired"));
-      return;
-    }
-    if (!effectiveSourceType) {
-      setError(t("errorFileTypeRequired"));
-      return;
-    }
-
-    if (effectiveSourceType === "google-doc" && !submissionForm.doc_url.trim()) {
-      setError(t("errorGoogleDocRequired"));
-      return;
-    }
-
-    if (effectiveSourceType === "word-doc" && !submissionForm.docx_file) {
-      setError(t("errorDocxRequired"));
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("target_site", targetSite);
-    formData.append("client_name", resolvedClientName);
-    formData.append("request_kind", isOrders ? "order" : "guest_post");
-    formData.append("source_type", effectiveSourceType);
-    formData.append("execution_mode", "async");
-    if (submissionForm.anchor.trim()) formData.append("anchor", submissionForm.anchor.trim());
-    if (submissionForm.topic.trim()) formData.append("topic", submissionForm.topic.trim());
-
-    if (effectiveSourceType === "google-doc") {
-      formData.append("doc_url", submissionForm.doc_url.trim());
-    } else if (submissionForm.docx_file) {
-      formData.append("docx_file", submissionForm.docx_file);
+    const blocks = submissionBlocks;
+    for (let index = 0; index < blocks.length; index += 1) {
+      const validationError = getSubmissionBlockError(blocks[index], {
+        orders: isOrders,
+        clientName: resolvedClientName,
+      });
+      if (validationError) {
+        setError(`Block ${index + 1}: ${validationError}`);
+        return;
+      }
     }
 
     try {
       setSubmitting(true);
-      if (effectiveSourceType === "word-doc" && submissionForm.docx_file) {
-        setUploadProgress(0);
-        await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
-        setUploadProgress(100);
-      } else {
-        const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
-          method: "POST",
-          credentials: "include",
-          body: formData,
+      for (let index = 0; index < blocks.length; index += 1) {
+        const block = blocks[index];
+        const formData = buildSubmissionFormData(block, {
+          orders: isOrders,
+          clientName: resolvedClientName,
         });
+        try {
+          if (block.source_type === "word-doc" && block.docx_file) {
+            setUploadProgressBlockId(block.id);
+            setUploadProgress(0);
+            await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
+            setUploadProgress(100);
+          } else {
+            setUploadProgressBlockId(null);
+            const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
+              method: "POST",
+              credentials: "include",
+              body: formData,
+            });
 
-        if (!response.ok) {
-          const detail = await readApiError(response, t("errorRequestFailed"));
-          throw new Error(detail);
+            if (!response.ok) {
+              const detail = await readApiError(response, t("errorRequestFailed"));
+              const requestError = new Error(detail || t("errorRequestFailed"));
+              requestError.statusCode = response.status;
+              throw requestError;
+            }
+            await response.json().catch(() => ({}));
+          }
+        } catch (err) {
+          setError(`Block ${index + 1}: ${err?.message || t("errorRequestFailed")}`);
+          openSubmissionErrorSupportModal({
+            statusCode: err?.statusCode,
+            message: err?.message,
+            blockIndex: index,
+          });
+          throw err;
         }
-        await response.json().catch(() => ({}));
       }
+
       setShowSubmissionSuccessModal(true);
-      setSubmissionForm((prev) => ({
-        ...emptySubmissionForm(),
-        target_site: prev.target_site,
-      }));
+      resetSubmissionBlocks();
     } catch (err) {
-      setError(err.message);
+      if (!err) {
+        setError(t("errorRequestFailed"));
+      }
     } finally {
       setSubmitting(false);
       setUploadProgress(null);
+      setUploadProgressBlockId(null);
     }
   };
 
@@ -829,13 +970,15 @@ export default function App() {
   const activeCoveragePercent = clients.length
     ? Math.round((mappedClientUserCount / Math.max(clientUserCount, 1)) * 100)
     : 0;
-  const siteQuery = (submissionForm.target_site || "").trim().toLowerCase();
-  const filteredSites = sites.filter((site) => {
-    if (!siteQuery) return true;
-    const url = (site.site_url || "").toLowerCase();
-    const name = (site.name || "").toLowerCase();
-    return url.includes(siteQuery) || name.includes(siteQuery);
-  });
+  const getFilteredSitesForQuery = (query) => {
+    const normalizedQuery = (query || "").trim().toLowerCase();
+    return sites.filter((site) => {
+      if (!normalizedQuery) return true;
+      const url = (site.site_url || "").toLowerCase();
+      const name = (site.name || "").toLowerCase();
+      return url.includes(normalizedQuery) || name.includes(normalizedQuery);
+    });
+  };
 
   return (
     <div className="app-shell">
@@ -1094,127 +1237,162 @@ export default function App() {
             <div className="panel form-panel">
               <h2>{isOrders ? t("formOrder") : t("formSubmission")}</h2>
               <form className="guest-form" onSubmit={submitGuestPost}>
-                <div>
-                  <label>{t("targetWebsite")}</label>
-                  <div className="site-suggest-wrap">
-                    <input
-                      value={submissionForm.target_site}
-                      onFocus={() => setShowSiteSuggestions(true)}
-                      onBlur={() => setTimeout(() => setShowSiteSuggestions(false), 120)}
-                      onChange={(e) => {
-                        setSubmissionForm((prev) => ({ ...prev, target_site: e.target.value }));
-                        setShowSiteSuggestions(true);
-                      }}
-                      placeholder={t("placeholderTargetWebsite")}
-                      required
-                    />
-                    {showSiteSuggestions && filteredSites.length > 0 ? (
-                      <div className="site-suggest-list">
-                        {filteredSites.slice(0, 30).map((site) => (
+                <div className="submission-blocks">
+                  {submissionBlocks.map((block, blockIndex) => {
+                    const blockFilteredSites = getFilteredSitesForQuery(block.target_site);
+                    return (
+                      <div key={block.id} className="submission-block panel">
+                        <div className="submission-block-header">
+                          <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
+                          {submissionBlocks.length > 1 ? (
+                            <button
+                              className="btn secondary"
+                              type="button"
+                              onClick={() => removeSubmissionBlock(block.id)}
+                              disabled={submitting}
+                            >
+                              {t("removeBlock")}
+                            </button>
+                          ) : null}
+                        </div>
+
+                        <div>
+                          <label>{t("targetWebsite")}</label>
+                          <div className="site-suggest-wrap">
+                            <input
+                              value={block.target_site}
+                              onFocus={() => setSiteSuggestionsBlockId(block.id)}
+                              onBlur={() => setTimeout(() => {
+                                setSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
+                              }, 120)}
+                              onChange={(e) => {
+                                setSubmissionBlockField(block.id, "target_site", e.target.value);
+                                setSiteSuggestionsBlockId(block.id);
+                              }}
+                              placeholder={t("placeholderTargetWebsite")}
+                              required
+                            />
+                            {siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0 ? (
+                              <div className="site-suggest-list">
+                                {blockFilteredSites.slice(0, 30).map((site) => (
+                                  <button
+                                    key={site.id}
+                                    type="button"
+                                    className="site-suggest-item"
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                      setSubmissionBlockField(block.id, "target_site", site.site_url);
+                                      setSiteSuggestionsBlockId(null);
+                                    }}
+                                  >
+                                    <span>{site.site_url}</span>
+                                    <span className="muted-text small-text">{site.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label>{t("fileType")}</label>
+                          <div className="toggle source-toggle">
+                            <button
+                              type="button"
+                              className={block.source_type === "google-doc" ? "active" : ""}
+                              onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
+                            >
+                              {t("googleDoc")}
+                            </button>
+                            <button
+                              type="button"
+                              className={block.source_type === "word-doc" ? "active" : ""}
+                              onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
+                            >
+                              {t("docxFile")}
+                            </button>
+                          </div>
+                        </div>
+
+                        {block.source_type === "google-doc" ? (
+                          <div>
+                            <label>{t("googleDocLink")}</label>
+                            <input
+                              type="url"
+                              value={block.doc_url}
+                              onChange={(e) => setSubmissionBlockField(block.id, "doc_url", e.target.value)}
+                              placeholder={t("placeholderGoogleDoc")}
+                              required
+                            />
+                          </div>
+                        ) : block.source_type === "word-doc" ? (
+                          <div>
+                            <label>{t("fileUpload")}</label>
+                            <input
+                              type="file"
+                              accept=".doc,.docx"
+                              required
+                              onChange={(e) => {
+                                const file = e.target.files?.[0] || null;
+                                setSubmissionBlockField(block.id, "docx_file", file);
+                              }}
+                            />
+                          </div>
+                        ) : null}
+
+                        {isOrders ? (
+                          <>
+                            <div>
+                              <label>{t("anchor")}</label>
+                              <input
+                                type="text"
+                                value={block.anchor}
+                                onChange={(e) => setSubmissionBlockField(block.id, "anchor", e.target.value)}
+                                placeholder={t("placeholderAnchor")}
+                              />
+                            </div>
+                            <div>
+                              <label>{t("topic")}</label>
+                              <input
+                                type="text"
+                                value={block.topic}
+                                onChange={(e) => setSubmissionBlockField(block.id, "topic", e.target.value)}
+                                placeholder={t("placeholderTopic")}
+                              />
+                            </div>
+                          </>
+                        ) : null}
+
+                        <div className="submission-block-actions">
                           <button
-                            key={site.id}
+                            className="btn secondary"
                             type="button"
-                            className="site-suggest-item"
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              setSubmissionForm((prev) => ({ ...prev, target_site: site.site_url }));
-                              setShowSiteSuggestions(false);
-                            }}
+                            onClick={() => addSubmissionBlock(block.id)}
+                            disabled={submitting}
                           >
-                            <span>{site.site_url}</span>
-                            <span className="muted-text small-text">{site.name}</span>
+                            {t("addAnotherBlock")}
                           </button>
-                        ))}
+                        </div>
+
+                        {submitting && uploadProgressBlockId === block.id && uploadProgress !== null ? (
+                          <div className="upload-meter" aria-live="polite">
+                            <div className="upload-meter-row">
+                              <span>{t("uploadingFile")}</span>
+                              <strong>{uploadProgress}%</strong>
+                            </div>
+                            <div className="upload-meter-track">
+                              <div className="upload-meter-fill" style={{ width: `${uploadProgress}%` }} />
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
+                    );
+                  })}
                 </div>
-
-                {!isOrders ? (
-                  <div>
-                    <label>{t("fileType")}</label>
-                    <div className="toggle source-toggle">
-                      <button
-                        type="button"
-                        className={submissionForm.source_type === "google-doc" ? "active" : ""}
-                        onClick={() => setSubmissionForm((prev) => ({ ...prev, source_type: "google-doc" }))}
-                      >
-                        {t("googleDoc")}
-                      </button>
-                      <button
-                        type="button"
-                        className={submissionForm.source_type === "word-doc" ? "active" : ""}
-                        onClick={() => setSubmissionForm((prev) => ({ ...prev, source_type: "word-doc" }))}
-                      >
-                        {t("docxFile")}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {!isOrders && submissionForm.source_type === "google-doc" ? (
-                  <div>
-                    <label>{t("googleDocLink")}</label>
-                    <input
-                      type="url"
-                      value={submissionForm.doc_url}
-                      onChange={(e) => setSubmissionForm((prev) => ({ ...prev, doc_url: e.target.value }))}
-                      placeholder={t("placeholderGoogleDoc")}
-                      required
-                    />
-                  </div>
-                ) : submissionForm.source_type === "word-doc" ? (
-                  <div>
-                    <label>{t("fileUpload")}</label>
-                    <input
-                      type="file"
-                      accept=".doc,.docx"
-                      required
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        setSubmissionForm((prev) => ({ ...prev, docx_file: file }));
-                      }}
-                    />
-                  </div>
-                ) : null}
-
-                {isOrders ? (
-                  <>
-                    <div>
-                      <label>{t("anchor")}</label>
-                      <input
-                        type="text"
-                        value={submissionForm.anchor}
-                        onChange={(e) => setSubmissionForm((prev) => ({ ...prev, anchor: e.target.value }))}
-                        placeholder={t("placeholderAnchor")}
-                      />
-                    </div>
-                    <div>
-                      <label>{t("topic")}</label>
-                      <input
-                        type="text"
-                        value={submissionForm.topic}
-                        onChange={(e) => setSubmissionForm((prev) => ({ ...prev, topic: e.target.value }))}
-                        placeholder={t("placeholderTopic")}
-                      />
-                    </div>
-                  </>
-                ) : null}
 
                 <button className="btn submit-btn" type="submit" disabled={submitting}>
                   {submitting ? t("submitting") : t("submitForReview")}
                 </button>
-                {submitting && submissionForm.source_type === "word-doc" && uploadProgress !== null ? (
-                  <div className="upload-meter" aria-live="polite">
-                    <div className="upload-meter-row">
-                      <span>{t("uploadingFile")}</span>
-                      <strong>{uploadProgress}%</strong>
-                    </div>
-                    <div className="upload-meter-track">
-                      <div className="upload-meter-fill" style={{ width: `${uploadProgress}%` }} />
-                    </div>
-                  </div>
-                ) : null}
               </form>
             </div>
           )}
@@ -1226,8 +1404,14 @@ export default function App() {
         onClose={() => setShowSubmissionSuccessModal(false)}
         onCreateAnother={() => {
           setShowSubmissionSuccessModal(false);
-          setActiveSection("guest-posts");
         }}
+      />
+      <SubmissionErrorModal
+        t={t}
+        open={showSubmissionErrorModal}
+        errorCode={submissionErrorCode}
+        errorMessage={submissionErrorMessage}
+        onClose={() => setShowSubmissionErrorModal(false)}
       />
     </div>
   );
@@ -1246,6 +1430,30 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
           </button>
           <button className="btn" type="button" onClick={onCreateAnother}>
             {t("createAnotherPost")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SubmissionErrorModal({ t, open, errorCode, errorMessage, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="submission-error-title">
+      <div className="modal-card panel">
+        <h3 id="submission-error-title">{t("submissionErrorTitle")}</h3>
+        <p className="muted-text">{t("submissionErrorBody")}</p>
+        <p className="muted-text">
+          <strong>{t("errorCodeLabel")}:</strong> {errorCode || "CLIENT_SUBMIT_UNKNOWN"}
+        </p>
+        {errorMessage ? <p className="muted-text">{errorMessage}</p> : null}
+        <div className="modal-actions">
+          <a className="btn secondary" href="mailto:aat@elci.cloud?subject=Portal%20submission%20error%20support">
+            {t("contactSupport")}
+          </a>
+          <button className="btn" type="button" onClick={onClose}>
+            {t("close")}
           </button>
         </div>
       </div>

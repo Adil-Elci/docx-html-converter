@@ -456,6 +456,35 @@ input:disabled {
   gap: 16px;
 }
 
+.submission-blocks {
+  display: grid;
+  gap: 14px;
+}
+
+.submission-block {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--panel-3) 45%, transparent);
+}
+
+.submission-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.submission-block-header h3 {
+  margin: 0;
+}
+
+.submission-block-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .inline {
   display: flex;
   gap: 12px;

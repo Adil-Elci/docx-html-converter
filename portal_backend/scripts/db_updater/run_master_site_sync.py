@@ -208,6 +208,61 @@ def _load_site_ids_by_url(engine: Engine) -> dict[str, Any]:
     return out
 
 
+def _publishing_sites_name_column(table: Table) -> str:
+    if "publishing_site_name" in table.c:
+        return "publishing_site_name"
+    return "name"
+
+
+def _collect_missing_publishing_sites(engine: Engine, master_site_urls: set[str]) -> list[dict[str, Any]]:
+    table = _reflect_table(engine, "publishing_sites")
+    name_col = _publishing_sites_name_column(table)
+    rows: list[dict[str, Any]] = []
+    with engine.connect() as conn:
+        for rec in conn.execute(select(table.c.id, table.c.publishing_site_url, table.c[name_col])).mappings():
+            normalized = _normalize_site_url(rec.get("publishing_site_url"))
+            if not normalized or normalized in master_site_urls:
+                continue
+            rows.append(
+                {
+                    "publishing_site_id": rec.get("id"),
+                    "publishing_site_url": rec.get("publishing_site_url"),
+                    "publishing_site_name": rec.get(name_col),
+                }
+            )
+    return rows
+
+
+def _find_site_delete_blockers(engine: Engine, site_ids: list[Any]) -> dict[Any, list[str]]:
+    if not site_ids:
+        return {}
+    blockers: dict[Any, list[str]] = {}
+    checks = [
+        ("submissions", "publishing_site_id"),
+        ("jobs", "publishing_site_id"),
+    ]
+    with engine.connect() as conn:
+        for table_name, col_name in checks:
+            table = _reflect_table(engine, table_name)
+            if col_name not in table.c:
+                continue
+            rows = conn.execute(select(table.c[col_name]).where(table.c[col_name].in_(site_ids)).distinct()).fetchall()
+            for (site_id,) in rows:
+                blockers.setdefault(site_id, []).append(table_name)
+    return blockers
+
+
+def _delete_publishing_sites(engine: Engine, site_ids: list[Any], *, dry_run: bool) -> int:
+    if not site_ids:
+        return 0
+    if dry_run:
+        return len(site_ids)
+    table = _reflect_table(engine, "publishing_sites")
+    with engine.begin() as conn:
+        result = conn.execute(table.delete().where(table.c.id.in_(site_ids)))
+        return int(result.rowcount or 0)
+
+
 def _prepare_publishing_sites_rows(master_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -300,6 +355,7 @@ def run_master_sync_for_file(
     file_path: str | Path,
     *,
     dry_run: bool = False,
+    delete_missing_sites: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     base = _script_dir()
@@ -337,6 +393,37 @@ def run_master_sync_for_file(
         match_columns=["publishing_site_url"],
         dry_run=dry_run,
     )
+
+    missing_sites_total = 0
+    missing_sites_delete_candidates = 0
+    missing_sites_deleted = 0
+    missing_sites_blocked = 0
+    missing_sites_preview: list[str] = []
+    if delete_missing_sites:
+        _emit_progress(progress_callback, 68, "prune_missing_sites", "Checking sites missing from master file.")
+        master_site_urls = {row["publishing_site_url"] for row in master_rows if row.get("publishing_site_url")}
+        missing_sites = _collect_missing_publishing_sites(engine, master_site_urls)
+        missing_sites_total = len(missing_sites)
+        missing_sites_preview = [str(item.get("publishing_site_url") or "") for item in missing_sites[:10]]
+        blockers = _find_site_delete_blockers(engine, [item["publishing_site_id"] for item in missing_sites if item.get("publishing_site_id")])
+        deletable_ids: list[Any] = []
+        for item in missing_sites:
+            site_id = item.get("publishing_site_id")
+            if site_id in blockers:
+                missing_sites_blocked += 1
+                issues.append(
+                    updater.RowIssue(
+                        row_number=0,
+                        reason=f"Cannot delete missing publishing site; referenced by {', '.join(sorted(set(blockers[site_id])))}",
+                        row=item,
+                    )
+                )
+                continue
+            if site_id is not None:
+                deletable_ids.append(site_id)
+        missing_sites_delete_candidates = len(deletable_ids)
+        _emit_progress(progress_callback, 72, "prune_missing_sites", "Deleting sites missing from master file.")
+        missing_sites_deleted = _delete_publishing_sites(engine, deletable_ids, dry_run=dry_run)
 
     _emit_progress(progress_callback, 76, "loading_site_ids", "Loading publishing site IDs.")
     site_ids_by_url = _load_site_ids_by_url(engine)
@@ -381,6 +468,7 @@ def run_master_sync_for_file(
         "timestamp_utc": stamp,
         "file_name": file_path.name,
         "dry_run": dry_run,
+        "delete_missing_sites": delete_missing_sites,
         "master_rows_input": len(raw_rows),
         "master_rows_prepared": len(master_rows),
         "master_rows_to_write": len(master_rows_to_write),
@@ -390,6 +478,11 @@ def run_master_sync_for_file(
         "credentials_rows_to_write": len(credential_rows_to_write),
         "admin_credentials_rows": len(admin_credential_rows),
         "admin_credentials_rows_to_write": len(admin_credential_rows_to_write),
+        "missing_sites_in_db_not_in_master": missing_sites_total,
+        "missing_sites_delete_candidates": missing_sites_delete_candidates,
+        "missing_sites_deleted": missing_sites_deleted,
+        "missing_sites_blocked": missing_sites_blocked,
+        "missing_sites_preview": missing_sites_preview,
         "issues_count": len(issues),
         "issues_preview": [{"row_number": i.row_number, "reason": i.reason} for i in issues[:20]],
     }
@@ -402,7 +495,7 @@ def run_master_sync_for_file(
     return report
 
 
-def run_master_sync(*, dry_run: bool = False) -> int:
+def run_master_sync(*, dry_run: bool = False, delete_missing_sites: bool = False) -> int:
     base = _script_dir()
     inbox_dir = base / "master_site_info"
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -419,7 +512,7 @@ def run_master_sync(*, dry_run: bool = False) -> int:
 
     file_path = files[0]
     try:
-        report = run_master_sync_for_file(file_path, dry_run=dry_run)
+        report = run_master_sync_for_file(file_path, dry_run=dry_run, delete_missing_sites=delete_missing_sites)
         print(f"Processed file: {file_path.name}")
         print(f"Prepared rows: {report['master_rows_prepared']}")
         print(
@@ -448,12 +541,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Sync one master site file from db_updater/master_site_info into master_site_info, publishing_sites, and publishing_site_credentials."
     )
     parser.add_argument("--dry-run", action="store_true", help="Validate and preview without writing DB changes.")
+    parser.add_argument(
+        "--delete-missing-sites",
+        action="store_true",
+        help="Delete publishing_sites rows not present in the master file (skips rows still referenced by submissions/jobs).",
+    )
     return parser
 
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    return run_master_sync(dry_run=bool(args.dry_run))
+    return run_master_sync(
+        dry_run=bool(args.dry_run),
+        delete_missing_sites=bool(args.delete_missing_sites),
+    )
 
 
 if __name__ == "__main__":

@@ -1127,6 +1127,12 @@ input:disabled {
   flex-wrap: wrap;
 }
 
+.db-updater-options {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 420px;
+}
+
 .db-updater-checkbox {
   display: flex;
   align-items: center;
@@ -1152,6 +1158,10 @@ input:disabled {
 .db-updater-checkbox span {
   line-height: 1.35;
   white-space: normal;
+}
+
+.db-updater-checkbox-danger span {
+  color: color-mix(in srgb, var(--danger) 78%, var(--ink));
 }
 
 .db-updater-submit {

@@ -135,6 +135,7 @@ export default function App() {
   const [resetMode, setResetMode] = useState(() => getResetModeFromUrl());
   const [dbUpdaterFile, setDbUpdaterFile] = useState(null);
   const [dbUpdaterDryRun, setDbUpdaterDryRun] = useState(true);
+  const [dbUpdaterDeleteMissingSites, setDbUpdaterDeleteMissingSites] = useState(false);
   const [dbUpdaterSubmitting, setDbUpdaterSubmitting] = useState(false);
   const [dbUpdaterUploadPercent, setDbUpdaterUploadPercent] = useState(0);
   const [dbUpdaterJobId, setDbUpdaterJobId] = useState("");
@@ -1063,6 +1064,7 @@ export default function App() {
       const formData = new FormData();
       formData.append("file", dbUpdaterFile);
       formData.append("dry_run", dbUpdaterDryRun ? "true" : "false");
+      formData.append("delete_missing_sites", dbUpdaterDeleteMissingSites ? "true" : "false");
       const payload = await api.upload("/db-updater/master-site-sync/jobs", formData, {
         onProgress: (percent) => setDbUpdaterUploadPercent(percent),
       });
@@ -1094,6 +1096,8 @@ export default function App() {
         onFileChange={setDbUpdaterFile}
         dryRun={dbUpdaterDryRun}
         onDryRunChange={setDbUpdaterDryRun}
+        deleteMissingSites={dbUpdaterDeleteMissingSites}
+        onDeleteMissingSitesChange={setDbUpdaterDeleteMissingSites}
         onSubmit={submitDbUpdaterFile}
         submitting={dbUpdaterSubmitting}
         progressPercent={overallProgress}
@@ -1764,6 +1768,8 @@ function DbUpdaterWorkspace({
   onFileChange,
   dryRun,
   onDryRunChange,
+  deleteMissingSites,
+  onDeleteMissingSitesChange,
   onSubmit,
   submitting,
   progressPercent,
@@ -1809,15 +1815,26 @@ function DbUpdaterWorkspace({
           </label>
 
           <div className="db-updater-form-controls">
-            <label className="db-updater-checkbox">
-              <input
-                type="checkbox"
-                checked={dryRun}
-                onChange={(event) => onDryRunChange(event.target.checked)}
-                disabled={submitting}
-              />
-              <span>Dry run (preview only, no DB writes)</span>
-            </label>
+            <div className="db-updater-options">
+              <label className="db-updater-checkbox">
+                <input
+                  type="checkbox"
+                  checked={dryRun}
+                  onChange={(event) => onDryRunChange(event.target.checked)}
+                  disabled={submitting}
+                />
+                <span>Dry run (preview only, no DB writes)</span>
+              </label>
+              <label className="db-updater-checkbox db-updater-checkbox-danger">
+                <input
+                  type="checkbox"
+                  checked={deleteMissingSites}
+                  onChange={(event) => onDeleteMissingSitesChange(event.target.checked)}
+                  disabled={submitting}
+                />
+                <span>Delete sites missing from master file (skips sites referenced by submissions/jobs)</span>
+              </label>
+            </div>
 
             <button className="btn submit-btn db-updater-submit" type="submit" disabled={submitting || !file}>
               {submitting ? "Running sync..." : "Upload & Sync"}
@@ -1866,6 +1883,26 @@ function DbUpdaterWorkspace({
             <div className="db-updater-report-card">
               <span className="stat-label">Mode</span>
               <strong>{report.dry_run ? "Dry Run" : "Live Sync"}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Delete Missing</span>
+              <strong>{report.delete_missing_sites ? "On" : "Off"}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Missing in DB</span>
+              <strong>{report.missing_sites_in_db_not_in_master || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Delete Candidates</span>
+              <strong>{report.missing_sites_delete_candidates || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Deleted</span>
+              <strong>{report.missing_sites_deleted || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Blocked Deletes</span>
+              <strong>{report.missing_sites_blocked || 0}</strong>
             </div>
           </div>
         ) : null}

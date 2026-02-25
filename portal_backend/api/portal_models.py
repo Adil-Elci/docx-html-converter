@@ -135,6 +135,27 @@ class MasterSiteInfo(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class DbUpdaterSyncJob(Base):
+    __tablename__ = "db_updater_sync_jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','running','completed','failed')", name="db_updater_sync_jobs_status_check"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_type = Column(Text, nullable=False, default="master_site_sync")
+    file_name = Column(Text, nullable=False)
+    dry_run = Column(Boolean, nullable=False, default=True)
+    status = Column(Text, nullable=False, default="queued")
+    progress_percent = Column(Integer, nullable=False, default=0)
+    stage = Column(Text, nullable=True)
+    message = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    report = Column(JSONB, nullable=True)
+    created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class SiteCredential(Base):
     __tablename__ = "publishing_site_credentials"
     __table_args__ = (

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import os
-import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
-from uuid import uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy.orm import Session
 
 from ..auth import require_admin
-from ..portal_models import User
+from ..db import get_db, get_sessionmaker
+from ..portal_models import DbUpdaterSyncJob, User
 from ...scripts.db_updater.run_master_site_sync import run_master_sync_for_file
 
 router = APIRouter(prefix="/db-updater", tags=["db_updater"])
@@ -19,25 +19,46 @@ router = APIRouter(prefix="/db-updater", tags=["db_updater"])
 _ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 _MAX_UPLOAD_BYTES = int(os.getenv("DB_UPDATER_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 _UPLOAD_DIR = Path(os.getenv("DB_UPDATER_UPLOAD_DIR", "/tmp/db_updater_uploads")).resolve()
-_JOBS_LOCK = threading.Lock()
-_JOBS: dict[str, dict[str, Any]] = {}
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _job_to_payload(job: DbUpdaterSyncJob) -> dict[str, Any]:
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "progress_percent": int(job.progress_percent or 0),
+        "stage": job.stage or "",
+        "message": job.message or "",
+        "error": job.error or "",
+        "dry_run": bool(job.dry_run),
+        "file_name": job.file_name,
+        "report": job.report,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
 
 
-def _set_job(job_id: str, **updates: Any) -> None:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id, {})
-        job.update(updates)
-        job["updated_at"] = _now_iso()
-        _JOBS[job_id] = job
+def _update_job(job_id: str, **updates: Any) -> None:
+    session = get_sessionmaker()()
+    try:
+        job_uuid = UUID(str(job_id))
+        job = session.query(DbUpdaterSyncJob).filter(DbUpdaterSyncJob.id == job_uuid).first()
+        if not job:
+            return
+        for key, value in updates.items():
+            if hasattr(job, key):
+                setattr(job, key, value)
+        session.add(job)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def _progress_cb(job_id: str):
     def inner(percent: int, stage: str, message: str | None) -> None:
-        _set_job(
+        _update_job(
             job_id,
             status="running" if percent < 100 else "completed",
             progress_percent=int(percent),
@@ -51,7 +72,7 @@ def _progress_cb(job_id: str):
 def _run_job(job_id: str, upload_path: Path, dry_run: bool) -> None:
     try:
         report = run_master_sync_for_file(upload_path, dry_run=dry_run, progress_callback=_progress_cb(job_id))
-        _set_job(
+        _update_job(
             job_id,
             status="completed",
             progress_percent=100,
@@ -60,7 +81,7 @@ def _run_job(job_id: str, upload_path: Path, dry_run: bool) -> None:
             report=report,
         )
     except Exception as exc:
-        _set_job(
+        _update_job(
             job_id,
             status="failed",
             stage="failed",
@@ -78,7 +99,8 @@ def _run_job(job_id: str, upload_path: Path, dry_run: bool) -> None:
 async def create_master_site_sync_job(
     file: UploadFile = File(...),
     dry_run: bool = Form(False),
-    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
 ) -> dict[str, Any]:
     file_name = (file.filename or "").strip()
     if not file_name:
@@ -99,10 +121,7 @@ async def create_master_site_sync_job(
         tmp.write(payload)
         upload_path = Path(tmp.name)
 
-    job_id = uuid4().hex
-    _set_job(
-        job_id,
-        id=job_id,
+    job = DbUpdaterSyncJob(
         status="queued",
         progress_percent=2,
         stage="queued",
@@ -111,27 +130,43 @@ async def create_master_site_sync_job(
         dry_run=bool(dry_run),
         file_name=file_name,
         report=None,
-        created_at=_now_iso(),
+        created_by_user_id=current_user.id,
     )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    job_id = str(job.id)
 
+    import threading
     thread = threading.Thread(target=_run_job, args=(job_id, upload_path, bool(dry_run)), daemon=True)
     thread.start()
     return {"job_id": job_id, "status": "queued"}
 
 
 @router.get("/master-site-sync/jobs/{job_id}")
-def get_master_site_sync_job(job_id: str, _: User = Depends(require_admin)) -> dict[str, Any]:
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if not job:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
-        return dict(job)
+def get_master_site_sync_job(job_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        job_uuid = UUID(str(job_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.") from exc
+    job = db.query(DbUpdaterSyncJob).filter(DbUpdaterSyncJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    return _job_to_payload(job)
 
 
 @router.get("/master-site-sync/jobs")
-def list_master_site_sync_jobs(limit: int = 20, _: User = Depends(require_admin)) -> dict[str, Any]:
+def list_master_site_sync_jobs(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 20), 100))
-    with _JOBS_LOCK:
-        jobs = [dict(item) for item in _JOBS.values()]
-    jobs.sort(key=lambda row: (row.get("updated_at") or "", row.get("created_at") or ""), reverse=True)
-    return {"items": jobs[:safe_limit]}
+    jobs = (
+        db.query(DbUpdaterSyncJob)
+        .filter(DbUpdaterSyncJob.job_type == "master_site_sync")
+        .order_by(DbUpdaterSyncJob.updated_at.desc(), DbUpdaterSyncJob.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    return {"items": [_job_to_payload(job) for job in jobs]}

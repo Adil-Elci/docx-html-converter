@@ -19,6 +19,7 @@ from .routers import (
     automation_router,
     client_site_access_router,
     clients_router,
+    db_updater_router,
     jobs_router,
     site_credentials_router,
     sites_router,
@@ -43,6 +44,7 @@ if cors_origins:
 app.include_router(clients_router)
 app.include_router(auth_router)
 app.include_router(admin_users_router)
+app.include_router(db_updater_router)
 app.include_router(automation_router)
 app.include_router(sites_router)
 app.include_router(site_credentials_router)

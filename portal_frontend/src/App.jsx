@@ -68,6 +68,7 @@ const emptyAdminUserForm = () => ({
 const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
+const defaultDbUpdaterHost = "updatedb.elci.live";
 const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs"];
 const CLIENT_SECTIONS = ["dashboard", "guest-posts", "orders"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
@@ -86,6 +87,7 @@ const normalizeHost = (raw) => {
 
 const clientPortalHost = normalizeHost(import.meta.env.VITE_CLIENT_PORTAL_HOST) || defaultClientPortalHost;
 const adminPortalHost = normalizeHost(import.meta.env.VITE_ADMIN_PORTAL_HOST) || defaultAdminPortalHost;
+const dbUpdaterHost = normalizeHost(import.meta.env.VITE_DB_UPDATER_HOST) || defaultDbUpdaterHost;
 
 const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "dashboard");
 
@@ -109,6 +111,8 @@ async function readApiError(response, fallbackMessage) {
 }
 
 export default function App() {
+  const currentHost = normalizeHost(window.location.hostname || "");
+  const isDbUpdaterDomain = Boolean(dbUpdaterHost && currentHost === dbUpdaterHost);
   const [activeSection, setActiveSection] = useState("guest-posts");
   const [language, setLanguage] = useState(getInitialLanguage());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
@@ -129,6 +133,14 @@ export default function App() {
   const [resetConfirmSubmitting, setResetConfirmSubmitting] = useState(false);
   const [resetConfirmMessage, setResetConfirmMessage] = useState("");
   const [resetMode, setResetMode] = useState(() => getResetModeFromUrl());
+  const [dbUpdaterFile, setDbUpdaterFile] = useState(null);
+  const [dbUpdaterDryRun, setDbUpdaterDryRun] = useState(true);
+  const [dbUpdaterSubmitting, setDbUpdaterSubmitting] = useState(false);
+  const [dbUpdaterUploadPercent, setDbUpdaterUploadPercent] = useState(0);
+  const [dbUpdaterJobId, setDbUpdaterJobId] = useState("");
+  const [dbUpdaterJob, setDbUpdaterJob] = useState(null);
+  const [dbUpdaterError, setDbUpdaterError] = useState("");
+  const [dbUpdaterSuccess, setDbUpdaterSuccess] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -558,20 +570,60 @@ export default function App() {
   useEffect(() => {
     if (!currentUser) return;
     if (!adminPortalHost || !clientPortalHost || adminPortalHost === clientPortalHost) return;
-    const currentHost = (window.location.hostname || "").trim().toLowerCase();
-    if (!currentHost) return;
+    const currentHostName = (window.location.hostname || "").trim().toLowerCase();
+    if (!currentHostName) return;
+    if (dbUpdaterHost && currentHostName === dbUpdaterHost) return;
 
     let targetHost = "";
-    if (currentUser.role === "admin" && currentHost === clientPortalHost) {
+    if (currentUser.role === "admin" && currentHostName === clientPortalHost) {
       targetHost = adminPortalHost;
-    } else if (currentUser.role !== "admin" && currentHost === adminPortalHost) {
+    } else if (currentUser.role !== "admin" && currentHostName === adminPortalHost) {
       targetHost = clientPortalHost;
     }
-    if (!targetHost || targetHost === currentHost) return;
+    if (!targetHost || targetHost === currentHostName) return;
 
     const nextUrl = `${window.location.protocol}//${targetHost}${window.location.pathname}${window.location.search}${window.location.hash}`;
     window.location.replace(nextUrl);
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!dbUpdaterJobId) return undefined;
+    let intervalId = null;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const payload = await api.get(`/db-updater/master-site-sync/jobs/${dbUpdaterJobId}`);
+        if (cancelled) return;
+        setDbUpdaterJob(payload);
+        if (payload?.status === "completed") {
+          const report = payload?.report || {};
+          setDbUpdaterSuccess(
+            `Sync completed. Updated: master ${report.master_rows_to_write || 0}, sites ${report.publishing_sites_rows_to_write || 0}, credentials ${report.credentials_rows_to_write || 0}.`
+          );
+          setDbUpdaterSubmitting(false);
+        } else if (payload?.status === "failed") {
+          setDbUpdaterError(payload?.error || payload?.message || "Sync failed.");
+          setDbUpdaterSubmitting(false);
+        }
+        if (payload?.status === "completed" || payload?.status === "failed") {
+          if (intervalId) window.clearInterval(intervalId);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setDbUpdaterError(err?.message || "Failed to fetch sync status.");
+        setDbUpdaterSubmitting(false);
+        if (intervalId) window.clearInterval(intervalId);
+      }
+    };
+
+    poll();
+    intervalId = window.setInterval(poll, 1200);
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, [dbUpdaterJobId]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
@@ -971,6 +1023,32 @@ export default function App() {
     }
   };
 
+  const submitDbUpdaterFile = async (event) => {
+    event.preventDefault();
+    if (!dbUpdaterFile) {
+      setDbUpdaterError("Please choose a CSV or XLSX file.");
+      return;
+    }
+    try {
+      setDbUpdaterSubmitting(true);
+      setDbUpdaterError("");
+      setDbUpdaterSuccess("");
+      setDbUpdaterUploadPercent(0);
+      setDbUpdaterJobId("");
+      setDbUpdaterJob(null);
+      const formData = new FormData();
+      formData.append("file", dbUpdaterFile);
+      formData.append("dry_run", dbUpdaterDryRun ? "true" : "false");
+      const payload = await api.upload("/db-updater/master-site-sync/jobs", formData, {
+        onProgress: (percent) => setDbUpdaterUploadPercent(percent),
+      });
+      setDbUpdaterJobId(payload?.job_id || "");
+    } catch (err) {
+      setDbUpdaterError(err?.message || "Upload failed.");
+      setDbUpdaterSubmitting(false);
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="auth-shell">
@@ -1020,6 +1098,50 @@ export default function App() {
         onResetConfirmSubmit={confirmPasswordReset}
         submittingResetConfirm={resetConfirmSubmitting}
         resetConfirmMessage={resetConfirmMessage}
+      />
+    );
+  }
+
+  if (isDbUpdaterDomain) {
+    if (currentUser.role !== "admin") {
+      return (
+        <div className="auth-shell">
+          <div className="db-updater-shell">
+            <div className="panel db-updater-panel">
+              <h1>DB Updater</h1>
+              <p className="muted-text">Admin access is required for this domain.</p>
+              <div className="db-updater-actions">
+                <button className="btn secondary" type="button" onClick={handleLogout}>
+                  {t("logout")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const serverProgress = Number(dbUpdaterJob?.progress_percent || 0);
+    const overallProgress = dbUpdaterJobId
+      ? Math.max(25, Math.min(100, 25 + Math.round((serverProgress * 75) / 100)))
+      : Math.round((dbUpdaterUploadPercent * 25) / 100);
+    const stageLabel = dbUpdaterJob?.message || (dbUpdaterSubmitting ? "Uploading file..." : "Ready");
+
+    return (
+      <DbUpdaterWorkspace
+        file={dbUpdaterFile}
+        onFileChange={setDbUpdaterFile}
+        dryRun={dbUpdaterDryRun}
+        onDryRunChange={setDbUpdaterDryRun}
+        onSubmit={submitDbUpdaterFile}
+        submitting={dbUpdaterSubmitting}
+        progressPercent={overallProgress}
+        uploadPercent={dbUpdaterUploadPercent}
+        stageLabel={stageLabel}
+        job={dbUpdaterJob}
+        error={dbUpdaterError}
+        success={dbUpdaterSuccess}
+        onLogout={handleLogout}
       />
     );
   }
@@ -1625,6 +1747,115 @@ function SubmissionErrorModal({ t, open, errorCode, errorMessage, onClose }) {
             {t("close")}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DbUpdaterWorkspace({
+  file,
+  onFileChange,
+  dryRun,
+  onDryRunChange,
+  onSubmit,
+  submitting,
+  progressPercent,
+  uploadPercent,
+  stageLabel,
+  job,
+  error,
+  success,
+  onLogout,
+}) {
+  const report = job?.report || null;
+  return (
+    <div className="db-updater-shell">
+      <div className="db-updater-topbar">
+        <div>
+          <strong>DB Updater</strong>
+          <p className="muted-text small-text">updatedb.elci.live</p>
+        </div>
+        <button className="btn secondary" type="button" onClick={onLogout}>
+          Logout
+        </button>
+      </div>
+
+      <div className="panel db-updater-panel">
+        <h1>Master Site Sync</h1>
+        <p className="muted-text">
+          Upload one CSV or XLSX file. The backend will sync `master_site_info`, `publishing_sites`, and `publishing_site_credentials`.
+        </p>
+
+        <form className="db-updater-form" onSubmit={onSubmit}>
+          <label className="db-updater-upload-box">
+            <span>{file ? file.name : "Choose file (CSV/XLSX)"}</span>
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={(event) => onFileChange(event.target.files?.[0] || null)}
+              disabled={submitting}
+            />
+          </label>
+
+          <label className="db-updater-checkbox">
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={(event) => onDryRunChange(event.target.checked)}
+              disabled={submitting}
+            />
+            <span>Dry run (preview only, no DB writes)</span>
+          </label>
+
+          <button className="btn submit-btn" type="submit" disabled={submitting || !file}>
+            {submitting ? "Running sync..." : "Upload & Sync"}
+          </button>
+        </form>
+
+        {(submitting || job || success) ? (
+          <div className="db-updater-progress" aria-live="polite">
+            <div className="upload-meter-row">
+              <span>{stageLabel}</span>
+              <strong>{progressPercent}%</strong>
+            </div>
+            <div className="upload-meter-track">
+              <div className="upload-meter-fill" style={{ width: `${progressPercent}%` }} />
+            </div>
+            {submitting && !job ? <p className="muted-text small-text">Upload progress: {uploadPercent}%</p> : null}
+          </div>
+        ) : null}
+
+        {error ? <div className="error">{error}</div> : null}
+        {success ? <div className="success">{success}</div> : null}
+
+        {report ? (
+          <div className="db-updater-report-grid">
+            <div className="db-updater-report-card">
+              <span className="stat-label">Prepared rows</span>
+              <strong>{report.master_rows_prepared || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Master updates</span>
+              <strong>{report.master_rows_to_write || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Site updates</span>
+              <strong>{report.publishing_sites_rows_to_write || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Credential updates</span>
+              <strong>{report.credentials_rows_to_write || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Issues</span>
+              <strong>{report.issues_count || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Mode</span>
+              <strong>{report.dry_run ? "Dry Run" : "Live Sync"}</strong>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

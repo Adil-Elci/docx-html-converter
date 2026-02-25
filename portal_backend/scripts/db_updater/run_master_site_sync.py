@@ -6,17 +6,21 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 from urllib.parse import urlparse
 
 from sqlalchemy import MetaData, Table, select
 from sqlalchemy.engine import Engine
 
-import import_tabular_to_db as updater
+try:
+    from . import import_tabular_to_db as updater
+except ImportError:  # pragma: no cover
+    import import_tabular_to_db as updater
 
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx"}
 DEFAULT_WP_REST_BASE = "/wp-json/wp/v2"
+ProgressCallback = Callable[[int, str, str | None], None]
 
 
 def _script_dir() -> Path:
@@ -238,12 +242,103 @@ def _write_report(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _emit_progress(callback: ProgressCallback | None, percent: int, stage: str, message: str | None = None) -> None:
+    if callback is None:
+        return
+    callback(max(0, min(100, int(percent))), stage, message)
+
+
+def run_master_sync_for_file(
+    file_path: str | Path,
+    *,
+    dry_run: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    base = _script_dir()
+    reports_dir = base / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    file_path = Path(file_path).resolve()
+    stamp = _utc_stamp()
+
+    _emit_progress(progress_callback, 5, "starting", "Initializing sync.")
+    engine = _build_engine_from_env()
+
+    _emit_progress(progress_callback, 15, "reading", f"Reading {file_path.name}.")
+    raw_rows = _read_rows(file_path)
+
+    _emit_progress(progress_callback, 28, "preparing_master", "Preparing master rows.")
+    master_rows, issues = _prepare_master_rows(raw_rows)
+
+    _emit_progress(progress_callback, 40, "sync_master_site_info", "Syncing master_site_info.")
+    master_rows_to_write = _filter_new_or_changed_rows(engine, "master_site_info", master_rows, match_columns=["publishing_site_url"])
+    _upsert_table(
+        engine,
+        "master_site_info",
+        master_rows_to_write,
+        match_columns=["publishing_site_url"],
+        dry_run=dry_run,
+    )
+
+    _emit_progress(progress_callback, 58, "sync_publishing_sites", "Syncing publishing_sites.")
+    site_rows = _prepare_publishing_sites_rows(master_rows)
+    site_rows_to_write = _filter_new_or_changed_rows(engine, "publishing_sites", site_rows, match_columns=["publishing_site_url"])
+    _upsert_table(
+        engine,
+        "publishing_sites",
+        site_rows_to_write,
+        match_columns=["publishing_site_url"],
+        dry_run=dry_run,
+    )
+
+    _emit_progress(progress_callback, 76, "loading_site_ids", "Loading publishing site IDs.")
+    site_ids_by_url = _load_site_ids_by_url(engine)
+
+    _emit_progress(progress_callback, 84, "preparing_credentials", "Preparing credentials rows.")
+    credential_rows, cred_issues = _prepare_credentials_rows(master_rows, site_ids_by_url)
+    issues.extend(cred_issues)
+
+    _emit_progress(progress_callback, 92, "sync_credentials", "Syncing publishing_site_credentials.")
+    credential_rows_to_write = _filter_new_or_changed_rows(
+        engine,
+        "publishing_site_credentials",
+        credential_rows,
+        match_columns=["publishing_site_id"],
+    )
+    _upsert_table(
+        engine,
+        "publishing_site_credentials",
+        credential_rows_to_write,
+        match_columns=["publishing_site_id"],
+        dry_run=dry_run,
+    )
+
+    report = {
+        "timestamp_utc": stamp,
+        "file_name": file_path.name,
+        "dry_run": dry_run,
+        "master_rows_input": len(raw_rows),
+        "master_rows_prepared": len(master_rows),
+        "master_rows_to_write": len(master_rows_to_write),
+        "publishing_sites_rows": len(site_rows),
+        "publishing_sites_rows_to_write": len(site_rows_to_write),
+        "credentials_rows": len(credential_rows),
+        "credentials_rows_to_write": len(credential_rows_to_write),
+        "issues_count": len(issues),
+        "issues_preview": [{"row_number": i.row_number, "reason": i.reason} for i in issues[:20]],
+    }
+    report_path = reports_dir / f"{file_path.stem}__{stamp}.report.json"
+    _emit_progress(progress_callback, 97, "writing_report", "Writing sync report.")
+    _write_report(report_path, report)
+    report["report_path"] = str(report_path)
+
+    _emit_progress(progress_callback, 100, "completed", "Sync complete.")
+    return report
+
+
 def run_master_sync(*, dry_run: bool = False) -> int:
     base = _script_dir()
     inbox_dir = base / "master_site_info"
-    reports_dir = base / "reports"
     inbox_dir.mkdir(parents=True, exist_ok=True)
-    reports_dir.mkdir(parents=True, exist_ok=True)
 
     files = _list_master_files(inbox_dir)
     if not files:
@@ -256,78 +351,18 @@ def run_master_sync(*, dry_run: bool = False) -> int:
         return 1
 
     file_path = files[0]
-    stamp = _utc_stamp()
     try:
-        engine = _build_engine_from_env()
-        raw_rows = _read_rows(file_path)
-        master_rows, issues = _prepare_master_rows(raw_rows)
-
-        # 1) master snapshot table
-        master_rows_to_write = _filter_new_or_changed_rows(engine, "master_site_info", master_rows, match_columns=["publishing_site_url"])
-        _upsert_table(
-            engine,
-            "master_site_info",
-            master_rows_to_write,
-            match_columns=["publishing_site_url"],
-            dry_run=dry_run,
-        )
-
-        # 2) publishing_sites (site metadata)
-        site_rows = _prepare_publishing_sites_rows(master_rows)
-        site_rows_to_write = _filter_new_or_changed_rows(engine, "publishing_sites", site_rows, match_columns=["publishing_site_url"])
-        _upsert_table(
-            engine,
-            "publishing_sites",
-            site_rows_to_write,
-            match_columns=["publishing_site_url"],
-            dry_run=dry_run,
-        )
-
-        # 3) publishing_site_credentials (one row per site)
-        site_ids_by_url = _load_site_ids_by_url(engine) if not dry_run else {row["publishing_site_url"]: None for row in master_rows}
-        if dry_run:
-            # For dry-run, still validate presence by using DB lookup if possible
-            site_ids_by_url = _load_site_ids_by_url(engine)
-        credential_rows, cred_issues = _prepare_credentials_rows(master_rows, site_ids_by_url)
-        issues.extend(cred_issues)
-        credential_rows_to_write = _filter_new_or_changed_rows(
-            engine,
-            "publishing_site_credentials",
-            credential_rows,
-            match_columns=["publishing_site_id"],
-        )
-        _upsert_table(
-            engine,
-            "publishing_site_credentials",
-            credential_rows_to_write,
-            match_columns=["publishing_site_id"],
-            dry_run=dry_run,
-        )
-
-        report = {
-            "timestamp_utc": stamp,
-            "file_name": file_path.name,
-            "dry_run": dry_run,
-            "master_rows_input": len(raw_rows),
-            "master_rows_prepared": len(master_rows),
-            "master_rows_to_write": len(master_rows_to_write),
-            "publishing_sites_rows": len(site_rows),
-            "publishing_sites_rows_to_write": len(site_rows_to_write),
-            "credentials_rows": len(credential_rows),
-            "credentials_rows_to_write": len(credential_rows_to_write),
-            "issues_count": len(issues),
-            "issues_preview": [{"row_number": i.row_number, "reason": i.reason} for i in issues[:20]],
-        }
-        report_path = reports_dir / f"{file_path.stem}__{stamp}.report.json"
-        _write_report(report_path, report)
+        report = run_master_sync_for_file(file_path, dry_run=dry_run)
         print(f"Processed file: {file_path.name}")
-        print(f"Prepared rows: {len(master_rows)}")
-        print(f"Rows to write -> master:{len(master_rows_to_write)} sites:{len(site_rows_to_write)} credentials:{len(credential_rows_to_write)}")
-        print(f"Issues: {len(issues)}")
-        print(f"Report: {report_path}")
-
-        if issues:
-            updater._print_issue_summary(issues)  # type: ignore[attr-defined]
+        print(f"Prepared rows: {report['master_rows_prepared']}")
+        print(
+            "Rows to write -> "
+            f"master:{report['master_rows_to_write']} "
+            f"sites:{report['publishing_sites_rows_to_write']} "
+            f"credentials:{report['credentials_rows_to_write']}"
+        )
+        print(f"Issues: {report['issues_count']}")
+        print(f"Report: {report['report_path']}")
 
         if dry_run:
             print("Dry run complete. File left in place.")

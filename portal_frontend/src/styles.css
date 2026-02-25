@@ -1062,7 +1062,78 @@ input:disabled {
     flex-wrap: wrap;
   }
 
-  .auth-card h1 {
-    white-space: normal;
-  }
+.auth-card h1 {
+  white-space: normal;
+}
+}
+
+.db-updater-shell {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.db-updater-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.db-updater-panel h1 {
+  margin-bottom: 8px;
+}
+
+.db-updater-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.db-updater-upload-box {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  background: var(--panel-soft, rgba(255, 255, 255, 0.04));
+}
+
+.db-updater-upload-box input[type="file"] {
+  width: 100%;
+}
+
+.db-updater-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.db-updater-progress {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.db-updater-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.db-updater-report-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.db-updater-report-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
 }

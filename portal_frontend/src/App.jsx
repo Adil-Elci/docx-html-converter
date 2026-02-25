@@ -136,6 +136,7 @@ export default function App() {
   const [dbUpdaterFile, setDbUpdaterFile] = useState(null);
   const [dbUpdaterDryRun, setDbUpdaterDryRun] = useState(true);
   const [dbUpdaterDeleteMissingSites, setDbUpdaterDeleteMissingSites] = useState(false);
+  const [dbUpdaterForceDeleteMissingSites, setDbUpdaterForceDeleteMissingSites] = useState(false);
   const [dbUpdaterSubmitting, setDbUpdaterSubmitting] = useState(false);
   const [dbUpdaterUploadPercent, setDbUpdaterUploadPercent] = useState(0);
   const [dbUpdaterJobId, setDbUpdaterJobId] = useState("");
@@ -628,6 +629,11 @@ export default function App() {
   }, [dbUpdaterJobId]);
 
   useEffect(() => {
+    if (dbUpdaterDeleteMissingSites) return;
+    setDbUpdaterForceDeleteMissingSites(false);
+  }, [dbUpdaterDeleteMissingSites]);
+
+  useEffect(() => {
     if (!isDbUpdaterDomain) return undefined;
     let cancelled = false;
     let intervalId = null;
@@ -1065,6 +1071,7 @@ export default function App() {
       formData.append("file", dbUpdaterFile);
       formData.append("dry_run", dbUpdaterDryRun ? "true" : "false");
       formData.append("delete_missing_sites", dbUpdaterDeleteMissingSites ? "true" : "false");
+      formData.append("force_delete_missing_sites", dbUpdaterForceDeleteMissingSites ? "true" : "false");
       const payload = await api.upload("/db-updater/master-site-sync/jobs", formData, {
         onProgress: (percent) => setDbUpdaterUploadPercent(percent),
       });
@@ -1098,6 +1105,8 @@ export default function App() {
         onDryRunChange={setDbUpdaterDryRun}
         deleteMissingSites={dbUpdaterDeleteMissingSites}
         onDeleteMissingSitesChange={setDbUpdaterDeleteMissingSites}
+        forceDeleteMissingSites={dbUpdaterForceDeleteMissingSites}
+        onForceDeleteMissingSitesChange={setDbUpdaterForceDeleteMissingSites}
         onSubmit={submitDbUpdaterFile}
         submitting={dbUpdaterSubmitting}
         progressPercent={overallProgress}
@@ -1770,6 +1779,8 @@ function DbUpdaterWorkspace({
   onDryRunChange,
   deleteMissingSites,
   onDeleteMissingSitesChange,
+  forceDeleteMissingSites,
+  onForceDeleteMissingSitesChange,
   onSubmit,
   submitting,
   progressPercent,
@@ -1833,6 +1844,15 @@ function DbUpdaterWorkspace({
                   disabled={submitting}
                 />
                 <span>Delete sites missing from master file (skips sites referenced by submissions/jobs)</span>
+              </label>
+              <label className="db-updater-checkbox db-updater-checkbox-danger">
+                <input
+                  type="checkbox"
+                  checked={forceDeleteMissingSites}
+                  onChange={(event) => onForceDeleteMissingSitesChange(event.target.checked)}
+                  disabled={submitting || !deleteMissingSites}
+                />
+                <span>Force delete referenced missing sites (deletes related submissions/jobs history)</span>
               </label>
             </div>
 
@@ -1903,6 +1923,10 @@ function DbUpdaterWorkspace({
             <div className="db-updater-report-card">
               <span className="stat-label">Blocked Deletes</span>
               <strong>{report.missing_sites_blocked || 0}</strong>
+            </div>
+            <div className="db-updater-report-card">
+              <span className="stat-label">Force Deleted</span>
+              <strong>{report.missing_sites_force_deleted || 0}</strong>
             </div>
           </div>
         ) : null}

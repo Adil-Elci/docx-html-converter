@@ -263,6 +263,22 @@ def _delete_publishing_sites(engine: Engine, site_ids: list[Any], *, dry_run: bo
         return int(result.rowcount or 0)
 
 
+def _delete_site_references_for_force_prune(engine: Engine, site_ids: list[Any], *, dry_run: bool) -> dict[str, int]:
+    counts = {"submissions_deleted": 0}
+    if not site_ids:
+        return counts
+    submissions = _reflect_table(engine, "submissions")
+    if dry_run:
+        with engine.connect() as conn:
+            rows = conn.execute(select(submissions.c.id).where(submissions.c.publishing_site_id.in_(site_ids))).fetchall()
+            counts["submissions_deleted"] = len(rows)
+        return counts
+    with engine.begin() as conn:
+        result = conn.execute(submissions.delete().where(submissions.c.publishing_site_id.in_(site_ids)))
+        counts["submissions_deleted"] = int(result.rowcount or 0)
+    return counts
+
+
 def _prepare_publishing_sites_rows(master_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -356,6 +372,7 @@ def run_master_sync_for_file(
     *,
     dry_run: bool = False,
     delete_missing_sites: bool = False,
+    force_delete_missing_sites: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     base = _script_dir()
@@ -398,6 +415,8 @@ def run_master_sync_for_file(
     missing_sites_delete_candidates = 0
     missing_sites_deleted = 0
     missing_sites_blocked = 0
+    missing_sites_force_deleted = 0
+    force_prune_reference_counts: dict[str, int] = {"submissions_deleted": 0}
     missing_sites_preview: list[str] = []
     if delete_missing_sites:
         _emit_progress(progress_callback, 68, "prune_missing_sites", "Checking sites missing from master file.")
@@ -407,23 +426,31 @@ def run_master_sync_for_file(
         missing_sites_preview = [str(item.get("publishing_site_url") or "") for item in missing_sites[:10]]
         blockers = _find_site_delete_blockers(engine, [item["publishing_site_id"] for item in missing_sites if item.get("publishing_site_id")])
         deletable_ids: list[Any] = []
+        force_deletable_ids: list[Any] = []
         for item in missing_sites:
             site_id = item.get("publishing_site_id")
             if site_id in blockers:
-                missing_sites_blocked += 1
-                issues.append(
-                    updater.RowIssue(
-                        row_number=0,
-                        reason=f"Cannot delete missing publishing site; referenced by {', '.join(sorted(set(blockers[site_id])))}",
-                        row=item,
+                if force_delete_missing_sites:
+                    force_deletable_ids.append(site_id)
+                else:
+                    missing_sites_blocked += 1
+                    issues.append(
+                        updater.RowIssue(
+                            row_number=0,
+                            reason=f"Cannot delete missing publishing site; referenced by {', '.join(sorted(set(blockers[site_id])))}",
+                            row=item,
+                        )
                     )
-                )
                 continue
             if site_id is not None:
                 deletable_ids.append(site_id)
-        missing_sites_delete_candidates = len(deletable_ids)
+        missing_sites_delete_candidates = len(deletable_ids) + len(force_deletable_ids)
+        if force_deletable_ids:
+            _emit_progress(progress_callback, 71, "force_prune_missing_sites", "Force-deleting references for missing sites.")
+            force_prune_reference_counts = _delete_site_references_for_force_prune(engine, force_deletable_ids, dry_run=dry_run)
         _emit_progress(progress_callback, 72, "prune_missing_sites", "Deleting sites missing from master file.")
-        missing_sites_deleted = _delete_publishing_sites(engine, deletable_ids, dry_run=dry_run)
+        missing_sites_deleted = _delete_publishing_sites(engine, deletable_ids + force_deletable_ids, dry_run=dry_run)
+        missing_sites_force_deleted = len(force_deletable_ids) if dry_run else max(0, missing_sites_deleted - len(deletable_ids))
 
     _emit_progress(progress_callback, 76, "loading_site_ids", "Loading publishing site IDs.")
     site_ids_by_url = _load_site_ids_by_url(engine)
@@ -469,6 +496,7 @@ def run_master_sync_for_file(
         "file_name": file_path.name,
         "dry_run": dry_run,
         "delete_missing_sites": delete_missing_sites,
+        "force_delete_missing_sites": force_delete_missing_sites,
         "master_rows_input": len(raw_rows),
         "master_rows_prepared": len(master_rows),
         "master_rows_to_write": len(master_rows_to_write),
@@ -482,6 +510,8 @@ def run_master_sync_for_file(
         "missing_sites_delete_candidates": missing_sites_delete_candidates,
         "missing_sites_deleted": missing_sites_deleted,
         "missing_sites_blocked": missing_sites_blocked,
+        "missing_sites_force_deleted": missing_sites_force_deleted,
+        "force_prune_reference_counts": force_prune_reference_counts,
         "missing_sites_preview": missing_sites_preview,
         "issues_count": len(issues),
         "issues_preview": [{"row_number": i.row_number, "reason": i.reason} for i in issues[:20]],
@@ -495,7 +525,7 @@ def run_master_sync_for_file(
     return report
 
 
-def run_master_sync(*, dry_run: bool = False, delete_missing_sites: bool = False) -> int:
+def run_master_sync(*, dry_run: bool = False, delete_missing_sites: bool = False, force_delete_missing_sites: bool = False) -> int:
     base = _script_dir()
     inbox_dir = base / "master_site_info"
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -512,7 +542,12 @@ def run_master_sync(*, dry_run: bool = False, delete_missing_sites: bool = False
 
     file_path = files[0]
     try:
-        report = run_master_sync_for_file(file_path, dry_run=dry_run, delete_missing_sites=delete_missing_sites)
+        report = run_master_sync_for_file(
+            file_path,
+            dry_run=dry_run,
+            delete_missing_sites=delete_missing_sites,
+            force_delete_missing_sites=force_delete_missing_sites,
+        )
         print(f"Processed file: {file_path.name}")
         print(f"Prepared rows: {report['master_rows_prepared']}")
         print(
@@ -546,6 +581,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete publishing_sites rows not present in the master file (skips rows still referenced by submissions/jobs).",
     )
+    parser.add_argument(
+        "--force-delete-missing-sites",
+        action="store_true",
+        help="Force delete missing sites by deleting related submissions/jobs history first (testing use only).",
+    )
     return parser
 
 
@@ -554,6 +594,7 @@ def main() -> int:
     return run_master_sync(
         dry_run=bool(args.dry_run),
         delete_missing_sites=bool(args.delete_missing_sites),
+        force_delete_missing_sites=bool(args.force_delete_missing_sites),
     )
 
 

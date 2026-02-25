@@ -72,12 +72,13 @@ def _progress_cb(job_id: str):
     return inner
 
 
-def _run_job(job_id: str, upload_path: Path, dry_run: bool, delete_missing_sites: bool) -> None:
+def _run_job(job_id: str, upload_path: Path, dry_run: bool, delete_missing_sites: bool, force_delete_missing_sites: bool) -> None:
     try:
         report = run_master_sync_for_file(
             upload_path,
             dry_run=dry_run,
             delete_missing_sites=delete_missing_sites,
+            force_delete_missing_sites=force_delete_missing_sites,
             progress_callback=_progress_cb(job_id),
         )
         _update_job(
@@ -108,6 +109,7 @@ async def create_master_site_sync_job(
     file: UploadFile = File(...),
     dry_run: bool = Form(False),
     delete_missing_sites: bool = Form(False),
+    force_delete_missing_sites: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     file_name = (file.filename or "").strip()
@@ -137,7 +139,11 @@ async def create_master_site_sync_job(
         dry_run=bool(dry_run),
         file_name=file_name,
         report=None,
-        message=("Queued delete+sync job." if delete_missing_sites else f"Queued {file_name}."),
+        message=(
+            "Queued force-delete sync job."
+            if force_delete_missing_sites
+            else ("Queued delete+sync job." if delete_missing_sites else f"Queued {file_name}.")
+        ),
         created_by_user_id=None,
     )
     db.add(job)
@@ -148,7 +154,7 @@ async def create_master_site_sync_job(
     import threading
     thread = threading.Thread(
         target=_run_job,
-        args=(job_id, upload_path, bool(dry_run), bool(delete_missing_sites)),
+        args=(job_id, upload_path, bool(dry_run), bool(delete_missing_sites), bool(force_delete_missing_sites)),
         daemon=True,
     )
     thread.start()

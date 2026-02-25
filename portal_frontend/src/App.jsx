@@ -1552,7 +1552,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="panel form-panel">
+            <div className="panel form-panel request-form-panel">
               <h2>{isOrders ? t("formOrder") : t("formSubmission")}</h2>
               <form className="guest-form" onSubmit={submitGuestPost}>
                 <div className="submission-blocks">
@@ -1569,7 +1569,7 @@ export default function App() {
                           </div>
 
                           {isOrders ? (
-                            <div>
+                            <div className="submission-field submission-field-wide">
                               <label>{t("targetSiteForBacklink")}</label>
                               <select
                                 value={block.target_site_id || ""}
@@ -1607,7 +1607,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          <div>
+                          <div className="submission-field submission-field-wide">
                             <label>{t("targetWebsite")}</label>
                             <div className="site-suggest-wrap">
                               <input
@@ -1646,7 +1646,7 @@ export default function App() {
                           </div>
 
                           {!isOrders ? (
-                            <div>
+                            <div className="submission-field">
                               <label>{t("fileType")}</label>
                               <div className="toggle source-toggle">
                                 <button
@@ -1668,7 +1668,7 @@ export default function App() {
                           ) : null}
 
                           {!isOrders && block.source_type === "google-doc" ? (
-                            <div>
+                            <div className="submission-field submission-field-wide">
                               <label>{t("googleDocLink")}</label>
                               <input
                                 type="url"
@@ -1679,7 +1679,7 @@ export default function App() {
                               />
                             </div>
                           ) : !isOrders && block.source_type === "word-doc" ? (
-                            <div>
+                            <div className="submission-field submission-field-wide">
                               <label>{t("fileUpload")}</label>
                               <input
                                 type="file"
@@ -1695,7 +1695,7 @@ export default function App() {
 
                           {isOrders ? (
                             <>
-                              <div>
+                              <div className="submission-field">
                                 <label>{t("anchor")}</label>
                                 <input
                                   type="text"
@@ -1704,7 +1704,7 @@ export default function App() {
                                   placeholder={t("placeholderAnchor")}
                                 />
                               </div>
-                              <div>
+                              <div className="submission-field">
                                 <label>{t("topic")}</label>
                                 <input
                                   type="text"

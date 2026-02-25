@@ -480,6 +480,18 @@ input:disabled {
   gap: 16px;
 }
 
+.request-form-panel {
+  max-width: 980px;
+}
+
+.request-form-panel .guest-form {
+  max-width: 100%;
+}
+
+.app-shell.sidebar-hidden .request-form-panel {
+  max-width: 1160px;
+}
+
 .submission-blocks {
   display: grid;
   gap: 14px;
@@ -493,6 +505,8 @@ input:disabled {
 .submission-block {
   display: grid;
   gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: start;
   padding: 16px;
   background: color-mix(in srgb, var(--panel-3) 45%, transparent);
 }
@@ -503,6 +517,7 @@ input:disabled {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  grid-column: 1 / -1;
 }
 
 .submission-block-header h3 {
@@ -518,6 +533,22 @@ input:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.submission-block > div {
+  min-width: 0;
+}
+
+.submission-block .upload-meter {
+  grid-column: 1 / -1;
+}
+
+.submission-field-wide {
+  grid-column: 1 / -1;
+}
+
+.app-shell.sidebar-hidden .submission-block {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .block-control-btn {

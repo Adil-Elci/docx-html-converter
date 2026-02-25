@@ -106,9 +106,31 @@ class Site(Base):
     name = Column(Text, nullable=False)
     site_url = Column("publishing_site_url", Text, nullable=False, unique=True)
     wp_rest_base = Column(Text, nullable=False, default="/wp-json/wp/v2")
-    hosting_provider = Column(Text, nullable=True)
-    hosting_panel = Column(Text, nullable=True)
+    hosted_by = Column(Text, nullable=True)
+    host_panel = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class MasterSiteInfo(Base):
+    __tablename__ = "master_site_info"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','inactive')", name="master_site_info_status_check"),
+        CheckConstraint("auth_type IN ('application_password')", name="master_site_info_auth_type_check"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    publishing_site_url = Column(Text, nullable=False, unique=True)
+    name = Column(Text, nullable=False)
+    wp_rest_base = Column(Text, nullable=False, default="/wp-json/wp/v2")
+    hosted_by = Column(Text, nullable=True)
+    host_panel = Column(Text, nullable=True)
+    status = Column(Text, nullable=False, default="active")
+    auth_type = Column(Text, nullable=False, default="application_password")
+    wp_username = Column(Text, nullable=True)
+    wp_app_password = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -117,7 +139,7 @@ class SiteCredential(Base):
     __tablename__ = "publishing_site_credentials"
     __table_args__ = (
         CheckConstraint("auth_type IN ('application_password')", name="publishing_site_credentials_auth_type_check"),
-        UniqueConstraint("publishing_site_id", "wp_username", name="publishing_site_credentials_site_username_unique"),
+        UniqueConstraint("publishing_site_id", name="publishing_site_credentials_site_unique"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

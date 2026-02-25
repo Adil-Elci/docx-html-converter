@@ -28,8 +28,8 @@ def _site_to_out(site: Site) -> SiteOut:
         name=site.name,
         site_url=site.site_url,
         wp_rest_base=site.wp_rest_base,
-        hosting_provider=site.hosting_provider,
-        hosting_panel=site.hosting_panel,
+        hosted_by=site.hosted_by,
+        host_panel=site.host_panel,
         status=site.status,
         created_at=site.created_at,
         updated_at=site.updated_at,
@@ -80,8 +80,8 @@ def create_site(
         name=payload.name,
         site_url=payload.site_url,
         wp_rest_base=payload.wp_rest_base,
-        hosting_provider=payload.hosting_provider,
-        hosting_panel=payload.hosting_panel,
+        hosted_by=payload.hosted_by,
+        host_panel=payload.host_panel,
         status=payload.status,
     )
     db.add(site)
@@ -111,10 +111,10 @@ def update_site(
         site.site_url = payload.site_url
     if payload.wp_rest_base is not None:
         site.wp_rest_base = payload.wp_rest_base
-    if payload.hosting_provider is not None:
-        site.hosting_provider = payload.hosting_provider
-    if payload.hosting_panel is not None:
-        site.hosting_panel = payload.hosting_panel
+    if payload.hosted_by is not None:
+        site.hosted_by = payload.hosted_by
+    if payload.host_panel is not None:
+        site.host_panel = payload.host_panel
     if payload.status is not None:
         site.status = payload.status
 

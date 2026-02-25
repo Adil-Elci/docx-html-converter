@@ -212,7 +212,7 @@ def _prepare_publishing_sites_rows(master_rows: list[dict[str, Any]]) -> list[di
     return [
         {
             "publishing_site_url": row["publishing_site_url"],
-            "name": row["name"],
+            "publishing_site_name": row["name"],
             "wp_rest_base": DEFAULT_WP_REST_BASE,
             "hosted_by": row.get("hosted_by"),
             "host_panel": row.get("host_panel"),

@@ -21,7 +21,7 @@ class Client(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(Text, nullable=False)
+    name = Column("publishing_site_name", Text, nullable=False)
     primary_domain = Column(Text, nullable=True)
     backlink_url = Column(Text, nullable=True)
     email = Column(Text, nullable=True)

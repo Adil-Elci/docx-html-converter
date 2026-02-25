@@ -33,7 +33,7 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
     ],
     "publishing_sites": [
         "id",
-        "name",
+        "publishing_site_name",
         "publishing_site_url",
         "wp_rest_base",
         "hosted_by",

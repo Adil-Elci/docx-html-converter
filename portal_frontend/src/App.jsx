@@ -175,6 +175,7 @@ export default function App() {
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
+  const portalRefreshInFlightRef = useRef(false);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
@@ -668,6 +669,48 @@ export default function App() {
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || isDbUpdaterDomain) return undefined;
+    let cancelled = false;
+    let intervalId = null;
+
+    const refreshPortalData = async () => {
+      if (portalRefreshInFlightRef.current) return;
+      if (document.visibilityState && document.visibilityState !== "visible") return;
+      portalRefreshInFlightRef.current = true;
+      try {
+        await loadAll(currentUser);
+        if (currentUser.role === "admin") {
+          if (activeSection === "pending-jobs") {
+            await loadPendingJobs(currentUser);
+          }
+          if (activeSection === "admin") {
+            await loadAdminUsers(currentUser);
+          }
+        }
+      } finally {
+        portalRefreshInFlightRef.current = false;
+      }
+    };
+
+    const onFocusOrVisible = () => {
+      if (cancelled) return;
+      refreshPortalData();
+    };
+
+    intervalId = window.setInterval(refreshPortalData, 30000);
+    window.addEventListener("focus", onFocusOrVisible);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocusOrVisible);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+      portalRefreshInFlightRef.current = false;
+    };
+  }, [currentUser, activeSection, isDbUpdaterDomain]);
 
   useEffect(() => {
     if (!currentUser) {

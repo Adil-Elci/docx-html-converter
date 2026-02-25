@@ -21,7 +21,7 @@ class Client(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column("publishing_site_name", Text, nullable=False)
+    name = Column(Text, nullable=False)
     primary_domain = Column(Text, nullable=True)
     backlink_url = Column(Text, nullable=True)
     email = Column(Text, nullable=True)
@@ -103,7 +103,7 @@ class Site(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(Text, nullable=False)
+    name = Column("publishing_site_name", Text, nullable=False)
     site_url = Column("publishing_site_url", Text, nullable=False, unique=True)
     wp_rest_base = Column(Text, nullable=False, default="/wp-json/wp/v2")
     hosted_by = Column(Text, nullable=True)

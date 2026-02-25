@@ -14,3 +14,4 @@ pyjwt
 email-validator
 google-api-python-client
 google-auth
+openpyxl

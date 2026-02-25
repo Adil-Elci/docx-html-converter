@@ -1292,20 +1292,21 @@ export default function App() {
         onSectionChange={setActiveSection}
         pendingJobsCount={pendingJobs.length}
       />
+      <button
+        className={`sidebar-edge-toggle ${sidebarHidden ? "collapsed" : ""}`.trim()}
+        type="button"
+        onClick={() => setSidebarHidden((prev) => !prev)}
+        aria-pressed={!sidebarHidden}
+        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
+        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
+      >
+        <span aria-hidden="true">{sidebarHidden ? "›" : "‹"}</span>
+      </button>
 
       <div className="app-main">
         <div className="header">
           <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
-            <button
-              className="btn secondary sidebar-toggle-btn"
-              type="button"
-              onClick={() => setSidebarHidden((prev) => !prev)}
-              aria-pressed={!sidebarHidden}
-              aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
-            >
-              {sidebarHidden ? "Show menu" : "Hide menu"}
-            </button>
             <div className="user-chip">
               <span>{`Hey ${
                 currentUser.role === "admin"

@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 from ..auth import require_admin
 from ..db import get_db, get_sessionmaker
 from ..portal_models import DbUpdaterSyncJob, User
-from ...scripts.db_updater.run_master_site_sync import run_master_sync_for_file
+
+try:
+    from scripts.db_updater.run_master_site_sync import run_master_sync_for_file
+except ImportError:  # pragma: no cover
+    from portal_backend.scripts.db_updater.run_master_site_sync import run_master_sync_for_file
 
 router = APIRouter(prefix="/db-updater", tags=["db_updater"])
 

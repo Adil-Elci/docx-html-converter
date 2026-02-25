@@ -9,9 +9,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from ..auth import require_admin
 from ..db import get_db, get_sessionmaker
-from ..portal_models import DbUpdaterSyncJob, User
+from ..portal_models import DbUpdaterSyncJob
 
 try:
     from scripts.db_updater.run_master_site_sync import run_master_sync_for_file
@@ -104,7 +103,6 @@ async def create_master_site_sync_job(
     file: UploadFile = File(...),
     dry_run: bool = Form(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
 ) -> dict[str, Any]:
     file_name = (file.filename or "").strip()
     if not file_name:
@@ -134,7 +132,7 @@ async def create_master_site_sync_job(
         dry_run=bool(dry_run),
         file_name=file_name,
         report=None,
-        created_by_user_id=current_user.id,
+        created_by_user_id=None,
     )
     db.add(job)
     db.commit()
@@ -148,7 +146,7 @@ async def create_master_site_sync_job(
 
 
 @router.get("/master-site-sync/jobs/{job_id}")
-def get_master_site_sync_job(job_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)) -> dict[str, Any]:
+def get_master_site_sync_job(job_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         job_uuid = UUID(str(job_id))
     except ValueError as exc:
@@ -163,7 +161,6 @@ def get_master_site_sync_job(job_id: str, db: Session = Depends(get_db), _: User
 def list_master_site_sync_jobs(
     limit: int = 20,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 20), 100))
     jobs = (

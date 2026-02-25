@@ -627,7 +627,7 @@ export default function App() {
   }, [dbUpdaterJobId]);
 
   useEffect(() => {
-    if (!isDbUpdaterDomain || !currentUser || currentUser.role !== "admin") return undefined;
+    if (!isDbUpdaterDomain) return undefined;
     let cancelled = false;
     let intervalId = null;
 
@@ -647,7 +647,7 @@ export default function App() {
       cancelled = true;
       if (intervalId) window.clearInterval(intervalId);
     };
-  }, [isDbUpdaterDomain, currentUser]);
+  }, [isDbUpdaterDomain]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
@@ -1081,6 +1081,33 @@ export default function App() {
     );
   }
 
+  if (isDbUpdaterDomain) {
+    const serverProgress = Number(dbUpdaterJob?.progress_percent || 0);
+    const overallProgress = dbUpdaterJobId
+      ? Math.max(25, Math.min(100, 25 + Math.round((serverProgress * 75) / 100)))
+      : Math.round((dbUpdaterUploadPercent * 25) / 100);
+    const stageLabel = dbUpdaterJob?.message || (dbUpdaterSubmitting ? "Uploading file..." : "Ready");
+
+    return (
+      <DbUpdaterWorkspace
+        file={dbUpdaterFile}
+        onFileChange={setDbUpdaterFile}
+        dryRun={dbUpdaterDryRun}
+        onDryRunChange={setDbUpdaterDryRun}
+        onSubmit={submitDbUpdaterFile}
+        submitting={dbUpdaterSubmitting}
+        progressPercent={overallProgress}
+        uploadPercent={dbUpdaterUploadPercent}
+        stageLabel={stageLabel}
+        job={dbUpdaterJob}
+        error={dbUpdaterError}
+        success={dbUpdaterSuccess}
+        historyItems={dbUpdaterJobsHistory}
+        onLogout={currentUser ? handleLogout : null}
+      />
+    );
+  }
+
   if (!currentUser) {
     return (
       <AuthGate
@@ -1122,51 +1149,6 @@ export default function App() {
         onResetConfirmSubmit={confirmPasswordReset}
         submittingResetConfirm={resetConfirmSubmitting}
         resetConfirmMessage={resetConfirmMessage}
-      />
-    );
-  }
-
-  if (isDbUpdaterDomain) {
-    if (currentUser.role !== "admin") {
-      return (
-        <div className="auth-shell">
-          <div className="db-updater-shell">
-            <div className="panel db-updater-panel">
-              <h1>DB Updater</h1>
-              <p className="muted-text">Admin access is required for this domain.</p>
-              <div className="db-updater-actions">
-                <button className="btn secondary" type="button" onClick={handleLogout}>
-                  {t("logout")}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    const serverProgress = Number(dbUpdaterJob?.progress_percent || 0);
-    const overallProgress = dbUpdaterJobId
-      ? Math.max(25, Math.min(100, 25 + Math.round((serverProgress * 75) / 100)))
-      : Math.round((dbUpdaterUploadPercent * 25) / 100);
-    const stageLabel = dbUpdaterJob?.message || (dbUpdaterSubmitting ? "Uploading file..." : "Ready");
-
-    return (
-      <DbUpdaterWorkspace
-        file={dbUpdaterFile}
-        onFileChange={setDbUpdaterFile}
-        dryRun={dbUpdaterDryRun}
-        onDryRunChange={setDbUpdaterDryRun}
-        onSubmit={submitDbUpdaterFile}
-        submitting={dbUpdaterSubmitting}
-        progressPercent={overallProgress}
-        uploadPercent={dbUpdaterUploadPercent}
-        stageLabel={stageLabel}
-        job={dbUpdaterJob}
-        error={dbUpdaterError}
-        success={dbUpdaterSuccess}
-        historyItems={dbUpdaterJobsHistory}
-        onLogout={handleLogout}
       />
     );
   }
@@ -1801,9 +1783,11 @@ function DbUpdaterWorkspace({
           <strong>DB Updater</strong>
           <p className="muted-text small-text">updatedb.elci.live</p>
         </div>
-        <button className="btn secondary" type="button" onClick={onLogout}>
-          Logout
-        </button>
+        {onLogout ? (
+          <button className="btn secondary" type="button" onClick={onLogout}>
+            Logout
+          </button>
+        ) : null}
       </div>
 
       <div className="panel db-updater-panel">

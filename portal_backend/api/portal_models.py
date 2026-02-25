@@ -131,6 +131,10 @@ class MasterSiteInfo(Base):
     wp_username = Column(Text, nullable=True)
     wp_app_password = Column(Text, nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
+    wp_admin_login_url = Column(Text, nullable=True)
+    wp_admin_username = Column(Text, nullable=True)
+    wp_admin_password = Column(Text, nullable=True)
+    wp_admin_enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -170,6 +174,22 @@ class SiteCredential(Base):
     wp_app_password = Column(Text, nullable=False)
     author_name = Column(Text, nullable=True)
     author_id = Column(BigInteger, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SiteAdminCredential(Base):
+    __tablename__ = "publishing_site_admin_credentials"
+    __table_args__ = (
+        UniqueConstraint("publishing_site_id", name="publishing_site_admin_credentials_site_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
+    wp_admin_login_url = Column(Text, nullable=True)
+    wp_admin_username = Column(Text, nullable=False)
+    wp_admin_password = Column(Text, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

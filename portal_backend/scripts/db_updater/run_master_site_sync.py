@@ -102,6 +102,9 @@ def _prepare_master_rows(raw_rows: List[Dict[str, Any]]) -> tuple[list[dict[str,
                 raise ValueError("publishing_site_url is required.")
             wp_username = _clean_text(row.get("wp_username"))
             wp_app_password = _clean_text(row.get("wp_app_password"))
+            wp_admin_login_url = _clean_text(row.get("wp_admin_login_url"))
+            wp_admin_username = _clean_text(row.get("wp_admin_username"))
+            wp_admin_password = _clean_text(row.get("wp_admin_password"))
             auth_type = _clean_text(row.get("auth_type")) or "application_password"
             if auth_type != "application_password":
                 raise ValueError("auth_type must be application_password.")
@@ -120,6 +123,10 @@ def _prepare_master_rows(raw_rows: List[Dict[str, Any]]) -> tuple[list[dict[str,
                     "wp_username": (wp_username or None),
                     "wp_app_password": (wp_app_password or None),
                     "enabled": _bool_or_default(row.get("enabled"), True),
+                    "wp_admin_login_url": (_clean_text(wp_admin_login_url) or None),
+                    "wp_admin_username": (wp_admin_username or None),
+                    "wp_admin_password": (wp_admin_password or None),
+                    "wp_admin_enabled": _bool_or_default(row.get("wp_admin_enabled"), True),
                 }
             )
         except Exception as exc:
@@ -237,6 +244,40 @@ def _prepare_credentials_rows(master_rows: list[dict[str, Any]], site_ids_by_url
     return rows, issues
 
 
+def _prepare_admin_credentials_rows(master_rows: list[dict[str, Any]], site_ids_by_url: dict[str, Any]) -> tuple[list[dict[str, Any]], list[updater.RowIssue]]:
+    rows: list[dict[str, Any]] = []
+    issues: list[updater.RowIssue] = []
+    for idx, row in enumerate(master_rows, start=2):
+        site_url = row["publishing_site_url"]
+        site_id = site_ids_by_url.get(site_url)
+        if site_id is None:
+            issues.append(updater.RowIssue(row_number=idx, reason="publishing_site_id lookup failed for wp admin credentials", row=row))
+            continue
+        wp_admin_username = _clean_text(row.get("wp_admin_username"))
+        wp_admin_password = _clean_text(row.get("wp_admin_password"))
+        if not wp_admin_username and not wp_admin_password:
+            continue
+        if not wp_admin_username or not wp_admin_password:
+            issues.append(
+                updater.RowIssue(
+                    row_number=idx,
+                    reason="Both wp_admin_username and wp_admin_password are required when wp admin credentials are present",
+                    row=row,
+                )
+            )
+            continue
+        rows.append(
+            {
+                "publishing_site_id": site_id,
+                "wp_admin_login_url": (_clean_text(row.get("wp_admin_login_url")) or None),
+                "wp_admin_username": wp_admin_username,
+                "wp_admin_password": wp_admin_password,
+                "enabled": bool(row.get("wp_admin_enabled", True)),
+            }
+        )
+    return rows, issues
+
+
 def _write_report(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -297,7 +338,7 @@ def run_master_sync_for_file(
     credential_rows, cred_issues = _prepare_credentials_rows(master_rows, site_ids_by_url)
     issues.extend(cred_issues)
 
-    _emit_progress(progress_callback, 92, "sync_credentials", "Syncing publishing_site_credentials.")
+    _emit_progress(progress_callback, 90, "sync_credentials", "Syncing publishing_site_credentials.")
     credential_rows_to_write = _filter_new_or_changed_rows(
         engine,
         "publishing_site_credentials",
@@ -308,6 +349,23 @@ def run_master_sync_for_file(
         engine,
         "publishing_site_credentials",
         credential_rows_to_write,
+        match_columns=["publishing_site_id"],
+        dry_run=dry_run,
+    )
+
+    _emit_progress(progress_callback, 95, "sync_admin_credentials", "Syncing publishing_site_admin_credentials.")
+    admin_credential_rows, admin_cred_issues = _prepare_admin_credentials_rows(master_rows, site_ids_by_url)
+    issues.extend(admin_cred_issues)
+    admin_credential_rows_to_write = _filter_new_or_changed_rows(
+        engine,
+        "publishing_site_admin_credentials",
+        admin_credential_rows,
+        match_columns=["publishing_site_id"],
+    )
+    _upsert_table(
+        engine,
+        "publishing_site_admin_credentials",
+        admin_credential_rows_to_write,
         match_columns=["publishing_site_id"],
         dry_run=dry_run,
     )
@@ -323,11 +381,13 @@ def run_master_sync_for_file(
         "publishing_sites_rows_to_write": len(site_rows_to_write),
         "credentials_rows": len(credential_rows),
         "credentials_rows_to_write": len(credential_rows_to_write),
+        "admin_credentials_rows": len(admin_credential_rows),
+        "admin_credentials_rows_to_write": len(admin_credential_rows_to_write),
         "issues_count": len(issues),
         "issues_preview": [{"row_number": i.row_number, "reason": i.reason} for i in issues[:20]],
     }
     report_path = reports_dir / f"{file_path.stem}__{stamp}.report.json"
-    _emit_progress(progress_callback, 97, "writing_report", "Writing sync report.")
+    _emit_progress(progress_callback, 98, "writing_report", "Writing sync report.")
     _write_report(report_path, report)
     report["report_path"] = str(report_path)
 
@@ -359,7 +419,8 @@ def run_master_sync(*, dry_run: bool = False) -> int:
             "Rows to write -> "
             f"master:{report['master_rows_to_write']} "
             f"sites:{report['publishing_sites_rows_to_write']} "
-            f"credentials:{report['credentials_rows_to_write']}"
+            f"credentials:{report['credentials_rows_to_write']} "
+            f"admin_credentials:{report.get('admin_credentials_rows_to_write', 0)}"
         )
         print(f"Issues: {report['issues_count']}")
         print(f"Report: {report['report_path']}")

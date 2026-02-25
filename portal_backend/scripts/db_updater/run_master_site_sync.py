@@ -58,6 +58,13 @@ def _site_name_from_url(value: Any) -> str:
     return normalized.replace("https://", "", 1) if normalized else ""
 
 
+def _default_wp_admin_login_url(site_url: Any) -> str | None:
+    normalized = _normalize_site_url(site_url)
+    if not normalized:
+        return None
+    return f"{normalized}/wp-admin"
+
+
 def _reflect_table(engine: Engine, table_name: str) -> Table:
     metadata = MetaData()
     return Table(table_name, metadata, autoload_with=engine)
@@ -102,7 +109,7 @@ def _prepare_master_rows(raw_rows: List[Dict[str, Any]]) -> tuple[list[dict[str,
                 raise ValueError("publishing_site_url is required.")
             wp_username = _clean_text(row.get("wp_username"))
             wp_app_password = _clean_text(row.get("wp_app_password"))
-            wp_admin_login_url = _clean_text(row.get("wp_admin_login_url"))
+            wp_admin_login_url = _clean_text(row.get("wp_admin_login_url")) or (_default_wp_admin_login_url(site_url) or "")
             wp_admin_username = _clean_text(row.get("wp_admin_username"))
             wp_admin_password = _clean_text(row.get("wp_admin_password"))
             auth_type = _clean_text(row.get("auth_type")) or "application_password"
@@ -269,7 +276,7 @@ def _prepare_admin_credentials_rows(master_rows: list[dict[str, Any]], site_ids_
         rows.append(
             {
                 "publishing_site_id": site_id,
-                "wp_admin_login_url": (_clean_text(row.get("wp_admin_login_url")) or None),
+                "wp_admin_login_url": (_clean_text(row.get("wp_admin_login_url")) or _default_wp_admin_login_url(site_url)),
                 "wp_admin_username": wp_admin_username,
                 "wp_admin_password": wp_admin_password,
                 "enabled": bool(row.get("wp_admin_enabled", True)),

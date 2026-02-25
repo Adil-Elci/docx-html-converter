@@ -5,8 +5,8 @@
 ## Usage
 
 ```bash
-python3 "scripts/db updater/import_tabular_to_db.py" --config "scripts/db updater/examples/publishing_site_credentials_by_url.example.json" --dry-run
-python3 "scripts/db updater/import_tabular_to_db.py" --config "scripts/db updater/examples/publishing_site_credentials_by_url.example.json"
+python3 portal_backend/scripts/db_updater/import_tabular_to_db.py --config portal_backend/scripts/db_updater/examples/publishing_site_credentials_by_url.example.json --dry-run
+python3 portal_backend/scripts/db_updater/import_tabular_to_db.py --config portal_backend/scripts/db_updater/examples/publishing_site_credentials_by_url.example.json
 ```
 
 ## Input Types
@@ -32,4 +32,4 @@ python3 "scripts/db updater/import_tabular_to_db.py" --config "scripts/db update
 - `allow_issues`: if `false`, exits non-zero when rows are skipped
 - `issues_output_jsonl`: optional path for skipped-row details
 
-The example config in `scripts/db updater/examples/` is ready for importing WordPress credentials by site URL.
+The example config in `portal_backend/scripts/db_updater/examples/` is ready for importing WordPress credentials by site URL.

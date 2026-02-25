@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import { getLabel } from "./i18n.js";
 
 const getInitialLanguage = () => localStorage.getItem("ui_language") || "en";
+const getInitialSidebarHidden = () => localStorage.getItem("portal_sidebar_hidden") === "true";
 
 const emptySubmissionForm = () => ({
   publishing_site: "",
@@ -116,6 +117,7 @@ export default function App() {
   const [activeSection, setActiveSection] = useState("guest-posts");
   const [language, setLanguage] = useState(getInitialLanguage());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
+  const [sidebarHidden, setSidebarHidden] = useState(getInitialSidebarHidden);
 
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -333,6 +335,10 @@ export default function App() {
     }
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("portal_sidebar_hidden", sidebarHidden ? "true" : "false");
+  }, [sidebarHidden]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1278,7 +1284,7 @@ export default function App() {
   const readySitesLabel = sites.length > 0 ? t("clientDashboardReadySitesYes") : t("clientDashboardReadySitesNo");
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarHidden ? "sidebar-hidden" : ""}`.trim()}>
       <Sidebar
         t={t}
         userRole={currentUser.role}
@@ -1291,6 +1297,15 @@ export default function App() {
         <div className="header">
           <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
           <div className="inline header-actions">
+            <button
+              className="btn secondary sidebar-toggle-btn"
+              type="button"
+              onClick={() => setSidebarHidden((prev) => !prev)}
+              aria-pressed={!sidebarHidden}
+              aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
+            >
+              {sidebarHidden ? "Show menu" : "Hide menu"}
+            </button>
             <div className="user-chip">
               <span>{`Hey ${
                 currentUser.role === "admin"

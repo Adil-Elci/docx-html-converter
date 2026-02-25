@@ -76,7 +76,12 @@ def upgrade() -> None:
     )
 
     # Enforce one credential per site.
-    op.drop_constraint("publishing_site_credentials_site_username_unique", "publishing_site_credentials", type_="unique")
+    op.execute(
+        """
+        ALTER TABLE publishing_site_credentials
+        DROP CONSTRAINT IF EXISTS publishing_site_credentials_site_username_unique;
+        """
+    )
     op.create_unique_constraint("publishing_site_credentials_site_unique", "publishing_site_credentials", ["publishing_site_id"])
 
     # Seed master table from existing publishing_sites + credentials

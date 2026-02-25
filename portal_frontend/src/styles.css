@@ -1086,29 +1086,68 @@ input:disabled {
   margin-bottom: 8px;
 }
 
+.db-updater-panel {
+  padding: 18px;
+}
+
 .db-updater-form {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   margin-top: 16px;
 }
 
 .db-updater-upload-box {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   padding: 16px;
   border: 1px dashed var(--border-color);
   border-radius: 12px;
   background: var(--panel-soft, rgba(255, 255, 255, 0.04));
+  align-items: start;
+}
+
+.db-updater-upload-title {
+  font-weight: 600;
+}
+
+.db-updater-upload-filename {
+  color: var(--muted-text, #61708f);
+  font-size: 13px;
 }
 
 .db-updater-upload-box input[type="file"] {
   width: 100%;
 }
 
+.db-updater-form-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 .db-updater-checkbox {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.db-updater-checkbox input[type="checkbox"] {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.db-updater-checkbox span {
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.db-updater-submit {
+  min-width: 150px;
+  width: auto;
 }
 
 .db-updater-progress {
@@ -1180,5 +1219,13 @@ input:disabled {
 
   .db-updater-history-head {
     display: none;
+  }
+
+  .db-updater-form-controls {
+    align-items: stretch;
+  }
+
+  .db-updater-submit {
+    width: 100%;
   }
 }

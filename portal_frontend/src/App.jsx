@@ -1798,7 +1798,8 @@ function DbUpdaterWorkspace({
 
         <form className="db-updater-form" onSubmit={onSubmit}>
           <label className="db-updater-upload-box">
-            <span>{file ? file.name : "Choose file (CSV/XLSX)"}</span>
+            <span className="db-updater-upload-title">Choose file (CSV/XLSX)</span>
+            <span className="db-updater-upload-filename">{file ? file.name : "No file selected"}</span>
             <input
               type="file"
               accept=".csv,.xlsx"
@@ -1807,19 +1808,21 @@ function DbUpdaterWorkspace({
             />
           </label>
 
-          <label className="db-updater-checkbox">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(event) => onDryRunChange(event.target.checked)}
-              disabled={submitting}
-            />
-            <span>Dry run (preview only, no DB writes)</span>
-          </label>
+          <div className="db-updater-form-controls">
+            <label className="db-updater-checkbox">
+              <input
+                type="checkbox"
+                checked={dryRun}
+                onChange={(event) => onDryRunChange(event.target.checked)}
+                disabled={submitting}
+              />
+              <span>Dry run (preview only, no DB writes)</span>
+            </label>
 
-          <button className="btn submit-btn" type="submit" disabled={submitting || !file}>
-            {submitting ? "Running sync..." : "Upload & Sync"}
-          </button>
+            <button className="btn submit-btn db-updater-submit" type="submit" disabled={submitting || !file}>
+              {submitting ? "Running sync..." : "Upload & Sync"}
+            </button>
+          </div>
         </form>
 
         {(submitting || job || success) ? (

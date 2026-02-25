@@ -9,6 +9,28 @@ python3 portal_backend/scripts/db_updater/import_tabular_to_db.py --config porta
 python3 portal_backend/scripts/db_updater/import_tabular_to_db.py --config portal_backend/scripts/db_updater/examples/publishing_site_credentials_by_url.example.json
 ```
 
+## Auto Inbox Mode (Recommended for recurring CSV patches)
+
+Drop exactly one file into:
+
+- `portal_backend/scripts/db_updater/inbox/`
+
+Then run:
+
+```bash
+python3 portal_backend/scripts/db_updater/run_inbox_update.py --dry-run
+python3 portal_backend/scripts/db_updater/run_inbox_update.py
+```
+
+What it does automatically:
+
+- reads the single file in `inbox/`
+- detects the target table from headers / filename
+- uses DB unique keys/PKs for upsert when possible
+- applies a built-in adapter for `publishing_site_credentials` (supports `publishing_site_url` -> `publishing_site_id` lookup)
+- writes a report to `portal_backend/scripts/db_updater/reports/`
+- moves the file to `processed/` or `failed/` (non-dry-run)
+
 ## Input Types
 
 - `csv` via `input.path`
@@ -22,6 +44,7 @@ python3 portal_backend/scripts/db_updater/import_tabular_to_db.py --config porta
 - Supports lookup mapping (for example `site_url` -> `publishing_site_id`)
 - Upserts rows using `match_columns`
 - Outputs skipped-row reasons (and optional JSONL issue log)
+- Supports automatic inbox processing for recurring patches
 
 ## Config Notes
 

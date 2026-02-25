@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -234,13 +233,6 @@ def _prepare_credentials_rows(master_rows: list[dict[str, Any]], site_ids_by_url
     return rows, issues
 
 
-def _move_file(src: Path, dest_dir: Path, suffix: str) -> Path:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    target = dest_dir / f"{src.stem}__{suffix}{src.suffix.lower()}"
-    shutil.move(str(src), str(target))
-    return target
-
-
 def _write_report(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -249,12 +241,8 @@ def _write_report(path: Path, data: dict[str, Any]) -> None:
 def run_master_sync(*, dry_run: bool = False) -> int:
     base = _script_dir()
     inbox_dir = base / "master_site_info"
-    processed_dir = base / "processed"
-    failed_dir = base / "failed"
     reports_dir = base / "reports"
     inbox_dir.mkdir(parents=True, exist_ok=True)
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    failed_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     files = _list_master_files(inbox_dir)
@@ -345,15 +333,10 @@ def run_master_sync(*, dry_run: bool = False) -> int:
             print("Dry run complete. File left in place.")
             return 0
 
-        destination = processed_dir if not issues else failed_dir
-        moved = _move_file(file_path, destination, stamp)
-        print(f"Moved file to: {moved}")
+        print("Sync complete. Master file left in place.")
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        if not dry_run and file_path.exists():
-            moved = _move_file(file_path, failed_dir, f"failed__{stamp}")
-            print(f"Moved file to: {moved}", file=sys.stderr)
         return 1
 
 

@@ -30,7 +30,7 @@ python3 portal_backend/scripts/db_updater/run_master_site_sync.py
 - syncs `publishing_sites`
 - syncs `publishing_site_credentials` (one credential row per site)
 - writes reports to `portal_backend/scripts/db_updater/reports/`
-- moves processed files to `processed/` or `failed/`
+- leaves the master file in place (you keep updating the same file)
 
 ### Expected Master File Columns
 

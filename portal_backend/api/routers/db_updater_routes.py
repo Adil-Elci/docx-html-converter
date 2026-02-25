@@ -127,3 +127,11 @@ def get_master_site_sync_job(job_id: str, _: User = Depends(require_admin)) -> d
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
         return dict(job)
 
+
+@router.get("/master-site-sync/jobs")
+def list_master_site_sync_jobs(limit: int = 20, _: User = Depends(require_admin)) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit or 20), 100))
+    with _JOBS_LOCK:
+        jobs = [dict(item) for item in _JOBS.values()]
+    jobs.sort(key=lambda row: (row.get("updated_at") or "", row.get("created_at") or ""), reverse=True)
+    return {"items": jobs[:safe_limit]}

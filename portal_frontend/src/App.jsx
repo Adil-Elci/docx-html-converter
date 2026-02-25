@@ -139,6 +139,7 @@ export default function App() {
   const [dbUpdaterUploadPercent, setDbUpdaterUploadPercent] = useState(0);
   const [dbUpdaterJobId, setDbUpdaterJobId] = useState("");
   const [dbUpdaterJob, setDbUpdaterJob] = useState(null);
+  const [dbUpdaterJobsHistory, setDbUpdaterJobsHistory] = useState([]);
   const [dbUpdaterError, setDbUpdaterError] = useState("");
   const [dbUpdaterSuccess, setDbUpdaterSuccess] = useState("");
 
@@ -624,6 +625,29 @@ export default function App() {
       if (intervalId) window.clearInterval(intervalId);
     };
   }, [dbUpdaterJobId]);
+
+  useEffect(() => {
+    if (!isDbUpdaterDomain || !currentUser || currentUser.role !== "admin") return undefined;
+    let cancelled = false;
+    let intervalId = null;
+
+    const loadHistory = async () => {
+      try {
+        const payload = await api.get("/db-updater/master-site-sync/jobs?limit=12");
+        if (cancelled) return;
+        setDbUpdaterJobsHistory(Array.isArray(payload?.items) ? payload.items : []);
+      } catch {
+        if (cancelled) return;
+      }
+    };
+
+    loadHistory();
+    intervalId = window.setInterval(loadHistory, 3000);
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, [isDbUpdaterDomain, currentUser]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
@@ -1141,6 +1165,7 @@ export default function App() {
         job={dbUpdaterJob}
         error={dbUpdaterError}
         success={dbUpdaterSuccess}
+        historyItems={dbUpdaterJobsHistory}
         onLogout={handleLogout}
       />
     );
@@ -1765,6 +1790,7 @@ function DbUpdaterWorkspace({
   job,
   error,
   success,
+  historyItems,
   onLogout,
 }) {
   const report = job?.report || null;
@@ -1853,6 +1879,32 @@ function DbUpdaterWorkspace({
             <div className="db-updater-report-card">
               <span className="stat-label">Mode</span>
               <strong>{report.dry_run ? "Dry Run" : "Live Sync"}</strong>
+            </div>
+          </div>
+        ) : null}
+
+        {Array.isArray(historyItems) && historyItems.length > 0 ? (
+          <div className="db-updater-history">
+            <h2>Recent Sync Jobs</h2>
+            <div className="db-updater-history-table">
+              <div className="db-updater-history-row db-updater-history-head">
+                <span>Time (UTC)</span>
+                <span>File</span>
+                <span>Mode</span>
+                <span>Status</span>
+                <span>Progress</span>
+                <span>Issues</span>
+              </div>
+              {historyItems.map((item) => (
+                <div key={item.id} className="db-updater-history-row">
+                  <span>{(item.updated_at || item.created_at || "").replace("T", " ").replace("Z", "")}</span>
+                  <span>{item.file_name || "-"}</span>
+                  <span>{item.dry_run ? "Dry Run" : "Live"}</span>
+                  <span>{item.status || "-"}</span>
+                  <span>{Number(item.progress_percent || 0)}%</span>
+                  <span>{item.report?.issues_count ?? "-"}</span>
+                </div>
+              ))}
             </div>
           </div>
         ) : null}

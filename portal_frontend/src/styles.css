@@ -1137,3 +1137,48 @@ input:disabled {
   display: grid;
   gap: 4px;
 }
+
+.db-updater-history {
+  margin-top: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.db-updater-history h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.db-updater-history-table {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.db-updater-history-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.4fr .8fr .9fr .7fr .7fr;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.db-updater-history-row:first-child {
+  border-top: 0;
+}
+
+.db-updater-history-head {
+  font-weight: 600;
+  background: var(--panel-soft, rgba(255, 255, 255, 0.04));
+}
+
+@media (max-width: 900px) {
+  .db-updater-history-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .db-updater-history-head {
+    display: none;
+  }
+}

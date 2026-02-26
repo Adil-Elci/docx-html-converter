@@ -628,18 +628,6 @@ input:disabled {
   overflow-wrap: anywhere;
 }
 
-.app-shell.sidebar-hidden .submission-block {
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-}
-
-.app-shell.sidebar-hidden .request-form-panel .submission-block {
-  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
-}
-
-.app-shell.sidebar-hidden .submission-field-site {
-  max-width: 360px;
-}
-
 .order-block {
   justify-content: start;
 }

@@ -1630,7 +1630,6 @@ export default function App() {
             </div>
           ) : (
             <div className="panel form-panel request-form-panel">
-              <h2>{isOrders ? t("formOrder") : t("formSubmission")}</h2>
               <form className="guest-form request-builder-form" onSubmit={submitGuestPost}>
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {

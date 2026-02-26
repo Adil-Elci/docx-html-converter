@@ -1637,24 +1637,6 @@ export default function App() {
                           </div>
 
                           {isOrders ? (
-                            <div className="submission-field submission-field-inline submission-field-client">
-                              <label>{t("clientName")}</label>
-                              <select
-                                value={block.client_name || ""}
-                                onChange={(e) => setSubmissionBlockField(block.id, "client_name", e.target.value)}
-                                required
-                              >
-                                <option value="">{t("selectClient")}</option>
-                                {clients.map((client) => (
-                                  <option key={client.id} value={(client.name || "").trim()}>
-                                    {(client.name || "").trim() || client.id}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          ) : null}
-
-                          {isOrders ? (
                             <div className="submission-field submission-field-site">
                               <label>{t("targetSiteForBacklink")}</label>
                               <select

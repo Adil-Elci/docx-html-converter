@@ -729,7 +729,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
         validation_errors: List[str] = []
         for check in (
-            validate_word_count(article_html, 750, 1100),
+            validate_word_count(article_html, 750, 1200),
             validate_hyperlink_count(article_html, 1),
             validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
         ):
@@ -767,7 +767,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             article_html = (fallback_payload.get("article_html") or "").strip()
             validation_errors: List[str] = []
             for check in (
-                validate_word_count(article_html, 750, 1100),
+                validate_word_count(article_html, 750, 1200),
                 validate_hyperlink_count(article_html, 1),
                 validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
             ):
@@ -785,8 +785,12 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     # ── post-generation repairs ──────────────────────────────────────
     art_html = (article_payload.get("article_html") or "").strip()
+    pre_repair_links = count_hyperlinks(art_html)
     # Strip stray hyperlinks (keep only the backlink)
     art_html = _strip_non_backlinks(art_html, backlink_url)
+    post_repair_links = count_hyperlinks(art_html)
+    if pre_repair_links != post_repair_links:
+        logger.info("creator.repair.stripped_links before=%s after=%s", pre_repair_links, post_repair_links)
     # Insert backlink if missing
     if backlink_url and backlink_url not in art_html:
         anchor_text = phase4.get("anchor_text_final") or "this resource"
@@ -918,7 +922,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             phase7_errors.append("topic_not_in_allowed_topics")
     if validate_hyperlink_count(phase5["article_html"], 1):
         phase7_errors.append("hyperlink_count_invalid")
-    if validate_word_count(phase5["article_html"], 750, 1100):
+    if validate_word_count(phase5["article_html"], 750, 1200):
         phase7_errors.append("word_count_invalid")
     if not (4 <= count_h2(phase5["article_html"]) <= 6):
         phase7_errors.append("h2_count_invalid")
@@ -926,18 +930,28 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     if phase7_errors:
         # one fix pass
         current_wc = word_count_from_html(phase5["article_html"])
+        logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
+        wc_ok = 750 <= current_wc <= 1200
+        if wc_ok:
+            wc_instruction = (
+                f"The word count ({current_wc}) is fine — do NOT add or remove content. "
+                "Only fix the specific issues listed below."
+            )
+        else:
+            wc_instruction = (
+                f"The article currently has {current_wc} words. "
+                "Adjust it to be between 800 and 1100 words."
+            )
         system_prompt = (
-            "Fix the HTML article to satisfy all SEO checks. "
-            "The article MUST have between 800 and 1100 words (currently it has "
-            f"{current_wc} words). Expand or rewrite sections as needed to reach "
-            "at least 850 words. Keep exactly one hyperlink. Keep 4-6 H2 sections. "
+            "Fix the HTML article to satisfy SEO checks. "
+            f"{wc_instruction} "
+            "Keep exactly one hyperlink (the backlink). Keep 4-6 H2 sections. "
             "Return JSON only."
         )
         user_prompt = (
             f"Article_html: {phase5['article_html']}\n"
-            f"Issues: {phase7_errors}\n"
+            f"Issues to fix: {phase7_errors}\n"
             f"Current word count: {current_wc}\n"
-            f"Required word count: 800-1100\n"
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
@@ -958,9 +972,13 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             fixed_html = (llm_out.get("article_html") or "").strip()
             fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
             logger.info("creator.phase7.fix_result before=%s after=%s", current_wc, fixed_wc)
-            # Only accept the fix if it improved or at least maintained word count
-            if fixed_html and fixed_wc >= current_wc:
+            # Accept the fix only if it stays within bounds
+            if fixed_html and 750 <= fixed_wc <= 1200:
                 phase5["article_html"] = fixed_html
+            elif fixed_html and fixed_wc > 0:
+                # Fix went out of bounds; keep original if it was in bounds
+                if not wc_ok:
+                    phase5["article_html"] = fixed_html
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
             phase5["slug"] = llm_out.get("slug") or phase5["slug"]
@@ -968,7 +986,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             phase7_errors = []
             if validate_hyperlink_count(phase5["article_html"], 1):
                 phase7_errors.append("hyperlink_count_invalid")
-            if validate_word_count(phase5["article_html"], 750, 1100):
+            if validate_word_count(phase5["article_html"], 750, 1200):
                 phase7_errors.append("word_count_invalid")
             if not (4 <= count_h2(phase5["article_html"]) <= 6):
                 phase7_errors.append("h2_count_invalid")

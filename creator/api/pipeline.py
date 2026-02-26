@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .llm import LLMError, call_llm_json
+from .llm import LLMError, call_llm_json, call_llm_text
 from .validators import (
     count_h2,
     count_hyperlinks,
@@ -142,6 +142,219 @@ def _build_anchor_text(anchor_type: str, brand_name: str, keyword_cluster: List[
     if anchor_type == "partial_match" and keyword_cluster:
         return " ".join(keyword_cluster[:3]).title()
     return "this resource"
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:html)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _wrap_paragraphs(text: str) -> str:
+    cleaned = _strip_code_fences(text)
+    if "<p" in cleaned or "<h2" in cleaned:
+        return cleaned
+    parts = [part.strip() for part in re.split(r"\n{2,}", cleaned) if part.strip()]
+    if not parts:
+        return ""
+    return "".join(f"<p>{part}</p>" for part in parts)
+
+
+def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
+    cleaned = _strip_code_fences(raw)
+    if "<h2" in cleaned:
+        return cleaned
+    body = _wrap_paragraphs(cleaned)
+    html = f"<h2>{h2}</h2>"
+    if h3s:
+        for h3 in h3s:
+            html += f"<h3>{h3}</h3>"
+    if body:
+        html += body
+    return html
+
+
+def _strip_non_backlinks(html: str, backlink_url: str) -> str:
+    if not backlink_url:
+        return re.sub(r"<a[^>]*>(.*?)</a>", r"\1", html, flags=re.IGNORECASE | re.DOTALL)
+
+    def replacer(match: re.Match[str]) -> str:
+        href = match.group(1) or ""
+        inner = match.group(2) or ""
+        if backlink_url in href:
+            return match.group(0)
+        return inner
+
+    return re.sub(
+        r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        replacer,
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: str) -> str:
+    anchor_html = f'<a href="{backlink_url}">{anchor_text}</a>'
+    if placement == "intro":
+        match = re.search(r"</p>", html, flags=re.IGNORECASE)
+        if match:
+            return html[:match.start()] + f" {anchor_html}" + html[match.start():]
+        return anchor_html + html
+
+    index = 0
+    try:
+        index = max(0, int(placement.split("_")[1]) - 2)
+    except Exception:
+        index = 0
+
+    matches = list(re.finditer(r"<h2[^>]*>", html, flags=re.IGNORECASE))
+    if not matches:
+        return html + anchor_html
+
+    if index >= len(matches):
+        index = len(matches) - 1
+
+    start = matches[index].end()
+    after = html[start:]
+    p_match = re.search(r"</p>", after, flags=re.IGNORECASE)
+    if p_match:
+        insert_at = start + p_match.start()
+        return html[:insert_at] + f" {anchor_html}" + html[insert_at:]
+    return html[:start] + anchor_html + html[start:]
+
+
+def _generate_article_by_sections(
+    *,
+    phase4: Dict[str, Any],
+    phase3: Dict[str, Any],
+    backlink_url: str,
+    llm_api_key: str,
+    llm_base_url: str,
+    llm_model: str,
+    http_timeout: int,
+) -> Optional[Dict[str, Any]]:
+    outline_items = phase4.get("outline") or []
+    if not isinstance(outline_items, list) or not outline_items:
+        return None
+
+    h2_count = len(outline_items)
+    intro_target = 120
+    target_total = 900
+    per_section = max(120, int((target_total - intro_target) / max(1, h2_count)))
+    per_min = max(110, per_section - 20)
+    per_max = min(220, per_section + 40)
+
+    backlink_placement = phase4.get("backlink_placement") or "intro"
+    anchor_text = phase4.get("anchor_text_final") or "this resource"
+
+    intro_system = "Write a short introduction paragraph in HTML. Return only HTML."
+    intro_user = (
+        f"Topic: {phase3.get('final_article_topic','')}\n"
+        f"H1: {phase4.get('h1','')}\n"
+        f"Length: {intro_target - 20}-{intro_target + 20} words.\n"
+        "No hyperlinks unless explicitly requested."
+    )
+    if backlink_placement == "intro":
+        intro_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
+
+    try:
+        intro_raw = call_llm_text(
+            system_prompt=intro_system,
+            user_prompt=intro_user,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            model=llm_model,
+            timeout_seconds=http_timeout,
+            max_tokens=500,
+            temperature=0.2,
+        )
+    except LLMError:
+        intro_raw = ""
+    intro_html = _wrap_paragraphs(intro_raw) or "<p></p>"
+
+    sections_html: List[str] = []
+    for index, item in enumerate(outline_items, start=1):
+        h2 = (item.get("h2") or "").strip() if isinstance(item, dict) else str(item)
+        h3s = item.get("h3") if isinstance(item, dict) else []
+        h3s_list = [str(h3).strip() for h3 in (h3s or []) if str(h3).strip()]
+        placement_index = None
+        if backlink_placement.startswith("section_"):
+            try:
+                placement_index = int(backlink_placement.split("_")[1]) - 2
+            except Exception:
+                placement_index = None
+        include_backlink = placement_index == (index - 1)
+
+        section_system = "Write HTML for a single H2 section of a guest post. Return only HTML."
+        section_user = (
+            f"H2: {h2}\n"
+            f"H3s: {h3s_list}\n"
+            f"Length: {per_min}-{per_max} words.\n"
+            "Write in a neutral authoritative tone. Do not use bullet lists unless necessary."
+            "\nDo not include any hyperlinks unless explicitly requested."
+        )
+        if include_backlink:
+            section_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
+
+        try:
+            raw = call_llm_text(
+                system_prompt=section_system,
+                user_prompt=section_user,
+                api_key=llm_api_key,
+                base_url=llm_base_url,
+                model=llm_model,
+                timeout_seconds=http_timeout,
+                max_tokens=900,
+                temperature=0.2,
+            )
+        except LLMError:
+            raw = ""
+
+        sections_html.append(_normalize_section_html(h2, h3s_list, raw))
+
+    article_html = f"<h1>{phase4.get('h1','')}</h1>" + intro_html + "".join(sections_html)
+    article_html = _strip_non_backlinks(article_html, backlink_url)
+    if backlink_url and anchor_text and backlink_url not in article_html:
+        article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
+
+    word_count = word_count_from_html(article_html)
+    if word_count < 800:
+        expand_system = "Expand a section with an additional paragraph in HTML. Return only HTML."
+        expand_user = (
+            f"Topic: {phase3.get('final_article_topic','')}\n"
+            "Write one additional paragraph of 120-180 words that fits the article. "
+            "No hyperlinks."
+        )
+        try:
+            extra = call_llm_text(
+                system_prompt=expand_system,
+                user_prompt=expand_user,
+                api_key=llm_api_key,
+                base_url=llm_base_url,
+                model=llm_model,
+                timeout_seconds=http_timeout,
+                max_tokens=400,
+                temperature=0.2,
+            )
+            article_html += _wrap_paragraphs(extra)
+        except LLMError:
+            pass
+
+    meta_title = phase4.get("h1") or ""
+    excerpt = ""
+    match = re.search(r"<p[^>]*>(.*?)</p>", article_html, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        excerpt = re.sub(r"<[^>]+>", "", match.group(1)).strip()[:200]
+
+    return {
+        "meta_title": meta_title,
+        "meta_description": "",
+        "slug": "",
+        "excerpt": excerpt,
+        "article_html": article_html,
+    }
 
 
 def _call_leonardo(
@@ -525,6 +738,33 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             "article_html": article_html,
         }
         break
+
+    if not article_payload:
+        fallback_payload = _generate_article_by_sections(
+            phase4=phase4,
+            phase3=phase3,
+            backlink_url=backlink_url,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model=llm_model,
+            http_timeout=http_timeout,
+        )
+        if fallback_payload:
+            article_html = (fallback_payload.get("article_html") or "").strip()
+            validation_errors: List[str] = []
+            for check in (
+                validate_word_count(article_html, 800, 1100),
+                validate_hyperlink_count(article_html, 1),
+                validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
+            ):
+                if check:
+                    validation_errors.append(check)
+            if not (4 <= count_h2(article_html) <= 6):
+                validation_errors.append("h2_count_invalid")
+            if not validation_errors:
+                article_payload = fallback_payload
+            else:
+                errors.extend(validation_errors)
 
     if not article_payload:
         raise CreatorError(f"Article generation failed: {errors}")

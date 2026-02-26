@@ -486,6 +486,7 @@ input:disabled {
 
 .request-form-panel .guest-form {
   max-width: 100%;
+  gap: 12px;
 }
 
 .app-shell.sidebar-hidden .request-form-panel {
@@ -495,6 +496,10 @@ input:disabled {
 .submission-blocks {
   display: grid;
   gap: 14px;
+}
+
+.request-form-panel .submission-blocks {
+  gap: 10px;
 }
 
 .submission-block-wrap {
@@ -509,6 +514,12 @@ input:disabled {
   align-items: start;
   padding: 16px;
   background: color-mix(in srgb, var(--panel-3) 45%, transparent);
+}
+
+.request-form-panel .submission-block {
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  padding: 12px 14px;
 }
 
 .submission-block-header {
@@ -547,8 +558,23 @@ input:disabled {
   grid-column: 1 / -1;
 }
 
+.submission-field-site {
+  justify-self: start;
+  width: 100%;
+  max-width: 520px;
+}
+
+.submission-field-site .small-text {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 .app-shell.sidebar-hidden .submission-block {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.app-shell.sidebar-hidden .request-form-panel .submission-block {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
 
 .block-control-btn {

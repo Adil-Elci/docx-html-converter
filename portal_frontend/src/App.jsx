@@ -1569,7 +1569,7 @@ export default function App() {
                           </div>
 
                           {isOrders ? (
-                            <div className="submission-field submission-field-wide">
+                            <div className="submission-field submission-field-site">
                               <label>{t("targetSiteForBacklink")}</label>
                               <select
                                 value={block.target_site_id || ""}
@@ -1607,7 +1607,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          <div className="submission-field submission-field-wide">
+                          <div className="submission-field submission-field-site">
                             <label>{t("targetWebsite")}</label>
                             <div className="site-suggest-wrap">
                               <input

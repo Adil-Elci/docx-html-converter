@@ -183,6 +183,7 @@ export default function App() {
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
+  const [clientSuggestionsBlockId, setClientSuggestionsBlockId] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
   const portalRefreshInFlightRef = useRef(false);
@@ -208,6 +209,10 @@ export default function App() {
 
   const getClientTargetSites = () => getTargetSitesForClient(clients[0]);
 
+  const sortByLabel = (items, getValue) => [...items].sort((a, b) => (
+    getValue(a).localeCompare(getValue(b), undefined, { sensitivity: "base" })
+  ));
+
   const getDefaultSubmissionTargetSite = () => {
     const rows = getClientTargetSites();
     if (!rows.length) return {};
@@ -222,6 +227,7 @@ export default function App() {
     nextSubmissionBlockIdRef.current = 2;
     setSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     setSiteSuggestionsBlockId(null);
+    setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
   };
 
@@ -233,6 +239,7 @@ export default function App() {
     nextSubmissionBlockIdRef.current = 2;
     setSubmissionBlocks([createSubmissionBlock(1)]);
     setSiteSuggestionsBlockId(null);
+    setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
     setShowSubmissionSuccessModal(false);
     setShowSubmissionErrorModal(false);
@@ -262,6 +269,7 @@ export default function App() {
       return next.length ? next : [createSubmissionBlock(1, getDefaultSubmissionTargetSite())];
     });
     setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
+    setClientSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setUploadProgressBlockId((prev) => (prev === blockId ? null : prev));
   };
 
@@ -1311,7 +1319,7 @@ export default function App() {
     : 0;
   const getFilteredSitesForQuery = (query) => {
     const normalizedQuery = (query || "").trim().toLowerCase();
-    return sites.filter((site) => {
+    return sortByLabel(sites, (site) => `${site.site_url || ""} ${site.name || ""}`).filter((site) => {
       if (!normalizedQuery) return true;
       const url = (site.site_url || "").toLowerCase();
       const name = (site.name || "").toLowerCase();
@@ -1627,10 +1635,21 @@ export default function App() {
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
+                    const blockFilteredClients = isAdminUser
+                      ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
+                          const q = (block.client_name || "").trim().toLowerCase();
+                          if (!q) return true;
+                          const name = ((client.name || "").trim()).toLowerCase();
+                          return name.includes(q);
+                        })
+                      : [];
                     const selectedClient = isAdminUser
                       ? clients.find((client) => (client.name || "").trim() === (block.client_name || "").trim())
                       : null;
-                    const availableTargetSites = isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites;
+                    const availableTargetSites = sortByLabel(
+                      isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
+                      (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
+                    );
                     const selectedClientTargetSite = availableTargetSites.find((row) => String(row.id || "") === String(block.target_site_id || ""));
                     const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
@@ -1644,33 +1663,66 @@ export default function App() {
                           {isAdminUser ? (
                             <div className="submission-field submission-field-inline submission-field-client">
                               <label>{t("clientName")}</label>
-                              <select
-                                value={block.client_name || ""}
-                                onChange={(e) => {
-                                  const nextClientName = e.target.value;
-                                  const nextClient = clients.find((client) => (client.name || "").trim() === nextClientName);
-                                  const nextTargetRows = getTargetSitesForClient(nextClient);
-                                  const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
-                                  setSubmissionBlocks((prev) => prev.map((item) => (
-                                    item.id === block.id
-                                      ? {
-                                          ...item,
-                                          client_name: nextClientName,
-                                          target_site_id: nextPrimary ? String(nextPrimary.id || "") : "",
-                                          target_site_url: nextPrimary ? (nextPrimary.target_site_url || "").trim() : "",
-                                        }
-                                      : item
-                                  )));
-                                }}
-                                required
-                              >
-                                <option value="">{t("selectClient")}</option>
-                                {clients.map((client) => (
-                                  <option key={client.id} value={(client.name || "").trim()}>
-                                    {(client.name || "").trim() || client.id}
-                                  </option>
-                                ))}
-                              </select>
+                              <div className="site-suggest-wrap">
+                                <input
+                                  type="text"
+                                  value={block.client_name || ""}
+                                  onFocus={() => setClientSuggestionsBlockId(block.id)}
+                                  onBlur={() => setTimeout(() => {
+                                    setClientSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
+                                  }, 120)}
+                                  onChange={(e) => {
+                                    const nextClientName = e.target.value;
+                                    setSubmissionBlocks((prev) => prev.map((item) => (
+                                      item.id === block.id
+                                        ? {
+                                            ...item,
+                                            client_name: nextClientName,
+                                            target_site_id: "",
+                                            target_site_url: "",
+                                          }
+                                        : item
+                                    )));
+                                    setClientSuggestionsBlockId(block.id);
+                                  }}
+                                  placeholder={t("selectClient")}
+                                  required
+                                />
+                                {clientSuggestionsBlockId === block.id && blockFilteredClients.length > 0 ? (
+                                  <div className="site-suggest-list">
+                                    {blockFilteredClients.slice(0, 30).map((client) => (
+                                      <button
+                                        key={client.id}
+                                        type="button"
+                                        className="site-suggest-item"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          const nextClientName = (client.name || "").trim();
+                                          const nextTargetRows = sortByLabel(
+                                            getTargetSitesForClient(client),
+                                            (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
+                                          );
+                                          const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
+                                          setSubmissionBlocks((prev) => prev.map((item) => (
+                                            item.id === block.id
+                                              ? {
+                                                  ...item,
+                                                  client_name: nextClientName,
+                                                  target_site_id: nextPrimary ? String(nextPrimary.id || "") : "",
+                                                  target_site_url: nextPrimary ? (nextPrimary.target_site_url || "").trim() : "",
+                                                }
+                                              : item
+                                          )));
+                                          setClientSuggestionsBlockId(null);
+                                        }}
+                                      >
+                                        <span>{(client.name || "").trim() || client.id}</span>
+                                        <span className="muted-text small-text">{client.email || client.id}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           ) : null}
 

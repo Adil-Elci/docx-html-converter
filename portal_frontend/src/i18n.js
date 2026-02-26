@@ -97,7 +97,7 @@ export const translations = {
     formSubmission: "Submission Form",
     formOrder: "Order Form",
     targetWebsite: "Publishing Site",
-    targetSiteForBacklink: "Target Site (your website)",
+    targetSiteForBacklink: "Target Site (client's website)",
     clientName: "Client Name",
     selectClient: "Select client",
     fileType: "File Type",

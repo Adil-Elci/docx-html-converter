@@ -240,11 +240,11 @@ def _generate_article_by_sections(
         return None
 
     h2_count = len(outline_items)
-    intro_target = 120
-    target_total = 900
-    per_section = max(120, int((target_total - intro_target) / max(1, h2_count)))
-    per_min = max(110, per_section - 20)
-    per_max = min(220, per_section + 40)
+    intro_target = 150
+    target_total = 1050
+    per_section = max(150, int((target_total - intro_target) / max(1, h2_count)))
+    per_min = max(130, per_section - 20)
+    per_max = min(280, per_section + 50)
 
     backlink_placement = phase4.get("backlink_placement") or "intro"
     anchor_text = phase4.get("anchor_text_final") or "this resource"
@@ -282,7 +282,7 @@ def _generate_article_by_sections(
         placement_index = None
         if backlink_placement.startswith("section_"):
             try:
-                placement_index = int(backlink_placement.split("_")[1]) - 2
+                placement_index = int(backlink_placement.split("_")[1]) - 1
             except Exception:
                 placement_index = None
         include_backlink = placement_index == (index - 1)
@@ -306,7 +306,7 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=900,
+                max_tokens=1200,
                 temperature=0.2,
             )
         except LLMError:
@@ -648,7 +648,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 1500
+            max_tokens = 3500
             temperature = 0.3
         elif attempt == 2 and last_article_html:
             system_prompt = (
@@ -667,7 +667,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 1700
+            max_tokens = 3500
             temperature = 0.2
         else:
             system_prompt = (
@@ -687,7 +687,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 1700
+            max_tokens = 3500
             temperature = 0.2
         try:
             llm_out = call_llm_json(
@@ -916,7 +916,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=1600,
+                max_tokens=3500,
             )
             phase5["article_html"] = (llm_out.get("article_html") or "").strip() or phase5["article_html"]
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]

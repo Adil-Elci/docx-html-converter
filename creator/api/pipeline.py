@@ -415,23 +415,67 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     article_payload = None
     errors: List[str] = []
     backlink_url = phase1["backlink_url"]
-    for attempt in range(1, 3):
-        system_prompt = (
-            "Write an SEO blog post in clean HTML. Requirements: 800-1100 words, neutral authoritative tone, "
-            "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
-            "Include H1 and 4-6 H2 sections. Return JSON only."
-        )
-        user_prompt = (
-            f"H1: {phase4['h1']}\n"
-            f"Outline: {phase4['outline']}\n"
-            f"Backlink placement: {phase4['backlink_placement']}\n"
-            f"Backlink URL: {backlink_url}\n"
-            f"Anchor text: {phase4['anchor_text_final']}\n"
-            f"Primary keyword: {phase3['primary_keyword']}\n"
-            f"Secondary keywords: {phase3['secondary_keywords']}\n"
-            "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-            "\"excerpt\":\"...\",\"article_html\":\"...\"}"
-        )
+    last_article_html = ""
+    last_validation_errors: List[str] = []
+    for attempt in range(1, 4):
+        if attempt == 1:
+            system_prompt = (
+                "Write an SEO blog post in clean HTML. Requirements: 800-1100 words, neutral authoritative tone, "
+                "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
+                "Include H1 and 4-6 H2 sections. Return JSON only."
+            )
+            user_prompt = (
+                f"H1: {phase4['h1']}\n"
+                f"Outline: {phase4['outline']}\n"
+                f"Backlink placement: {phase4['backlink_placement']}\n"
+                f"Backlink URL: {backlink_url}\n"
+                f"Anchor text: {phase4['anchor_text_final']}\n"
+                f"Primary keyword: {phase3['primary_keyword']}\n"
+                f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
+                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+            )
+            max_tokens = 1500
+            temperature = 0.3
+        elif attempt == 2 and last_article_html:
+            system_prompt = (
+                "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
+                "Return JSON only."
+            )
+            user_prompt = (
+                f"Current article_html:\n{last_article_html}\n\n"
+                f"Issues: {last_validation_errors}\n"
+                f"Required H1: {phase4['h1']}\n"
+                f"Required outline: {phase4['outline']}\n"
+                "Constraints: 800-1100 words, H1 + 4-6 H2 sections, exactly one hyperlink in the HTML.\n"
+                f"Backlink URL: {backlink_url}\n"
+                f"Backlink placement: {phase4['backlink_placement']}\n"
+                f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
+                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+            )
+            max_tokens = 1700
+            temperature = 0.2
+        else:
+            system_prompt = (
+                "Write a NEW article from scratch that strictly satisfies all constraints. "
+                "Do not return markdown fences. Return JSON only."
+            )
+            user_prompt = (
+                f"H1: {phase4['h1']}\n"
+                f"Outline: {phase4['outline']}\n"
+                f"Backlink placement: {phase4['backlink_placement']}\n"
+                f"Backlink URL: {backlink_url}\n"
+                f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                "Constraints: 800-1100 words, H1 + 4-6 H2 sections, exactly one hyperlink in the HTML, "
+                "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
+                f"Primary keyword: {phase3['primary_keyword']}\n"
+                f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
+                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+            )
+            max_tokens = 1700
+            temperature = 0.2
         try:
             llm_out = call_llm_json(
                 system_prompt=system_prompt,
@@ -440,19 +484,23 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=1500,
+                max_tokens=max_tokens,
+                temperature=temperature,
                 allow_html_fallback=True,
             )
         except LLMError as exc:
             errors.append(str(exc))
             continue
 
+        html_fallback = bool(llm_out.pop("_html_fallback", False))
         article_html = (llm_out.get("article_html") or "").strip()
         if not article_html:
             errors.append("missing_article_html")
             continue
 
         validation_errors: List[str] = []
+        if html_fallback:
+            validation_errors.append("llm_html_fallback")
         for check in (
             validate_word_count(article_html, 800, 1100),
             validate_hyperlink_count(article_html, 1),
@@ -463,47 +511,10 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         if not (4 <= count_h2(article_html) <= 6):
             validation_errors.append("h2_count_invalid")
 
-        if validation_errors and attempt == 1:
-            errors.extend(validation_errors)
-            # fix pass
-            system_prompt = "Fix the HTML to satisfy the constraints. Return JSON only."
-            user_prompt = (
-                f"Current article_html: {article_html}\n"
-                f"Issues: {validation_errors}\n"
-                f"Backlink URL: {backlink_url}\n"
-                f"Placement: {phase4['backlink_placement']}\n"
-                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
-            )
-            try:
-                llm_out = call_llm_json(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    api_key=llm_api_key,
-                    base_url=llm_base_url,
-                    model=llm_model,
-                    timeout_seconds=http_timeout,
-                    max_tokens=1300,
-                    allow_html_fallback=True,
-                )
-                article_html = (llm_out.get("article_html") or "").strip()
-            except LLMError as exc:
-                errors.append(str(exc))
-                continue
-            # revalidate
-            validation_errors = []
-            for check in (
-                validate_word_count(article_html, 800, 1100),
-                validate_hyperlink_count(article_html, 1),
-                validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
-            ):
-                if check:
-                    validation_errors.append(check)
-            if not (4 <= count_h2(article_html) <= 6):
-                validation_errors.append("h2_count_invalid")
-
         if validation_errors:
             errors.extend(validation_errors)
+            last_article_html = article_html
+            last_validation_errors = validation_errors
             continue
 
         article_payload = {

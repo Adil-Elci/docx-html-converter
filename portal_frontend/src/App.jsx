@@ -118,6 +118,14 @@ export default function App() {
   const [language, setLanguage] = useState(getInitialLanguage());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
   const [sidebarHidden, setSidebarHidden] = useState(getInitialSidebarHidden);
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+  const [isNarrowViewport, setIsNarrowViewport] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(max-width: 1080px)").matches;
+  });
 
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -267,7 +275,8 @@ export default function App() {
   const getSubmissionBlockError = (block, { orders, clientName, requiresTargetSite }) => {
     const publishingSite = (block.publishing_site || "").trim();
     if (!publishingSite) return t("errorTargetRequired");
-    if (!clientName) return t("errorClientRequired");
+    const effectiveClientName = orders ? ((block.client_name || "").trim() || clientName) : clientName;
+    if (!effectiveClientName) return t("errorClientRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
     const sourceType = orders ? "" : (block.source_type || "").trim();
     if (!orders && !sourceType) return t("errorFileTypeRequired");
@@ -282,8 +291,9 @@ export default function App() {
   const buildSubmissionFormData = (block, { orders, clientName }) => {
     const formData = new FormData();
     const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
+    const effectiveClientName = orders ? ((block.client_name || "").trim() || clientName) : clientName;
     formData.append("publishing_site", block.publishing_site.trim());
-    formData.append("client_name", clientName);
+    formData.append("client_name", effectiveClientName);
     if (orders) {
       const targetSiteId = (block.target_site_id || "").trim();
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetSiteId)) {
@@ -328,17 +338,60 @@ export default function App() {
   }, [clients, currentUser?.role]);
 
   useEffect(() => {
-    if (theme === "system") {
+    if (currentUser?.role !== "client") return;
+    const fallbackClientName = ((clients[0]?.name) || "").trim();
+    if (!fallbackClientName) return;
+    setSubmissionBlocks((prev) => prev.map((block) => (
+      (block.client_name || "").trim() ? block : { ...block, client_name: fallbackClientName }
+    )));
+  }, [clients, currentUser?.role]);
+
+  useEffect(() => {
+    const effectiveTheme = theme === "system" ? (systemPrefersDark ? "dark" : "light") : theme;
+    if (effectiveTheme === "dark") {
       document.documentElement.removeAttribute("data-theme");
     } else {
-      document.documentElement.setAttribute("data-theme", theme);
+      document.documentElement.setAttribute("data-theme", "light");
     }
     localStorage.setItem("theme", theme);
-  }, [theme]);
+  }, [theme, systemPrefersDark]);
 
   useEffect(() => {
     localStorage.setItem("portal_sidebar_hidden", sidebarHidden ? "true" : "false");
   }, [sidebarHidden]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+    const widthMedia = window.matchMedia("(max-width: 1080px)");
+
+    const onThemeMediaChange = (event) => setSystemPrefersDark(Boolean(event.matches));
+    const onWidthMediaChange = (event) => {
+      const narrow = Boolean(event.matches);
+      setIsNarrowViewport(narrow);
+      if (narrow) setSidebarHidden(true);
+    };
+
+    setSystemPrefersDark(themeMedia.matches);
+    setIsNarrowViewport(widthMedia.matches);
+    if (widthMedia.matches) setSidebarHidden(true);
+
+    if (typeof themeMedia.addEventListener === "function") {
+      themeMedia.addEventListener("change", onThemeMediaChange);
+      widthMedia.addEventListener("change", onWidthMediaChange);
+      return () => {
+        themeMedia.removeEventListener("change", onThemeMediaChange);
+        widthMedia.removeEventListener("change", onWidthMediaChange);
+      };
+    }
+
+    themeMedia.addListener(onThemeMediaChange);
+    widthMedia.addListener(onWidthMediaChange);
+    return () => {
+      themeMedia.removeListener(onThemeMediaChange);
+      widthMedia.removeListener(onWidthMediaChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (isDbUpdaterDomain) {
@@ -1293,9 +1346,20 @@ export default function App() {
         t={t}
         userRole={currentUser.role}
         activeSection={activeSection}
-        onSectionChange={setActiveSection}
+        onSectionChange={(next) => {
+          setActiveSection(next);
+          if (isNarrowViewport) setSidebarHidden(true);
+        }}
         pendingJobsCount={pendingJobs.length}
       />
+      {isNarrowViewport && !sidebarHidden ? (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="Close menu"
+          onClick={() => setSidebarHidden(true)}
+        />
+      ) : null}
       <button
         className={`sidebar-edge-toggle ${sidebarHidden ? "collapsed" : ""}`.trim()}
         type="button"
@@ -1304,7 +1368,7 @@ export default function App() {
         aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
         title={sidebarHidden ? "Show side panel" : "Hide side panel"}
       >
-        <span aria-hidden="true">{sidebarHidden ? "›" : "‹"}</span>
+        <span aria-hidden="true">{isNarrowViewport ? (sidebarHidden ? "☰" : "×") : (sidebarHidden ? "›" : "‹")}</span>
       </button>
 
       <div className="app-main">
@@ -1567,10 +1631,28 @@ export default function App() {
                     const showRemoveControl = blockIndex > 0;
                     return (
                       <div key={block.id} className="submission-block-wrap">
-                        <div className="submission-block panel">
+                        <div className={`submission-block panel ${isOrders ? "order-block" : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
+
+                          {isOrders ? (
+                            <div className="submission-field submission-field-inline submission-field-client">
+                              <label>{t("clientName")}</label>
+                              <select
+                                value={block.client_name || ""}
+                                onChange={(e) => setSubmissionBlockField(block.id, "client_name", e.target.value)}
+                                required
+                              >
+                                <option value="">{t("selectClient")}</option>
+                                {clients.map((client) => (
+                                  <option key={client.id} value={(client.name || "").trim()}>
+                                    {(client.name || "").trim() || client.id}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
 
                           {isOrders ? (
                             <div className="submission-field submission-field-site">
@@ -1611,7 +1693,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          <div className="submission-field submission-field-site">
+                          <div className={`submission-field submission-field-site ${isOrders ? "submission-field-inline" : ""}`.trim()}>
                             <label>{t("targetWebsite")}</label>
                             <div className="site-suggest-wrap">
                               <input
@@ -1699,7 +1781,7 @@ export default function App() {
 
                           {isOrders ? (
                             <>
-                              <div className="submission-field">
+                              <div className="submission-field submission-field-inline">
                                 <label>{t("anchor")}</label>
                                 <input
                                   type="text"
@@ -1708,7 +1790,7 @@ export default function App() {
                                   placeholder={t("placeholderAnchor")}
                                 />
                               </div>
-                              <div className="submission-field">
+                              <div className="submission-field submission-field-inline">
                                 <label>{t("topic")}</label>
                                 <input
                                   type="text"

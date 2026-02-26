@@ -584,6 +584,23 @@ input:disabled {
   letter-spacing: 0.07em;
 }
 
+.submission-field-inline {
+  justify-self: start;
+  width: fit-content;
+  min-width: 170px;
+  max-width: min(100%, 420px);
+}
+
+.submission-field-inline input,
+.submission-field-inline select,
+.submission-field-inline .site-suggest-wrap {
+  width: 100%;
+}
+
+.submission-field-client {
+  max-width: 260px;
+}
+
 .submission-block .upload-meter {
   grid-column: 1 / -1;
 }
@@ -613,6 +630,22 @@ input:disabled {
 
 .app-shell.sidebar-hidden .submission-field-site {
   max-width: 360px;
+}
+
+.order-block {
+  justify-content: start;
+}
+
+.order-block .submission-field-inline {
+  min-width: 150px;
+}
+
+.order-block .submission-field-site {
+  max-width: 340px;
+}
+
+.order-block .submission-field-wide {
+  max-width: none;
 }
 
 .request-builder-form .source-toggle {
@@ -688,6 +721,10 @@ input:disabled {
 
 .sidebar-edge-toggle.collapsed {
   left: max(2px, calc(var(--portal-sidebar-peek) - 14px));
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 .user-chip {
@@ -1156,10 +1193,19 @@ input:disabled {
   }
 
   .sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--sidebar-border);
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(50vw, 420px);
+    max-width: calc(100vw - 20px);
+    border-right: 1px solid var(--sidebar-border);
+    border-bottom: none;
     padding: 12px;
     gap: 14px;
+    z-index: 55;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
   }
 
   .app-shell.sidebar-hidden .sidebar {
@@ -1173,25 +1219,49 @@ input:disabled {
   }
 
   .sidebar-edge-toggle {
-    left: 10px;
-    bottom: 10px;
-    width: 34px;
-    height: 44px;
+    left: 12px;
+    top: 12px;
+    bottom: auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    z-index: 70;
   }
 
   .sidebar-edge-toggle.collapsed {
-    left: 10px;
+    left: 12px;
+  }
+
+  .sidebar-edge-toggle span {
+    font-size: 20px;
+    transform: none;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 8, 24, 0.42);
+    border: none;
+    padding: 0;
+    margin: 0;
+    z-index: 50;
+    cursor: pointer;
   }
 
   .nav {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(120px, 1fr);
-    overflow-x: auto;
+    grid-auto-flow: row;
+    grid-auto-columns: unset;
+    overflow-x: visible;
   }
 
   .nav-item {
-    text-align: center;
+    text-align: left;
     font-size: 14px;
+  }
+
+  .header {
+    padding-left: 60px;
   }
 
   .title {
@@ -1220,6 +1290,13 @@ input:disabled {
 
   .client-dashboard-grid {
     grid-template-columns: 1fr;
+  }
+
+  .order-block .submission-field-inline,
+  .order-block .submission-field-site {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
   }
 }
 

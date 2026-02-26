@@ -442,7 +442,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     if explicit_model:
         llm_model = explicit_model
     elif "anthropic" in llm_base_url.lower():
-        llm_model = "claude-haiku-4-20250414"
+        llm_model = "claude-haiku-4-5-20251001"
     else:
         llm_model = DEFAULT_LLM_MODEL
 

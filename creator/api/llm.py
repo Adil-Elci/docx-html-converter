@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -28,6 +29,10 @@ def _extract_json(text: str) -> Dict[str, Any]:
     except ValueError:
         pass
 
+    parsed = _try_literal_eval(cleaned)
+    if parsed is not None:
+        return parsed
+
     first = cleaned.find("{")
     last = cleaned.rfind("}")
     if first >= 0 and last > first:
@@ -38,6 +43,9 @@ def _extract_json(text: str) -> Dict[str, Any]:
                 return parsed
         except ValueError:
             pass
+        parsed = _try_literal_eval(snippet)
+        if parsed is not None:
+            return parsed
 
     raise LLMError("LLM returned invalid JSON.")
 
@@ -53,6 +61,17 @@ def _is_retryable_error(error: LLMError) -> bool:
     if "timed out" in message:
         return True
     return False
+
+
+def _try_literal_eval(text: str) -> Optional[Dict[str, Any]]:
+    normalized = re.sub(r'(?<![A-Za-z0-9_"])true(?![A-Za-z0-9_"])', "True", text, flags=re.IGNORECASE)
+    normalized = re.sub(r'(?<![A-Za-z0-9_"])false(?![A-Za-z0-9_"])', "False", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r'(?<![A-Za-z0-9_"])null(?![A-Za-z0-9_"])', "None", normalized, flags=re.IGNORECASE)
+    try:
+        parsed = ast.literal_eval(normalized)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _read_env_int(name: str, default: int) -> int:

@@ -33,7 +33,7 @@ DEFAULT_IMAGE_POLL_INTERVAL_SECONDS = 2
 DEFAULT_CATEGORY_LLM_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_CATEGORY_LLM_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_CATEGORY_LLM_OPENAI_MODEL = "gpt-4.1-mini"
-DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL = "claude-3-5-haiku-latest"
+DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL = "claude-haiku-4-20250414"
 DEFAULT_CATEGORY_LLM_MAX_CATEGORIES = 2
 DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD = 0.55
 
@@ -790,6 +790,9 @@ def run_creator_order_pipeline(
     poll_interval_seconds: int,
     image_width: int,
     image_height: int,
+    leonardo_api_key: str = "",
+    leonardo_base_url: str = DEFAULT_LEONARDO_BASE_URL,
+    leonardo_model_id: str = DEFAULT_LEONARDO_MODEL_ID,
     category_llm_enabled: bool,
     category_llm_api_key: str,
     category_llm_base_url: str,
@@ -851,7 +854,25 @@ def run_creator_order_pipeline(
     if isinstance(featured_meta, dict):
         featured_alt = str(featured_meta.get("alt_text") or "").strip()
     if not featured_url:
-        raise AutomationError("Creator output missing featured image URL.")
+        featured_prompt = ""
+        if isinstance(featured_meta, dict):
+            featured_prompt = str(featured_meta.get("prompt") or "").strip()
+        if not featured_prompt:
+            featured_prompt = f"Editorial photo illustrating: {title or 'blog post'}"
+        if not leonardo_api_key:
+            raise AutomationError("Creator output missing featured image URL and LEONARDO_API_KEY is not set for fallback.")
+        logger.warning("automation.creator.image_fallback generating featured image on portal side")
+        featured_url = generate_image_via_leonardo(
+            prompt=featured_prompt,
+            api_key=leonardo_api_key,
+            timeout_seconds=timeout_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            model_id=leonardo_model_id,
+            width=image_width,
+            height=image_height,
+            base_url=leonardo_base_url,
+        )
 
     image_bytes, file_name, content_type = download_binary_file(
         featured_url,

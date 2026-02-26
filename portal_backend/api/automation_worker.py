@@ -15,8 +15,19 @@ from .automation_service import (
     converter_publishing_site_from_site_url,
     get_runtime_config,
     run_guest_post_pipeline,
+    run_creator_order_pipeline,
 )
-from .portal_models import Asset, Job, JobEvent, Site, SiteCategory, SiteCredential, SiteDefaultCategory, Submission
+from .portal_models import (
+    Asset,
+    CreatorOutput,
+    Job,
+    JobEvent,
+    Site,
+    SiteCategory,
+    SiteCredential,
+    SiteDefaultCategory,
+    Submission,
+)
 
 logger = logging.getLogger("portal_backend.automation")
 
@@ -82,17 +93,72 @@ class AutomationJobWorker:
             logger.warning("automation.worker.config_error job_id=%s error=%s", job_id, str(exc))
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
             return
-        if not run_config["leonardo_api_key"]:
-            logger.warning("automation.worker.missing_leonardo_key job_id=%s", job_id)
-            self._mark_failed_or_retry(
-                job_id,
-                max_attempts=max_attempts,
-                error_message="LEONARDO_API_KEY is not set.",
-            )
-            return
-
         try:
             payload = self._load_job_payload(job_id)
+            if payload.get("creator_mode"):
+                if not (payload.get("target_site_url") or "").strip():
+                    raise AutomationError("Creator orders require target_site_url.")
+                if not run_config.get("creator_endpoint"):
+                    raise AutomationError("Creator endpoint is not configured.")
+                self._append_event(
+                    job_id,
+                    "converter_called",
+                    {
+                        "source": "creator",
+                        "target_site_url": payload.get("target_site_url"),
+                        "publishing_site": payload.get("site_url"),
+                        "attempt": payload.get("attempt_count"),
+                    },
+                )
+                pipeline_result = run_creator_order_pipeline(
+                    creator_endpoint=run_config["creator_endpoint"],
+                    target_site_url=payload.get("target_site_url") or "",
+                    publishing_site_url=payload.get("site_url") or "",
+                    anchor=payload.get("anchor"),
+                    topic=payload.get("topic"),
+                    site_url=payload["site_url"],
+                    wp_rest_base=payload["wp_rest_base"],
+                    wp_username=payload["wp_username"],
+                    wp_app_password=payload["wp_app_password"],
+                    existing_wp_post_id=payload["existing_wp_post_id"],
+                    post_status=payload["post_status"],
+                    author_id=payload["author_id"],
+                    category_ids=payload["category_ids"],
+                    category_candidates=payload["category_candidates"],
+                    timeout_seconds=run_config["timeout_seconds"],
+                    poll_timeout_seconds=run_config["poll_timeout_seconds"],
+                    poll_interval_seconds=run_config["poll_interval_seconds"],
+                    image_width=run_config["image_width"],
+                    image_height=run_config["image_height"],
+                    category_llm_enabled=run_config["category_llm_enabled"],
+                    category_llm_api_key=run_config["category_llm_api_key"],
+                    category_llm_base_url=run_config["category_llm_base_url"],
+                    category_llm_model=run_config["category_llm_model"],
+                    category_llm_max_categories=run_config["category_llm_max_categories"],
+                    category_llm_confidence_threshold=run_config["category_llm_confidence_threshold"],
+                )
+                self._mark_creator_success(
+                    job_id,
+                    creator_output=pipeline_result["creator_output"],
+                    image_url=pipeline_result["image_url"],
+                    media_url=pipeline_result["media_url"],
+                    post_payload=pipeline_result["post_payload"],
+                    post_event_type=pipeline_result["post_event_type"],
+                    selected_category_ids=pipeline_result["selected_category_ids"],
+                    leonardo_model_id=run_config["leonardo_model_id"],
+                )
+                logger.info("automation.worker.creator_succeeded job_id=%s", job_id)
+                return
+
+            if not run_config["leonardo_api_key"]:
+                logger.warning("automation.worker.missing_leonardo_key job_id=%s", job_id)
+                self._mark_failed_or_retry(
+                    job_id,
+                    max_attempts=max_attempts,
+                    error_message="LEONARDO_API_KEY is not set.",
+                )
+                return
+
             self._append_event(
                 job_id,
                 "converter_called",
@@ -172,19 +238,24 @@ class AutomationJobWorker:
             if not credential:
                 raise RuntimeError("No enabled site credential found for site.")
 
+            parsed_notes = _parse_notes(submission.notes)
+            creator_mode = parsed_notes.get("creator_mode", "").lower() == "true"
+
             if submission.source_type == "google-doc":
                 source_url = (submission.doc_url or "").strip()
             else:
                 source_url = (submission.file_url or "").strip()
-            if not source_url:
+            if not source_url and not creator_mode:
                 raise RuntimeError("Submission source URL is empty.")
-
-            parsed_notes = _parse_notes(submission.notes)
             post_status = parsed_notes.get("post_status", "publish").strip().lower()
             if post_status not in {"draft", "publish"}:
                 post_status = "publish"
             if bool(job.requires_admin_approval):
                 post_status = "draft"
+
+            target_site_url = parsed_notes.get("client_target_site_url", "")
+            anchor = parsed_notes.get("anchor")
+            topic = parsed_notes.get("topic")
 
             credential_author_id_raw = credential.author_id
             credential_author_id = None
@@ -270,6 +341,10 @@ class AutomationJobWorker:
                 "category_ids": ordered_category_ids,
                 "category_candidates": category_candidates,
                 "attempt_count": int(job.attempt_count or 0),
+                "creator_mode": creator_mode,
+                "target_site_url": target_site_url,
+                "anchor": anchor,
+                "topic": topic,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:
@@ -350,6 +425,110 @@ class AutomationJobWorker:
                         "category_ids": selected_category_ids,
                         "pending_admin_approval": bool(job.requires_admin_approval),
                     },
+                )
+            )
+            session.commit()
+
+    def _mark_creator_success(
+        self,
+        job_id: UUID,
+        *,
+        creator_output: Dict[str, Any],
+        image_url: str,
+        media_url: Optional[str],
+        post_payload: Dict[str, Any],
+        post_event_type: str,
+        selected_category_ids: List[int],
+        leonardo_model_id: str,
+    ) -> None:
+        with self._sessionmaker() as session:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                return
+
+            submission = session.query(Submission).filter(Submission.id == job.submission_id).first()
+            if not submission:
+                return
+
+            wp_post_id = post_payload.get("id")
+            wp_post_url = post_payload.get("link")
+            if wp_post_id is not None:
+                job.wp_post_id = int(wp_post_id)
+            if isinstance(wp_post_url, str) and wp_post_url.strip():
+                job.wp_post_url = wp_post_url.strip()
+
+            job.job_status = "pending_approval" if bool(job.requires_admin_approval) else "succeeded"
+            job.last_error = None
+            session.add(job)
+
+            phase5 = creator_output.get("phase5") or {}
+            phase6 = creator_output.get("phase6") or {}
+            featured_prompt = ""
+            if isinstance(phase6, dict):
+                featured_image = phase6.get("featured_image")
+                if isinstance(featured_image, dict):
+                    featured_prompt = str(featured_image.get("prompt") or "").strip()
+
+            session.add(
+                JobEvent(
+                    job_id=job_id,
+                    event_type="converter_ok",
+                    payload={
+                        "source": "creator",
+                        "title": phase5.get("meta_title") or phase5.get("title"),
+                        "slug": phase5.get("slug"),
+                    },
+                )
+            )
+            if featured_prompt:
+                session.add(
+                    JobEvent(
+                        job_id=job_id,
+                        event_type="image_prompt_ok",
+                        payload={"image_prompt": featured_prompt, "source": "creator"},
+                    )
+                )
+            if image_url:
+                session.add(
+                    JobEvent(
+                        job_id=job_id,
+                        event_type="image_generated",
+                        payload={"source_url": image_url, "source": "creator"},
+                    )
+                )
+                session.add(
+                    Asset(
+                        job_id=job_id,
+                        asset_type="featured_image",
+                        provider="leonardo",
+                        source_url=image_url,
+                        storage_url=media_url,
+                        meta={"model_id": leonardo_model_id, "source": "creator"},
+                    )
+                )
+
+            session.add(
+                JobEvent(
+                    job_id=job_id,
+                    event_type=post_event_type,
+                    payload={
+                        "wp_post_id": job.wp_post_id,
+                        "wp_post_url": job.wp_post_url,
+                        "category_ids": selected_category_ids,
+                        "pending_admin_approval": bool(job.requires_admin_approval),
+                        "source": "creator",
+                    },
+                )
+            )
+            session.add(
+                CreatorOutput(
+                    submission_id=submission.id,
+                    job_id=job.id,
+                    client_id=submission.client_id,
+                    site_id=submission.site_id,
+                    target_site_url=str(creator_output.get("target_site_url") or ""),
+                    host_site_url=str(creator_output.get("host_site_url") or ""),
+                    payload=creator_output,
                 )
             )
             session.commit()

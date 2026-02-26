@@ -17,6 +17,7 @@ import requests
 
 
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"
+DEFAULT_CREATOR_ENDPOINT = "http://localhost:8100"
 DEFAULT_LEONARDO_BASE_URL = "https://cloud.leonardo.ai/api/rest/v1"
 # Leonardo Flux Schnell
 DEFAULT_LEONARDO_MODEL_ID = "1dd50843-d653-4516-a8e3-f0238ee453ff"
@@ -455,6 +456,7 @@ def wp_create_media_item(
     file_name: str,
     content_type: str,
     title: str,
+    alt_text: Optional[str] = None,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     media_url = f"{_wp_api_base(site_url, wp_rest_base)}/media"
@@ -508,6 +510,9 @@ def wp_create_media_item(
 
     # Keep parity with Make: uploaded media title follows generated post title.
     title_url = f"{_wp_api_base(site_url, wp_rest_base)}/media/{media_id}"
+    update_payload = {"title": title}
+    if alt_text:
+        update_payload["alt_text"] = alt_text
     _request_json(
         "POST",
         title_url,
@@ -515,7 +520,7 @@ def wp_create_media_item(
             "Authorization": _wp_auth_header(wp_username, wp_app_password),
             "Content-Type": "application/json",
         },
-        json_body={"title": title},
+        json_body=update_payload,
         timeout_seconds=timeout_seconds,
         allow_redirects=False,
     )
@@ -924,6 +929,7 @@ def get_runtime_config() -> Dict[str, Any]:
 
     return {
         "converter_endpoint": os.getenv("AUTOMATION_CONVERTER_ENDPOINT", DEFAULT_CONVERTER_ENDPOINT).strip(),
+        "creator_endpoint": os.getenv("AUTOMATION_CREATOR_ENDPOINT", DEFAULT_CREATOR_ENDPOINT).strip(),
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),
         "leonardo_base_url": os.getenv("LEONARDO_BASE_URL", DEFAULT_LEONARDO_BASE_URL).strip(),
         "leonardo_model_id": DEFAULT_LEONARDO_MODEL_ID,

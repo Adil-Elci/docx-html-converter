@@ -380,6 +380,7 @@ def _compose_submission_notes(
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
     manual_order: bool = False,
+    creator_mode: bool = False,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -398,6 +399,8 @@ def _compose_submission_notes(
         parts.append(f"topic={_safe_note_value(topic)}")
     if manual_order:
         parts.append("manual_order=true")
+    if creator_mode:
+        parts.append("creator_mode=true")
     return ";".join(parts)
 
 
@@ -488,8 +491,10 @@ def _enqueue_job(
     requires_admin_approval: bool,
     author_id: int,
     client_target_site: Optional[ClientTargetSite],
+    creator_mode: bool,
 ) -> Tuple[Submission, Job, bool]:
     manual_order = request_kind == "order" and not (source_url or "").strip()
+    creator_order = manual_order and creator_mode
     if manual_order:
         submission_source_type = "google-doc"
         doc_url = None
@@ -514,6 +519,7 @@ def _enqueue_job(
         anchor=payload.anchor,
         topic=payload.topic,
         manual_order=manual_order,
+        creator_mode=creator_mode,
     )
 
     existing_submission = _find_existing_submission(
@@ -541,8 +547,12 @@ def _enqueue_job(
                 existing_job.approved_by = None
                 existing_job.approved_by_name_snapshot = None
                 existing_job.approved_at = None
-            if manual_order and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
+            if manual_order and not creator_order and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
                 existing_job.job_status = "pending_approval"
+                existing_job.last_error = None
+                changed_existing_job = True
+            if creator_order and existing_job.job_status == "pending_approval":
+                existing_job.job_status = "queued"
                 existing_job.last_error = None
                 changed_existing_job = True
             if existing_job.job_status == "failed":
@@ -593,7 +603,7 @@ def _enqueue_job(
         submission_id=submission.id,
         client_id=client.id,
         site_id=site.id,
-        job_status="pending_approval" if manual_order else "queued",
+        job_status="queued" if creator_order else ("pending_approval" if manual_order else "queued"),
         requires_admin_approval=requires_admin_approval,
         approved_by=None,
         approved_by_name_snapshot=None,
@@ -682,11 +692,58 @@ async def process_guest_post_webhook(
         payload.idempotency_key,
     )
     request_kind = payload.request_kind
-    manual_order = request_kind == "order" and not _payload_has_source_document(payload)
+    manual_order = request_kind == "order" and not _payload_has_source_document(payload) and not payload.creator_mode
+    creator_order = request_kind == "order" and payload.creator_mode and not _payload_has_source_document(payload)
     if manual_order and payload.execution_mode == "sync":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Orders without a document require async or shadow mode.")
+    if creator_order and payload.execution_mode == "sync":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Creator orders require async or shadow mode.")
 
     site = _resolve_publishing_site(db, payload.publishing_site)
+
+    if creator_order and payload.execution_mode in {"async", "shadow"}:
+        client = _resolve_client(db, payload)
+        client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
+        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+        if current_user is not None and current_user.role != "admin":
+            ensure_client_access(db, current_user, client.id)
+            if enforce_client_site_access:
+                ensure_site_access(db, current_user, site.id)
+        if enforce_client_site_access:
+            _require_client_site_access(db, client.id, site.id)
+        else:
+            logger.info(
+                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
+                client.id,
+                site.id,
+            )
+        submission, job, deduplicated = _enqueue_job(
+            db,
+            payload=payload,
+            request_kind=request_kind,
+            source_type="google-doc",
+            source_url=None,
+            site=site,
+            client=client,
+            post_status="draft",
+            requires_admin_approval=True,
+            author_id=0,
+            client_target_site=client_target_site,
+            creator_mode=True,
+        )
+        shadow_dispatched = False
+        if payload.execution_mode == "shadow":
+            shadow_dispatched = _dispatch_shadow_webhook(payload)
+        return AutomationGuestPostOut(
+            ok=True,
+            execution_mode=payload.execution_mode,
+            deduplicated=deduplicated,
+            submission_id=submission.id,
+            job_id=job.id,
+            job_status=job.job_status,
+            shadow_dispatched=shadow_dispatched,
+            result=None,
+        )
 
     if manual_order and payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
@@ -716,6 +773,7 @@ async def process_guest_post_webhook(
             requires_admin_approval=True,
             author_id=0,
             client_target_site=client_target_site,
+            creator_mode=payload.creator_mode,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
@@ -802,6 +860,7 @@ async def process_guest_post_webhook(
             requires_admin_approval=requires_admin_approval,
             author_id=author_id,
             client_target_site=client_target_site,
+            creator_mode=payload.creator_mode,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":

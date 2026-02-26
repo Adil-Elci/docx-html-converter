@@ -15,6 +15,7 @@ const emptySubmissionForm = () => ({
   docx_file: null,
   anchor: "",
   topic: "",
+  creator_mode: false,
 });
 
 const createSubmissionBlock = (id, defaults = {}) => ({
@@ -291,7 +292,7 @@ export default function App() {
     if (!orders && !sourceType) return t("errorFileTypeRequired");
     if (!orders && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
     if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
-    if (orders && !(block.anchor || "").trim() && !(block.topic || "").trim()) {
+    if (orders && !block.creator_mode && !(block.anchor || "").trim() && !(block.topic || "").trim()) {
       return t("errorOrderAnchorOrTopicRequired");
     }
     return "";
@@ -315,6 +316,7 @@ export default function App() {
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
+    if (block.creator_mode) formData.append("creator_mode", "true");
     if (!orders && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
     } else if (sourceType === "word-doc" && block.docx_file) {
@@ -1852,6 +1854,26 @@ export default function App() {
 
                           {isOrders ? (
                             <>
+                              <div className="submission-field submission-field-inline">
+                                <label>{t("aiDraftLabel")}</label>
+                                <div className="toggle">
+                                  <button
+                                    type="button"
+                                    className={block.creator_mode ? "active" : ""}
+                                    onClick={() => setSubmissionBlockField(block.id, "creator_mode", true)}
+                                  >
+                                    {t("aiDraftOn")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={!block.creator_mode ? "active" : ""}
+                                    onClick={() => setSubmissionBlockField(block.id, "creator_mode", false)}
+                                  >
+                                    {t("aiDraftOff")}
+                                  </button>
+                                </div>
+                                <p className="muted-text small-text">{t("aiDraftHint")}</p>
+                              </div>
                               <div className="submission-field submission-field-inline">
                                 <label>{t("anchor")}</label>
                                 <input

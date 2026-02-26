@@ -744,6 +744,7 @@ class AutomationGuestPostIn(BaseModel):
     docx_file: Optional[str] = None
     anchor: Optional[str] = None
     topic: Optional[str] = None
+    creator_mode: bool = False
     client_id: Optional[UUID] = None
     client_name: Optional[str] = None
     target_site_id: Optional[UUID] = None
@@ -832,8 +833,9 @@ class AutomationGuestPostIn(BaseModel):
         docx_file = values.get("docx_file")
         anchor = values.get("anchor")
         topic = values.get("topic")
+        creator_mode = bool(values.get("creator_mode"))
         if request_kind == "order" and not doc_url and not docx_file:
-            if not anchor and not topic:
+            if not anchor and not topic and not creator_mode:
                 raise ValueError("anchor or topic is required for request_kind=order when no document is provided.")
             return values
         if source_type == "google-doc" and not doc_url:

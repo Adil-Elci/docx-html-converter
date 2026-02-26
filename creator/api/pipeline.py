@@ -828,24 +828,14 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     height = _read_int_env("CREATOR_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT)
     poll_timeout = _read_int_env("CREATOR_IMAGE_POLL_TIMEOUT_SECONDS", DEFAULT_POLL_TIMEOUT_SECONDS)
     poll_interval = _read_int_env("CREATOR_IMAGE_POLL_INTERVAL_SECONDS", DEFAULT_POLL_SECONDS)
+    image_required = _read_bool_env("CREATOR_IMAGE_REQUIRED", False)
 
     featured_image_url = ""
     in_content_image_url = ""
     if not dry_run:
-        featured_image_url = _call_leonardo(
-            prompt=featured_prompt,
-            api_key=leonardo_api_key,
-            base_url=leonardo_base_url,
-            model_id=DEFAULT_LEONARDO_MODEL_ID,
-            width=width,
-            height=height,
-            timeout_seconds=http_timeout,
-            poll_timeout_seconds=poll_timeout,
-            poll_interval_seconds=poll_interval,
-        )
-        if include_in_content and in_content_prompt:
-            in_content_image_url = _call_leonardo(
-                prompt=in_content_prompt,
+        try:
+            featured_image_url = _call_leonardo(
+                prompt=featured_prompt,
                 api_key=leonardo_api_key,
                 base_url=leonardo_base_url,
                 model_id=DEFAULT_LEONARDO_MODEL_ID,
@@ -855,6 +845,30 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 poll_timeout_seconds=poll_timeout,
                 poll_interval_seconds=poll_interval,
             )
+        except CreatorError as exc:
+            warnings.append(f"phase6_featured_image_failed:{exc}")
+            featured_image_url = ""
+            include_in_content = False
+
+        if include_in_content and in_content_prompt:
+            try:
+                in_content_image_url = _call_leonardo(
+                    prompt=in_content_prompt,
+                    api_key=leonardo_api_key,
+                    base_url=leonardo_base_url,
+                    model_id=DEFAULT_LEONARDO_MODEL_ID,
+                    width=width,
+                    height=height,
+                    timeout_seconds=http_timeout,
+                    poll_timeout_seconds=poll_timeout,
+                    poll_interval_seconds=poll_interval,
+                )
+            except CreatorError as exc:
+                warnings.append(f"phase6_in_content_image_failed:{exc}")
+                in_content_image_url = ""
+
+    if image_required and not featured_image_url and not dry_run:
+        raise CreatorError("Featured image generation failed.")
 
     phase6["featured_image"] = {
         "prompt": featured_prompt,

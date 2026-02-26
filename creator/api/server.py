@@ -57,8 +57,16 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
 
 
 @app.get("/health")
-async def health() -> Dict[str, bool]:
-    return {"ok": True}
+async def health() -> JSONResponse:
+    llm_ready = bool(
+        os.getenv("CREATOR_LLM_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("ANTHROPIC_API_KEY")
+    )
+    image_ready = bool(os.getenv("LEONARDO_API_KEY"))
+    ok = llm_ready and image_ready
+    payload = {"ok": ok, "llm_ready": llm_ready, "image_ready": image_ready}
+    return JSONResponse(status_code=200 if ok else 503, content=payload)
 
 
 @app.post("/create")

@@ -1123,6 +1123,16 @@ def run_guest_post_pipeline(
     }
 
 
+def check_creator_health(*, creator_endpoint: str, timeout_seconds: int) -> Dict[str, Any]:
+    url = creator_endpoint.rstrip("/") + "/health"
+    return _request_json(
+        "GET",
+        url,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
 def get_runtime_config() -> Dict[str, Any]:
     def read_int(name: str, default: int) -> int:
         raw = os.getenv(name, str(default)).strip()

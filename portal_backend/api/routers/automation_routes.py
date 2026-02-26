@@ -25,6 +25,7 @@ from ..auth import (
 )
 from ..automation_service import (
     AutomationError,
+    check_creator_health,
     converter_publishing_site_from_site_url,
     get_runtime_config,
     resolve_source_url,
@@ -706,6 +707,16 @@ async def process_guest_post_webhook(
     site = _resolve_publishing_site(db, payload.publishing_site)
 
     if creator_order and payload.execution_mode in {"async", "shadow"}:
+        try:
+            health = check_creator_health(
+                creator_endpoint=get_runtime_config()["creator_endpoint"],
+                timeout_seconds=10,
+            )
+        except AutomationError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        if not health.get("ok"):
+            detail = health or {"error": "creator_not_ready"}
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)

@@ -208,9 +208,26 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
-    llm_api_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
-    llm_base_url = os.getenv("CREATOR_LLM_BASE_URL", DEFAULT_LLM_BASE_URL).strip()
-    llm_model = os.getenv("CREATOR_LLM_MODEL", DEFAULT_LLM_MODEL).strip()
+    explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    llm_api_key = explicit_llm_key or openai_key or anthropic_key
+
+    explicit_base_url = os.getenv("CREATOR_LLM_BASE_URL", "").strip()
+    if explicit_base_url:
+        llm_base_url = explicit_base_url
+    elif anthropic_key and not openai_key:
+        llm_base_url = "https://api.anthropic.com/v1"
+    else:
+        llm_base_url = DEFAULT_LLM_BASE_URL
+
+    explicit_model = os.getenv("CREATOR_LLM_MODEL", "").strip()
+    if explicit_model:
+        llm_model = explicit_model
+    elif "anthropic" in llm_base_url.lower():
+        llm_model = "claude-3-5-haiku-latest"
+    else:
+        llm_model = DEFAULT_LLM_MODEL
 
     phase_start = time.time()
     logger.info("creator.phase1.start target=%s", target_site_url)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
@@ -40,7 +40,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
     raise LLMError("LLM returned invalid JSON.")
 
 
-def call_llm_json(
+def _call_openai(
     *,
     system_prompt: str,
     user_prompt: str,
@@ -48,11 +48,9 @@ def call_llm_json(
     base_url: str,
     model: str,
     timeout_seconds: int,
-    max_tokens: int = 1200,
-    temperature: float = 0.3,
-) -> Dict[str, Any]:
-    if not api_key:
-        raise LLMError("Missing CREATOR_LLM_API_KEY.")
+    max_tokens: int,
+    temperature: float,
+) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -88,4 +86,93 @@ def call_llm_json(
             content = message.get("content")
     if not content:
         raise LLMError("LLM response missing content.")
-    return _extract_json(str(content))
+    return str(content)
+
+
+def _call_anthropic(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout_seconds: int,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    url = base_url.rstrip("/") + "/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+    except requests.RequestException as exc:
+        raise LLMError(f"LLM request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        raise LLMError(f"LLM HTTP {response.status_code}: {response.text[:400]}")
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise LLMError("LLM returned non-JSON response.") from exc
+
+    content_blocks = body.get("content")
+    if isinstance(content_blocks, list):
+        texts = []
+        for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+        if texts:
+            return "\n".join(texts)
+    raise LLMError("LLM response missing content.")
+
+
+def call_llm_json(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout_seconds: int,
+    max_tokens: int = 1200,
+    temperature: float = 0.3,
+) -> Dict[str, Any]:
+    if not api_key:
+        raise LLMError("Missing LLM API key.")
+    provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
+    if provider_is_anthropic:
+        raw = _call_anthropic(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    else:
+        raw = _call_openai(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    return _extract_json(str(raw))

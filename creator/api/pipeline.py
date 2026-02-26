@@ -718,9 +718,16 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             errors.append("missing_article_html")
             continue
 
-        validation_errors: List[str] = []
+        wc = word_count_from_html(article_html)
+        logger.info(
+            "creator.phase5.attempt attempt=%s word_count=%s html_fallback=%s",
+            attempt, wc, html_fallback,
+        )
+
         if html_fallback:
-            validation_errors.append("llm_html_fallback")
+            warnings.append("llm_html_fallback")
+
+        validation_errors: List[str] = []
         for check in (
             validate_word_count(article_html, 750, 1100),
             validate_hyperlink_count(article_html, 1),
@@ -775,6 +782,17 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     if not article_payload:
         raise CreatorError(f"Article generation failed: {errors}")
+
+    # ── post-generation repairs ──────────────────────────────────────
+    art_html = (article_payload.get("article_html") or "").strip()
+    # Strip stray hyperlinks (keep only the backlink)
+    art_html = _strip_non_backlinks(art_html, backlink_url)
+    # Insert backlink if missing
+    if backlink_url and backlink_url not in art_html:
+        anchor_text = phase4.get("anchor_text_final") or "this resource"
+        art_html = _insert_backlink(art_html, backlink_url, anchor_text, phase4["backlink_placement"])
+        warnings.append("backlink_inserted_post_generation")
+    article_payload["article_html"] = art_html
 
     phase5 = article_payload
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
@@ -890,7 +908,8 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     debug["timings_ms"]["phase6"] = int((time.time() - phase_start) * 1000)
 
     phase_start = time.time()
-    logger.info("creator.phase7.start")
+    p7_wc = word_count_from_html(phase5["article_html"])
+    logger.info("creator.phase7.start word_count=%s", p7_wc)
     phase7_errors: List[str] = []
     allowed_topics = [t.lower() for t in phase2.get("allowed_topics") or [] if isinstance(t, str)]
     if allowed_topics:
@@ -937,8 +956,10 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 allow_html_fallback=True,
             )
             fixed_html = (llm_out.get("article_html") or "").strip()
+            fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
+            logger.info("creator.phase7.fix_result before=%s after=%s", current_wc, fixed_wc)
             # Only accept the fix if it improved or at least maintained word count
-            if fixed_html and word_count_from_html(fixed_html) >= current_wc:
+            if fixed_html and fixed_wc >= current_wc:
                 phase5["article_html"] = fixed_html
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]

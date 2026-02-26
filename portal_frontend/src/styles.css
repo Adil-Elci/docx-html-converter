@@ -300,6 +300,12 @@ body {
   width: 100%;
 }
 
+.request-container {
+  max-width: none;
+  width: 100%;
+  justify-items: stretch;
+}
+
 .hero,
 .stats-grid,
 .form-panel {
@@ -481,7 +487,10 @@ input:disabled {
 }
 
 .request-form-panel {
-  max-width: 980px;
+  max-width: none;
+  width: 100%;
+  border-radius: 16px;
+  padding: 18px;
 }
 
 .request-form-panel .guest-form {
@@ -489,8 +498,10 @@ input:disabled {
   gap: 12px;
 }
 
-.app-shell.sidebar-hidden .request-form-panel {
-  max-width: 1160px;
+.request-container .hero,
+.request-container .request-form-panel {
+  max-width: none;
+  width: 100%;
 }
 
 .submission-blocks {
@@ -518,8 +529,15 @@ input:disabled {
 
 .request-form-panel .submission-block {
   gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   padding: 12px 14px;
+  border-radius: 14px;
+  border-color: color-mix(in srgb, var(--border) 90%, #ffffff10);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--panel-2) 72%, transparent),
+    color-mix(in srgb, var(--panel-3) 52%, transparent)
+  );
 }
 
 .submission-block-header {
@@ -550,6 +568,22 @@ input:disabled {
   min-width: 0;
 }
 
+.request-builder-form .submission-field {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-3) 32%, transparent);
+  padding: 10px;
+}
+
+.request-builder-form .submission-field > label {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+}
+
 .submission-block .upload-meter {
   grid-column: 1 / -1;
 }
@@ -561,7 +595,7 @@ input:disabled {
 .submission-field-site {
   justify-self: start;
   width: 100%;
-  max-width: 520px;
+  max-width: 440px;
 }
 
 .submission-field-site .small-text {
@@ -574,7 +608,29 @@ input:disabled {
 }
 
 .app-shell.sidebar-hidden .request-form-panel .submission-block {
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+}
+
+.app-shell.sidebar-hidden .submission-field-site {
+  max-width: 360px;
+}
+
+.request-builder-form .source-toggle {
+  width: 100%;
+}
+
+.request-builder-form .source-toggle button {
+  flex: 1;
+}
+
+.request-builder-form .submission-block-controls {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+.request-builder-form .submit-btn {
+  justify-self: end;
+  min-width: 180px;
 }
 
 .block-control-btn {

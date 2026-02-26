@@ -1328,7 +1328,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`container ${isAdminPendingSection ? "container-wide" : ""}`.trim()}>
+        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(!isAdminUser && (isGuestPostsSection || isOrders)) ? "request-container" : ""}`.trim()}>
           {!isAdminUser && (isGuestPostsSection || isOrders) ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
@@ -1554,7 +1554,7 @@ export default function App() {
           ) : (
             <div className="panel form-panel request-form-panel">
               <h2>{isOrders ? t("formOrder") : t("formSubmission")}</h2>
-              <form className="guest-form" onSubmit={submitGuestPost}>
+              <form className="guest-form request-builder-form" onSubmit={submitGuestPost}>
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);

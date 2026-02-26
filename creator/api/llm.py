@@ -63,6 +63,51 @@ def _is_retryable_error(error: LLMError) -> bool:
     return False
 
 
+def _strip_tags(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _extract_html_blob(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:html)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    if "<" not in cleaned or ">" not in cleaned:
+        return ""
+    match = re.search(r"<(h1|html|article|section|div|p)\b", cleaned, flags=re.IGNORECASE)
+    if match:
+        cleaned = cleaned[match.start():]
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _infer_meta_title(html: str) -> str:
+    match = re.search(r"<h1[^>]*>(.*?)</h1>", html, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return _strip_tags(match.group(1))[:160]
+    return ""
+
+
+def _infer_excerpt(html: str) -> str:
+    match = re.search(r"<p[^>]*>(.*?)</p>", html, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return _strip_tags(match.group(1))[:200]
+    return ""
+
+
+def _coerce_html_payload(raw: str) -> Optional[Dict[str, Any]]:
+    html = _extract_html_blob(raw)
+    if not html:
+        return None
+    return {
+        "meta_title": _infer_meta_title(html),
+        "meta_description": "",
+        "slug": "",
+        "excerpt": _infer_excerpt(html),
+        "article_html": html,
+    }
+
+
 def _try_literal_eval(text: str) -> Optional[Dict[str, Any]]:
     normalized = re.sub(r'(?<![A-Za-z0-9_"])true(?![A-Za-z0-9_"])', "True", text, flags=re.IGNORECASE)
     normalized = re.sub(r'(?<![A-Za-z0-9_"])false(?![A-Za-z0-9_"])', "False", normalized, flags=re.IGNORECASE)
@@ -197,6 +242,7 @@ def call_llm_json(
     timeout_seconds: int,
     max_tokens: int = 1200,
     temperature: float = 0.3,
+    allow_html_fallback: bool = False,
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -229,7 +275,16 @@ def call_llm_json(
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
-            return _extract_json(str(raw))
+            raw_text = str(raw)
+            try:
+                return _extract_json(raw_text)
+            except LLMError as exc:
+                if allow_html_fallback:
+                    payload = _coerce_html_payload(raw_text)
+                    if payload:
+                        logger.warning("creator.llm_html_fallback used")
+                        return payload
+                raise exc
         except LLMError as exc:
             last_error = exc
             if attempt >= retries or not _is_retryable_error(exc):

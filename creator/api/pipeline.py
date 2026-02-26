@@ -441,6 +441,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 model=llm_model,
                 timeout_seconds=http_timeout,
                 max_tokens=1500,
+                allow_html_fallback=True,
             )
         except LLMError as exc:
             errors.append(str(exc))
@@ -483,6 +484,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                     model=llm_model,
                     timeout_seconds=http_timeout,
                     max_tokens=1300,
+                    allow_html_fallback=True,
                 )
                 article_html = (llm_out.get("article_html") or "").strip()
             except LLMError as exc:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
@@ -38,6 +40,33 @@ def _extract_json(text: str) -> Dict[str, Any]:
             pass
 
     raise LLMError("LLM returned invalid JSON.")
+
+
+def _is_retryable_error(error: LLMError) -> bool:
+    message = str(error).lower()
+    if "llm request failed" in message:
+        return True
+    match = re.search(r"llm http (\d+)", message)
+    if match:
+        code = int(match.group(1))
+        return code in {408, 409, 429, 500, 502, 503, 504}
+    if "timed out" in message:
+        return True
+    return False
+
+
+def _read_env_int(name: str, default: int) -> int:
+    try:
+        return int((os.getenv(name, str(default))).strip())
+    except Exception:
+        return default
+
+
+def _read_env_float(name: str, default: float) -> float:
+    try:
+        return float((os.getenv(name, str(default))).strip())
+    except Exception:
+        return default
 
 
 def _call_openai(
@@ -153,26 +182,47 @@ def call_llm_json(
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    if provider_is_anthropic:
-        raw = _call_anthropic(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    else:
-        raw = _call_openai(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-    return _extract_json(str(raw))
+    retries = _read_env_int("CREATOR_LLM_RETRIES", 2)
+    backoff_seconds = _read_env_float("CREATOR_LLM_RETRY_BACKOFF_SECONDS", 2.0)
+
+    last_error: Optional[LLMError] = None
+    for attempt in range(retries + 1):
+        try:
+            if provider_is_anthropic:
+                raw = _call_anthropic(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    timeout_seconds=timeout_seconds,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            else:
+                raw = _call_openai(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    timeout_seconds=timeout_seconds,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            return _extract_json(str(raw))
+        except LLMError as exc:
+            last_error = exc
+            if attempt >= retries or not _is_retryable_error(exc):
+                break
+            sleep_seconds = backoff_seconds * (2 ** attempt)
+            logger.warning(
+                "creator.llm_retry attempt=%s/%s sleep=%.1fs error=%s",
+                attempt + 1,
+                retries + 1,
+                sleep_seconds,
+                exc,
+            )
+            time.sleep(sleep_seconds)
+
+    raise last_error or LLMError("LLM request failed.")

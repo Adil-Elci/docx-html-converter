@@ -341,12 +341,16 @@ export default function App() {
   }, [sidebarHidden]);
 
   useEffect(() => {
+    if (isDbUpdaterDomain) {
+      document.title = "DB Updater";
+      return;
+    }
     if (!currentUser) {
       document.title = "Elci Solutions Portal";
       return;
     }
     document.title = currentUser.role === "admin" ? "Admin Portal | Elci Solutions" : "Clients Portal | Elci Solutions";
-  }, [currentUser]);
+  }, [currentUser, isDbUpdaterDomain]);
 
   const loadAll = async (forUser = currentUser) => {
     try {

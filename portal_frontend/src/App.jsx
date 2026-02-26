@@ -1803,7 +1803,7 @@ export default function App() {
                           </div>
 
                           {!isOrders ? (
-                            <div className="submission-field">
+                            <div className="submission-field submission-field-type">
                               <label>{t("fileType")}</label>
                               <div className="toggle source-toggle">
                                 <button

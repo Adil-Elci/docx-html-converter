@@ -819,6 +819,10 @@ input:disabled {
   grid-column: span 5;
 }
 
+.request-container .request-form-panel .submission-field-type {
+  grid-column: span 4;
+}
+
 .request-container .request-form-panel .order-block .submission-field-inline {
   grid-column: span 2;
 }
@@ -1491,6 +1495,10 @@ input:disabled {
 
   .request-container .request-form-panel .submission-field-client,
   .request-container .request-form-panel .submission-field-site {
+    grid-column: span 6;
+  }
+
+  .request-container .request-form-panel .submission-field-type {
     grid-column: span 6;
   }
 

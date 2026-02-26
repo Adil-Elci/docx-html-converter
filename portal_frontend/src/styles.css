@@ -572,10 +572,16 @@ input:disabled {
   display: grid;
   gap: 6px;
   align-content: start;
+  justify-self: stretch;
+  width: 100%;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel-3) 32%, transparent);
   padding: 10px;
+}
+
+.request-builder-form .submission-field > * {
+  min-width: 0;
 }
 
 .request-builder-form .submission-field > label {
@@ -652,6 +658,15 @@ input:disabled {
 
 .request-builder-form .source-toggle {
   width: 100%;
+}
+
+.request-builder-form .submission-field input,
+.request-builder-form .submission-field select,
+.request-builder-form .submission-field textarea,
+.request-builder-form .submission-field .site-suggest-wrap,
+.request-builder-form .submission-field .toggle {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .request-builder-form .source-toggle button {

@@ -287,7 +287,9 @@ export default function App() {
     if (!publishingSite) return t("errorTargetRequired");
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
     if (!effectiveClientName) return t("errorClientRequired");
-    if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
+    if (requiresTargetSite && !(block.target_site_id || "").trim() && !(block.target_site_url || "").trim()) {
+      return t("errorClientTargetSiteRequired");
+    }
     const sourceType = orders ? "" : (block.source_type || "").trim();
     if (!orders && !sourceType) return t("errorFileTypeRequired");
     if (!orders && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
@@ -1651,7 +1653,6 @@ export default function App() {
                       isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
                       (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                     );
-                    const selectedClientTargetSite = availableTargetSites.find((row) => String(row.id || "") === String(block.target_site_id || ""));
                     const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
                     return (
@@ -1730,39 +1731,43 @@ export default function App() {
                           {isOrders ? (
                             <div className="submission-field submission-field-site">
                               <label>{t("targetSiteForBacklink")}</label>
-                              <select
-                                value={block.target_site_id || ""}
+                              <input
+                                type="url"
+                                list={`target-site-list-${block.id}`}
+                                value={block.target_site_url || ""}
                                 onChange={(e) => {
-                                  const nextId = e.target.value;
-                                  const nextTarget = availableTargetSites.find((row) => String(row.id || "") === nextId);
+                                  const nextUrl = e.target.value;
+                                  const nextTarget = availableTargetSites.find((row) => {
+                                    const urlValue = (row.target_site_url || "").trim();
+                                    const domainValue = (row.target_site_domain || "").trim();
+                                    const domainUrlValue = domainValue ? `https://${domainValue}` : "";
+                                    return urlValue === nextUrl || domainUrlValue === nextUrl;
+                                  });
+                                  const nextId = nextTarget ? String(nextTarget.id || "") : "";
                                   setSubmissionBlocks((prev) => prev.map((item) => (
                                     item.id === block.id
                                       ? {
                                           ...item,
                                           target_site_id: nextId,
-                                          target_site_url: (nextTarget?.target_site_url || "").trim(),
+                                          target_site_url: nextUrl,
                                         }
                                       : item
                                   )));
                                 }}
+                                placeholder={t("placeholderTargetWebsite")}
                                 required
-                              >
-                                <option value="">{t("selectTargetSite")}</option>
+                              />
+                              <datalist id={`target-site-list-${block.id}`}>
                                 {availableTargetSites.map((row) => {
                                   const optionId = String(row.id || "");
                                   const domainLabel = (row.target_site_domain || "").trim();
                                   const urlLabel = (row.target_site_url || "").trim();
-                                  const label = domainLabel || urlLabel || optionId;
+                                  const label = urlLabel || (domainLabel ? `https://${domainLabel}` : "") || optionId;
                                   return (
-                                    <option key={optionId} value={optionId}>
-                                      {row.is_primary ? `${label} (${t("primaryLabel")})` : label}
-                                    </option>
+                                    <option key={optionId} value={label} />
                                   );
                                 })}
-                              </select>
-                              {selectedClientTargetSite?.target_site_url ? (
-                                <p className="muted-text small-text">{selectedClientTargetSite.target_site_url}</p>
-                              ) : null}
+                              </datalist>
                             </div>
                           ) : null}
 

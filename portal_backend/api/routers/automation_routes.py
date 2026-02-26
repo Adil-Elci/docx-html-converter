@@ -327,7 +327,7 @@ def _resolve_client_target_site(
         for row in rows:
             if (row.target_site_url or "").strip() == requested_url:
                 return row
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_url is not assigned to this client.")
+        return None
 
     primary = next((row for row in rows if bool(row.is_primary)), None)
     return primary or rows[0]
@@ -377,6 +377,7 @@ def _compose_submission_notes(
     author_id: int,
     *,
     client_target_site: Optional[ClientTargetSite] = None,
+    custom_target_site_url: Optional[str] = None,
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
     manual_order: bool = False,
@@ -393,6 +394,8 @@ def _compose_submission_notes(
             parts.append(f"client_target_site_domain={_safe_note_value(client_target_site.target_site_domain)}")
         if client_target_site.target_site_url:
             parts.append(f"client_target_site_url={_safe_note_value(client_target_site.target_site_url)}")
+    elif custom_target_site_url:
+        parts.append(f"client_target_site_url={_safe_note_value(custom_target_site_url)}")
     if anchor:
         parts.append(f"anchor={_safe_note_value(anchor)}")
     if topic:
@@ -516,6 +519,7 @@ def _enqueue_job(
         post_status,
         author_id,
         client_target_site=client_target_site,
+        custom_target_site_url=payload.target_site_url,
         anchor=payload.anchor,
         topic=payload.topic,
         manual_order=manual_order,

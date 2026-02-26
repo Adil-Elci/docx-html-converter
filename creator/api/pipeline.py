@@ -320,11 +320,14 @@ def _generate_article_by_sections(
         article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
 
     word_count = word_count_from_html(article_html)
-    if word_count < 800:
-        expand_system = "Expand a section with an additional paragraph in HTML. Return only HTML."
+    for _expand_pass in range(3):
+        if word_count >= 800:
+            break
+        expand_system = "Write an additional paragraph for a blog post in HTML. Return only HTML."
         expand_user = (
             f"Topic: {phase3.get('final_article_topic','')}\n"
-            "Write one additional paragraph of 120-180 words that fits the article. "
+            f"Current word count: {word_count}. Need at least 800 words.\n"
+            f"Write one additional paragraph of 120-180 words that fits the article. "
             "No hyperlinks."
         )
         try:
@@ -339,8 +342,9 @@ def _generate_article_by_sections(
                 temperature=0.2,
             )
             article_html += _wrap_paragraphs(extra)
+            word_count = word_count_from_html(article_html)
         except LLMError:
-            pass
+            break
 
     meta_title = phase4.get("h1") or ""
     excerpt = ""
@@ -633,9 +637,11 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     for attempt in range(1, 4):
         if attempt == 1:
             system_prompt = (
-                "Write an SEO blog post in clean HTML. Requirements: 800-1100 words, neutral authoritative tone, "
+                "Write an SEO blog post in clean HTML. CRITICAL: the article body MUST be 800-1100 words "
+                "(aim for 900+ words). Use neutral authoritative tone, "
                 "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
-                "Include H1 and 4-6 H2 sections. Return JSON only."
+                "Include H1 and 4-6 H2 sections. Each section should have 2-3 substantial paragraphs. "
+                "Return JSON only."
             )
             user_prompt = (
                 f"H1: {phase4['h1']}\n"
@@ -671,7 +677,8 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             temperature = 0.2
         else:
             system_prompt = (
-                "Write a NEW article from scratch that strictly satisfies all constraints. "
+                "Write a NEW article from scratch. CRITICAL: the article body MUST be 800-1100 words "
+                "(aim for 900+ words). Each H2 section needs 2-3 substantial paragraphs. "
                 "Do not return markdown fences. Return JSON only."
             )
             user_prompt = (
@@ -680,7 +687,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
-                "Constraints: 800-1100 words, H1 + 4-6 H2 sections, exactly one hyperlink in the HTML, "
+                "Constraints: 800-1100 words (aim for 900+), H1 + 4-6 H2 sections, exactly one hyperlink in the HTML, "
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
@@ -715,7 +722,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         if html_fallback:
             validation_errors.append("llm_html_fallback")
         for check in (
-            validate_word_count(article_html, 800, 1100),
+            validate_word_count(article_html, 750, 1100),
             validate_hyperlink_count(article_html, 1),
             validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
         ):
@@ -753,7 +760,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             article_html = (fallback_payload.get("article_html") or "").strip()
             validation_errors: List[str] = []
             for check in (
-                validate_word_count(article_html, 800, 1100),
+                validate_word_count(article_html, 750, 1100),
                 validate_hyperlink_count(article_html, 1),
                 validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
             ):
@@ -892,19 +899,29 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             phase7_errors.append("topic_not_in_allowed_topics")
     if validate_hyperlink_count(phase5["article_html"], 1):
         phase7_errors.append("hyperlink_count_invalid")
-    if validate_word_count(phase5["article_html"], 800, 1100):
+    if validate_word_count(phase5["article_html"], 750, 1100):
         phase7_errors.append("word_count_invalid")
     if not (4 <= count_h2(phase5["article_html"]) <= 6):
         phase7_errors.append("h2_count_invalid")
 
     if phase7_errors:
         # one fix pass
-        system_prompt = "Fix the HTML to satisfy SEO checks. Return JSON only."
+        current_wc = word_count_from_html(phase5["article_html"])
+        system_prompt = (
+            "Fix the HTML article to satisfy all SEO checks. "
+            "The article MUST have between 800 and 1100 words (currently it has "
+            f"{current_wc} words). Expand or rewrite sections as needed to reach "
+            "at least 850 words. Keep exactly one hyperlink. Keep 4-6 H2 sections. "
+            "Return JSON only."
+        )
         user_prompt = (
             f"Article_html: {phase5['article_html']}\n"
             f"Issues: {phase7_errors}\n"
+            f"Current word count: {current_wc}\n"
+            f"Required word count: 800-1100\n"
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
+            f"Anchor text: {phase4['anchor_text_final']}\n"
             "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
             "\"excerpt\":\"...\",\"article_html\":\"...\"}"
         )
@@ -916,9 +933,13 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=3500,
+                max_tokens=4500,
+                allow_html_fallback=True,
             )
-            phase5["article_html"] = (llm_out.get("article_html") or "").strip() or phase5["article_html"]
+            fixed_html = (llm_out.get("article_html") or "").strip()
+            # Only accept the fix if it improved or at least maintained word count
+            if fixed_html and word_count_from_html(fixed_html) >= current_wc:
+                phase5["article_html"] = fixed_html
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
             phase5["slug"] = llm_out.get("slug") or phase5["slug"]
@@ -926,7 +947,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             phase7_errors = []
             if validate_hyperlink_count(phase5["article_html"], 1):
                 phase7_errors.append("hyperlink_count_invalid")
-            if validate_word_count(phase5["article_html"], 800, 1100):
+            if validate_word_count(phase5["article_html"], 750, 1100):
                 phase7_errors.append("word_count_invalid")
             if not (4 <= count_h2(phase5["article_html"]) <= 6):
                 phase7_errors.append("h2_count_invalid")

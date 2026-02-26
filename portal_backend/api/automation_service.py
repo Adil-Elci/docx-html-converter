@@ -27,6 +27,7 @@ DEFAULT_IMAGE_COUNT = 1
 DEFAULT_AUTHOR_ID = 4
 DEFAULT_POST_STATUS = "publish"
 DEFAULT_TIMEOUT_SECONDS = 60
+DEFAULT_CREATOR_TIMEOUT_SECONDS = 300
 DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS = 90
 DEFAULT_IMAGE_POLL_INTERVAL_SECONDS = 2
 DEFAULT_CATEGORY_LLM_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -784,6 +785,7 @@ def run_creator_order_pipeline(
     category_ids: Optional[List[int]],
     category_candidates: Optional[List[Dict[str, Any]]],
     timeout_seconds: int,
+    creator_timeout_seconds: int = DEFAULT_CREATOR_TIMEOUT_SECONDS,
     poll_timeout_seconds: int,
     poll_interval_seconds: int,
     image_width: int,
@@ -801,7 +803,7 @@ def run_creator_order_pipeline(
         publishing_site_url=publishing_site_url,
         anchor=anchor,
         topic=topic,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=creator_timeout_seconds,
     )
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}
@@ -1178,6 +1180,7 @@ def get_runtime_config() -> Dict[str, Any]:
         "image_width": read_int("AUTOMATION_IMAGE_WIDTH", DEFAULT_IMAGE_WIDTH),
         "image_height": read_int("AUTOMATION_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT),
         "timeout_seconds": read_int("AUTOMATION_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        "creator_timeout_seconds": read_int("AUTOMATION_CREATOR_TIMEOUT_SECONDS", DEFAULT_CREATOR_TIMEOUT_SECONDS),
         "poll_timeout_seconds": read_int("AUTOMATION_IMAGE_POLL_TIMEOUT_SECONDS", DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS),
         "poll_interval_seconds": read_int(
             "AUTOMATION_IMAGE_POLL_INTERVAL_SECONDS",

@@ -126,6 +126,7 @@ class AutomationJobWorker:
                     category_ids=payload["category_ids"],
                     category_candidates=payload["category_candidates"],
                     timeout_seconds=run_config["timeout_seconds"],
+                    creator_timeout_seconds=run_config["creator_timeout_seconds"],
                     poll_timeout_seconds=run_config["poll_timeout_seconds"],
                     poll_interval_seconds=run_config["poll_interval_seconds"],
                     image_width=run_config["image_width"],

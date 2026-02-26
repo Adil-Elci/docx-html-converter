@@ -70,7 +70,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs"];
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "guest-posts", "orders"];
 const CLIENT_SECTIONS = ["dashboard", "guest-posts", "orders"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
@@ -189,8 +189,7 @@ export default function App() {
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
 
-  const getClientTargetSites = () => {
-    const client = clients[0];
+  const getTargetSitesForClient = (client) => {
     if (!client) return [];
     const explicit = Array.isArray(client.target_sites) ? client.target_sites.filter(Boolean) : [];
     if (explicit.length) return explicit;
@@ -206,6 +205,8 @@ export default function App() {
     }
     return [];
   };
+
+  const getClientTargetSites = () => getTargetSitesForClient(clients[0]);
 
   const getDefaultSubmissionTargetSite = () => {
     const rows = getClientTargetSites();
@@ -275,7 +276,7 @@ export default function App() {
   const getSubmissionBlockError = (block, { orders, clientName, requiresTargetSite }) => {
     const publishingSite = (block.publishing_site || "").trim();
     if (!publishingSite) return t("errorTargetRequired");
-    const effectiveClientName = orders ? ((block.client_name || "").trim() || clientName) : clientName;
+    const effectiveClientName = ((block.client_name || "").trim() || clientName);
     if (!effectiveClientName) return t("errorClientRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim()) return t("errorClientTargetSiteRequired");
     const sourceType = orders ? "" : (block.source_type || "").trim();
@@ -291,7 +292,7 @@ export default function App() {
   const buildSubmissionFormData = (block, { orders, clientName }) => {
     const formData = new FormData();
     const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
-    const effectiveClientName = orders ? ((block.client_name || "").trim() || clientName) : clientName;
+    const effectiveClientName = ((block.client_name || "").trim() || clientName);
     formData.append("publishing_site", block.publishing_site.trim());
     formData.append("client_name", effectiveClientName);
     if (orders) {
@@ -1396,8 +1397,8 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(!isAdminUser && (isGuestPostsSection || isOrders)) ? "request-container" : ""}`.trim()}>
-          {!isAdminUser && (isGuestPostsSection || isOrders) ? (
+        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(isGuestPostsSection || isOrders) ? "request-container" : ""}`.trim()}>
+          {(isGuestPostsSection || isOrders) ? (
             <div className="hero">
               <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
             </div>
@@ -1626,7 +1627,11 @@ export default function App() {
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
-                    const selectedClientTargetSite = clientTargetSites.find((row) => String(row.id || "") === String(block.target_site_id || ""));
+                    const selectedClient = isAdminUser
+                      ? clients.find((client) => (client.name || "").trim() === (block.client_name || "").trim())
+                      : null;
+                    const availableTargetSites = isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites;
+                    const selectedClientTargetSite = availableTargetSites.find((row) => String(row.id || "") === String(block.target_site_id || ""));
                     const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
                     return (
@@ -1636,6 +1641,39 @@ export default function App() {
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
 
+                          {isAdminUser ? (
+                            <div className="submission-field submission-field-inline submission-field-client">
+                              <label>{t("clientName")}</label>
+                              <select
+                                value={block.client_name || ""}
+                                onChange={(e) => {
+                                  const nextClientName = e.target.value;
+                                  const nextClient = clients.find((client) => (client.name || "").trim() === nextClientName);
+                                  const nextTargetRows = getTargetSitesForClient(nextClient);
+                                  const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
+                                  setSubmissionBlocks((prev) => prev.map((item) => (
+                                    item.id === block.id
+                                      ? {
+                                          ...item,
+                                          client_name: nextClientName,
+                                          target_site_id: nextPrimary ? String(nextPrimary.id || "") : "",
+                                          target_site_url: nextPrimary ? (nextPrimary.target_site_url || "").trim() : "",
+                                        }
+                                      : item
+                                  )));
+                                }}
+                                required
+                              >
+                                <option value="">{t("selectClient")}</option>
+                                {clients.map((client) => (
+                                  <option key={client.id} value={(client.name || "").trim()}>
+                                    {(client.name || "").trim() || client.id}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
+
                           {isOrders ? (
                             <div className="submission-field submission-field-site">
                               <label>{t("targetSiteForBacklink")}</label>
@@ -1643,7 +1681,7 @@ export default function App() {
                                 value={block.target_site_id || ""}
                                 onChange={(e) => {
                                   const nextId = e.target.value;
-                                  const nextTarget = clientTargetSites.find((row) => String(row.id || "") === nextId);
+                                  const nextTarget = availableTargetSites.find((row) => String(row.id || "") === nextId);
                                   setSubmissionBlocks((prev) => prev.map((item) => (
                                     item.id === block.id
                                       ? {
@@ -1657,7 +1695,7 @@ export default function App() {
                                 required
                               >
                                 <option value="">{t("selectTargetSite")}</option>
-                                {clientTargetSites.map((row) => {
+                                {availableTargetSites.map((row) => {
                                   const optionId = String(row.id || "");
                                   const domainLabel = (row.target_site_domain || "").trim();
                                   const urlLabel = (row.target_site_url || "").trim();
@@ -2332,6 +2370,8 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
+        { id: "guest-posts", label: t("navGuestPosts") },
+        { id: "orders", label: t("navOrders") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
       ]
     : [

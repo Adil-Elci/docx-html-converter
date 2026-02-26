@@ -716,6 +716,238 @@ def converter_publishing_site_from_site_url(site_url: str) -> str:
     return (parsed.netloc or parsed.path).strip().lower()
 
 
+def _pick_creator_image(images: List[Dict[str, Any]], image_type: str) -> str:
+    for item in images or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != image_type:
+            continue
+        value = item.get("id_or_url")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _insert_in_content_image(html: str, image_url: str, alt_text: str) -> str:
+    if not image_url:
+        return html
+    alt = alt_text.replace('"', "'").strip()
+    img_tag = f'<figure class="wp-block-image"><img src="{image_url}" alt="{alt}" /></figure>'
+    if "</h2>" in html:
+        return html.replace("</h2>", f"</h2>{img_tag}", 1)
+    return f"{html}{img_tag}"
+
+
+def call_creator_service(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    publishing_site_url: str,
+    anchor: Optional[str],
+    topic: Optional[str],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    url = creator_endpoint.rstrip("/") + "/create"
+    body: Dict[str, Any] = {
+        "target_site_url": target_site_url,
+        "publishing_site_url": publishing_site_url,
+    }
+    if anchor:
+        body["anchor"] = anchor
+    if topic:
+        body["topic"] = topic
+    return _request_json(
+        "POST",
+        url,
+        json_body=body,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
+def run_creator_order_pipeline(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    publishing_site_url: str,
+    anchor: Optional[str],
+    topic: Optional[str],
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    existing_wp_post_id: Optional[int],
+    post_status: str,
+    author_id: int,
+    category_ids: Optional[List[int]],
+    category_candidates: Optional[List[Dict[str, Any]]],
+    timeout_seconds: int,
+    poll_timeout_seconds: int,
+    poll_interval_seconds: int,
+    image_width: int,
+    image_height: int,
+    category_llm_enabled: bool,
+    category_llm_api_key: str,
+    category_llm_base_url: str,
+    category_llm_model: str,
+    category_llm_max_categories: int,
+    category_llm_confidence_threshold: float,
+) -> Dict[str, Any]:
+    creator_output = call_creator_service(
+        creator_endpoint=creator_endpoint,
+        target_site_url=target_site_url,
+        publishing_site_url=publishing_site_url,
+        anchor=anchor,
+        topic=topic,
+        timeout_seconds=timeout_seconds,
+    )
+    phase5 = creator_output.get("phase5") or {}
+    phase6 = creator_output.get("phase6") or {}
+    images = creator_output.get("images") or []
+
+    title = str(phase5.get("meta_title") or phase5.get("title") or "").strip()
+    excerpt = str(phase5.get("excerpt") or "").strip()
+    slug = str(phase5.get("slug") or "").strip()
+    article_html = str(phase5.get("article_html") or "").strip()
+    if not article_html:
+        raise AutomationError("Creator output missing article_html.")
+
+    selected_category_ids = list(category_ids or [])
+    if category_llm_enabled and category_candidates:
+        if category_llm_api_key:
+            try:
+                llm_selected_ids = _select_categories_with_llm(
+                    title=title or "Generated Draft",
+                    excerpt=excerpt,
+                    clean_html=article_html,
+                    category_candidates=category_candidates,
+                    api_key=category_llm_api_key,
+                    base_url=category_llm_base_url,
+                    model=category_llm_model,
+                    max_categories=max(1, category_llm_max_categories),
+                    confidence_threshold=max(0.0, min(1.0, category_llm_confidence_threshold)),
+                    timeout_seconds=timeout_seconds,
+                )
+                selected_category_ids = llm_selected_ids
+            except AutomationError as exc:
+                logger.warning(
+                    "automation.creator.category_llm.fallback reason=%s defaults_count=%s",
+                    str(exc),
+                    len(selected_category_ids),
+                )
+        else:
+            logger.warning(
+                "automation.creator.category_llm.fallback reason=missing_api_key defaults_count=%s",
+                len(selected_category_ids),
+            )
+
+    featured_url = _pick_creator_image(images, "featured")
+    featured_alt = ""
+    featured_meta = phase6.get("featured_image") if isinstance(phase6.get("featured_image"), dict) else {}
+    if isinstance(featured_meta, dict):
+        featured_alt = str(featured_meta.get("alt_text") or "").strip()
+    if not featured_url:
+        raise AutomationError("Creator output missing featured image URL.")
+
+    image_bytes, file_name, content_type = download_binary_file(
+        featured_url,
+        timeout_seconds=timeout_seconds,
+    )
+    media_payload = wp_create_media_item(
+        site_url=site_url,
+        wp_rest_base=wp_rest_base,
+        wp_username=wp_username,
+        wp_app_password=wp_app_password,
+        data=image_bytes,
+        file_name=file_name,
+        content_type=content_type,
+        title=title or "Generated Draft",
+        alt_text=featured_alt or None,
+        timeout_seconds=timeout_seconds,
+    )
+
+    in_content_url = _pick_creator_image(images, "in_content")
+    if in_content_url:
+        in_meta = phase6.get("in_content_image") if isinstance(phase6.get("in_content_image"), dict) else {}
+        in_alt = str(in_meta.get("alt_text") or "").strip() if isinstance(in_meta, dict) else ""
+        try:
+            in_bytes, in_name, in_type = download_binary_file(
+                in_content_url,
+                timeout_seconds=timeout_seconds,
+            )
+            in_media_payload = wp_create_media_item(
+                site_url=site_url,
+                wp_rest_base=wp_rest_base,
+                wp_username=wp_username,
+                wp_app_password=wp_app_password,
+                data=in_bytes,
+                file_name=in_name,
+                content_type=in_type,
+                title=title or "Generated Draft",
+                alt_text=in_alt or None,
+                timeout_seconds=timeout_seconds,
+            )
+            in_media_url = in_media_payload.get("source_url") or in_media_payload.get("guid", {}).get("rendered")
+            if isinstance(in_media_url, str) and in_media_url.strip():
+                article_html = _insert_in_content_image(article_html, in_media_url.strip(), in_alt)
+        except AutomationError:
+            logger.warning("automation.creator.in_content_upload_failed")
+
+    featured_media_id = int(media_payload.get("id"))
+    if existing_wp_post_id:
+        post_payload = wp_update_post(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+            post_id=existing_wp_post_id,
+            title=title,
+            clean_html=article_html,
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_updated"
+    else:
+        post_payload = wp_create_post(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+            title=title,
+            clean_html=article_html,
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_created"
+
+    guid_value = media_payload.get("guid")
+    media_url = media_payload.get("source_url")
+    if not media_url and isinstance(guid_value, dict):
+        media_url = guid_value.get("rendered")
+
+    return {
+        "creator_output": creator_output,
+        "image_url": featured_url,
+        "media_payload": media_payload,
+        "media_url": media_url,
+        "post_payload": post_payload,
+        "post_event_type": post_event_type,
+        "selected_category_ids": selected_category_ids,
+    }
+
+
 def run_guest_post_pipeline(
     *,
     source_url: str,

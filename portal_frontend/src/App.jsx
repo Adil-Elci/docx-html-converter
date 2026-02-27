@@ -783,13 +783,9 @@ export default function App() {
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || isDbUpdaterDomain) return undefined;
-    let cancelled = false;
-    let intervalId = null;
-
-    const refreshPortalData = async () => {
+    if (!currentUser || isDbUpdaterDomain) return;
+    const refreshOnSectionChange = async () => {
       if (portalRefreshInFlightRef.current) return;
-      if (document.visibilityState && document.visibilityState !== "visible") return;
       portalRefreshInFlightRef.current = true;
       try {
         await loadAll(currentUser);
@@ -805,23 +801,7 @@ export default function App() {
         portalRefreshInFlightRef.current = false;
       }
     };
-
-    const onFocusOrVisible = () => {
-      if (cancelled) return;
-      refreshPortalData();
-    };
-
-    intervalId = window.setInterval(refreshPortalData, 30000);
-    window.addEventListener("focus", onFocusOrVisible);
-    document.addEventListener("visibilitychange", onFocusOrVisible);
-
-    return () => {
-      cancelled = true;
-      if (intervalId) window.clearInterval(intervalId);
-      window.removeEventListener("focus", onFocusOrVisible);
-      document.removeEventListener("visibilitychange", onFocusOrVisible);
-      portalRefreshInFlightRef.current = false;
-    };
+    refreshOnSectionChange();
   }, [currentUser, activeSection, isDbUpdaterDomain]);
 
   useEffect(() => {

@@ -943,6 +943,8 @@ input:disabled {
 .request-container .request-form-panel .submission-block-controls.submission-block-controls-global {
   justify-content: flex-start;
   gap: 6px;
+  width: fit-content;
+  display: inline-flex;
 }
 
 .request-container .request-form-panel .submit-btn {

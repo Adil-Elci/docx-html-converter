@@ -421,6 +421,53 @@ body {
   align-items: center;
 }
 
+.toast-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1400;
+  background: transparent;
+}
+
+.toast-card {
+  background: #fff;
+  color: #1b1b1b;
+  border: 1px solid #c7c7c7;
+  border-radius: 14px;
+  padding: 14px 20px;
+  font-weight: 700;
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.22);
+  animation: toast-in 0.12s ease forwards;
+}
+
+.toast-card.toast-hide {
+  animation: toast-out 0.12s ease forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
 .form-panel h2 {
   margin: 0 0 16px;
   font-size: 22px;

@@ -181,6 +181,7 @@ export default function App() {
   const [creatorCanceling, setCreatorCanceling] = useState(false);
   const [creatorCancelError, setCreatorCancelError] = useState("");
   const [creatorCancelConfirm, setCreatorCancelConfirm] = useState(false);
+  const [imageRegenToast, setImageRegenToast] = useState({ open: false, message: "", closing: false });
   const [creatorJobIds, setCreatorJobIds] = useState([]);
   const [creatorProgress, setCreatorProgress] = useState({});
   const [showCreatorProgress, setShowCreatorProgress] = useState(false);
@@ -556,7 +557,7 @@ export default function App() {
       setSuccess("");
       await api.post(`/jobs/${jobId}/regenerate-image`, {});
       await loadPendingJobs();
-      setSuccess(t("adminImageRegeneratedSuccess"));
+      setImageRegenToast({ open: true, message: t("adminImageRegeneratedSuccess"), closing: false });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1036,6 +1037,29 @@ export default function App() {
     setCreatorCanceling(false);
     setCreatorCancelConfirm(false);
   }, [stopCreatorPolling]);
+
+  const dismissImageRegenToast = useCallback(() => {
+    setImageRegenToast((prev) => {
+      if (!prev.open || prev.closing) return prev;
+      return { ...prev, closing: true };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!imageRegenToast.open) return undefined;
+    const timer = setTimeout(() => {
+      dismissImageRegenToast();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [imageRegenToast.open, dismissImageRegenToast]);
+
+  useEffect(() => {
+    if (!imageRegenToast.closing) return undefined;
+    const timer = setTimeout(() => {
+      setImageRegenToast({ open: false, message: "", closing: false });
+    }, 160);
+    return () => clearTimeout(timer);
+  }, [imageRegenToast.closing]);
 
   useEffect(() => {
     if (!showCreatorProgress || creatorJobIds.length === 0) return;
@@ -2137,6 +2161,18 @@ export default function App() {
         errorMessage={submissionErrorMessage}
         onClose={() => setShowSubmissionErrorModal(false)}
       />
+      {imageRegenToast.open ? (
+        <div
+          className="toast-overlay"
+          role="presentation"
+          onClick={dismissImageRegenToast}
+          onTouchStart={dismissImageRegenToast}
+        >
+          <div className={`toast-card ${imageRegenToast.closing ? "toast-hide" : ""}`}>
+            {imageRegenToast.message}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -616,12 +616,18 @@ input:disabled {
 .submission-block-actions {
   display: flex;
   justify-content: flex-end;
+  grid-column: 1 / -1;
 }
 
 .submission-block-controls {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.submission-block-controls-global {
+  justify-content: flex-start;
+  margin-top: 10px;
 }
 
 .submission-block > div {

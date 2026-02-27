@@ -1141,8 +1141,7 @@ export default function App() {
     setCreatorCancelConfirm(false);
   }, [creatorCanceling]);
 
-  const submitGuestPost = async (event) => {
-    event.preventDefault();
+  const submitSubmissionBlock = async (block, blockIndex) => {
     setError("");
     setSuccess("");
     setShowSubmissionErrorModal(false);
@@ -1155,92 +1154,68 @@ export default function App() {
       return;
     }
     const resolvedClientName = ((clients[0]?.name) || "").trim();
-    const blocks = submissionBlocks;
     const requiresTargetSiteSelection = isOrders;
-      for (let index = 0; index < blocks.length; index += 1) {
-        const validationError = getSubmissionBlockError(blocks[index], {
-          orders: isOrders,
-          clientName: resolvedClientName,
-          requiresTargetSite: requiresTargetSiteSelection,
-        });
-        if (validationError) {
-          if (validationError === t("errorFileTypeRequired")) {
-            const blockId = blocks[index].id;
-            setSubmissionFieldErrors((prev) => ({
-              ...prev,
-              [blockId]: {
-                ...(prev[blockId] || {}),
-                source_type: true,
-              },
-            }));
-            return;
-          }
-          setError(`Block ${index + 1}: ${validationError}`);
-          return;
-        }
+    const validationError = getSubmissionBlockError(block, {
+      orders: isOrders,
+      clientName: resolvedClientName,
+      requiresTargetSite: requiresTargetSiteSelection,
+    });
+    if (validationError) {
+      if (validationError === t("errorFileTypeRequired")) {
+        const blockId = block.id;
+        setSubmissionFieldErrors((prev) => ({
+          ...prev,
+          [blockId]: {
+            ...(prev[blockId] || {}),
+            source_type: true,
+          },
+        }));
+        return;
       }
+      setError(`Block ${blockIndex + 1}: ${validationError}`);
+      return;
+    }
 
     try {
       setSubmitting(true);
-      const collectedJobIds = [];
-      let hasCreatorBlocks = false;
-      for (let index = 0; index < blocks.length; index += 1) {
-        const block = blocks[index];
-        const formData = buildSubmissionFormData(block, {
-          orders: isOrders,
-          clientName: resolvedClientName,
+      const formData = buildSubmissionFormData(block, {
+        orders: isOrders,
+        clientName: resolvedClientName,
+      });
+      const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
+      let responseData = null;
+      if (effectiveSourceType === "word-doc" && block.docx_file) {
+        setUploadProgressBlockId(block.id);
+        setUploadProgress(0);
+        responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
+        setUploadProgress(100);
+      } else {
+        setUploadProgressBlockId(null);
+        const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
+          method: "POST",
+          credentials: "include",
+          body: formData,
         });
-        if (isOrders) hasCreatorBlocks = true;
-        try {
-          const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
-          let responseData = null;
-          if (effectiveSourceType === "word-doc" && block.docx_file) {
-            setUploadProgressBlockId(block.id);
-            setUploadProgress(0);
-            responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
-            setUploadProgress(100);
-          } else {
-            setUploadProgressBlockId(null);
-            const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
-              method: "POST",
-              credentials: "include",
-              body: formData,
-            });
 
-            if (!response.ok) {
-              const detail = await readApiError(response, t("errorRequestFailed"));
-              const requestError = new Error(detail || t("errorRequestFailed"));
-              requestError.statusCode = response.status;
-              throw requestError;
-            }
-            responseData = await response.json().catch(() => ({}));
-          }
-          if (responseData?.job_id && isOrders) {
-            collectedJobIds.push(responseData.job_id);
-          }
-        } catch (err) {
-          setError(`Block ${index + 1}: ${err?.message || t("errorRequestFailed")}`);
-          openSubmissionErrorSupportModal({
-            statusCode: err?.statusCode,
-            message: err?.message,
-            blockIndex: index,
-          });
-          throw err;
+        if (!response.ok) {
+          const detail = await readApiError(response, t("errorRequestFailed"));
+          const requestError = new Error(detail || t("errorRequestFailed"));
+          requestError.statusCode = response.status;
+          throw requestError;
         }
+        responseData = await response.json().catch(() => ({}));
       }
 
-      if (hasCreatorBlocks && collectedJobIds.length > 0) {
-        setCreatorJobIds(collectedJobIds);
-        const initialProgress = {};
-        collectedJobIds.forEach((jid) => {
-          initialProgress[jid] = { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false };
+      if (responseData?.job_id && isOrders) {
+        const jobId = responseData.job_id;
+        setCreatorJobIds([jobId]);
+        setCreatorProgress({
+          [jobId]: { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false },
         });
-        setCreatorProgress(initialProgress);
         setShowCreatorProgress(true);
       } else {
         setShowSubmissionSuccessModal(true);
       }
-      resetSubmissionBlocks();
     } catch (err) {
       if (!err) {
         setError(t("errorRequestFailed"));
@@ -1811,7 +1786,7 @@ export default function App() {
             </div>
           ) : (
             <div className="panel form-panel request-form-panel">
-              <form className="guest-form request-builder-form" onSubmit={submitGuestPost}>
+              <div className="guest-form request-builder-form">
                 <div className="submission-blocks">
                   {submissionBlocks.map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
@@ -1830,13 +1805,23 @@ export default function App() {
                       isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
                       (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                     );
-                    const showAddControl = blockIndex === submissionBlocks.length - 1;
                     const showRemoveControl = blockIndex > 0;
                     return (
                       <div key={block.id} className="submission-block-wrap">
                         <div className={`submission-block panel ${isOrders ? "order-block" : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
+                            {showRemoveControl ? (
+                              <button
+                                className="btn secondary block-control-btn"
+                                type="button"
+                                aria-label={t("removeBlock")}
+                                onClick={() => removeSubmissionBlock(block.id)}
+                                disabled={submitting}
+                              >
+                                -
+                              </button>
+                            ) : null}
                           </div>
 
                           {isAdminUser ? (
@@ -2092,43 +2077,34 @@ export default function App() {
                               </div>
                             </div>
                           ) : null}
-                        </div>
 
-                        {(showAddControl || showRemoveControl) ? (
-                          <div className="submission-block-controls">
-                            {showRemoveControl ? (
-                              <button
-                                className="btn secondary block-control-btn"
-                                type="button"
-                                aria-label={t("removeBlock")}
-                                onClick={() => removeSubmissionBlock(block.id)}
-                                disabled={submitting}
-                              >
-                                -
-                              </button>
-                            ) : null}
-                            {showAddControl ? (
-                              <button
-                                className="btn block-control-btn"
-                                type="button"
-                                aria-label={t("addAnotherBlock")}
-                                onClick={() => addSubmissionBlock(block.id)}
-                                disabled={submitting}
-                              >
-                                +
-                              </button>
-                            ) : null}
+                          <div className="submission-block-actions">
+                            <button
+                              className="btn submit-btn"
+                              type="button"
+                              onClick={() => submitSubmissionBlock(block, blockIndex)}
+                              disabled={submitting}
+                            >
+                              {submitting ? t("submitting") : t("submitForReview")}
+                            </button>
                           </div>
-                        ) : null}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-
-                <button className="btn submit-btn" type="submit" disabled={submitting}>
-                  {submitting ? t("submitting") : t("submitForReview")}
-                </button>
-              </form>
+                <div className="submission-block-controls submission-block-controls-global">
+                  <button
+                    className="btn block-control-btn"
+                    type="button"
+                    aria-label={t("addAnotherBlock")}
+                    onClick={() => addSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
+                    disabled={submitting}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

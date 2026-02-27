@@ -419,7 +419,7 @@ def _call_leonardo(
     raise CreatorError("Leonardo generation timed out.")
 
 
-def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anchor: Optional[str], topic: Optional[str], dry_run: bool) -> Dict[str, Any]:
+def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anchor: Optional[str], topic: Optional[str], exclude_topics: Optional[List[str]] = None, dry_run: bool) -> Dict[str, Any]:
     warnings: List[str] = []
     debug: Dict[str, Any] = {"dry_run": dry_run, "timings_ms": {}, "fetched_pages": []}
 
@@ -527,17 +527,30 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     phase_start = time.time()
     logger.info("creator.phase3.start")
+    safe_exclude = list(exclude_topics or [])
     system_prompt = (
         "You select a guest post topic that fits publishing site authority and allows a natural backlink. "
-        "Avoid promotional topics and exact match money keywords. Return JSON only."
+        "Avoid promotional topics and exact match money keywords. "
+        "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
+        "Return JSON only."
     )
+    exclude_block = ""
+    if safe_exclude:
+        exclude_block = (
+            "Previously used topics (DO NOT reuse or closely paraphrase these):\n"
+            + "\n".join(f"- {t}" for t in safe_exclude)
+            + "\n\n"
+        )
     user_prompt = (
+        f"{exclude_block}"
         f"Allowed topics: {phase2['allowed_topics']}\n"
         f"Target keyword cluster: {keyword_cluster}\n"
         f"Requested topic (optional): {topic or ''}\n"
         "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
         "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"
     )
+    # Use higher temperature when we need to differentiate from existing topics.
+    phase3_temperature = 0.7 if safe_exclude else 0.3
     try:
         llm_out = call_llm_json(
             system_prompt=system_prompt,
@@ -547,6 +560,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             model=llm_model,
             timeout_seconds=http_timeout,
             max_tokens=500,
+            temperature=phase3_temperature,
         )
         phase3 = {
             "final_article_topic": llm_out.get("final_article_topic") or (topic or ""),

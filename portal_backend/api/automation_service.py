@@ -746,6 +746,7 @@ def call_creator_service(
     publishing_site_url: str,
     anchor: Optional[str],
     topic: Optional[str],
+    exclude_topics: Optional[List[str]] = None,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
     if not creator_endpoint:
@@ -759,6 +760,8 @@ def call_creator_service(
         body["anchor"] = anchor
     if topic:
         body["topic"] = topic
+    if exclude_topics:
+        body["exclude_topics"] = exclude_topics
     return _request_json(
         "POST",
         url,
@@ -775,6 +778,7 @@ def run_creator_order_pipeline(
     publishing_site_url: str,
     anchor: Optional[str],
     topic: Optional[str],
+    exclude_topics: Optional[List[str]] = None,
     site_url: str,
     wp_rest_base: str,
     wp_username: str,
@@ -806,6 +810,7 @@ def run_creator_order_pipeline(
         publishing_site_url=publishing_site_url,
         anchor=anchor,
         topic=topic,
+        exclude_topics=exclude_topics,
         timeout_seconds=creator_timeout_seconds,
     )
     phase5 = creator_output.get("phase5") or {}

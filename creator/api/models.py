@@ -10,6 +10,7 @@ class CreatorRequest(BaseModel):
     publishing_site_url: HttpUrl = Field(..., description="Publishing site URL (required for analysis)")
     anchor: Optional[str] = None
     topic: Optional[str] = None
+    exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
     dry_run: bool = False
 
     @validator("anchor", "topic")
@@ -18,6 +19,14 @@ class CreatorRequest(BaseModel):
             return value
         cleaned = value.strip()
         return cleaned or None
+
+    @validator("exclude_topics", pre=True, always=True)
+    def _clean_exclude_topics(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 class ErrorResponse(BaseModel):

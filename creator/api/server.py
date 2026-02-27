@@ -84,6 +84,7 @@ async def create(request: Request) -> JSONResponse:
             publishing_site_url=str(payload.publishing_site_url),
             anchor=payload.anchor,
             topic=payload.topic,
+            exclude_topics=payload.exclude_topics,
             dry_run=payload.dry_run,
         )
     except (CreatorError, LLMError) as exc:

@@ -116,6 +116,7 @@ class AutomationJobWorker:
                     publishing_site_url=payload.get("site_url") or "",
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
+                    exclude_topics=payload.get("exclude_topics") or [],
                     site_url=payload["site_url"],
                     wp_rest_base=payload["wp_rest_base"],
                     wp_username=payload["wp_username"],
@@ -332,6 +333,31 @@ class AutomationJobWorker:
                     }
                 )
 
+            # Gather topics from previous creator outputs for the same
+            # client + publishing site + target site so the creator can
+            # avoid generating duplicate articles.
+            exclude_topics: List[str] = []
+            if creator_mode and target_site_url:
+                prev_outputs = (
+                    session.query(CreatorOutput.payload)
+                    .filter(
+                        CreatorOutput.client_id == job.client_id,
+                        CreatorOutput.site_id == job.site_id,
+                        CreatorOutput.target_site_url == target_site_url,
+                        CreatorOutput.job_id != job.id,
+                    )
+                    .order_by(CreatorOutput.created_at.desc())
+                    .limit(50)
+                    .all()
+                )
+                for (prev_payload,) in prev_outputs:
+                    if not isinstance(prev_payload, dict):
+                        continue
+                    phase3_data = prev_payload.get("phase3") or {}
+                    prev_topic = phase3_data.get("final_article_topic", "")
+                    if isinstance(prev_topic, str) and prev_topic.strip():
+                        exclude_topics.append(prev_topic.strip())
+
             return {
                 "source_url": source_url,
                 "converter_publishing_site": converter_publishing_site,
@@ -349,6 +375,7 @@ class AutomationJobWorker:
                 "target_site_url": target_site_url,
                 "anchor": anchor,
                 "topic": topic,
+                "exclude_topics": exclude_topics,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:

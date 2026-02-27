@@ -2095,6 +2095,15 @@ export default function App() {
                 </div>
                 <div className="submission-block-controls submission-block-controls-global">
                   <button
+                    className="btn secondary block-control-btn"
+                    type="button"
+                    aria-label={t("removeBlock")}
+                    onClick={() => removeSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
+                    disabled={submitting || submissionBlocks.length <= 1}
+                  >
+                    -
+                  </button>
+                  <button
                     className="btn block-control-btn"
                     type="button"
                     aria-label={t("addAnotherBlock")}

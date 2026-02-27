@@ -1811,17 +1811,6 @@ export default function App() {
                         <div className={`submission-block panel ${isOrders ? "order-block" : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
-                            {showRemoveControl ? (
-                              <button
-                                className="btn secondary block-control-btn"
-                                type="button"
-                                aria-label={t("removeBlock")}
-                                onClick={() => removeSubmissionBlock(block.id)}
-                                disabled={submitting}
-                              >
-                                -
-                              </button>
-                            ) : null}
                           </div>
 
                           {isAdminUser ? (
@@ -2088,30 +2077,33 @@ export default function App() {
                               {submitting ? t("submitting") : t("submitForReview")}
                             </button>
                           </div>
+
+                          <div className="submission-block-controls submission-block-controls-inline">
+                            <button
+                              className="btn block-control-btn"
+                              type="button"
+                              aria-label={t("addAnotherBlock")}
+                              onClick={() => addSubmissionBlock(block.id)}
+                              disabled={submitting}
+                            >
+                              +
+                            </button>
+                            {showRemoveControl ? (
+                              <button
+                                className="btn secondary block-control-btn"
+                                type="button"
+                                aria-label={t("removeBlock")}
+                                onClick={() => removeSubmissionBlock(block.id)}
+                                disabled={submitting}
+                              >
+                                -
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     );
                   })}
-                </div>
-                <div className="submission-block-controls submission-block-controls-global">
-                  <button
-                    className="btn secondary block-control-btn"
-                    type="button"
-                    aria-label={t("removeBlock")}
-                    onClick={() => removeSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
-                    disabled={submitting || submissionBlocks.length <= 1}
-                  >
-                    -
-                  </button>
-                  <button
-                    className="btn block-control-btn"
-                    type="button"
-                    aria-label={t("addAnotherBlock")}
-                    onClick={() => addSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
-                    disabled={submitting}
-                  >
-                    +
-                  </button>
                 </div>
               </div>
             </div>

@@ -22,7 +22,7 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _site_to_out(site: Site) -> SiteOut:
+def _site_to_out(site: Site, credential: Optional[SiteCredential] = None) -> SiteOut:
     return SiteOut(
         id=site.id,
         name=site.name,
@@ -30,6 +30,8 @@ def _site_to_out(site: Site) -> SiteOut:
         wp_rest_base=site.wp_rest_base,
         hosted_by=site.hosted_by,
         host_panel=site.host_panel,
+        author_name=credential.author_name if credential else None,
+        author_id=credential.author_id if credential else None,
         status=site.status,
         created_at=site.created_at,
         updated_at=site.updated_at,
@@ -67,7 +69,17 @@ def list_sites(
             .exists()
         )
     sites = query.order_by(Site.created_at.desc()).all()
-    return [_site_to_out(site) for site in sites]
+    if not sites:
+        return []
+    site_ids = [site.id for site in sites]
+    credentials = (
+        db.query(SiteCredential)
+        .filter(SiteCredential.site_id.in_(site_ids), SiteCredential.enabled.is_(True))
+        .order_by(SiteCredential.created_at.desc())
+        .all()
+    )
+    credential_map = {cred.site_id: cred for cred in credentials}
+    return [_site_to_out(site, credential_map.get(site.id)) for site in sites]
 
 
 @router.post("", response_model=SiteOut, status_code=status.HTTP_201_CREATED)

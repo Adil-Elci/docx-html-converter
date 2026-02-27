@@ -1410,6 +1410,8 @@ export default function App() {
   const getFilteredSitesForQuery = (query) => {
     const normalizedQuery = (query || "").trim().toLowerCase();
     return sortByLabel(sites, (site) => `${site.site_url || ""} ${site.name || ""}`).filter((site) => {
+      const authorName = (site.author_name || "").trim();
+      if (!authorName) return false;
       if (!normalizedQuery) return true;
       const url = (site.site_url || "").toLowerCase();
       const name = (site.name || "").toLowerCase();

@@ -352,6 +352,8 @@ class SiteOut(BaseModel):
     wp_rest_base: str
     hosted_by: Optional[str]
     host_panel: Optional[str]
+    author_name: Optional[str] = None
+    author_id: Optional[int] = None
     status: str
     created_at: datetime
     updated_at: datetime

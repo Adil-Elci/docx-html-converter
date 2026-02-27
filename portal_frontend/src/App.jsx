@@ -1085,27 +1085,28 @@ export default function App() {
     const resolvedClientName = ((clients[0]?.name) || "").trim();
     const blocks = submissionBlocks;
     const requiresTargetSiteSelection = isOrders;
-    for (let index = 0; index < blocks.length; index += 1) {
-      const validationError = getSubmissionBlockError(blocks[index], {
-        orders: isOrders,
-        clientName: resolvedClientName,
-        requiresTargetSite: requiresTargetSiteSelection,
-      });
-      if (validationError) {
-        if (validationError === t("errorFileTypeRequired")) {
-          const blockId = blocks[index].id;
-          setSubmissionFieldErrors((prev) => ({
-            ...prev,
-            [blockId]: {
-              ...(prev[blockId] || {}),
-              source_type: true,
-            },
-          }));
+      for (let index = 0; index < blocks.length; index += 1) {
+        const validationError = getSubmissionBlockError(blocks[index], {
+          orders: isOrders,
+          clientName: resolvedClientName,
+          requiresTargetSite: requiresTargetSiteSelection,
+        });
+        if (validationError) {
+          if (validationError === t("errorFileTypeRequired")) {
+            const blockId = blocks[index].id;
+            setSubmissionFieldErrors((prev) => ({
+              ...prev,
+              [blockId]: {
+                ...(prev[blockId] || {}),
+                source_type: true,
+              },
+            }));
+            return;
+          }
+          setError(`Block ${index + 1}: ${validationError}`);
+          return;
         }
-        setError(`Block ${index + 1}: ${validationError}`);
-        return;
       }
-    }
 
     try {
       setSubmitting(true);
@@ -1951,7 +1952,10 @@ export default function App() {
                                 </button>
                               </div>
                               {submissionFieldErrors[block.id]?.source_type ? (
-                                <div className="validation-error validation-error-inline">{t("errorFileTypeRequired")}</div>
+                                <div className="file-type-tooltip" role="alert">
+                                  <span className="file-type-tooltip-icon">!</span>
+                                  <span>{t("errorFileTypeRequired")}</span>
+                                </div>
                               ) : null}
                             </div>
                           ) : null}

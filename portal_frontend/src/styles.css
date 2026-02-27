@@ -821,6 +821,7 @@ input:disabled {
 
 .request-container .request-form-panel .submission-field-type {
   grid-column: span 4;
+  position: relative;
 }
 
 .request-container .request-form-panel .order-block .submission-field-inline {
@@ -1232,6 +1233,49 @@ input:disabled {
   margin-top: 8px;
   font-size: 13px;
   width: fit-content;
+}
+
+.file-type-tooltip {
+  position: absolute;
+  left: 18px;
+  top: calc(100% + 10px);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  color: #1b1b1b;
+  border: 1px solid #c7c7c7;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
+  font-weight: 600;
+  z-index: 5;
+}
+
+.file-type-tooltip::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 22px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-left: 1px solid #c7c7c7;
+  border-top: 1px solid #c7c7c7;
+  transform: rotate(45deg);
+}
+
+.file-type-tooltip-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #ff8a00;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
 }
 
 .muted-text {

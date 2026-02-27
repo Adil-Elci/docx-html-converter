@@ -754,15 +754,12 @@ input:disabled {
 .request-container .hero {
   max-width: none;
   position: relative;
-  padding: 22px 24px;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  background:
-    radial-gradient(900px 240px at 5% -25%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
-    radial-gradient(700px 220px at 95% 0%, color-mix(in srgb, var(--accent-2) 10%, transparent), transparent 55%),
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 90%, transparent), color-mix(in srgb, var(--panel-2) 92%, transparent));
-  box-shadow: var(--shadow);
-  overflow: hidden;
+  padding: 0 2px 12px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .request-container .hero::after {
@@ -770,7 +767,7 @@ input:disabled {
   position: absolute;
   inset: auto 0 0 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 40%, var(--border)), transparent);
+  background: color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .request-container .hero h1 {
@@ -780,10 +777,10 @@ input:disabled {
 }
 
 .request-container .request-form-panel {
-  border-radius: 16px;
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border-radius: 0;
+  padding: 14px 2px;
+  border: none;
+  background: transparent;
   box-shadow: none;
 }
 

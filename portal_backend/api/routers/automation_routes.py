@@ -824,8 +824,7 @@ async def process_guest_post_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AUTOMATION_POST_STATUS must be draft or publish.",
         )
-    is_authenticated_client = current_user is not None and current_user.role != "admin"
-    requires_admin_approval = is_authenticated_client
+    requires_admin_approval = True
     if requires_admin_approval:
         post_status = "draft"
 

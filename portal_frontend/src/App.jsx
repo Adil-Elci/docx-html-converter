@@ -1556,7 +1556,9 @@ export default function App() {
           ) : null}
 
           {loading ? <div className="panel muted-text">{t("loading")}</div> : null}
-          {error && error !== "Load failed" && error !== "Failed to fetch" ? <div className="panel error">{error}</div> : null}
+          {error && error !== "Load failed" && error !== "Failed to fetch" ? (
+            <div className="validation-error validation-error-banner">{error}</div>
+          ) : null}
           {success ? <div className="panel success">{success}</div> : null}
 
           {isAdminSection ? (
@@ -1949,7 +1951,7 @@ export default function App() {
                                 </button>
                               </div>
                               {submissionFieldErrors[block.id]?.source_type ? (
-                                <div className="error">{t("errorFileTypeRequired")}</div>
+                                <div className="validation-error validation-error-inline">{t("errorFileTypeRequired")}</div>
                               ) : null}
                             </div>
                           ) : null}

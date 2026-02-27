@@ -592,12 +592,9 @@ input:disabled {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   padding: 12px 14px;
   border-radius: 14px;
-  border-color: color-mix(in srgb, var(--border) 90%, #ffffff10);
-  background: linear-gradient(
-    165deg,
-    color-mix(in srgb, var(--panel-2) 72%, transparent),
-    color-mix(in srgb, var(--panel-3) 52%, transparent)
-  );
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  background: transparent;
+  box-shadow: none;
 }
 
 .submission-block-header {
@@ -640,10 +637,10 @@ input:disabled {
   align-content: start;
   justify-self: stretch;
   width: 100%;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--panel-3) 32%, transparent);
-  padding: 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .request-builder-form .submission-field > * {
@@ -783,14 +780,11 @@ input:disabled {
 }
 
 .request-container .request-form-panel {
-  border-radius: 22px;
-  padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, transparent), color-mix(in srgb, var(--panel-2) 94%, transparent));
-  box-shadow:
-    0 20px 48px rgba(5, 13, 30, 0.1),
-    inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
+  border-radius: 16px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: none;
 }
 
 .request-container .request-form-panel h2 {
@@ -824,40 +818,43 @@ input:disabled {
 .request-container .request-form-panel .submission-block {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 80%, transparent), color-mix(in srgb, var(--panel-3) 62%, transparent));
-  box-shadow:
-    0 10px 24px rgba(7, 14, 32, 0.08),
-    inset 0 1px 0 color-mix(in srgb, white 12%, transparent);
+  padding: 10px 0 6px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.request-container .request-form-panel .submission-block + .submission-block {
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .request-container .request-form-panel .submission-block-header h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.01em;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  background: color-mix(in srgb, var(--panel-3) 44%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 85%, white 5%);
 }
 
 .request-container .request-form-panel .submission-field {
-  border-radius: 14px;
-  padding: 10px;
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 88%, transparent), color-mix(in srgb, var(--panel-3) 74%, transparent));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+  border-radius: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .request-container .request-form-panel .submission-field > label {
   font-size: 10.5px;
   letter-spacing: 0.11em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--muted) 90%, white 5%);
+  color: color-mix(in srgb, var(--muted) 80%, white 5%);
 }
 
 .request-container .request-form-panel .submission-field input,
@@ -865,8 +862,8 @@ input:disabled {
 .request-container .request-form-panel .submission-field textarea {
   min-height: 44px;
   border-radius: 12px;
-  border-color: color-mix(in srgb, var(--border) 84%, transparent);
-  background: color-mix(in srgb, var(--panel-3) 56%, transparent);
+  border-color: color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--panel-2) 40%, transparent);
 }
 
 .request-container .request-form-panel .submission-field input:focus,
@@ -1850,7 +1847,7 @@ input:disabled {
 
   .request-container .request-form-panel .submission-block {
     grid-template-columns: 1fr;
-    padding: 12px;
+    padding: 12px 0 8px;
   }
 
   .request-container .request-form-panel .submission-field-client,

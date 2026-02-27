@@ -316,9 +316,6 @@ export default function App() {
     if (!orders && !sourceType) return t("errorFileTypeRequired");
     if (!orders && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
     if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
-    if (orders && !block.creator_mode && !(block.anchor || "").trim() && !(block.topic || "").trim()) {
-      return t("errorOrderAnchorOrTopicRequired");
-    }
     return "";
   };
 
@@ -340,7 +337,7 @@ export default function App() {
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
-    if (block.creator_mode) formData.append("creator_mode", "true");
+    if (orders) formData.append("creator_mode", "true");
     if (!orders && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
     } else if (sourceType === "word-doc" && block.docx_file) {
@@ -1118,7 +1115,7 @@ export default function App() {
           orders: isOrders,
           clientName: resolvedClientName,
         });
-        if (block.creator_mode) hasCreatorBlocks = true;
+        if (isOrders) hasCreatorBlocks = true;
         try {
           const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
           let responseData = null;
@@ -1143,7 +1140,7 @@ export default function App() {
             }
             responseData = await response.json().catch(() => ({}));
           }
-          if (responseData?.job_id && block.creator_mode) {
+          if (responseData?.job_id && isOrders) {
             collectedJobIds.push(responseData.job_id);
           }
         } catch (err) {
@@ -1988,29 +1985,6 @@ export default function App() {
 
                           {isOrders ? (
                             <>
-                              <div className="submission-field submission-field-inline submission-field-ai-draft">
-                                <label className="label-with-info">
-                                  <span>{t("aiDraftLabel")}</span>
-                                  <span className="info-dot" tabIndex={0} aria-label={t("aiDraftHint")}>!</span>
-                                  <span className="info-tooltip">{t("aiDraftHint")}</span>
-                                </label>
-                                <div className="toggle toggle-compact">
-                                  <button
-                                    type="button"
-                                    className={block.creator_mode ? "active" : ""}
-                                    onClick={() => setSubmissionBlockField(block.id, "creator_mode", true)}
-                                  >
-                                    {t("aiDraftOn")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={!block.creator_mode ? "active" : ""}
-                                    onClick={() => setSubmissionBlockField(block.id, "creator_mode", false)}
-                                  >
-                                    {t("aiDraftOff")}
-                                  </button>
-                                </div>
-                              </div>
                               <div className="submission-field submission-field-inline submission-field-anchor">
                                 <label>{`${t("anchor")} (${t("optional")})`}</label>
                                 <input

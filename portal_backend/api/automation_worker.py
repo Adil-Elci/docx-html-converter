@@ -94,7 +94,13 @@ class AutomationJobWorker:
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
             return
         try:
+            if self._is_job_canceled(job_id):
+                logger.info("automation.worker.canceled_before_start job_id=%s", job_id)
+                return
             payload = self._load_job_payload(job_id)
+            if self._is_job_canceled(job_id):
+                logger.info("automation.worker.canceled_before_run job_id=%s", job_id)
+                return
             if payload.get("creator_mode"):
                 if not (payload.get("target_site_url") or "").strip():
                     raise AutomationError("Creator orders require target_site_url.")
@@ -119,6 +125,9 @@ class AutomationJobWorker:
                         )
                     except Exception:
                         logger.debug("automation.worker.phase_event_failed job_id=%s phase=%s", job_id, phase)
+
+                def _should_cancel() -> bool:
+                    return self._is_job_canceled(job_id)
 
                 pipeline_result = run_creator_order_pipeline(
                     creator_endpoint=run_config["creator_endpoint"],
@@ -152,7 +161,11 @@ class AutomationJobWorker:
                     category_llm_model=run_config["category_llm_model"],
                     category_llm_max_categories=run_config["category_llm_max_categories"],
                     category_llm_confidence_threshold=run_config["category_llm_confidence_threshold"],
+                    should_cancel=_should_cancel,
                 )
+                if self._is_job_canceled(job_id):
+                    logger.info("automation.worker.canceled_after_creator job_id=%s", job_id)
+                    return
                 self._mark_creator_success(
                     job_id,
                     creator_output=pipeline_result["creator_output"],
@@ -233,6 +246,13 @@ class AutomationJobWorker:
                 max_attempts=max_attempts,
                 error_message=f"Unexpected error ({exc.__class__.__name__}): {exc}",
             )
+
+    def _is_job_canceled(self, job_id: UUID) -> bool:
+        with self._sessionmaker() as session:
+            job = session.query(Job.job_status).filter(Job.id == job_id).first()
+            if not job:
+                return False
+            return job[0] == "canceled"
 
     def _load_job_payload(self, job_id: UUID) -> Dict[str, Any]:
         with self._sessionmaker() as session:
@@ -579,6 +599,9 @@ class AutomationJobWorker:
         with self._sessionmaker() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
+                return
+            if job.job_status == "canceled":
+                logger.info("automation.worker.skip_fail_mark job_id=%s status=canceled", job_id)
                 return
 
             attempts = int(job.attempt_count or 0)

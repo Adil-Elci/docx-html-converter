@@ -749,6 +749,7 @@ def call_creator_service(
     exclude_topics: Optional[List[str]] = None,
     timeout_seconds: int,
     on_phase: Optional[Callable[[int, str, int], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     if not creator_endpoint:
         raise AutomationError("Creator endpoint is not configured.")
@@ -764,7 +765,7 @@ def call_creator_service(
         body["exclude_topics"] = exclude_topics
 
     if on_phase is not None:
-        return _call_creator_stream(creator_endpoint, body, timeout_seconds, on_phase)
+        return _call_creator_stream(creator_endpoint, body, timeout_seconds, on_phase, should_cancel)
 
     url = creator_endpoint.rstrip("/") + "/create"
     return _request_json(
@@ -781,6 +782,7 @@ def _call_creator_stream(
     body: Dict[str, Any],
     timeout_seconds: int,
     on_phase: Callable[[int, str, int], None],
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Call the creator /create-stream SSE endpoint and forward phase events."""
     url = creator_endpoint.rstrip("/") + "/create-stream"
@@ -804,6 +806,9 @@ def _call_creator_stream(
     current_data_lines: List[str] = []
 
     for raw_line in resp.iter_lines(decode_unicode=True):
+        if should_cancel is not None and should_cancel():
+            resp.close()
+            raise AutomationError("Job canceled by client.")
         if raw_line is None:
             raw_line = ""
         line = raw_line
@@ -880,6 +885,7 @@ def run_creator_order_pipeline(
     category_llm_model: str,
     category_llm_max_categories: int,
     category_llm_confidence_threshold: float,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     creator_output = call_creator_service(
         creator_endpoint=creator_endpoint,
@@ -890,6 +896,7 @@ def run_creator_order_pipeline(
         exclude_topics=exclude_topics,
         timeout_seconds=creator_timeout_seconds,
         on_phase=on_phase,
+        should_cancel=should_cancel,
     )
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}

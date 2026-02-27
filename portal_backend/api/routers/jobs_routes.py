@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
+import os
 import re
 from typing import List, Optional
 from uuid import UUID
@@ -48,6 +49,14 @@ REJECTION_REASON_LABELS = {
     "format_or_structure_issue": "Formatting or structure issue",
     "other": "Other",
 }
+
+
+def _read_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def _job_to_out(job: Job) -> JobOut:
@@ -469,6 +478,55 @@ def publish_pending_job(
     db.commit()
     db.refresh(job)
     return PendingJobPublishOut(job=_job_to_out(job))
+
+
+@router.post("/{job_id}/cancel", response_model=JobOut)
+def cancel_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> JobOut:
+    job = _get_job_or_404(db, job_id)
+    if current_user.role != "admin":
+        ensure_client_access(db, current_user, job.client_id)
+        ensure_site_access(db, current_user, job.site_id)
+
+    submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found for job.")
+    if submission.request_kind != "order":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only order jobs can be canceled.")
+
+    if job.job_status not in {"queued", "processing", "retrying"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job cannot be canceled in its current state.")
+    if job.wp_post_id is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job already created a WordPress draft.")
+
+    cancel_window_minutes = _read_int_env("AUTOMATION_CLIENT_CANCEL_WINDOW_MINUTES", 10)
+    if current_user.role != "admin" and cancel_window_minutes > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cancel_window_minutes)
+        if job.created_at < cutoff:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cancel window has expired.")
+
+    now = datetime.now(timezone.utc)
+    job.job_status = "canceled"
+    job.last_error = "canceled_by_client"
+    job.updated_at = now
+    db.add(job)
+    db.add(
+        JobEvent(
+            job_id=job.id,
+            event_type="canceled",
+            payload={
+                "by_user_id": str(current_user.id),
+                "by_role": current_user.role,
+                "reason": "client_requested",
+            },
+        )
+    )
+    db.commit()
+    db.refresh(job)
+    return _job_to_out(job)
 
 
 @router.post("/{job_id}/regenerate-image", response_model=PendingJobRegenerateImageOut)

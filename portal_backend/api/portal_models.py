@@ -284,7 +284,7 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint(
-            "job_status IN ('queued','processing','pending_approval','rejected','succeeded','failed','retrying')",
+            "job_status IN ('queued','processing','pending_approval','rejected','succeeded','failed','retrying','canceled')",
             name="jobs_job_status_check",
         ),
     )
@@ -310,7 +310,7 @@ class JobEvent(Base):
     __tablename__ = "job_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed','creator_phase')",
+            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed','creator_phase','canceled')",
             name="job_events_event_type_check",
         ),
     )

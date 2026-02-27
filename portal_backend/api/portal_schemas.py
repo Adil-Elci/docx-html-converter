@@ -14,7 +14,7 @@ BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
 REQUEST_KINDS = {"guest_post", "order"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
-JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying"}
+JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying", "canceled"}
 EVENT_TYPES = {
     "converter_called",
     "converter_ok",
@@ -642,7 +642,7 @@ class JobCreate(BaseModel):
     def validate_job_status(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying/canceled.")
         return cleaned
 
 
@@ -663,7 +663,7 @@ class JobUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in JOB_STATUSES:
-            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying.")
+            raise ValueError("job_status must be one of queued/processing/pending_approval/rejected/succeeded/failed/retrying/canceled.")
         return cleaned
 
 

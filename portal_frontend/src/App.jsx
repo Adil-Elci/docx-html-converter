@@ -178,6 +178,8 @@ export default function App() {
   const [submissionErrorCode, setSubmissionErrorCode] = useState("");
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
   const [submissionFieldErrors, setSubmissionFieldErrors] = useState({});
+  const [creatorCanceling, setCreatorCanceling] = useState(false);
+  const [creatorCancelError, setCreatorCancelError] = useState("");
   const [creatorJobIds, setCreatorJobIds] = useState([]);
   const [creatorProgress, setCreatorProgress] = useState({});
   const [showCreatorProgress, setShowCreatorProgress] = useState(false);
@@ -1029,6 +1031,8 @@ export default function App() {
     setShowCreatorProgress(false);
     setCreatorJobIds([]);
     setCreatorProgress({});
+    setCreatorCancelError("");
+    setCreatorCanceling(false);
   }, [stopCreatorPolling]);
 
   useEffect(() => {
@@ -1043,13 +1047,18 @@ export default function App() {
           if (!data?.found) { allDone = false; continue; }
           const phaseEvents = (data.events || []).filter((e) => e.event_type === "creator_phase");
           const last = phaseEvents.length > 0 ? phaseEvents[phaseEvents.length - 1] : null;
-          const jobDone = data.job_status === "pending_approval" || data.job_status === "succeeded" || data.job_status === "failed" || data.job_status === "rejected";
+          const jobDone = data.job_status === "pending_approval"
+            || data.job_status === "succeeded"
+            || data.job_status === "failed"
+            || data.job_status === "rejected"
+            || data.job_status === "canceled";
           updates[jid] = {
             phase: last?.payload?.phase || 0,
             label: last?.payload?.label || "",
             percent: jobDone ? 100 : (last?.payload?.percent || 0),
             done: jobDone,
             failed: data.job_status === "failed",
+            canceled: data.job_status === "canceled",
           };
           if (!jobDone) allDone = false;
         } catch {
@@ -1065,6 +1074,37 @@ export default function App() {
     creatorPollRef.current = setInterval(poll, 3000);
     return () => { cancelled = true; stopCreatorPolling(); };
   }, [showCreatorProgress, creatorJobIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cancelCreatorJobs = useCallback(async () => {
+    if (creatorCanceling || creatorJobIds.length === 0) return;
+    const confirmed = window.confirm(t("cancelConfirm"));
+    if (!confirmed) return;
+    setCreatorCanceling(true);
+    setCreatorCancelError("");
+    try {
+      await Promise.all(creatorJobIds.map((jid) => api.post(`/jobs/${jid}/cancel`, {})));
+      setCreatorProgress((prev) => {
+        const next = { ...prev };
+        creatorJobIds.forEach((jid) => {
+          const current = next[jid] || {};
+          next[jid] = {
+            ...current,
+            done: true,
+            failed: false,
+            canceled: true,
+            percent: 100,
+            label: t("progressCanceled"),
+          };
+        });
+        return next;
+      });
+      stopCreatorPolling();
+    } catch (err) {
+      setCreatorCancelError(err?.message || t("errorRequestFailed"));
+    } finally {
+      setCreatorCanceling(false);
+    }
+  }, [creatorCanceling, creatorJobIds, stopCreatorPolling, t]);
 
   const submitGuestPost = async (event) => {
     event.preventDefault();
@@ -1158,7 +1198,7 @@ export default function App() {
         setCreatorJobIds(collectedJobIds);
         const initialProgress = {};
         collectedJobIds.forEach((jid) => {
-          initialProgress[jid] = { phase: 0, label: "", percent: 0, done: false };
+          initialProgress[jid] = { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false };
         });
         setCreatorProgress(initialProgress);
         setShowCreatorProgress(true);
@@ -2072,6 +2112,9 @@ export default function App() {
         jobIds={creatorJobIds}
         progress={creatorProgress}
         onClose={closeCreatorProgress}
+        onCancel={cancelCreatorJobs}
+        canceling={creatorCanceling}
+        cancelError={creatorCancelError}
       />
       <SubmissionErrorModal
         t={t}
@@ -2104,13 +2147,14 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
   );
 }
 
-function CreatorProgressModal({ t, open, jobIds, progress, onClose }) {
+function CreatorProgressModal({ t, open, jobIds, progress, onClose, onCancel, canceling, cancelError }) {
   if (!open) return null;
   // Aggregate progress across all jobs — use the first job for the step display
   const firstId = jobIds[0];
   const info = progress[firstId] || { phase: 0, label: "", percent: 0, done: false, failed: false };
   const allDone = jobIds.length > 0 && jobIds.every((jid) => progress[jid]?.done);
   const anyFailed = jobIds.some((jid) => progress[jid]?.failed);
+  const anyCanceled = jobIds.some((jid) => progress[jid]?.canceled);
   // Compute aggregate percent
   const aggPercent = jobIds.length > 0
     ? Math.round(jobIds.reduce((sum, jid) => sum + (progress[jid]?.percent || 0), 0) / jobIds.length)
@@ -2152,10 +2196,19 @@ function CreatorProgressModal({ t, open, jobIds, progress, onClose }) {
           </div>
         </div>
 
+        {!allDone && (
+          <div className="progress-modal-actions">
+            <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
+              {canceling ? t("canceling") : t("cancel")}
+            </button>
+            {cancelError ? <p className="muted-text">{cancelError}</p> : null}
+          </div>
+        )}
+
         {allDone && (
           <div className="progress-modal-actions">
             <p className="muted-text">
-              {anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
+              {anyCanceled ? t("progressCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
             </p>
             <button className="btn" type="button" onClick={onClose}>
               {t("close")}

@@ -507,7 +507,13 @@ def _enqueue_job(
         if source_url is None:
             raise RuntimeError("source_url is required for non-manual submissions.")
         submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
-    idempotency_source = (source_url or "").strip() or f"order:{(payload.anchor or '').strip()}:{(payload.topic or '').strip()}"
+    # For creator orders without an explicit idempotency key, generate a
+    # unique key so that multiple orders with the same anchor/topic/site
+    # each create their own submission + job instead of being deduplicated.
+    if creator_order and not (payload.idempotency_key or "").strip():
+        idempotency_source = f"order:{uuid4().hex}"
+    else:
+        idempotency_source = (source_url or "").strip() or f"order:{(payload.anchor or '').strip()}:{(payload.topic or '').strip()}"
     idempotency_key = _build_idempotency_key(
         explicit_key=payload.idempotency_key,
         client_id=client.id,

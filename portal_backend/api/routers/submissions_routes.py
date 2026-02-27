@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 from uuid import UUID
 
@@ -55,6 +56,14 @@ def _require_active_site(db: Session, site_id: UUID) -> None:
 
 
 def _require_access(db: Session, client_id: UUID, site_id: UUID) -> None:
+    enforce_client_site_access = os.getenv("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enforce_client_site_access:
+        return
     access = (
         db.query(ClientSiteAccess)
         .filter(

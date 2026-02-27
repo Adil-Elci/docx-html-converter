@@ -110,6 +110,16 @@ class AutomationJobWorker:
                         "attempt": payload.get("attempt_count"),
                     },
                 )
+                def _on_phase(phase: int, label: str, percent: int) -> None:
+                    try:
+                        self._append_event(
+                            job_id,
+                            "creator_phase",
+                            {"phase": phase, "label": label, "percent": percent},
+                        )
+                    except Exception:
+                        logger.debug("automation.worker.phase_event_failed job_id=%s phase=%s", job_id, phase)
+
                 pipeline_result = run_creator_order_pipeline(
                     creator_endpoint=run_config["creator_endpoint"],
                     target_site_url=payload.get("target_site_url") or "",
@@ -117,6 +127,7 @@ class AutomationJobWorker:
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
+                    on_phase=_on_phase,
                     site_url=payload["site_url"],
                     wp_rest_base=payload["wp_rest_base"],
                     wp_username=payload["wp_username"],

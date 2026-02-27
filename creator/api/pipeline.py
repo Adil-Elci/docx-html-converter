@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -419,7 +419,23 @@ def _call_leonardo(
     raise CreatorError("Leonardo generation timed out.")
 
 
-def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anchor: Optional[str], topic: Optional[str], exclude_topics: Optional[List[str]] = None, dry_run: bool) -> Dict[str, Any]:
+PHASE_LABELS: List[str] = [
+    "",                          # index 0 unused
+    "Analyzing target site",     # phase 1
+    "Analyzing publishing site", # phase 2
+    "Selecting topic",           # phase 3
+    "Creating outline",          # phase 4
+    "Writing article",           # phase 5
+    "Generating images",         # phase 6
+    "Final SEO checks",          # phase 7
+]
+
+def _noop_progress(phase: int, label: str, percent: int) -> None:
+    pass
+
+
+def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anchor: Optional[str], topic: Optional[str], exclude_topics: Optional[List[str]] = None, dry_run: bool, on_progress: Optional[Callable[[int, str, int], None]] = None) -> Dict[str, Any]:
+    progress = on_progress or _noop_progress
     warnings: List[str] = []
     debug: Dict[str, Any] = {"dry_run": dry_run, "timings_ms": {}, "fetched_pages": []}
 
@@ -446,6 +462,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     else:
         llm_model = DEFAULT_LLM_MODEL
 
+    progress(1, PHASE_LABELS[1], 0)
     phase_start = time.time()
     logger.info("creator.phase1.start target=%s", target_site_url)
     target_html = fetch_url(
@@ -472,7 +489,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         "keyword_cluster": keyword_cluster,
     }
     debug["timings_ms"]["phase1"] = int((time.time() - phase_start) * 1000)
+    progress(1, PHASE_LABELS[1], 14)
 
+    progress(2, PHASE_LABELS[2], 14)
     phase_start = time.time()
     logger.info("creator.phase2.start publishing=%s", publishing_site_url)
     publishing_html = fetch_url(
@@ -524,7 +543,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         phase2["content_style_constraints"] = []
 
     debug["timings_ms"]["phase2"] = int((time.time() - phase_start) * 1000)
+    progress(2, PHASE_LABELS[2], 28)
 
+    progress(3, PHASE_LABELS[3], 28)
     phase_start = time.time()
     logger.info("creator.phase3.start")
     safe_exclude = list(exclude_topics or [])
@@ -578,7 +599,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
         }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
+    progress(3, PHASE_LABELS[3], 42)
 
+    progress(4, PHASE_LABELS[4], 42)
     phase_start = time.time()
     logger.info("creator.phase4.start")
     anchor_safe = _is_anchor_safe(anchor)
@@ -640,7 +663,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     phase4 = outline
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
+    progress(4, PHASE_LABELS[4], 56)
 
+    progress(5, PHASE_LABELS[5], 56)
     phase_start = time.time()
     logger.info("creator.phase5.start")
     article_payload = None
@@ -814,7 +839,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
 
     phase5 = article_payload
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
+    progress(5, PHASE_LABELS[5], 70)
 
+    progress(6, PHASE_LABELS[6], 70)
     phase_start = time.time()
     logger.info("creator.phase6.start")
     phase6 = {
@@ -924,7 +951,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         "alt_text": in_content_alt,
     }
     debug["timings_ms"]["phase6"] = int((time.time() - phase_start) * 1000)
+    progress(6, PHASE_LABELS[6], 85)
 
+    progress(7, PHASE_LABELS[7], 85)
     phase_start = time.time()
     p7_wc = word_count_from_html(phase5["article_html"])
     logger.info("creator.phase7.start word_count=%s", p7_wc)
@@ -1011,6 +1040,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")
 
     debug["timings_ms"]["phase7"] = int((time.time() - phase_start) * 1000)
+    progress(7, PHASE_LABELS[7], 100)
 
     images: List[Dict[str, str]] = []
     if featured_image_url:

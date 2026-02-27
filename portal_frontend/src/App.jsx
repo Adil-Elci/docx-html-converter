@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { getLabel } from "./i18n.js";
+
+const CREATOR_PHASE_LABELS = [
+  "", // unused index 0
+  "progressPhase1",
+  "progressPhase2",
+  "progressPhase3",
+  "progressPhase4",
+  "progressPhase5",
+  "progressPhase6",
+  "progressPhase7",
+];
+const CREATOR_TOTAL_PHASES = 7;
 
 const getInitialLanguage = () => localStorage.getItem("ui_language") || "en";
 const getInitialSidebarHidden = () => localStorage.getItem("portal_sidebar_hidden") === "true";
@@ -165,6 +177,10 @@ export default function App() {
   const [showSubmissionErrorModal, setShowSubmissionErrorModal] = useState(false);
   const [submissionErrorCode, setSubmissionErrorCode] = useState("");
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
+  const [creatorJobIds, setCreatorJobIds] = useState([]);
+  const [creatorProgress, setCreatorProgress] = useState({});
+  const [showCreatorProgress, setShowCreatorProgress] = useState(false);
+  const creatorPollRef = useRef(null);
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
@@ -246,6 +262,9 @@ export default function App() {
     setShowSubmissionErrorModal(false);
     setSubmissionErrorCode("");
     setSubmissionErrorMessage("");
+    setShowCreatorProgress(false);
+    setCreatorJobIds([]);
+    setCreatorProgress({});
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
@@ -997,6 +1016,56 @@ export default function App() {
     resetClientSubmissionState();
   };
 
+  // ── Creator progress polling ──
+  const stopCreatorPolling = useCallback(() => {
+    if (creatorPollRef.current) {
+      clearInterval(creatorPollRef.current);
+      creatorPollRef.current = null;
+    }
+  }, []);
+
+  const closeCreatorProgress = useCallback(() => {
+    stopCreatorPolling();
+    setShowCreatorProgress(false);
+    setCreatorJobIds([]);
+    setCreatorProgress({});
+  }, [stopCreatorPolling]);
+
+  useEffect(() => {
+    if (!showCreatorProgress || creatorJobIds.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      const updates = {};
+      let allDone = true;
+      for (const jid of creatorJobIds) {
+        try {
+          const data = await api.get(`/automation/status?job_id=${encodeURIComponent(jid)}`);
+          if (!data?.found) { allDone = false; continue; }
+          const phaseEvents = (data.events || []).filter((e) => e.event_type === "creator_phase");
+          const last = phaseEvents.length > 0 ? phaseEvents[phaseEvents.length - 1] : null;
+          const jobDone = data.job_status === "pending_approval" || data.job_status === "succeeded" || data.job_status === "failed" || data.job_status === "rejected";
+          updates[jid] = {
+            phase: last?.payload?.phase || 0,
+            label: last?.payload?.label || "",
+            percent: jobDone ? 100 : (last?.payload?.percent || 0),
+            done: jobDone,
+            failed: data.job_status === "failed",
+          };
+          if (!jobDone) allDone = false;
+        } catch {
+          allDone = false;
+        }
+      }
+      if (!cancelled) {
+        setCreatorProgress((prev) => ({ ...prev, ...updates }));
+        if (allDone) stopCreatorPolling();
+      }
+    };
+    poll();
+    creatorPollRef.current = setInterval(poll, 3000);
+    return () => { cancelled = true; stopCreatorPolling(); };
+  }, [showCreatorProgress, creatorJobIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const submitGuestPost = async (event) => {
     event.preventDefault();
     setError("");
@@ -1026,18 +1095,22 @@ export default function App() {
 
     try {
       setSubmitting(true);
+      const collectedJobIds = [];
+      let hasCreatorBlocks = false;
       for (let index = 0; index < blocks.length; index += 1) {
         const block = blocks[index];
         const formData = buildSubmissionFormData(block, {
           orders: isOrders,
           clientName: resolvedClientName,
         });
+        if (block.creator_mode) hasCreatorBlocks = true;
         try {
           const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
+          let responseData = null;
           if (effectiveSourceType === "word-doc" && block.docx_file) {
             setUploadProgressBlockId(block.id);
             setUploadProgress(0);
-            await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
+            responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
             setUploadProgress(100);
           } else {
             setUploadProgressBlockId(null);
@@ -1053,7 +1126,10 @@ export default function App() {
               requestError.statusCode = response.status;
               throw requestError;
             }
-            await response.json().catch(() => ({}));
+            responseData = await response.json().catch(() => ({}));
+          }
+          if (responseData?.job_id && block.creator_mode) {
+            collectedJobIds.push(responseData.job_id);
           }
         } catch (err) {
           setError(`Block ${index + 1}: ${err?.message || t("errorRequestFailed")}`);
@@ -1066,7 +1142,17 @@ export default function App() {
         }
       }
 
-      setShowSubmissionSuccessModal(true);
+      if (hasCreatorBlocks && collectedJobIds.length > 0) {
+        setCreatorJobIds(collectedJobIds);
+        const initialProgress = {};
+        collectedJobIds.forEach((jid) => {
+          initialProgress[jid] = { phase: 0, label: "", percent: 0, done: false };
+        });
+        setCreatorProgress(initialProgress);
+        setShowCreatorProgress(true);
+      } else {
+        setShowSubmissionSuccessModal(true);
+      }
       resetSubmissionBlocks();
     } catch (err) {
       if (!err) {
@@ -1960,6 +2046,13 @@ export default function App() {
           setShowSubmissionSuccessModal(false);
         }}
       />
+      <CreatorProgressModal
+        t={t}
+        open={showCreatorProgress}
+        jobIds={creatorJobIds}
+        progress={creatorProgress}
+        onClose={closeCreatorProgress}
+      />
       <SubmissionErrorModal
         t={t}
         open={showSubmissionErrorModal}
@@ -1986,6 +2079,69 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
             {t("createAnotherPost")}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CreatorProgressModal({ t, open, jobIds, progress, onClose }) {
+  if (!open) return null;
+  // Aggregate progress across all jobs — use the first job for the step display
+  const firstId = jobIds[0];
+  const info = progress[firstId] || { phase: 0, label: "", percent: 0, done: false, failed: false };
+  const allDone = jobIds.length > 0 && jobIds.every((jid) => progress[jid]?.done);
+  const anyFailed = jobIds.some((jid) => progress[jid]?.failed);
+  // Compute aggregate percent
+  const aggPercent = jobIds.length > 0
+    ? Math.round(jobIds.reduce((sum, jid) => sum + (progress[jid]?.percent || 0), 0) / jobIds.length)
+    : 0;
+  const currentPhase = info.phase || 0;
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="creator-progress-title">
+      <div className="progress-modal-card panel">
+        <h3 id="creator-progress-title">{t("progressTitle")}</h3>
+
+        <div className="progress-steps">
+          {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
+            const step = i + 1;
+            const isCompleted = allDone || step < currentPhase;
+            const isActive = !allDone && step === currentPhase;
+            const cls = isCompleted ? "completed" : isActive ? "active" : "";
+            return (
+              <div key={step} className={`progress-step ${cls}`}>
+                <div className="progress-step-indicator">
+                  <div className="progress-step-dot" />
+                  {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line" />}
+                </div>
+                <div className="progress-step-content">
+                  <span className="progress-step-label">{t(CREATOR_PHASE_LABELS[step])}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="progress-bar-container">
+          <div className="progress-bar-header">
+            <span>{currentPhase === 0 && !allDone ? t("progressWaiting") : info.label}</span>
+            <strong>{allDone ? 100 : aggPercent}%</strong>
+          </div>
+          <div className="progress-bar-track">
+            <div className="progress-bar-fill" style={{ width: `${allDone ? 100 : aggPercent}%` }} />
+          </div>
+        </div>
+
+        {allDone && (
+          <div className="progress-modal-actions">
+            <p className="muted-text">
+              {anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
+            </p>
+            <button className="btn" type="button" onClick={onClose}>
+              {t("close")}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

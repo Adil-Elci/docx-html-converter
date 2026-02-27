@@ -310,7 +310,7 @@ class JobEvent(Base):
     __tablename__ = "job_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed')",
+            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed','creator_phase')",
             name="job_events_event_type_check",
         ),
     )

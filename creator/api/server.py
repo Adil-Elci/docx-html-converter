@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+import queue
+import threading
 from typing import Dict
 
 from dotenv import load_dotenv
@@ -9,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse
 
 from .llm import LLMError
 from .models import CreatorRequest, ErrorResponse
@@ -93,3 +97,54 @@ async def create(request: Request) -> JSONResponse:
         return JSONResponse(status_code=422, content=response.dict())
 
     return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/create-stream")
+async def create_stream(request: Request) -> EventSourceResponse:
+    """SSE endpoint that streams phase progress events, then the final result."""
+    try:
+        data = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+
+    payload = CreatorRequest(**data)
+
+    progress_queue: queue.Queue = queue.Queue()
+
+    def on_progress(phase: int, label: str, percent: int) -> None:
+        progress_queue.put({"event": "progress", "phase": phase, "label": label, "percent": percent})
+
+    def run_pipeline() -> None:
+        try:
+            result = run_creator_pipeline(
+                target_site_url=str(payload.target_site_url),
+                publishing_site_url=str(payload.publishing_site_url),
+                anchor=payload.anchor,
+                topic=payload.topic,
+                exclude_topics=payload.exclude_topics,
+                dry_run=payload.dry_run,
+                on_progress=on_progress,
+            )
+            progress_queue.put({"event": "complete", "data": result})
+        except (CreatorError, LLMError) as exc:
+            logger.warning("creator.pipeline_failed error=%s", str(exc))
+            progress_queue.put({"event": "error", "error": str(exc)})
+        except Exception as exc:
+            logger.exception("creator.stream.unhandled_error")
+            progress_queue.put({"event": "error", "error": "internal_error"})
+
+    thread = threading.Thread(target=run_pipeline, daemon=True)
+    thread.start()
+
+    async def event_generator():
+        while True:
+            try:
+                msg = progress_queue.get(timeout=300)
+            except queue.Empty:
+                break
+            event_type = msg.pop("event", "message")
+            yield {"event": event_type, "data": json.dumps(msg)}
+            if event_type in ("complete", "error"):
+                break
+
+    return EventSourceResponse(event_generator())

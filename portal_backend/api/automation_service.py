@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -748,10 +748,10 @@ def call_creator_service(
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
     timeout_seconds: int,
+    on_phase: Optional[Callable[[int, str, int], None]] = None,
 ) -> Dict[str, Any]:
     if not creator_endpoint:
         raise AutomationError("Creator endpoint is not configured.")
-    url = creator_endpoint.rstrip("/") + "/create"
     body: Dict[str, Any] = {
         "target_site_url": target_site_url,
         "publishing_site_url": publishing_site_url,
@@ -762,6 +762,11 @@ def call_creator_service(
         body["topic"] = topic
     if exclude_topics:
         body["exclude_topics"] = exclude_topics
+
+    if on_phase is not None:
+        return _call_creator_stream(creator_endpoint, body, timeout_seconds, on_phase)
+
+    url = creator_endpoint.rstrip("/") + "/create"
     return _request_json(
         "POST",
         url,
@@ -769,6 +774,77 @@ def call_creator_service(
         timeout_seconds=timeout_seconds,
         allow_redirects=False,
     )
+
+
+def _call_creator_stream(
+    creator_endpoint: str,
+    body: Dict[str, Any],
+    timeout_seconds: int,
+    on_phase: Callable[[int, str, int], None],
+) -> Dict[str, Any]:
+    """Call the creator /create-stream SSE endpoint and forward phase events."""
+    url = creator_endpoint.rstrip("/") + "/create-stream"
+    try:
+        resp = requests.post(
+            url,
+            json=body,
+            timeout=timeout_seconds,
+            stream=True,
+            headers={"Accept": "text/event-stream"},
+        )
+    except requests.RequestException as exc:
+        raise AutomationError(f"Request failed for {url}: {exc}") from exc
+    if resp.status_code >= 400:
+        resp_body = resp.text[:600]
+        raise AutomationError(f"HTTP {resp.status_code} from {url}: {resp_body}")
+
+    result: Optional[Dict[str, Any]] = None
+    error_msg: Optional[str] = None
+    current_event = "message"
+    current_data_lines: List[str] = []
+
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if raw_line is None:
+            raw_line = ""
+        line = raw_line
+
+        if line.startswith("event:"):
+            current_event = line[len("event:"):].strip()
+            continue
+        if line.startswith("data:"):
+            current_data_lines.append(line[len("data:"):].strip())
+            continue
+        if line == "" and current_data_lines:
+            data_str = "\n".join(current_data_lines)
+            current_data_lines = []
+            try:
+                data = json.loads(data_str)
+            except (json.JSONDecodeError, ValueError):
+                current_event = "message"
+                continue
+            if current_event == "progress":
+                phase = data.get("phase", 0)
+                label = data.get("label", "")
+                percent = data.get("percent", 0)
+                try:
+                    on_phase(phase, label, percent)
+                except Exception:
+                    logger.warning("creator.stream.on_phase_error phase=%s", phase, exc_info=True)
+            elif current_event == "complete":
+                result = data.get("data") if isinstance(data.get("data"), dict) else data
+            elif current_event == "error":
+                error_msg = data.get("error", "creator_stream_error")
+            current_event = "message"
+
+    resp.close()
+
+    if error_msg:
+        raise AutomationError(f"Creator pipeline failed: {error_msg}")
+    if result is None:
+        raise AutomationError("Creator stream ended without a result.")
+    if not isinstance(result, dict):
+        raise AutomationError(f"Expected JSON object from creator stream, got {type(result).__name__}.")
+    return result
 
 
 def run_creator_order_pipeline(
@@ -779,6 +855,7 @@ def run_creator_order_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    on_phase: Optional[Callable[[int, str, int], None]] = None,
     site_url: str,
     wp_rest_base: str,
     wp_username: str,
@@ -812,6 +889,7 @@ def run_creator_order_pipeline(
         topic=topic,
         exclude_topics=exclude_topics,
         timeout_seconds=creator_timeout_seconds,
+        on_phase=on_phase,
     )
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}

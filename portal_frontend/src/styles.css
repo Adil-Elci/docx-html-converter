@@ -1005,6 +1005,141 @@ input:disabled {
   transition: width 0.12s ease;
 }
 
+/* ── Pipeline progress modal ── */
+.progress-modal-card {
+  width: 100%;
+  max-width: 480px;
+  display: grid;
+  gap: 20px;
+}
+
+.progress-modal-card h3 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.progress-steps {
+  display: grid;
+  gap: 0;
+}
+
+.progress-step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  align-items: start;
+  min-height: 42px;
+}
+
+.progress-step-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.progress-step-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.progress-step.completed .progress-step-dot {
+  border-color: #2de1c2;
+  background: #2de1c2;
+}
+
+.progress-step.active .progress-step-dot {
+  border-color: #2f71ff;
+  background: #2f71ff;
+  box-shadow: 0 0 0 3px rgba(47, 113, 255, 0.18);
+}
+
+.progress-step-line {
+  width: 2px;
+  flex: 1;
+  min-height: 16px;
+  background: var(--border);
+  margin: 3px auto 0;
+  transition: background 0.2s;
+}
+
+.progress-step.completed .progress-step-line {
+  background: #2de1c2;
+}
+
+.progress-step:last-child .progress-step-line {
+  display: none;
+}
+
+.progress-step-content {
+  padding: 2px 0 10px;
+}
+
+.progress-step-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+.progress-step.active .progress-step-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.progress-step.completed .progress-step-label {
+  color: #2de1c2;
+}
+
+.progress-bar-container {
+  display: grid;
+  gap: 6px;
+}
+
+.progress-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-3) 75%, transparent);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2f71ff 0%, #2de1c2 100%);
+  transition: width 0.35s ease;
+}
+
+.progress-modal-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.progress-step.active .progress-step-dot {
+  animation: progress-pulse 1.5s ease-in-out infinite;
+}
+
 .toggle {
   display: inline-flex;
   border: 1px solid var(--border);

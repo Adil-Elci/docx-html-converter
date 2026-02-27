@@ -177,6 +177,7 @@ export default function App() {
   const [showSubmissionErrorModal, setShowSubmissionErrorModal] = useState(false);
   const [submissionErrorCode, setSubmissionErrorCode] = useState("");
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
+  const [submissionFieldErrors, setSubmissionFieldErrors] = useState({});
   const [creatorJobIds, setCreatorJobIds] = useState([]);
   const [creatorProgress, setCreatorProgress] = useState({});
   const [showCreatorProgress, setShowCreatorProgress] = useState(false);
@@ -246,6 +247,7 @@ export default function App() {
     setSiteSuggestionsBlockId(null);
     setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
+    setSubmissionFieldErrors({});
   };
 
   const resetClientSubmissionState = () => {
@@ -262,6 +264,7 @@ export default function App() {
     setShowSubmissionErrorModal(false);
     setSubmissionErrorCode("");
     setSubmissionErrorMessage("");
+    setSubmissionFieldErrors({});
     setShowCreatorProgress(false);
     setCreatorJobIds([]);
     setCreatorProgress({});
@@ -1073,6 +1076,7 @@ export default function App() {
     setShowSubmissionErrorModal(false);
     setSubmissionErrorCode("");
     setSubmissionErrorMessage("");
+    setSubmissionFieldErrors({});
 
     if (activeSection === "admin") {
       setError(t("errorSelectClientSection"));
@@ -1088,6 +1092,16 @@ export default function App() {
         requiresTargetSite: requiresTargetSiteSelection,
       });
       if (validationError) {
+        if (validationError === t("errorFileTypeRequired")) {
+          const blockId = blocks[index].id;
+          setSubmissionFieldErrors((prev) => ({
+            ...prev,
+            [blockId]: {
+              ...(prev[blockId] || {}),
+              source_type: true,
+            },
+          }));
+        }
         setError(`Block ${index + 1}: ${validationError}`);
         return;
       }
@@ -1904,18 +1918,39 @@ export default function App() {
                                 <button
                                   type="button"
                                   className={block.source_type === "google-doc" ? "active" : ""}
-                                  onClick={() => setSubmissionBlockField(block.id, "source_type", "google-doc")}
+                                  onClick={() => {
+                                    setSubmissionBlockField(block.id, "source_type", "google-doc");
+                                    setSubmissionFieldErrors((prev) => ({
+                                      ...prev,
+                                      [block.id]: {
+                                        ...(prev[block.id] || {}),
+                                        source_type: false,
+                                      },
+                                    }));
+                                  }}
                                 >
                                   {t("googleDoc")}
                                 </button>
                                 <button
                                   type="button"
                                   className={block.source_type === "word-doc" ? "active" : ""}
-                                  onClick={() => setSubmissionBlockField(block.id, "source_type", "word-doc")}
+                                  onClick={() => {
+                                    setSubmissionBlockField(block.id, "source_type", "word-doc");
+                                    setSubmissionFieldErrors((prev) => ({
+                                      ...prev,
+                                      [block.id]: {
+                                        ...(prev[block.id] || {}),
+                                        source_type: false,
+                                      },
+                                    }));
+                                  }}
                                 >
                                   {t("docxFile")}
                                 </button>
                               </div>
+                              {submissionFieldErrors[block.id]?.source_type ? (
+                                <div className="error">{t("errorFileTypeRequired")}</div>
+                              ) : null}
                             </div>
                           ) : null}
 

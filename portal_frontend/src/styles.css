@@ -408,6 +408,19 @@ body {
   flex-wrap: wrap;
 }
 
+.cancel-confirm-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cancel-confirm-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .form-panel h2 {
   margin: 0 0 16px;
   font-size: 22px;

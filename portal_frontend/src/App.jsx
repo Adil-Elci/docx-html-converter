@@ -180,6 +180,7 @@ export default function App() {
   const [submissionFieldErrors, setSubmissionFieldErrors] = useState({});
   const [creatorCanceling, setCreatorCanceling] = useState(false);
   const [creatorCancelError, setCreatorCancelError] = useState("");
+  const [creatorCancelConfirm, setCreatorCancelConfirm] = useState(false);
   const [creatorJobIds, setCreatorJobIds] = useState([]);
   const [creatorProgress, setCreatorProgress] = useState({});
   const [showCreatorProgress, setShowCreatorProgress] = useState(false);
@@ -1033,6 +1034,7 @@ export default function App() {
     setCreatorProgress({});
     setCreatorCancelError("");
     setCreatorCanceling(false);
+    setCreatorCancelConfirm(false);
   }, [stopCreatorPolling]);
 
   useEffect(() => {
@@ -1077,8 +1079,6 @@ export default function App() {
 
   const cancelCreatorJobs = useCallback(async () => {
     if (creatorCanceling || creatorJobIds.length === 0) return;
-    const confirmed = window.confirm(t("cancelConfirm"));
-    if (!confirmed) return;
     setCreatorCanceling(true);
     setCreatorCancelError("");
     try {
@@ -1105,6 +1105,17 @@ export default function App() {
       setCreatorCanceling(false);
     }
   }, [creatorCanceling, creatorJobIds, stopCreatorPolling, t]);
+
+  const requestCancelCreatorJobs = useCallback(() => {
+    if (creatorCanceling) return;
+    setCreatorCancelConfirm(true);
+    setCreatorCancelError("");
+  }, [creatorCanceling]);
+
+  const dismissCancelConfirm = useCallback(() => {
+    if (creatorCanceling) return;
+    setCreatorCancelConfirm(false);
+  }, [creatorCanceling]);
 
   const submitGuestPost = async (event) => {
     event.preventDefault();
@@ -2115,6 +2126,9 @@ export default function App() {
         onCancel={cancelCreatorJobs}
         canceling={creatorCanceling}
         cancelError={creatorCancelError}
+        cancelConfirm={creatorCancelConfirm}
+        onRequestCancel={requestCancelCreatorJobs}
+        onDismissCancel={dismissCancelConfirm}
       />
       <SubmissionErrorModal
         t={t}
@@ -2147,7 +2161,19 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
   );
 }
 
-function CreatorProgressModal({ t, open, jobIds, progress, onClose, onCancel, canceling, cancelError }) {
+function CreatorProgressModal({
+  t,
+  open,
+  jobIds,
+  progress,
+  onClose,
+  onCancel,
+  canceling,
+  cancelError,
+  cancelConfirm,
+  onRequestCancel,
+  onDismissCancel,
+}) {
   if (!open) return null;
   // Aggregate progress across all jobs — use the first job for the step display
   const firstId = jobIds[0];
@@ -2198,9 +2224,23 @@ function CreatorProgressModal({ t, open, jobIds, progress, onClose, onCancel, ca
 
         {!allDone && (
           <div className="progress-modal-actions">
-            <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
-              {canceling ? t("canceling") : t("cancel")}
-            </button>
+            {!cancelConfirm ? (
+              <button className="btn danger" type="button" onClick={onRequestCancel} disabled={canceling}>
+                {t("cancel")}
+              </button>
+            ) : (
+              <div className="cancel-confirm-row">
+                <span className="muted-text">{t("cancelConfirm")}</span>
+                <div className="cancel-confirm-actions">
+                  <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
+                    {canceling ? t("canceling") : t("cancel")}
+                  </button>
+                  <button className="btn secondary" type="button" onClick={onDismissCancel} disabled={canceling}>
+                    {t("close")}
+                  </button>
+                </div>
+              </div>
+            )}
             {cancelError ? <p className="muted-text">{cancelError}</p> : null}
           </div>
         )}

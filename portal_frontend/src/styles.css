@@ -940,6 +940,11 @@ input:disabled {
   gap: 10px;
 }
 
+.request-container .request-form-panel .submission-block-controls.submission-block-controls-global {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
 .request-container .request-form-panel .submit-btn {
   min-width: 230px;
   height: 46px;

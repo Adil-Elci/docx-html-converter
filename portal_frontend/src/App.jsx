@@ -189,8 +189,10 @@ export default function App() {
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
-  const nextSubmissionBlockIdRef = useRef(2);
-  const [submissionBlocks, setSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
+  const guestBlockIdRef = useRef(2);
+  const orderBlockIdRef = useRef(2);
+  const [guestSubmissionBlocks, setGuestSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
+  const [orderSubmissionBlocks, setOrderSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminUserForm, setAdminUserForm] = useState(emptyAdminUserForm());
   const [adminUserEdits, setAdminUserEdits] = useState({});
@@ -246,8 +248,13 @@ export default function App() {
   };
 
   const resetSubmissionBlocks = () => {
-    nextSubmissionBlockIdRef.current = 2;
-    setSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
+    if (isOrders) {
+      orderBlockIdRef.current = 2;
+      setOrderSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
+    } else {
+      guestBlockIdRef.current = 2;
+      setGuestSubmissionBlocks([createSubmissionBlock(1)]);
+    }
     setSiteSuggestionsBlockId(null);
     setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
@@ -259,8 +266,10 @@ export default function App() {
     setSites([]);
     setError("");
     setSuccess("");
-    nextSubmissionBlockIdRef.current = 2;
-    setSubmissionBlocks([createSubmissionBlock(1)]);
+    guestBlockIdRef.current = 2;
+    orderBlockIdRef.current = 2;
+    setGuestSubmissionBlocks([createSubmissionBlock(1)]);
+    setOrderSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     setSiteSuggestionsBlockId(null);
     setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
@@ -275,14 +284,17 @@ export default function App() {
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
-    setSubmissionBlocks((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
+    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
 
   const addSubmissionBlock = (afterBlockId) => {
-    setSubmissionBlocks((prev) => {
-      const nextId = nextSubmissionBlockIdRef.current;
-      nextSubmissionBlockIdRef.current += 1;
-      const nextBlock = createSubmissionBlock(nextId, getDefaultSubmissionTargetSite());
+    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const idRef = isOrders ? orderBlockIdRef : guestBlockIdRef;
+    setter((prev) => {
+      const nextId = idRef.current;
+      idRef.current += 1;
+      const nextBlock = createSubmissionBlock(nextId, isOrders ? getDefaultSubmissionTargetSite() : {});
       const insertIndex = prev.findIndex((block) => block.id === afterBlockId);
       if (insertIndex < 0) return [...prev, nextBlock];
       return [...prev.slice(0, insertIndex + 1), nextBlock, ...prev.slice(insertIndex + 1)];
@@ -290,10 +302,11 @@ export default function App() {
   };
 
   const removeSubmissionBlock = (blockId) => {
-    setSubmissionBlocks((prev) => {
+    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    setter((prev) => {
       if (prev.length <= 1) return prev;
       const next = prev.filter((block) => block.id !== blockId);
-      return next.length ? next : [createSubmissionBlock(1, getDefaultSubmissionTargetSite())];
+      return next.length ? next : [createSubmissionBlock(1, isOrders ? getDefaultSubmissionTargetSite() : {})];
     });
     setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setClientSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
@@ -1788,7 +1801,7 @@ export default function App() {
             <div className="panel form-panel request-form-panel">
               <div className="guest-form request-builder-form">
                 <div className="submission-blocks">
-                  {submissionBlocks.map((block, blockIndex) => {
+                  {(isOrders ? orderSubmissionBlocks : guestSubmissionBlocks).map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
                     const blockFilteredClients = isAdminUser
                       ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
@@ -2087,17 +2100,23 @@ export default function App() {
                     className="btn block-control-btn"
                     type="button"
                     aria-label={t("addAnotherBlock")}
-                    onClick={() => addSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
+                    onClick={() => {
+                      const currentBlocks = isOrders ? orderSubmissionBlocks : guestSubmissionBlocks;
+                      addSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
+                    }}
                     disabled={submitting}
                   >
                     +
                   </button>
-                  {submissionBlocks.length > 1 ? (
+                  {(isOrders ? orderSubmissionBlocks : guestSubmissionBlocks).length > 1 ? (
                     <button
                       className="btn secondary block-control-btn"
                       type="button"
                       aria-label={t("removeBlock")}
-                      onClick={() => removeSubmissionBlock(submissionBlocks[submissionBlocks.length - 1]?.id)}
+                      onClick={() => {
+                        const currentBlocks = isOrders ? orderSubmissionBlocks : guestSubmissionBlocks;
+                        removeSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
+                      }}
                       disabled={submitting}
                     >
                       -

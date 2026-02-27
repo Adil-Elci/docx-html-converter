@@ -625,10 +625,9 @@ input:disabled {
   gap: 8px;
 }
 
-.submission-block-controls-inline {
+.submission-block-controls-global {
   justify-content: flex-start;
-  grid-column: 1 / -1;
-  margin-top: 4px;
+  margin-top: 10px;
 }
 
 .submission-block > div {

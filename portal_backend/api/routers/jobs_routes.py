@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from html import escape
 import os
 import re
@@ -502,11 +502,22 @@ def cancel_job(
     if job.wp_post_id is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job already created a WordPress draft.")
 
-    cancel_window_minutes = _read_int_env("AUTOMATION_CLIENT_CANCEL_WINDOW_MINUTES", 10)
-    if current_user.role != "admin" and cancel_window_minutes > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cancel_window_minutes)
-        if job.created_at < cutoff:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cancel window has expired.")
+    if current_user.role != "admin":
+        max_cancels = _read_int_env("AUTOMATION_CLIENT_CANCELS_PER_DAY", 2)
+        now = datetime.now(timezone.utc)
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        cancels_today = (
+            db.query(JobEvent.id)
+            .join(Job, Job.id == JobEvent.job_id)
+            .filter(
+                Job.client_id == job.client_id,
+                JobEvent.event_type == "canceled",
+                JobEvent.created_at >= start_of_day,
+            )
+            .count()
+        )
+        if cancels_today >= max_cancels:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Daily cancel limit reached.")
 
     now = datetime.now(timezone.utc)
     job.job_status = "canceled"

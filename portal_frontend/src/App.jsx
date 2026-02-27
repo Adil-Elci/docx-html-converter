@@ -1834,7 +1834,7 @@ export default function App() {
                           ) : null}
 
                           {isOrders ? (
-                            <div className="submission-field submission-field-site">
+                            <div className="submission-field submission-field-site submission-field-target-site">
                               <label>{t("targetSiteForBacklink")}</label>
                               <input
                                 type="url"
@@ -1988,9 +1988,13 @@ export default function App() {
 
                           {isOrders ? (
                             <>
-                              <div className="submission-field submission-field-inline">
-                                <label>{t("aiDraftLabel")}</label>
-                                <div className="toggle">
+                              <div className="submission-field submission-field-inline submission-field-ai-draft">
+                                <label className="label-with-info">
+                                  <span>{t("aiDraftLabel")}</span>
+                                  <span className="info-dot" tabIndex={0} aria-label={t("aiDraftHint")}>!</span>
+                                  <span className="info-tooltip">{t("aiDraftHint")}</span>
+                                </label>
+                                <div className="toggle toggle-compact">
                                   <button
                                     type="button"
                                     className={block.creator_mode ? "active" : ""}
@@ -2006,10 +2010,9 @@ export default function App() {
                                     {t("aiDraftOff")}
                                   </button>
                                 </div>
-                                <p className="muted-text small-text">{t("aiDraftHint")}</p>
                               </div>
-                              <div className="submission-field submission-field-inline">
-                                <label>{t("anchor")}</label>
+                              <div className="submission-field submission-field-inline submission-field-anchor">
+                                <label>{`${t("anchor")} (${t("optional")})`}</label>
                                 <input
                                   type="text"
                                   value={block.anchor}
@@ -2017,8 +2020,8 @@ export default function App() {
                                   placeholder={t("placeholderAnchor")}
                                 />
                               </div>
-                              <div className="submission-field submission-field-inline">
-                                <label>{t("topic")}</label>
+                              <div className="submission-field submission-field-inline submission-field-topic">
+                                <label>{`${t("topic")} (${t("optional")})`}</label>
                                 <input
                                   type="text"
                                   value={block.topic}

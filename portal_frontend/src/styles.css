@@ -824,8 +824,99 @@ input:disabled {
   position: relative;
 }
 
+.request-container .request-form-panel .submission-field-ai-draft {
+  justify-self: start;
+  width: fit-content;
+}
+
+.request-container .request-form-panel .submission-field-ai-draft .toggle {
+  width: auto;
+}
+
+.request-container .request-form-panel .label-with-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.request-container .request-form-panel .info-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: #ff8a00;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.request-container .request-form-panel .info-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 10px);
+  min-width: 220px;
+  max-width: 260px;
+  background: #fff;
+  color: #1b1b1b;
+  border: 1px solid #c7c7c7;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
+  font-weight: 600;
+  z-index: 6;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.request-container .request-form-panel .label-with-info:hover .info-tooltip,
+.request-container .request-form-panel .label-with-info:focus-within .info-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toggle-compact {
+  border-radius: 8px;
+}
+
+.toggle-compact button {
+  min-width: 44px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .request-container .request-form-panel .order-block .submission-field-inline {
   grid-column: span 2;
+}
+
+.request-container .request-form-panel .order-block .submission-field-client {
+  grid-column: span 2;
+}
+
+.request-container .request-form-panel .order-block .submission-field-target-site,
+.request-container .request-form-panel .order-block .submission-field-site {
+  grid-column: span 2;
+}
+
+.request-container .request-form-panel .order-block .submission-field-ai-draft {
+  grid-column: span 2;
+}
+
+.request-container .request-form-panel .order-block .submission-field-anchor,
+.request-container .request-form-panel .order-block .submission-field-topic {
+  grid-column: span 2;
+}
+
+@media (min-width: 1200px) {
+  .request-container .request-form-panel .order-block {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
 }
 
 .request-container .request-form-panel .submission-field-wide {

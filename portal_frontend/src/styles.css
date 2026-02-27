@@ -905,7 +905,7 @@ input:disabled {
 }
 
 .request-container .request-form-panel .order-block .submission-field-ai-draft {
-  grid-column: span 2;
+  grid-column: span 1;
 }
 
 .request-container .request-form-panel .order-block .submission-field-anchor,

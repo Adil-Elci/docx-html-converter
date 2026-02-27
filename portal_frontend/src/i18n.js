@@ -106,7 +106,7 @@ export const translations = {
     aiDraftLabel: "AI Draft",
     aiDraftOn: "On",
     aiDraftOff: "Off",
-    aiDraftHint: "LLM selects the topic, backlink placement, and drafts the post.",
+    aiDraftHint: "AI selects the topic, backlink placement, and drafts the post.",
     anchor: "Anchor",
     topic: "Topic",
     submit: "Submit",

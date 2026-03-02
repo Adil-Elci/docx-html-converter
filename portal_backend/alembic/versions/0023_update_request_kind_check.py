@@ -17,6 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.drop_constraint("submissions_source_payload_check", "submissions", type_="check")
     op.drop_constraint("submissions_request_kind_check", "submissions", type_="check")
 
     op.execute(
@@ -27,6 +28,10 @@ def upgrade() -> None:
         "UPDATE submissions SET request_kind = 'create_article' "
         "WHERE request_kind IN ('order','orders')"
     )
+    op.execute(
+        "UPDATE submissions SET request_kind = 'create_article' "
+        "WHERE request_kind = 'submit_article' AND doc_url IS NULL AND file_url IS NULL"
+    )
 
     op.alter_column("submissions", "request_kind", server_default=sa.text("'submit_article'"))
     op.create_check_constraint(
@@ -34,9 +39,17 @@ def upgrade() -> None:
         "submissions",
         "request_kind IN ('submit_article','create_article')",
     )
+    op.create_check_constraint(
+        "submissions_source_payload_check",
+        "submissions",
+        "((request_kind = 'create_article' AND doc_url IS NULL AND file_url IS NULL) "
+        "OR (source_type = 'google-doc' AND doc_url IS NOT NULL AND file_url IS NULL) "
+        "OR (source_type = 'docx-upload' AND file_url IS NOT NULL AND doc_url IS NULL))",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint("submissions_source_payload_check", "submissions", type_="check")
     op.drop_constraint("submissions_request_kind_check", "submissions", type_="check")
     op.execute(
         "UPDATE submissions SET request_kind = 'guest_post' "
@@ -51,4 +64,10 @@ def downgrade() -> None:
         "submissions_request_kind_check",
         "submissions",
         "request_kind IN ('guest_post','order')",
+    )
+    op.create_check_constraint(
+        "submissions_source_payload_check",
+        "submissions",
+        "(source_type = 'google-doc' AND doc_url IS NOT NULL AND file_url IS NULL) "
+        "OR (source_type = 'docx-upload' AND file_url IS NOT NULL AND doc_url IS NULL)",
     )

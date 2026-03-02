@@ -852,7 +852,7 @@ def _call_creator_stream(
     return result
 
 
-def run_creator_order_pipeline(
+def run_create_article_pipeline(
     *,
     creator_endpoint: str,
     target_site_url: str,
@@ -1061,7 +1061,7 @@ def run_creator_order_pipeline(
     }
 
 
-def run_guest_post_pipeline(
+def run_submit_article_pipeline(
     *,
     source_url: str,
     publishing_site: str,

@@ -29,7 +29,7 @@ from ..automation_service import (
     converter_publishing_site_from_site_url,
     get_runtime_config,
     resolve_source_url,
-    run_guest_post_pipeline,
+    run_submit_article_pipeline,
 )
 from ..db import get_db
 from ..portal_models import (
@@ -46,9 +46,9 @@ from ..portal_models import (
     User,
 )
 from ..portal_schemas import (
-    AutomationGuestPostIn,
-    AutomationGuestPostOut,
-    AutomationGuestPostResultOut,
+    AutomationSubmitArticleIn,
+    AutomationSubmitArticleOut,
+    AutomationSubmitArticleResultOut,
     AutomationStatusEventOut,
     AutomationStatusOut,
 )
@@ -249,7 +249,7 @@ def _resolve_category_candidates(db: Session, site_id: UUID) -> list[Dict[str, o
     return out
 
 
-def _resolve_client(db: Session, payload: AutomationGuestPostIn) -> Client:
+def _resolve_client(db: Session, payload: AutomationSubmitArticleIn) -> Client:
     client_id = payload.client_id
     client_name = (payload.client_name or "").strip()
 
@@ -304,7 +304,7 @@ def _resolve_client_target_site(
     db: Session,
     *,
     client: Client,
-    payload: AutomationGuestPostIn,
+    payload: AutomationSubmitArticleIn,
 ) -> Optional[ClientTargetSite]:
     rows = (
         db.query(ClientTargetSite)
@@ -357,7 +357,7 @@ def _resolve_submission_source(source_type: str, source_url: str) -> Tuple[str, 
     return "docx-upload", None, source_url
 
 
-def _payload_has_source_document(payload: AutomationGuestPostIn) -> bool:
+def _payload_has_source_document(payload: AutomationSubmitArticleIn) -> bool:
     return bool((payload.doc_url or "").strip() or (payload.docx_file or "").strip())
 
 
@@ -381,7 +381,7 @@ def _compose_submission_notes(
     custom_target_site_url: Optional[str] = None,
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
-    manual_order: bool = False,
+    manual_create_article: bool = False,
     creator_mode: bool = False,
 ) -> str:
     parts = [
@@ -401,8 +401,8 @@ def _compose_submission_notes(
         parts.append(f"anchor={_safe_note_value(anchor)}")
     if topic:
         parts.append(f"topic={_safe_note_value(topic)}")
-    if manual_order:
-        parts.append("manual_order=true")
+    if manual_create_article:
+        parts.append("manual_create_article=true")
     if creator_mode:
         parts.append("creator_mode=true")
     return ";".join(parts)
@@ -469,7 +469,7 @@ def _find_existing_submission(
     return None
 
 
-def _dispatch_shadow_webhook(payload: AutomationGuestPostIn) -> bool:
+def _dispatch_shadow_webhook(payload: AutomationSubmitArticleIn) -> bool:
     webhook_url = os.getenv("AUTOMATION_SHADOW_WEBHOOK_URL", "").strip()
     if not webhook_url:
         return False
@@ -485,7 +485,7 @@ def _dispatch_shadow_webhook(payload: AutomationGuestPostIn) -> bool:
 def _enqueue_job(
     db: Session,
     *,
-    payload: AutomationGuestPostIn,
+    payload: AutomationSubmitArticleIn,
     request_kind: str,
     source_type: str,
     source_url: Optional[str],
@@ -497,9 +497,9 @@ def _enqueue_job(
     client_target_site: Optional[ClientTargetSite],
     creator_mode: bool,
 ) -> Tuple[Submission, Job, bool]:
-    manual_order = request_kind == "order" and not (source_url or "").strip()
-    creator_order = manual_order and creator_mode
-    if manual_order:
+    manual_create_article = request_kind == "create_article" and not (source_url or "").strip()
+    creator_create_article = manual_create_article and creator_mode
+    if manual_create_article:
         submission_source_type = "google-doc"
         doc_url = None
         file_url = None
@@ -507,13 +507,13 @@ def _enqueue_job(
         if source_url is None:
             raise RuntimeError("source_url is required for non-manual submissions.")
         submission_source_type, doc_url, file_url = _resolve_submission_source(source_type, source_url)
-    # For creator orders without an explicit idempotency key, generate a
-    # unique key so that multiple orders with the same anchor/topic/site
+    # For creator article-creation requests without an explicit idempotency key, generate a
+    # unique key so that multiple creations with the same anchor/topic/site
     # each create their own submission + job instead of being deduplicated.
-    if creator_order and not (payload.idempotency_key or "").strip():
-        idempotency_source = f"order:{uuid4().hex}"
+    if creator_create_article and not (payload.idempotency_key or "").strip():
+        idempotency_source = f"create_article:{uuid4().hex}"
     else:
-        idempotency_source = (source_url or "").strip() or f"order:{(payload.anchor or '').strip()}:{(payload.topic or '').strip()}"
+        idempotency_source = (source_url or "").strip() or f"create_article:{(payload.anchor or '').strip()}:{(payload.topic or '').strip()}"
     idempotency_key = _build_idempotency_key(
         explicit_key=payload.idempotency_key,
         client_id=client.id,
@@ -529,7 +529,7 @@ def _enqueue_job(
         custom_target_site_url=payload.target_site_url,
         anchor=payload.anchor,
         topic=payload.topic,
-        manual_order=manual_order,
+        manual_create_article=manual_create_article,
         creator_mode=creator_mode,
     )
 
@@ -558,11 +558,11 @@ def _enqueue_job(
                 existing_job.approved_by = None
                 existing_job.approved_by_name_snapshot = None
                 existing_job.approved_at = None
-            if manual_order and not creator_order and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
+            if manual_create_article and not creator_create_article and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
                 existing_job.job_status = "pending_approval"
                 existing_job.last_error = None
                 changed_existing_job = True
-            if creator_order and existing_job.job_status == "pending_approval":
+            if creator_create_article and existing_job.job_status == "pending_approval":
                 existing_job.job_status = "queued"
                 existing_job.last_error = None
                 changed_existing_job = True
@@ -582,7 +582,7 @@ def _enqueue_job(
             submission_id=existing_submission.id,
             client_id=client.id,
             site_id=site.id,
-            job_status="pending_approval" if manual_order else "queued",
+            job_status="pending_approval" if manual_create_article else "queued",
             requires_admin_approval=requires_admin_approval,
             approved_by=None,
             approved_by_name_snapshot=None,
@@ -614,7 +614,7 @@ def _enqueue_job(
         submission_id=submission.id,
         client_id=client.id,
         site_id=site.id,
-        job_status="queued" if creator_order else ("pending_approval" if manual_order else "queued"),
+        job_status="queued" if creator_create_article else ("pending_approval" if manual_create_article else "queued"),
         requires_admin_approval=requires_admin_approval,
         approved_by=None,
         approved_by_name_snapshot=None,
@@ -627,7 +627,7 @@ def _enqueue_job(
     return submission, job, False
 
 
-async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
+async def _parse_automation_payload(request: Request) -> AutomationSubmitArticleIn:
     content_type = (request.headers.get("content-type") or "").lower()
     data: Dict[str, object]
 
@@ -665,7 +665,7 @@ async def _parse_automation_payload(request: Request) -> AutomationGuestPostIn:
             data = dict(parse_qsl(decoded_body, keep_blank_values=True))
 
     try:
-        return AutomationGuestPostIn(**data)
+        return AutomationSubmitArticleIn(**data)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -688,12 +688,12 @@ def get_automation_upload(file_name: str) -> FileResponse:
     return FileResponse(path=file_path, media_type=media_type, filename=safe_name)
 
 
-@router.post("/submit-article-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)
+@router.post("/submit-article-webhook", response_model=AutomationSubmitArticleOut, status_code=status.HTTP_200_OK)
 async def process_submit_article_webhook(
     request: Request,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user),
-) -> AutomationGuestPostOut:
+) -> AutomationSubmitArticleOut:
     payload = await _parse_automation_payload(request)
     logger.info(
         "automation.webhook.received mode=%s source_type=%s publishing_site=%s idempotency_key=%s",
@@ -703,16 +703,22 @@ async def process_submit_article_webhook(
         payload.idempotency_key,
     )
     request_kind = payload.request_kind
-    manual_order = request_kind == "order" and not _payload_has_source_document(payload) and not payload.creator_mode
-    creator_order = request_kind == "order" and payload.creator_mode and not _payload_has_source_document(payload)
-    if manual_order and payload.execution_mode == "sync":
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Orders without a document require async or shadow mode.")
-    if creator_order and payload.execution_mode == "sync":
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Creator orders require async or shadow mode.")
+    manual_create_article = request_kind == "create_article" and not _payload_has_source_document(payload) and not payload.creator_mode
+    creator_create_article = request_kind == "create_article" and payload.creator_mode and not _payload_has_source_document(payload)
+    if manual_create_article and payload.execution_mode == "sync":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Created-article requests without a document require async or shadow mode.",
+        )
+    if creator_create_article and payload.execution_mode == "sync":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Article-creation requests require async or shadow mode.",
+        )
 
     site = _resolve_publishing_site(db, payload.publishing_site)
 
-    if creator_order and payload.execution_mode in {"async", "shadow"}:
+    if creator_create_article and payload.execution_mode in {"async", "shadow"}:
         try:
             health = check_creator_health(
                 creator_endpoint=get_runtime_config()["creator_endpoint"],
@@ -755,7 +761,7 @@ async def process_submit_article_webhook(
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
             shadow_dispatched = _dispatch_shadow_webhook(payload)
-        return AutomationGuestPostOut(
+        return AutomationSubmitArticleOut(
             ok=True,
             execution_mode=payload.execution_mode,
             deduplicated=deduplicated,
@@ -766,7 +772,7 @@ async def process_submit_article_webhook(
             result=None,
         )
 
-    if manual_order and payload.execution_mode in {"async", "shadow"}:
+    if manual_create_article and payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
@@ -799,7 +805,7 @@ async def process_submit_article_webhook(
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
             shadow_dispatched = _dispatch_shadow_webhook(payload)
-        return AutomationGuestPostOut(
+        return AutomationSubmitArticleOut(
             ok=True,
             execution_mode=payload.execution_mode,
             deduplicated=deduplicated,
@@ -893,7 +899,7 @@ async def process_submit_article_webhook(
             deduplicated,
             shadow_dispatched,
         )
-        return AutomationGuestPostOut(
+        return AutomationSubmitArticleOut(
             ok=True,
             execution_mode=payload.execution_mode,
             deduplicated=deduplicated,
@@ -907,7 +913,7 @@ async def process_submit_article_webhook(
     try:
         if current_user is not None and current_user.role != "admin" and payload.execution_mode == "sync":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Clients cannot run sync execution mode.")
-        pipeline_result = run_guest_post_pipeline(
+        pipeline_result = run_submit_article_pipeline(
             source_url=source_url,
             publishing_site=converter_publishing_site,
             site_url=site.site_url,
@@ -939,7 +945,7 @@ async def process_submit_article_webhook(
         logger.warning("automation.webhook.sync_failed error=%s", str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
-    result = AutomationGuestPostResultOut(
+    result = AutomationSubmitArticleResultOut(
         source_type=normalized_source_type,
         publishing_site=payload.publishing_site,
         source_url=source_url,
@@ -957,7 +963,7 @@ async def process_submit_article_webhook(
         site.id,
         result.wp_post_id,
     )
-    return AutomationGuestPostOut(
+    return AutomationSubmitArticleOut(
         ok=True,
         execution_mode="sync",
         deduplicated=False,

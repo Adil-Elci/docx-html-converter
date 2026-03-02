@@ -14,8 +14,8 @@ from .automation_service import (
     AutomationError,
     converter_publishing_site_from_site_url,
     get_runtime_config,
-    run_guest_post_pipeline,
-    run_creator_order_pipeline,
+    run_submit_article_pipeline,
+    run_create_article_pipeline,
 )
 from .portal_models import (
     Asset,
@@ -103,7 +103,7 @@ class AutomationJobWorker:
                 return
             if payload.get("creator_mode"):
                 if not (payload.get("target_site_url") or "").strip():
-                    raise AutomationError("Creator orders require target_site_url.")
+                    raise AutomationError("Article creation requests require target_site_url.")
                 if not run_config.get("creator_endpoint"):
                     raise AutomationError("Creator endpoint is not configured.")
                 self._append_event(
@@ -129,7 +129,7 @@ class AutomationJobWorker:
                 def _should_cancel() -> bool:
                     return self._is_job_canceled(job_id)
 
-                pipeline_result = run_creator_order_pipeline(
+                pipeline_result = run_create_article_pipeline(
                     creator_endpoint=run_config["creator_endpoint"],
                     target_site_url=payload.get("target_site_url") or "",
                     publishing_site_url=payload.get("site_url") or "",
@@ -197,7 +197,7 @@ class AutomationJobWorker:
                     "attempt": payload["attempt_count"],
                 },
             )
-            pipeline_result = run_guest_post_pipeline(
+            pipeline_result = run_submit_article_pipeline(
                 source_url=payload["source_url"],
                 publishing_site=payload["converter_publishing_site"],
                 site_url=payload["site_url"],

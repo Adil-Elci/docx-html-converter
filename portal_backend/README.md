@@ -156,7 +156,7 @@ python scripts/sync_wp_categories.py
 
 Optional:
 - `--site-url https://eintragnews.de` to sync one site.
-- `--default-slugs guest-post,news,allgemein` to seed `publishing_site_default_categories` in slug order.
+- `--default-slugs submit-article,news,allgemein` to seed `publishing_site_default_categories` in slug order.
 - `--replace-defaults` (with `--default-slugs`) to disable existing defaults not in the matched list.
 
 ## Make.com Replacement Webhook

@@ -352,7 +352,7 @@ export default function App() {
       }
       if ((block.target_site_url || "").trim()) formData.append("target_site_url", block.target_site_url.trim());
     }
-    formData.append("request_kind", isCreateArticle ? "order" : "guest_post");
+    formData.append("request_kind", isCreateArticle ? "create_article" : "submit_article");
     formData.append("source_type", sourceType);
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
@@ -1683,14 +1683,14 @@ export default function App() {
                 </div>
                 {pendingJobs.map((item) => {
                   const draftReviewUrl = getDraftReviewUrl(item);
-                  const requestKind = item.request_kind === "order" ? "order" : "guest_post";
+                  const requestKind = item.request_kind === "create_article" ? "create_article" : "submit_article";
                   return (
                     <div key={item.job_id} className="pending-item-wrap">
                       <div className="pending-item-row">
                         <span>{item.client_name}</span>
                         <span>{item.site_url || item.site_name}</span>
                         <span>{item.content_title || t("contentTitleFallback")}</span>
-                        <span>{requestKind === "order" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
+                        <span>{requestKind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
                         <div className="pending-actions">
                           {draftReviewUrl ? (
                             <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">

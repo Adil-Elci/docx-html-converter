@@ -1,7 +1,7 @@
 """master site info table and site column renames
 
 Revision ID: 0016_master_site_info
-Revises: 0015_manual_orders_no_doc
+Revises: 0015_manual_create_articles_no_doc
 Create Date: 2026-02-24 00:00:00.000000
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "0016_master_site_info"
-down_revision = "0015_manual_orders_no_doc"
+down_revision = "0015_manual_create_articles_no_doc"
 branch_labels = None
 depends_on = None
 

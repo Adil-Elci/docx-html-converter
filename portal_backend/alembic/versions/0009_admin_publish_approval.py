@@ -21,12 +21,12 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "submissions",
-        sa.Column("request_kind", sa.Text(), nullable=False, server_default=sa.text("'guest_post'")),
+        sa.Column("request_kind", sa.Text(), nullable=False, server_default=sa.text("'submit_article'")),
     )
     op.create_check_constraint(
         "submissions_request_kind_check",
         "submissions",
-        "request_kind IN ('guest_post','order')",
+        "request_kind IN ('submit_article','create_article')",
     )
 
     op.add_column(

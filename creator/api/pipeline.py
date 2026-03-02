@@ -287,7 +287,7 @@ def _generate_article_by_sections(
                 placement_index = None
         include_backlink = placement_index == (index - 1)
 
-        section_system = "Write HTML for a single H2 section of a guest post. Return only HTML."
+        section_system = "Write HTML for a single H2 section of a submitted article. Return only HTML."
         section_user = (
             f"H2: {h2}\n"
             f"H3s: {h3s_list}\n"
@@ -512,7 +512,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     }
     if publishing_text:
         system_prompt = (
-            "You analyze publishing site content for safe guest post topics. "
+            "You analyze publishing site content for safe submitted article topics. "
             "Use only the provided site text. Return JSON with allowed_topics (5-10), "
             "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only)."
         )
@@ -550,7 +550,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     logger.info("creator.phase3.start")
     safe_exclude = list(exclude_topics or [])
     system_prompt = (
-        "You select a guest post topic that fits publishing site authority and allows a natural backlink. "
+        "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
         "Avoid promotional topics and exact match money keywords. "
         "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
         "Return JSON only."

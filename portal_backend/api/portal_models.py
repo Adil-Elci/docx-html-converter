@@ -247,7 +247,7 @@ class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
         CheckConstraint("source_type IN ('google-doc','docx-upload')", name="submissions_source_type_check"),
-        CheckConstraint("request_kind IN ('guest_post','order')", name="submissions_request_kind_check"),
+        CheckConstraint("request_kind IN ('submit_article','create_article')", name="submissions_request_kind_check"),
         CheckConstraint("backlink_placement IN ('intro','conclusion')", name="submissions_backlink_placement_check"),
         CheckConstraint("post_status IN ('draft','publish')", name="submissions_post_status_check"),
         CheckConstraint(
@@ -255,7 +255,7 @@ class Submission(Base):
             name="submissions_status_check",
         ),
         CheckConstraint(
-            "((request_kind = 'order' AND doc_url IS NULL AND file_url IS NULL) "
+            "((request_kind = 'create_article' AND doc_url IS NULL AND file_url IS NULL) "
             "OR (source_type = 'google-doc' AND doc_url IS NOT NULL AND file_url IS NULL) "
             "OR (source_type = 'docx-upload' AND file_url IS NOT NULL AND doc_url IS NULL))",
             name="submissions_source_payload_check",
@@ -265,7 +265,7 @@ class Submission(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
     site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id"), nullable=False)
-    request_kind = Column(Text, nullable=False, default="guest_post")
+    request_kind = Column(Text, nullable=False, default="submit_article")
     source_type = Column(Text, nullable=False)
     doc_url = Column(Text, nullable=True)
     file_url = Column(Text, nullable=True)

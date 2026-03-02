@@ -265,8 +265,8 @@ def list_pending_jobs(
     kind_filter: Optional[str] = None
     if request_kind is not None:
         cleaned = request_kind.strip().lower()
-        if cleaned not in {"guest_post", "order"}:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="request_kind must be guest_post or order.")
+        if cleaned not in {"submit_article", "create_article"}:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="request_kind must be submit_article or create_article.")
         kind_filter = cleaned
 
     query = (
@@ -494,8 +494,8 @@ def cancel_job(
     submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
     if not submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found for job.")
-    if submission.request_kind != "order":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only order jobs can be canceled.")
+    if submission.request_kind != "create_article":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only created-article jobs can be canceled.")
 
     if job.job_status not in {"queued", "processing", "retrying"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job cannot be canceled in its current state.")

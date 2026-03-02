@@ -12,7 +12,7 @@ AUTH_TYPES = {"application_password"}
 SOURCE_TYPES = {"google-doc", "docx-upload"}
 BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
-REQUEST_KINDS = {"guest_post", "order"}
+REQUEST_KINDS = {"submit_article", "create_article"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
 JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying", "canceled"}
 EVENT_TYPES = {
@@ -479,7 +479,7 @@ class ClientSiteAccessOut(BaseModel):
 class SubmissionCreate(BaseModel):
     client_id: UUID
     site_id: UUID
-    request_kind: str = "guest_post"
+    request_kind: str = "submit_article"
     source_type: str
     doc_url: Optional[str] = None
     file_url: Optional[str] = None
@@ -495,7 +495,7 @@ class SubmissionCreate(BaseModel):
     def validate_request_kind(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in REQUEST_KINDS:
-            raise ValueError("request_kind must be guest_post or order.")
+            raise ValueError("request_kind must be submit_article or create_article.")
         return cleaned
 
     @validator("source_type")
@@ -565,7 +565,7 @@ class SubmissionUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in REQUEST_KINDS:
-            raise ValueError("request_kind must be guest_post or order.")
+            raise ValueError("request_kind must be submit_article or create_article.")
         return cleaned
 
     @validator("source_type")
@@ -738,10 +738,10 @@ class AssetOut(BaseModel):
     created_at: datetime
 
 
-class AutomationGuestPostIn(BaseModel):
+class AutomationSubmitArticleIn(BaseModel):
     source_type: str
     publishing_site: str
-    request_kind: str = "guest_post"
+    request_kind: str = "submit_article"
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
     anchor: Optional[str] = None
@@ -761,7 +761,7 @@ class AutomationGuestPostIn(BaseModel):
     def validate_request_kind(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in REQUEST_KINDS:
-            raise ValueError("request_kind must be guest_post or order.")
+            raise ValueError("request_kind must be submit_article or create_article.")
         return cleaned
 
     @validator("source_type")
@@ -836,9 +836,9 @@ class AutomationGuestPostIn(BaseModel):
         anchor = values.get("anchor")
         topic = values.get("topic")
         creator_mode = bool(values.get("creator_mode"))
-        if request_kind == "order" and not doc_url and not docx_file:
+        if request_kind == "create_article" and not doc_url and not docx_file:
             if not anchor and not topic and not creator_mode:
-                raise ValueError("anchor or topic is required for request_kind=order when no document is provided.")
+                raise ValueError("anchor or topic is required for request_kind=create_article when no document is provided.")
             return values
         if source_type == "google-doc" and not doc_url:
             raise ValueError("doc_url is required for source_type=google-doc.")
@@ -847,7 +847,7 @@ class AutomationGuestPostIn(BaseModel):
         return values
 
 
-class AutomationGuestPostResultOut(BaseModel):
+class AutomationSubmitArticleResultOut(BaseModel):
     source_type: str
     publishing_site: str
     source_url: str
@@ -861,7 +861,7 @@ class AutomationGuestPostResultOut(BaseModel):
     site_credential_id: UUID
 
 
-class AutomationGuestPostOut(BaseModel):
+class AutomationSubmitArticleOut(BaseModel):
     ok: bool = True
     execution_mode: str
     deduplicated: bool = False
@@ -869,7 +869,7 @@ class AutomationGuestPostOut(BaseModel):
     job_id: Optional[UUID] = None
     job_status: Optional[str] = None
     shadow_dispatched: bool = False
-    result: Optional[AutomationGuestPostResultOut] = None
+    result: Optional[AutomationSubmitArticleResultOut] = None
 
 
 class AutomationStatusEventOut(BaseModel):

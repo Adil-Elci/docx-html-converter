@@ -32,10 +32,10 @@ npm install
 npm run dev
 ```
 
-# Local Guest Post Conversion Service
+# Local Submitted Article Conversion Service
 
 ## What it does
-This service runs locally and converts guest post documents into WordPress-ready HTML and metadata. It accepts a `source_url`, downloads a DOCX (or Google Docs export), converts and sanitizes the HTML, and returns German title/slug/excerpt/meta plus an English image prompt.
+This service runs locally and converts submitted article documents into WordPress-ready HTML and metadata. It accepts a `source_url`, downloads a DOCX (or Google Docs export), converts and sanitizes the HTML, and returns German title/slug/excerpt/meta plus an English image prompt.
 
 ## Supported inputs
 - Google Docs share links

@@ -746,7 +746,7 @@ input:disabled {
   line-height: 1;
 }
 
-/* Modern request-page refresh (guest posts + orders) */
+/* Modern request-page refresh (submitted + created articles) */
 .request-container {
   gap: 20px;
 }

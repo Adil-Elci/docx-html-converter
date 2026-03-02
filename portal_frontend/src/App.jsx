@@ -83,8 +83,12 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "guest-posts", "orders"];
-const CLIENT_SECTIONS = ["dashboard", "guest-posts", "orders"];
+const SECTION_ALIASES = {
+  "guest-posts": "submit-article",
+  "orders": "create-article",
+};
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "submit-article", "create-article"];
+const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
 
@@ -107,11 +111,17 @@ const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "dashbo
 
 const getAllowedSectionsForRole = (role) => (role === "admin" ? ADMIN_SECTIONS : CLIENT_SECTIONS);
 
-const getStoredSectionForRole = (role) => localStorage.getItem(`active_section_${role}`) || "";
+const normalizeSectionId = (section) => {
+  const value = (section || "").trim();
+  return SECTION_ALIASES[value] || value;
+};
+
+const getStoredSectionForRole = (role) => normalizeSectionId(localStorage.getItem(`active_section_${role}`) || "");
 
 const resolveSectionForRole = (role, section) => {
+  const normalized = normalizeSectionId(section);
   const allowed = getAllowedSectionsForRole(role);
-  return allowed.includes(section) ? section : getDefaultSectionForRole(role);
+  return allowed.includes(normalized) ? normalized : getDefaultSectionForRole(role);
 };
 
 const getLandingSectionForRole = (role) =>
@@ -130,7 +140,7 @@ async function readApiError(response, fallbackMessage) {
 export default function App() {
   const currentHost = normalizeHost(window.location.hostname || "");
   const isDbUpdaterDomain = Boolean(dbUpdaterHost && currentHost === dbUpdaterHost);
-  const [activeSection, setActiveSection] = useState("guest-posts");
+  const [activeSection, setActiveSection] = useState("submit-article");
   const [language, setLanguage] = useState(getInitialLanguage());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
   const [sidebarHidden, setSidebarHidden] = useState(getInitialSidebarHidden);
@@ -251,7 +261,7 @@ export default function App() {
   };
 
   const resetSubmissionBlocks = () => {
-    if (isOrders) {
+    if (isCreateArticleSection) {
       orderBlockIdRef.current = 2;
       setOrderSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     } else {
@@ -287,17 +297,17 @@ export default function App() {
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
-    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
     setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
 
   const addSubmissionBlock = (afterBlockId) => {
-    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
-    const idRef = isOrders ? orderBlockIdRef : guestBlockIdRef;
+    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const idRef = isCreateArticleSection ? orderBlockIdRef : guestBlockIdRef;
     setter((prev) => {
       const nextId = idRef.current;
       idRef.current += 1;
-      const nextBlock = createSubmissionBlock(nextId, isOrders ? getDefaultSubmissionTargetSite() : {});
+      const nextBlock = createSubmissionBlock(nextId, isCreateArticleSection ? getDefaultSubmissionTargetSite() : {});
       const insertIndex = prev.findIndex((block) => block.id === afterBlockId);
       if (insertIndex < 0) return [...prev, nextBlock];
       return [...prev.slice(0, insertIndex + 1), nextBlock, ...prev.slice(insertIndex + 1)];
@@ -305,11 +315,11 @@ export default function App() {
   };
 
   const removeSubmissionBlock = (blockId) => {
-    const setter = isOrders ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
     setter((prev) => {
       if (prev.length <= 1) return prev;
       const next = prev.filter((block) => block.id !== blockId);
-      return next.length ? next : [createSubmissionBlock(1, isOrders ? getDefaultSubmissionTargetSite() : {})];
+      return next.length ? next : [createSubmissionBlock(1, isCreateArticleSection ? getDefaultSubmissionTargetSite() : {})];
     });
     setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setClientSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
@@ -1150,9 +1160,9 @@ export default function App() {
       return;
     }
     const resolvedClientName = ((clients[0]?.name) || "").trim();
-    const requiresTargetSiteSelection = isOrders;
+    const requiresTargetSiteSelection = isCreateArticleSection;
     const validationError = getSubmissionBlockError(block, {
-      orders: isOrders,
+      orders: isCreateArticleSection,
       clientName: resolvedClientName,
       requiresTargetSite: requiresTargetSiteSelection,
     });
@@ -1175,10 +1185,10 @@ export default function App() {
     try {
       setSubmitting(true);
       const formData = buildSubmissionFormData(block, {
-        orders: isOrders,
+        orders: isCreateArticleSection,
         clientName: resolvedClientName,
       });
-      const effectiveSourceType = isOrders ? "google-doc" : (block.source_type || "").trim();
+      const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
       let responseData = null;
       if (effectiveSourceType === "word-doc" && block.docx_file) {
         setUploadProgressBlockId(block.id);
@@ -1202,7 +1212,7 @@ export default function App() {
         responseData = await response.json().catch(() => ({}));
       }
 
-      if (responseData?.job_id && isOrders) {
+      if (responseData?.job_id && isCreateArticleSection) {
         const jobId = responseData.job_id;
         setCreatorJobIds([jobId]);
         setCreatorProgress({
@@ -1435,8 +1445,8 @@ export default function App() {
   const isAdminUser = currentUser.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
-  const isOrders = activeSection === "orders";
-  const isGuestPostsSection = activeSection === "guest-posts";
+  const isCreateArticleSection = activeSection === "create-article";
+  const isSubmitArticleSection = activeSection === "submit-article";
   const activeClient = clients[0] || null;
   const resolvedClientName = ((activeClient?.name) || "").trim();
   const clientTargetSites = getClientTargetSites();
@@ -1555,10 +1565,10 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(isGuestPostsSection || isOrders) ? "request-container" : ""}`.trim()}>
-          {(isGuestPostsSection || isOrders) ? (
+        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+          {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
-              <h1>{isOrders ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
+              <h1>{isCreateArticleSection ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
             </div>
           ) : null}
 
@@ -1637,8 +1647,8 @@ export default function App() {
               weeklyCadenceText={weeklyCadenceText}
               siteMixPreview={siteMixPreview}
               uniqueDomainCount={uniqueSiteDomains.length}
-              onOpenGuestPosts={() => setActiveSection("guest-posts")}
-              onOpenOrders={() => setActiveSection("orders")}
+              onOpenGuestPosts={() => setActiveSection("submit-article")}
+              onOpenOrders={() => setActiveSection("create-article")}
             />
           ) : isWebsitesSection ? (
             <div className="panel form-panel">
@@ -1784,7 +1794,7 @@ export default function App() {
             <div className="panel form-panel request-form-panel">
               <div className="guest-form request-builder-form">
                 <div className="submission-blocks">
-                  {(isOrders ? orderSubmissionBlocks : guestSubmissionBlocks).map((block, blockIndex) => {
+                  {(isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks).map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
                     const blockFilteredClients = isAdminUser
                       ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
@@ -1804,7 +1814,7 @@ export default function App() {
                     const showRemoveControl = blockIndex > 0;
                     return (
                       <div key={block.id} className="submission-block-wrap">
-                        <div className={`submission-block panel ${isOrders ? "order-block" : ""}`.trim()}>
+                        <div className={`submission-block panel ${isCreateArticleSection ? "order-block" : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
@@ -1875,7 +1885,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {isOrders ? (
+                          {isCreateArticleSection ? (
                             <div className="submission-field submission-field-site submission-field-target-site">
                               <label>{t("targetSiteForBacklink")}</label>
                               <input
@@ -1918,7 +1928,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          <div className={`submission-field submission-field-site ${isOrders ? "submission-field-inline" : ""}`.trim()}>
+                          <div className={`submission-field submission-field-site ${isCreateArticleSection ? "submission-field-inline" : ""}`.trim()}>
                             <label>{t("targetWebsite")}</label>
                             <div className="site-suggest-wrap">
                               <input
@@ -1956,7 +1966,7 @@ export default function App() {
                             </div>
                           </div>
 
-                          {!isOrders ? (
+                          {!isCreateArticleSection ? (
                             <div className="submission-field submission-field-type">
                               <label>{t("fileType")}</label>
                               <div className="toggle source-toggle">
@@ -2002,7 +2012,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {!isOrders && block.source_type === "google-doc" ? (
+                          {!isCreateArticleSection && block.source_type === "google-doc" ? (
                             <div className="submission-field submission-field-wide">
                               <label>{t("googleDocLink")}</label>
                               <input
@@ -2013,7 +2023,7 @@ export default function App() {
                                 required
                               />
                             </div>
-                          ) : !isOrders && block.source_type === "word-doc" ? (
+                          ) : !isCreateArticleSection && block.source_type === "word-doc" ? (
                             <div className="submission-field submission-field-wide">
                               <label>{t("fileUpload")}</label>
                               <input
@@ -2028,7 +2038,7 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {isOrders ? (
+                          {isCreateArticleSection ? (
                             <>
                               <div className="submission-field submission-field-inline submission-field-anchor">
                                 <label>{`${t("anchor")} (${t("optional")})`}</label>
@@ -2084,20 +2094,20 @@ export default function App() {
                     type="button"
                     aria-label={t("addAnotherBlock")}
                     onClick={() => {
-                      const currentBlocks = isOrders ? orderSubmissionBlocks : guestSubmissionBlocks;
+                      const currentBlocks = isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks;
                       addSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
                     }}
                     disabled={submitting}
                   >
                     +
                   </button>
-                  {(isOrders ? orderSubmissionBlocks : guestSubmissionBlocks).length > 1 ? (
+                  {(isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks).length > 1 ? (
                     <button
                       className="btn secondary block-control-btn"
                       type="button"
                       aria-label={t("removeBlock")}
                       onClick={() => {
-                        const currentBlocks = isOrders ? orderSubmissionBlocks : guestSubmissionBlocks;
+                        const currentBlocks = isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks;
                         removeSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
                       }}
                       disabled={submitting}
@@ -2731,14 +2741,14 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
-        { id: "guest-posts", label: t("navGuestPosts") },
-        { id: "orders", label: t("navOrders") },
+        { id: "submit-article", label: t("navGuestPosts") },
+        { id: "create-article", label: t("navOrders") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
       ]
     : [
         { id: "dashboard", label: t("navClientDashboard") },
-        { id: "guest-posts", label: t("navGuestPosts") },
-        { id: "orders", label: t("navOrders") },
+        { id: "submit-article", label: t("navGuestPosts") },
+        { id: "create-article", label: t("navOrders") },
       ];
 
   return (

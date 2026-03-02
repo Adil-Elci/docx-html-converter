@@ -688,8 +688,8 @@ def get_automation_upload(file_name: str) -> FileResponse:
     return FileResponse(path=file_path, media_type=media_type, filename=safe_name)
 
 
-@router.post("/guest-post-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)
-async def process_guest_post_webhook(
+@router.post("/submit-article-webhook", response_model=AutomationGuestPostOut, status_code=status.HTTP_200_OK)
+async def process_submit_article_webhook(
     request: Request,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user),

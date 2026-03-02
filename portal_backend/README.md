@@ -64,7 +64,7 @@ Enforced behavior:
   - `GET/POST/PATCH /submissions*`
   - `GET /jobs*`, `GET /jobs/{id}*`
   - `GET /automation/status`
-- `POST /automation/guest-post-webhook` remains compatible for unauthenticated external callers (Ninja/Make), but authenticated client users are scoped to their allowed client/site mappings and cannot run `execution_mode=sync`.
+- `POST /automation/submit-article-webhook` remains compatible for unauthenticated external callers (Ninja/Make), but authenticated client users are scoped to their allowed client/site mappings and cannot run `execution_mode=sync`.
 
 ## Admin User Management + Hardening (Phase 4)
 Admin-only endpoints:
@@ -161,7 +161,7 @@ Optional:
 
 ## Make.com Replacement Webhook
 Endpoint:
-- `POST /automation/guest-post-webhook`
+- `POST /automation/submit-article-webhook`
 - Content types supported: `application/json`, `application/x-www-form-urlencoded`, `multipart/form-data`
 
 Supported payload fields:

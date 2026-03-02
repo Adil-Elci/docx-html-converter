@@ -83,10 +83,6 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const SECTION_ALIASES = {
-  "guest-posts": "submit-article",
-  "orders": "create-article",
-};
 const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
@@ -111,17 +107,11 @@ const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "dashbo
 
 const getAllowedSectionsForRole = (role) => (role === "admin" ? ADMIN_SECTIONS : CLIENT_SECTIONS);
 
-const normalizeSectionId = (section) => {
-  const value = (section || "").trim();
-  return SECTION_ALIASES[value] || value;
-};
-
-const getStoredSectionForRole = (role) => normalizeSectionId(localStorage.getItem(`active_section_${role}`) || "");
+const getStoredSectionForRole = (role) => (localStorage.getItem(`active_section_${role}`) || "").trim();
 
 const resolveSectionForRole = (role, section) => {
-  const normalized = normalizeSectionId(section);
   const allowed = getAllowedSectionsForRole(role);
-  return allowed.includes(normalized) ? normalized : getDefaultSectionForRole(role);
+  return allowed.includes(section) ? section : getDefaultSectionForRole(role);
 };
 
 const getLandingSectionForRole = (role) =>
@@ -202,10 +192,10 @@ export default function App() {
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
-  const guestBlockIdRef = useRef(2);
-  const orderBlockIdRef = useRef(2);
-  const [guestSubmissionBlocks, setGuestSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
-  const [orderSubmissionBlocks, setOrderSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
+  const submitArticleBlockIdRef = useRef(2);
+  const createArticleBlockIdRef = useRef(2);
+  const [submitArticleSubmissionBlocks, setSubmitArticleSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
+  const [createArticleSubmissionBlocks, setCreateArticleSubmissionBlocks] = useState(() => [createSubmissionBlock(1)]);
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminUserForm, setAdminUserForm] = useState(emptyAdminUserForm());
   const [adminUserEdits, setAdminUserEdits] = useState({});
@@ -262,11 +252,11 @@ export default function App() {
 
   const resetSubmissionBlocks = () => {
     if (isCreateArticleSection) {
-      orderBlockIdRef.current = 2;
-      setOrderSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
+      createArticleBlockIdRef.current = 2;
+      setCreateArticleSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     } else {
-      guestBlockIdRef.current = 2;
-      setGuestSubmissionBlocks([createSubmissionBlock(1)]);
+      submitArticleBlockIdRef.current = 2;
+      setSubmitArticleSubmissionBlocks([createSubmissionBlock(1)]);
     }
     setSiteSuggestionsBlockId(null);
     setClientSuggestionsBlockId(null);
@@ -279,10 +269,10 @@ export default function App() {
     setSites([]);
     setError("");
     setSuccess("");
-    guestBlockIdRef.current = 2;
-    orderBlockIdRef.current = 2;
-    setGuestSubmissionBlocks([createSubmissionBlock(1)]);
-    setOrderSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
+    submitArticleBlockIdRef.current = 2;
+    createArticleBlockIdRef.current = 2;
+    setSubmitArticleSubmissionBlocks([createSubmissionBlock(1)]);
+    setCreateArticleSubmissionBlocks([createSubmissionBlock(1, getDefaultSubmissionTargetSite())]);
     setSiteSuggestionsBlockId(null);
     setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
@@ -297,13 +287,13 @@ export default function App() {
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
-    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
 
   const addSubmissionBlock = (afterBlockId) => {
-    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
-    const idRef = isCreateArticleSection ? orderBlockIdRef : guestBlockIdRef;
+    const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
+    const idRef = isCreateArticleSection ? createArticleBlockIdRef : submitArticleBlockIdRef;
     setter((prev) => {
       const nextId = idRef.current;
       idRef.current += 1;
@@ -315,7 +305,7 @@ export default function App() {
   };
 
   const removeSubmissionBlock = (blockId) => {
-    const setter = isCreateArticleSection ? setOrderSubmissionBlocks : setGuestSubmissionBlocks;
+    const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     setter((prev) => {
       if (prev.length <= 1) return prev;
       const next = prev.filter((block) => block.id !== blockId);
@@ -334,7 +324,7 @@ export default function App() {
     setShowSubmissionErrorModal(true);
   };
 
-  const getSubmissionBlockError = (block, { orders, clientName, requiresTargetSite }) => {
+  const getSubmissionBlockError = (block, { isCreateArticle, clientName, requiresTargetSite }) => {
     const publishingSite = (block.publishing_site || "").trim();
     if (!publishingSite) return t("errorTargetRequired");
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
@@ -342,33 +332,33 @@ export default function App() {
     if (requiresTargetSite && !(block.target_site_id || "").trim() && !(block.target_site_url || "").trim()) {
       return t("errorClientTargetSiteRequired");
     }
-    const sourceType = orders ? "" : (block.source_type || "").trim();
-    if (!orders && !sourceType) return t("errorFileTypeRequired");
-    if (!orders && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
+    const sourceType = isCreateArticle ? "" : (block.source_type || "").trim();
+    if (!isCreateArticle && !sourceType) return t("errorFileTypeRequired");
+    if (!isCreateArticle && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
     if (sourceType === "word-doc" && !block.docx_file) return t("errorDocxRequired");
     return "";
   };
 
-  const buildSubmissionFormData = (block, { orders, clientName }) => {
+  const buildSubmissionFormData = (block, { isCreateArticle, clientName }) => {
     const formData = new FormData();
-    const sourceType = orders ? "google-doc" : (block.source_type || "").trim();
+    const sourceType = isCreateArticle ? "google-doc" : (block.source_type || "").trim();
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
     formData.append("publishing_site", block.publishing_site.trim());
     formData.append("client_name", effectiveClientName);
-    if (orders) {
+    if (isCreateArticle) {
       const targetSiteId = (block.target_site_id || "").trim();
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetSiteId)) {
         formData.append("target_site_id", targetSiteId);
       }
       if ((block.target_site_url || "").trim()) formData.append("target_site_url", block.target_site_url.trim());
     }
-    formData.append("request_kind", orders ? "order" : "guest_post");
+    formData.append("request_kind", isCreateArticle ? "order" : "guest_post");
     formData.append("source_type", sourceType);
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
-    if (orders) formData.append("creator_mode", "true");
-    if (!orders && sourceType === "google-doc") {
+    if (isCreateArticle) formData.append("creator_mode", "true");
+    if (!isCreateArticle && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
     } else if (sourceType === "word-doc" && block.docx_file) {
       formData.append("docx_file", block.docx_file);
@@ -1123,7 +1113,7 @@ export default function App() {
             failed: false,
             canceled: true,
             percent: 100,
-            label: t("progressCanceled"),
+            label: t("createArticleCanceled"),
           };
         });
         return next;
@@ -1156,13 +1146,13 @@ export default function App() {
     setSubmissionFieldErrors({});
 
     if (activeSection === "admin") {
-      setError(t("errorSelectClientSection"));
+      setError(t("errorSelectArticleSection"));
       return;
     }
     const resolvedClientName = ((clients[0]?.name) || "").trim();
     const requiresTargetSiteSelection = isCreateArticleSection;
     const validationError = getSubmissionBlockError(block, {
-      orders: isCreateArticleSection,
+      isCreateArticle: isCreateArticleSection,
       clientName: resolvedClientName,
       requiresTargetSite: requiresTargetSiteSelection,
     });
@@ -1185,7 +1175,7 @@ export default function App() {
     try {
       setSubmitting(true);
       const formData = buildSubmissionFormData(block, {
-        orders: isCreateArticleSection,
+        isCreateArticle: isCreateArticleSection,
         clientName: resolvedClientName,
       });
       const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
@@ -1193,11 +1183,11 @@ export default function App() {
       if (effectiveSourceType === "word-doc" && block.docx_file) {
         setUploadProgressBlockId(block.id);
         setUploadProgress(0);
-        responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/guest-post-webhook`, formData);
+        responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData);
         setUploadProgress(100);
       } else {
         setUploadProgressBlockId(null);
-        const response = await fetch(`${baseApiUrl}/automation/guest-post-webhook`, {
+        const response = await fetch(`${baseApiUrl}/automation/submit-article-webhook`, {
           method: "POST",
           credentials: "include",
           body: formData,
@@ -1486,8 +1476,8 @@ export default function App() {
       return url.includes(normalizedQuery) || name.includes(normalizedQuery);
     });
   };
-  const suggestedGuestPostsMonthly = Math.max(4, Math.min(36, sites.length * 2));
-  const suggestedOrdersMonthly = Math.max(2, Math.min(18, Math.ceil(Math.max(sites.length, 1) / 2)));
+  const suggestedSubmittedArticlesMonthly = Math.max(4, Math.min(36, sites.length * 2));
+  const suggestedCreatedArticlesMonthly = Math.max(2, Math.min(18, Math.ceil(Math.max(sites.length, 1) / 2)));
   const weeklyCadenceText = sites.length >= 14
     ? t("clientDashboardCadenceLarge")
     : sites.length >= 6
@@ -1568,7 +1558,7 @@ export default function App() {
         <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
-              <h1>{isCreateArticleSection ? t("heroCreateOrder") : t("heroCreateGuestPost")}</h1>
+              <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
             </div>
           ) : null}
 
@@ -1642,13 +1632,13 @@ export default function App() {
               targetSiteCount={clientTargetSitesCount}
               targetSitePreview={clientTargetSitePreview}
               readySitesLabel={readySitesLabel}
-              suggestedGuestPostsMonthly={suggestedGuestPostsMonthly}
-              suggestedOrdersMonthly={suggestedOrdersMonthly}
+              suggestedSubmittedArticlesMonthly={suggestedSubmittedArticlesMonthly}
+              suggestedCreatedArticlesMonthly={suggestedCreatedArticlesMonthly}
               weeklyCadenceText={weeklyCadenceText}
               siteMixPreview={siteMixPreview}
               uniqueDomainCount={uniqueSiteDomains.length}
-              onOpenGuestPosts={() => setActiveSection("submit-article")}
-              onOpenOrders={() => setActiveSection("create-article")}
+              onOpenSubmitArticles={() => setActiveSection("submit-article")}
+              onOpenCreateArticles={() => setActiveSection("create-article")}
             />
           ) : isWebsitesSection ? (
             <div className="panel form-panel">
@@ -1700,7 +1690,7 @@ export default function App() {
                         <span>{item.client_name}</span>
                         <span>{item.site_url || item.site_name}</span>
                         <span>{item.content_title || t("contentTitleFallback")}</span>
-                        <span>{requestKind === "order" ? t("jobTypeOrder") : t("jobTypeGuestPost")}</span>
+                        <span>{requestKind === "order" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
                         <div className="pending-actions">
                           {draftReviewUrl ? (
                             <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
@@ -1792,9 +1782,9 @@ export default function App() {
             </div>
           ) : (
             <div className="panel form-panel request-form-panel">
-              <div className="guest-form request-builder-form">
+              <div className="submit-article-form request-builder-form">
                 <div className="submission-blocks">
-                  {(isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks).map((block, blockIndex) => {
+                  {(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).map((block, blockIndex) => {
                     const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
                     const blockFilteredClients = isAdminUser
                       ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
@@ -1814,7 +1804,7 @@ export default function App() {
                     const showRemoveControl = blockIndex > 0;
                     return (
                       <div key={block.id} className="submission-block-wrap">
-                        <div className={`submission-block panel ${isCreateArticleSection ? "order-block" : ""}`.trim()}>
+                        <div className={`submission-block panel ${isCreateArticleSection ? "create-article-block" : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
                           </div>
@@ -2094,20 +2084,20 @@ export default function App() {
                     type="button"
                     aria-label={t("addAnotherBlock")}
                     onClick={() => {
-                      const currentBlocks = isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks;
+                      const currentBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
                       addSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
                     }}
                     disabled={submitting}
                   >
                     +
                   </button>
-                  {(isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks).length > 1 ? (
+                  {(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).length > 1 ? (
                     <button
                       className="btn secondary block-control-btn"
                       type="button"
                       aria-label={t("removeBlock")}
                       onClick={() => {
-                        const currentBlocks = isCreateArticleSection ? orderSubmissionBlocks : guestSubmissionBlocks;
+                        const currentBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
                         removeSubmissionBlock(currentBlocks[currentBlocks.length - 1]?.id);
                       }}
                       disabled={submitting}
@@ -2214,7 +2204,7 @@ function CreatorProgressModal({
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="creator-progress-title">
       <div className="progress-modal-card panel">
-        <h3 id="creator-progress-title">{t("progressTitle")}</h3>
+        <h3 id="creator-progress-title">{t("createArticleProgressTitle")}</h3>
 
         <div className="progress-steps">
           {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
@@ -2254,7 +2244,7 @@ function CreatorProgressModal({
               </button>
             ) : (
               <div className="cancel-confirm-row">
-                <span className="muted-text">{t("cancelConfirm")}</span>
+                <span className="muted-text">{t("cancelCreateArticleConfirm")}</span>
                 <div className="cancel-confirm-actions">
                   <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
                     {canceling ? t("canceling") : t("cancel")}
@@ -2272,7 +2262,7 @@ function CreatorProgressModal({
         {allDone && (
           <div className="progress-modal-actions">
             <p className="muted-text">
-              {anyCanceled ? t("progressCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
+              {anyCanceled ? t("createArticleCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
             </p>
             <button className="btn" type="button" onClick={onClose}>
               {t("close")}
@@ -2504,13 +2494,13 @@ function ClientDashboardPanel({
   targetSiteCount,
   targetSitePreview,
   readySitesLabel,
-  suggestedGuestPostsMonthly,
-  suggestedOrdersMonthly,
+  suggestedSubmittedArticlesMonthly,
+  suggestedCreatedArticlesMonthly,
   weeklyCadenceText,
   siteMixPreview,
   uniqueDomainCount,
-  onOpenGuestPosts,
-  onOpenOrders,
+  onOpenSubmitArticles,
+  onOpenCreateArticles,
 }) {
   return (
     <div className="panel form-panel client-dashboard-panel">
@@ -2546,12 +2536,12 @@ function ClientDashboardPanel({
           <p className="muted-text">{t("clientDashboardMomentumBody")}</p>
           <div className="client-dashboard-metrics">
             <div>
-              <span className="stat-label">{t("navGuestPosts")}</span>
-              <strong>{suggestedGuestPostsMonthly}</strong>
+              <span className="stat-label">{t("navSubmitArticle")}</span>
+              <strong>{suggestedSubmittedArticlesMonthly}</strong>
             </div>
             <div>
-              <span className="stat-label">{t("navOrders")}</span>
-              <strong>{suggestedOrdersMonthly}</strong>
+              <span className="stat-label">{t("navCreateArticle")}</span>
+              <strong>{suggestedCreatedArticlesMonthly}</strong>
             </div>
           </div>
         </div>
@@ -2576,11 +2566,11 @@ function ClientDashboardPanel({
           <h3>{t("clientDashboardMixTitle")}</h3>
           <p className="muted-text">{t("clientDashboardMixBody")}</p>
           <div className="client-dashboard-actions">
-            <button className="btn" type="button" onClick={onOpenGuestPosts}>
-              {t("clientDashboardCreateGuestPostsCta")}
+            <button className="btn" type="button" onClick={onOpenSubmitArticles}>
+              {t("clientDashboardSubmitArticlesCta")}
             </button>
-            <button className="btn secondary" type="button" onClick={onOpenOrders}>
-              {t("clientDashboardCreateOrdersCta")}
+            <button className="btn secondary" type="button" onClick={onOpenCreateArticles}>
+              {t("clientDashboardCreateArticlesCta")}
             </button>
           </div>
         </div>
@@ -2741,14 +2731,14 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
         { id: "clients", label: t("navClients") },
-        { id: "submit-article", label: t("navGuestPosts") },
-        { id: "create-article", label: t("navOrders") },
+        { id: "submit-article", label: t("navSubmitArticle") },
+        { id: "create-article", label: t("navCreateArticle") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
       ]
     : [
         { id: "dashboard", label: t("navClientDashboard") },
-        { id: "submit-article", label: t("navGuestPosts") },
-        { id: "create-article", label: t("navOrders") },
+        { id: "submit-article", label: t("navSubmitArticle") },
+        { id: "create-article", label: t("navCreateArticle") },
       ];
 
   return (

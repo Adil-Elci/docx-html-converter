@@ -291,6 +291,16 @@ export default function App() {
     setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
 
+  const updateActiveSubmissionBlocks = (updater) => {
+    const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
+    setter((prev) => updater(prev));
+  };
+
+  const updateAllSubmissionBlocks = (updater) => {
+    setSubmitArticleSubmissionBlocks((prev) => updater(prev));
+    setCreateArticleSubmissionBlocks((prev) => updater(prev));
+  };
+
   const addSubmissionBlock = (afterBlockId) => {
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     const idRef = isCreateArticleSection ? createArticleBlockIdRef : submitArticleBlockIdRef;
@@ -372,7 +382,7 @@ export default function App() {
     if (!targetSites.length) return;
     const validIds = new Set(targetSites.map((row) => String(row.id || "")).filter(Boolean));
     const primary = targetSites.find((row) => row?.is_primary) || targetSites[0];
-    setSubmissionBlocks((prev) => prev.map((block) => {
+    updateAllSubmissionBlocks((prev) => prev.map((block) => {
       const currentId = String(block.target_site_id || "");
       if (currentId && validIds.has(currentId)) {
         const selected = targetSites.find((row) => String(row.id || "") === currentId);
@@ -393,7 +403,7 @@ export default function App() {
     if (currentUser?.role !== "client") return;
     const fallbackClientName = ((clients[0]?.name) || "").trim();
     if (!fallbackClientName) return;
-    setSubmissionBlocks((prev) => prev.map((block) => (
+    updateAllSubmissionBlocks((prev) => prev.map((block) => (
       (block.client_name || "").trim() ? block : { ...block, client_name: fallbackClientName }
     )));
   }, [clients, currentUser?.role]);
@@ -1822,7 +1832,7 @@ export default function App() {
                                   }, 120)}
                                   onChange={(e) => {
                                     const nextClientName = e.target.value;
-                                    setSubmissionBlocks((prev) => prev.map((item) => (
+                                    updateActiveSubmissionBlocks((prev) => prev.map((item) => (
                                       item.id === block.id
                                         ? {
                                             ...item,
@@ -1852,7 +1862,7 @@ export default function App() {
                                             (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                                           );
                                           const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
-                                          setSubmissionBlocks((prev) => prev.map((item) => (
+                                          updateActiveSubmissionBlocks((prev) => prev.map((item) => (
                                             item.id === block.id
                                               ? {
                                                   ...item,
@@ -1891,7 +1901,7 @@ export default function App() {
                                     return urlValue === nextUrl || domainUrlValue === nextUrl;
                                   });
                                   const nextId = nextTarget ? String(nextTarget.id || "") : "";
-                                  setSubmissionBlocks((prev) => prev.map((item) => (
+                                  updateActiveSubmissionBlocks((prev) => prev.map((item) => (
                                     item.id === block.id
                                       ? {
                                           ...item,

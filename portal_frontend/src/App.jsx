@@ -114,6 +114,9 @@ const resolveSectionForRole = (role, section) => {
   return allowed.includes(section) ? section : getDefaultSectionForRole(role);
 };
 
+const getLandingSectionForRole = (role) =>
+  role === "admin" ? getDefaultSectionForRole(role) : resolveSectionForRole(role, getStoredSectionForRole(role));
+
 async function readApiError(response, fallbackMessage) {
   const rawBody = await response.text();
   try {
@@ -647,7 +650,7 @@ export default function App() {
         }
         const user = await response.json();
         setCurrentUser(user);
-        setActiveSection(resolveSectionForRole(user.role, getStoredSectionForRole(user.role)));
+        setActiveSection(getLandingSectionForRole(user.role));
         setLoading(true);
         await loadAll(user);
         if (user.role === "admin") {
@@ -904,7 +907,7 @@ export default function App() {
       setShowResetRequestForm(false);
       setResetRequestMessage("");
       setResetConfirmMessage("");
-      setActiveSection(resolveSectionForRole(user.role, getStoredSectionForRole(user.role)));
+      setActiveSection(getLandingSectionForRole(user.role));
       setLoading(true);
       await loadAll(user);
       if (user.role === "admin") {

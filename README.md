@@ -12,6 +12,12 @@ Migration ownership:
 - Database container never runs Alembic migrations.
 - Backend deploys must run from `portal_backend/` Dockerfile entrypoint to execute `alembic upgrade head`.
 
+Dokploy exec command (inside backend container):
+```bash
+cd /app
+/opt/venv/bin/alembic -c /app/alembic.ini upgrade head
+```
+
 ## Portal Backend (quick run)
 ```bash
 cd portal_backend

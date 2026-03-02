@@ -82,6 +82,12 @@ Notes:
 - Deploy startup runs: wait for Postgres, advisory lock, `alembic upgrade head`, unlock, start API.
 - Converter and database containers do not run Alembic.
 
+Manual Alembic (Dokploy exec shell):
+```bash
+cd /app
+/opt/venv/bin/alembic -c /app/alembic.ini upgrade head
+```
+
 ## Docker / Dokploy
 - Container startup is handled by `entrypoint.sh`.
 - Docker image uses `ENTRYPOINT ["/app/entrypoint.sh"]`.

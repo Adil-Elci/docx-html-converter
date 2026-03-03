@@ -576,7 +576,7 @@ input:disabled {
 }
 
 .request-form-panel .submission-blocks {
-  gap: 10px;
+  gap: 0;
 }
 
 .submission-block-wrap {
@@ -596,11 +596,16 @@ input:disabled {
 .request-form-panel .submission-block {
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  padding: 12px 0;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   background: transparent;
   box-shadow: none;
+}
+
+.request-form-panel .submission-block:last-child {
+  border-bottom: none;
 }
 
 .submission-block-header {
@@ -621,6 +626,7 @@ input:disabled {
   justify-content: flex-end;
   align-self: end;
   grid-column: auto;
+  min-width: 0;
 }
 
 .submission-block-controls {
@@ -738,7 +744,9 @@ input:disabled {
 
 .request-builder-form .submit-btn {
   justify-self: end;
-  min-width: 180px;
+  min-width: 0;
+  width: 100%;
+  max-width: 220px;
 }
 
 .block-control-btn {
@@ -816,22 +824,22 @@ input:disabled {
 }
 
 .request-container .request-form-panel .submission-blocks {
-  gap: 14px;
+  gap: 0;
 }
 
 .request-container .request-form-panel .submission-block {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
-  padding: 10px 0 6px;
+  padding: 12px 0;
   border-radius: 0;
   border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: transparent;
   box-shadow: none;
 }
 
 .request-container .request-form-panel .submission-block + .submission-block {
-  padding-top: 18px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding-top: 12px;
 }
 
 .request-container .request-form-panel .submission-block-header h3 {

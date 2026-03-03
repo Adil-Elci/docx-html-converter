@@ -537,11 +537,11 @@ export default function App() {
       setPublishedLoading(true);
       const params = new URLSearchParams();
       const nextQuery = (overrides.query ?? publishedQuery).trim();
-      const nextClientId = (overrides.clientId ?? publishedClientId || "").trim();
-      const nextSiteId = (overrides.siteId ?? publishedSiteId || "").trim();
+      const nextClientId = ((overrides.clientId ?? publishedClientId) || "").trim();
+      const nextSiteId = ((overrides.siteId ?? publishedSiteId) || "").trim();
       const nextLimit = Number(overrides.limit ?? publishedLimit) || publishedLimit;
       const nextOffset = Number(overrides.offset ?? publishedOffset) || 0;
-      const nextSort = (overrides.sort ?? publishedSort || "published_at").trim();
+      const nextSort = ((overrides.sort ?? publishedSort) || "published_at").trim();
       params.set("limit", String(nextLimit));
       params.set("offset", String(nextOffset));
       if (nextSort) params.set("sort", nextSort);

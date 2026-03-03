@@ -903,6 +903,8 @@ def run_create_article_pipeline(
     images = creator_output.get("images") or []
 
     title = str(phase5.get("meta_title") or phase5.get("title") or "").strip()
+    if title:
+        title = unescape(title)
     excerpt = str(phase5.get("excerpt") or "").strip()
     slug = str(phase5.get("slug") or "").strip()
     article_html = str(phase5.get("article_html") or "").strip()

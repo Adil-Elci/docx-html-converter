@@ -847,6 +847,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         anchor_text = phase4.get("anchor_text_final") or "this resource"
         art_html = _insert_backlink(art_html, backlink_url, anchor_text, phase4["backlink_placement"])
         warnings.append("backlink_inserted_post_generation")
+    art_html = _strip_h1_tags(art_html)
     article_payload["article_html"] = art_html
 
     phase5 = article_payload

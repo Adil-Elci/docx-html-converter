@@ -690,6 +690,17 @@ export default function App() {
     return date.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
   };
 
+  const formatPublishedStatus = (value) => {
+    const normalized = (value || "").trim().toLowerCase();
+    if (!normalized) return t("notAvailable");
+    if (normalized === "succeeded" || normalized === "published" || normalized === "publish") {
+      return t("publishedStatusPublished");
+    }
+    if (normalized === "pending_approval") return t("publishedStatusPending");
+    if (normalized === "failed") return t("publishedStatusFailed");
+    return normalized.replace(/_/g, " ");
+  };
+
   const applyPublishedSearch = () => {
     setPublishedOffset(0);
     loadPublishedArticles(currentUser, { query: publishedQuery.trim(), offset: 0 });
@@ -1660,7 +1671,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`container ${isAdminPendingSection ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
               <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
@@ -1770,7 +1781,7 @@ export default function App() {
               </div>
             </div>
           ) : isPublishedArticlesSection ? (
-            <div className="panel form-panel">
+            <div className="panel form-panel published-panel">
               <h2>{t("publishedArticlesTitle")}</h2>
               <div className="published-controls">
                 <div className="published-field">
@@ -1877,6 +1888,7 @@ export default function App() {
                   <span>{t("publishedUrlLabel")}</span>
                   <span>{t("publishedClientLabel")}</span>
                   <span>{t("publishedSiteLabel")}</span>
+                  <span>{t("publishedStatusLabel")}</span>
                   <span>{t("publishedByLabel")}</span>
                   <span>{t("publishedAtLabel")}</span>
                 </div>
@@ -1885,6 +1897,7 @@ export default function App() {
                   const publishedBy = (item?.published_by || "").trim() || t("publishedBySystem");
                   const clientName = (item?.client_name || "").trim() || item?.client_id || t("notAvailable");
                   const siteLabel = (item?.site_url || "").trim() || (item?.site_name || "").trim() || item?.site_id || t("notAvailable");
+                  const statusLabel = formatPublishedStatus(item?.status);
                   return (
                     <div key={item.job_id} className="published-item-row">
                       {url ? (
@@ -1896,6 +1909,7 @@ export default function App() {
                       )}
                       <span>{clientName}</span>
                       <span>{siteLabel}</span>
+                      <span>{statusLabel}</span>
                       <span>{publishedBy}</span>
                       <span>{formatPublishedAt(item?.published_at)}</span>
                     </div>

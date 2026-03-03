@@ -1663,7 +1663,7 @@ input:disabled {
 .published-list-header,
 .published-item-row {
   display: grid;
-  grid-template-columns: 2.2fr 1fr 1.2fr 1.1fr 1.1fr;
+  grid-template-columns: 2.2fr 1fr 1.2fr 0.9fr 1fr 1.1fr;
   gap: 10px;
   align-items: center;
 }
@@ -1699,6 +1699,10 @@ input:disabled {
 
 .published-link:hover {
   text-decoration: underline;
+}
+
+.published-panel {
+  max-width: none;
 }
 
 .published-controls {

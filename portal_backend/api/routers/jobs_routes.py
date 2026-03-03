@@ -342,6 +342,7 @@ def list_published_articles(
                 wp_post_url=url,
                 published_by=published_by,
                 published_at=published_at,
+                status=job.job_status,
                 client_id=client.id,
                 client_name=(client.name or "").strip(),
                 site_id=site.id,

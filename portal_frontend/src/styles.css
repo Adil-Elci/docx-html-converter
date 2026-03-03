@@ -370,6 +370,12 @@ body {
   box-shadow: var(--shadow);
 }
 
+.form-panel .panel {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -613,7 +619,8 @@ input:disabled {
 .submission-block-actions {
   display: flex;
   justify-content: flex-end;
-  grid-column: 1 / -1;
+  align-self: end;
+  grid-column: auto;
 }
 
 .submission-block-controls {
@@ -1479,6 +1486,39 @@ input:disabled {
   display: grid;
   gap: 8px;
   padding: 14px;
+}
+
+.form-panel .admin-summary-card,
+.form-panel .admin-user-card,
+.form-panel .admin-entity-card,
+.form-panel .pending-item-wrap,
+.form-panel .published-item-row,
+.form-panel .client-dashboard-card,
+.form-panel .client-dashboard-metrics > div {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.form-panel .admin-summary-grid,
+.form-panel .admin-entity-list,
+.form-panel .admin-users-list,
+.form-panel .pending-list-table,
+.form-panel .published-list-table,
+.form-panel .client-dashboard-grid {
+  gap: 0;
+}
+
+.form-panel .admin-summary-card:last-child,
+.form-panel .admin-user-card:last-child,
+.form-panel .admin-entity-card:last-child,
+.form-panel .pending-item-wrap:last-child,
+.form-panel .published-item-row:last-child,
+.form-panel .client-dashboard-card:last-child {
+  border-bottom: none;
 }
 
 .admin-summary-card h3 {

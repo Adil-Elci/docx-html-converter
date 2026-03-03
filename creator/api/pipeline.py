@@ -314,7 +314,7 @@ def _generate_article_by_sections(
 
         sections_html.append(_normalize_section_html(h2, h3s_list, raw))
 
-    article_html = f"<h1>{phase4.get('h1','')}</h1>" + intro_html + "".join(sections_html)
+    article_html = intro_html + "".join(sections_html)
     article_html = _strip_non_backlinks(article_html, backlink_url)
     if backlink_url and anchor_text and backlink_url not in article_html:
         article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
@@ -549,6 +549,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     phase_start = time.time()
     logger.info("creator.phase3.start")
     safe_exclude = list(exclude_topics or [])
+    requested_topic = (topic or "").strip()
     system_prompt = (
         "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
         "Avoid promotional topics and exact match money keywords. "
@@ -566,7 +567,8 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         f"{exclude_block}"
         f"Allowed topics: {phase2['allowed_topics']}\n"
         f"Target keyword cluster: {keyword_cluster}\n"
-        f"Requested topic (optional): {topic or ''}\n"
+        f"Requested topic (optional): {requested_topic}\n"
+        "If a requested topic is provided, you MUST use it verbatim as final_article_topic.\n"
         "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
         "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"
     )
@@ -583,19 +585,23 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             max_tokens=500,
             temperature=phase3_temperature,
         )
+        resolved_topic = requested_topic or (llm_out.get("final_article_topic") or "")
+        resolved_primary = llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else "")
+        if requested_topic:
+            resolved_primary = requested_topic
         phase3 = {
-            "final_article_topic": llm_out.get("final_article_topic") or (topic or ""),
+            "final_article_topic": resolved_topic,
             "search_intent_type": llm_out.get("search_intent_type") or "informational",
-            "primary_keyword": llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else ""),
+            "primary_keyword": resolved_primary,
             "secondary_keywords": llm_out.get("secondary_keywords") or [],
         }
     except LLMError as exc:
         warnings.append(f"phase3_llm_failed:{exc}")
-        fallback_topic = topic or (phase2["allowed_topics"][0] if phase2["allowed_topics"] else "Industry insights")
+        fallback_topic = requested_topic or (phase2["allowed_topics"][0] if phase2["allowed_topics"] else "Industry insights")
         phase3 = {
             "final_article_topic": fallback_topic,
             "search_intent_type": "informational",
-            "primary_keyword": keyword_cluster[0] if keyword_cluster else fallback_topic,
+            "primary_keyword": requested_topic or (keyword_cluster[0] if keyword_cluster else fallback_topic),
             "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
         }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)

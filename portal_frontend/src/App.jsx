@@ -1958,6 +1958,7 @@ export default function App() {
                   <span>{t("targetWebsiteLabel")}</span>
                   <span>{t("contentTitleLabel")}</span>
                   <span>{t("jobTypeLabel")}</span>
+                  <span>{t("createdAtLabel")}</span>
                   <span>{t("actionsLabel")}</span>
                 </div>
                 {pendingJobs.map((item) => {
@@ -1970,6 +1971,7 @@ export default function App() {
                         <span>{item.site_url || item.site_name}</span>
                         <span>{item.content_title || t("contentTitleFallback")}</span>
                         <span>{requestKind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
+                        <span>{formatPublishedAt(item?.created_at)}</span>
                         <div className="pending-actions">
                           {draftReviewUrl ? (
                             <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">

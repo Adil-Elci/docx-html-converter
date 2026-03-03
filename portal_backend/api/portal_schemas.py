@@ -685,6 +685,25 @@ class JobOut(BaseModel):
     updated_at: datetime
 
 
+class PublishedArticleOut(BaseModel):
+    job_id: UUID
+    wp_post_url: str
+    published_by: Optional[str]
+    published_at: Optional[datetime]
+    client_id: UUID
+    client_name: str
+    site_id: UUID
+    site_name: str
+    site_url: str
+
+
+class PublishedArticlesPageOut(BaseModel):
+    items: List[PublishedArticleOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class JobEventCreate(BaseModel):
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)

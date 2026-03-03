@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
@@ -33,6 +34,8 @@ from ..portal_schemas import (
     JobEventOut,
     JobOut,
     JobUpdate,
+    PublishedArticleOut,
+    PublishedArticlesPageOut,
     PendingJobOut,
     PendingJobPublishOut,
     PendingJobRegenerateImageOut,
@@ -254,6 +257,99 @@ def list_jobs(
         query = query.filter(Job.job_status == job_status.strip().lower())
     jobs = query.order_by(Job.created_at.desc()).all()
     return [_job_to_out(job) for job in jobs]
+
+
+@router.get("/published", response_model=PublishedArticlesPageOut)
+def list_published_articles(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    q: Optional[str] = Query(default=None),
+    client_id: Optional[UUID] = Query(default=None),
+    site_id: Optional[UUID] = Query(default=None),
+    sort: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> PublishedArticlesPageOut:
+    query = (
+        db.query(Job, Client, Site)
+        .join(Client, Client.id == Job.client_id)
+        .join(Site, Site.id == Job.site_id)
+        .filter(
+            Job.job_status == "succeeded",
+            Job.wp_post_url.isnot(None),
+            Job.wp_post_url != "",
+        )
+    )
+    if client_id is not None:
+        query = query.filter(Job.client_id == client_id)
+    if site_id is not None:
+        query = query.filter(Job.site_id == site_id)
+    if q:
+        cleaned = q.strip().lower()
+        if cleaned:
+            like = f"%{cleaned}%"
+            query = query.filter(
+                or_(
+                    func.lower(Job.wp_post_url).like(like),
+                    func.lower(func.coalesce(Job.approved_by_name_snapshot, "")).like(like),
+                    func.lower(func.coalesce(Client.name, "")).like(like),
+                    func.lower(func.coalesce(Site.name, "")).like(like),
+                    func.lower(func.coalesce(Site.site_url, "")).like(like),
+                )
+            )
+
+    total = query.count()
+    normalized_sort = (sort or "").strip().lower()
+    if normalized_sort and normalized_sort not in {"published_at", "url"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="sort must be published_at or url.")
+
+    if normalized_sort == "url":
+        ordering = (func.lower(Job.wp_post_url).asc(), Job.created_at.desc())
+    else:
+        ordering = (Job.approved_at.desc().nullslast(), Job.created_at.desc())
+
+    rows = query.order_by(*ordering).offset(offset).limit(limit).all()
+    if not rows:
+        return PublishedArticlesPageOut(items=[], total=total, limit=limit, offset=offset)
+
+    job_ids = [job.id for job, _, _ in rows]
+    event_rows = (
+        db.query(JobEvent.job_id, JobEvent.created_at)
+        .filter(
+            JobEvent.job_id.in_(job_ids),
+            JobEvent.event_type.in_(("wp_post_updated", "wp_post_created")),
+        )
+        .order_by(JobEvent.created_at.desc())
+        .all()
+    )
+
+    published_at_map: dict[UUID, datetime] = {}
+    for job_id_value, created_at in event_rows:
+        if job_id_value in published_at_map:
+            continue
+        published_at_map[job_id_value] = created_at
+
+    out: List[PublishedArticleOut] = []
+    for job, client, site in rows:
+        url = (job.wp_post_url or "").strip()
+        if not url:
+            continue
+        published_by = (job.approved_by_name_snapshot or "").strip() or None
+        published_at = job.approved_at or published_at_map.get(job.id)
+        out.append(
+            PublishedArticleOut(
+                job_id=job.id,
+                wp_post_url=url,
+                published_by=published_by,
+                published_at=published_at,
+                client_id=client.id,
+                client_name=(client.name or "").strip(),
+                site_id=site.id,
+                site_name=(site.name or "").strip(),
+                site_url=(site.site_url or "").strip(),
+            )
+        )
+    return PublishedArticlesPageOut(items=out, total=total, limit=limit, offset=offset)
 
 
 @router.get("/pending", response_model=List[PendingJobOut])

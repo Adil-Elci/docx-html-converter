@@ -1655,6 +1655,87 @@ input:disabled {
   justify-content: flex-end;
 }
 
+.published-list-table {
+  display: grid;
+  gap: 10px;
+}
+
+.published-list-header,
+.published-item-row {
+  display: grid;
+  grid-template-columns: 2.2fr 1fr 1.2fr 1.1fr 1.1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.published-list-header {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+
+.published-item-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-3) 60%, transparent);
+  padding: 12px;
+}
+
+.published-item-row > span,
+.published-item-row > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.published-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.published-link:hover {
+  text-decoration: underline;
+}
+
+.published-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: end;
+}
+
+.published-field {
+  display: grid;
+  gap: 6px;
+}
+
+.published-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.published-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1826,6 +1907,31 @@ input:disabled {
 
   .pending-actions {
     flex-wrap: wrap;
+  }
+
+  .published-list-header {
+    display: none;
+  }
+
+  .published-item-row {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .published-item-row > span,
+  .published-item-row > a {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .published-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .published-pagination {
+    align-items: flex-start;
   }
 
 .auth-card h1 {

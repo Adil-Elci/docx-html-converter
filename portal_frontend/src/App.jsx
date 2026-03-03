@@ -83,10 +83,12 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
+const PUBLISHED_PAGE_SIZE = 25;
+const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -209,6 +211,15 @@ export default function App() {
   const [regeneratingImageJobId, setRegeneratingImageJobId] = useState("");
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
+  const [publishedArticles, setPublishedArticles] = useState([]);
+  const [publishedLoading, setPublishedLoading] = useState(false);
+  const [publishedTotal, setPublishedTotal] = useState(0);
+  const [publishedOffset, setPublishedOffset] = useState(0);
+  const [publishedLimit, setPublishedLimit] = useState(PUBLISHED_PAGE_SIZE);
+  const [publishedQuery, setPublishedQuery] = useState("");
+  const [publishedClientId, setPublishedClientId] = useState("");
+  const [publishedSiteId, setPublishedSiteId] = useState("");
+  const [publishedSort, setPublishedSort] = useState("published_at");
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
   const [clientSuggestionsBlockId, setClientSuggestionsBlockId] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
@@ -520,6 +531,36 @@ export default function App() {
     }
   };
 
+  const loadPublishedArticles = async (forUser = currentUser, overrides = {}) => {
+    if (forUser?.role !== "admin") return;
+    try {
+      setPublishedLoading(true);
+      const params = new URLSearchParams();
+      const nextQuery = (overrides.query ?? publishedQuery).trim();
+      const nextClientId = (overrides.clientId ?? publishedClientId || "").trim();
+      const nextSiteId = (overrides.siteId ?? publishedSiteId || "").trim();
+      const nextLimit = Number(overrides.limit ?? publishedLimit) || publishedLimit;
+      const nextOffset = Number(overrides.offset ?? publishedOffset) || 0;
+      const nextSort = (overrides.sort ?? publishedSort || "published_at").trim();
+      params.set("limit", String(nextLimit));
+      params.set("offset", String(nextOffset));
+      if (nextSort) params.set("sort", nextSort);
+      if (nextQuery) params.set("q", nextQuery);
+      if (nextClientId) params.set("client_id", nextClientId);
+      if (nextSiteId) params.set("site_id", nextSiteId);
+      const payload = await api.get(`/jobs/published?${params.toString()}`);
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setPublishedArticles(items);
+      setPublishedTotal(Number(payload?.total || 0));
+      setPublishedLimit(Number(payload?.limit || nextLimit));
+      setPublishedOffset(Number(payload?.offset || nextOffset));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPublishedLoading(false);
+    }
+  };
+
   const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
@@ -639,6 +680,42 @@ export default function App() {
       return apiBase ? `${apiBase}/jobs/${encodeURIComponent(jobId)}/draft-preview` : `/jobs/${encodeURIComponent(jobId)}/draft-preview`;
     }
     return (item?.wp_post_url || "").trim();
+  };
+
+  const formatPublishedAt = (value) => {
+    if (!value) return t("notAvailable");
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    const locale = language === "de" ? "de-DE" : "en-US";
+    return date.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
+  };
+
+  const applyPublishedSearch = () => {
+    setPublishedOffset(0);
+    loadPublishedArticles(currentUser, { query: publishedQuery.trim(), offset: 0 });
+  };
+
+  const resetPublishedFilters = () => {
+    setPublishedQuery("");
+    setPublishedClientId("");
+    setPublishedSiteId("");
+    setPublishedSort("published_at");
+    setPublishedLimit(PUBLISHED_PAGE_SIZE);
+    setPublishedOffset(0);
+    loadPublishedArticles(currentUser, {
+      query: "",
+      clientId: "",
+      siteId: "",
+      sort: "published_at",
+      limit: PUBLISHED_PAGE_SIZE,
+      offset: 0,
+    });
+  };
+
+  const goToPublishedOffset = (nextOffset) => {
+    const safeOffset = Math.max(0, nextOffset);
+    setPublishedOffset(safeOffset);
+    loadPublishedArticles(currentUser, { offset: safeOffset });
   };
 
   useEffect(() => {
@@ -796,6 +873,12 @@ export default function App() {
   }, [currentUser, activeSection]);
 
   useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection !== "published-articles") return;
+    loadPublishedArticles();
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
     if (!currentUser || isDbUpdaterDomain) return;
     const refreshOnSectionChange = async () => {
       if (portalRefreshInFlightRef.current) return;
@@ -805,6 +888,9 @@ export default function App() {
         if (currentUser.role === "admin") {
           if (activeSection === "pending-jobs") {
             await loadPendingJobs(currentUser);
+          }
+          if (activeSection === "published-articles") {
+            await loadPublishedArticles(currentUser);
           }
           if (activeSection === "admin") {
             await loadAdminUsers(currentUser);
@@ -1444,6 +1530,7 @@ export default function App() {
   const isClientsSection = activeSection === "clients";
   const isAdminUser = currentUser.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
+  const isPublishedArticlesSection = isAdminUser && activeSection === "published-articles";
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isCreateArticleSection = activeSection === "create-article";
   const isSubmitArticleSection = activeSection === "submit-article";
@@ -1508,6 +1595,14 @@ export default function App() {
   const uniqueSiteDomains = Array.from(new Set(siteDomainSamples));
   const siteMixPreview = uniqueSiteDomains.slice(0, 4).join(" • ");
   const readySitesLabel = sites.length > 0 ? t("clientDashboardReadySitesYes") : t("clientDashboardReadySitesNo");
+  const publishedPageCount = publishedTotal === 0 ? 0 : Math.ceil(publishedTotal / Math.max(publishedLimit, 1));
+  const publishedPage = publishedTotal === 0
+    ? 0
+    : Math.min(publishedPageCount, Math.floor(publishedOffset / Math.max(publishedLimit, 1)) + 1);
+  const publishedFrom = publishedTotal === 0 ? 0 : publishedOffset + 1;
+  const publishedTo = publishedTotal === 0 ? 0 : Math.min(publishedOffset + publishedLimit, publishedTotal);
+  const publishedCanPrev = publishedTotal > 0 && publishedOffset > 0;
+  const publishedCanNext = publishedTotal > 0 && publishedOffset + publishedLimit < publishedTotal;
 
   return (
     <div className={`app-shell ${sidebarHidden ? "sidebar-hidden" : ""}`.trim()}>
@@ -1672,6 +1767,166 @@ export default function App() {
                     <span className="muted-text">{client.email || client.phone_number || "-"}</span>
                   </div>
                 ))}
+              </div>
+            </div>
+          ) : isPublishedArticlesSection ? (
+            <div className="panel form-panel">
+              <h2>{t("publishedArticlesTitle")}</h2>
+              <div className="published-controls">
+                <div className="published-field">
+                  <label>{t("publishedSearchLabel")}</label>
+                  <input
+                    type="text"
+                    value={publishedQuery}
+                    onChange={(e) => setPublishedQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        applyPublishedSearch();
+                      }
+                    }}
+                    placeholder={t("publishedSearchPlaceholder")}
+                  />
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedFilterClient")}</label>
+                  <select
+                    value={publishedClientId}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPublishedClientId(next);
+                      setPublishedOffset(0);
+                      loadPublishedArticles(currentUser, { clientId: next, offset: 0 });
+                    }}
+                  >
+                    <option value="">{t("publishedAllClients")}</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {(client.name || "").trim() || client.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedFilterSite")}</label>
+                  <select
+                    value={publishedSiteId}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPublishedSiteId(next);
+                      setPublishedOffset(0);
+                      loadPublishedArticles(currentUser, { siteId: next, offset: 0 });
+                    }}
+                  >
+                    <option value="">{t("publishedAllSites")}</option>
+                    {sites.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {(site.site_url || "").trim() || (site.name || "").trim() || site.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedSortLabel")}</label>
+                  <select
+                    value={publishedSort}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPublishedSort(next);
+                      setPublishedOffset(0);
+                      loadPublishedArticles(currentUser, { sort: next, offset: 0 });
+                    }}
+                  >
+                    <option value="published_at">{t("publishedSortPublishedAt")}</option>
+                    <option value="url">{t("publishedSortUrl")}</option>
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedPageSizeLabel")}</label>
+                  <select
+                    value={publishedLimit}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) || PUBLISHED_PAGE_SIZE;
+                      setPublishedLimit(next);
+                      setPublishedOffset(0);
+                      loadPublishedArticles(currentUser, { limit: next, offset: 0 });
+                    }}
+                  >
+                    {PUBLISHED_PAGE_SIZES.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-actions">
+                  <button className="btn secondary" type="button" onClick={applyPublishedSearch} disabled={publishedLoading}>
+                    {t("publishedSearchButton")}
+                  </button>
+                  <button className="btn" type="button" onClick={resetPublishedFilters} disabled={publishedLoading}>
+                    {t("publishedClearFilters")}
+                  </button>
+                </div>
+              </div>
+              {publishedLoading ? <p className="muted-text">{t("loading")}</p> : null}
+              {!publishedLoading && publishedArticles.length === 0 ? (
+                <p className="muted-text">{t("publishedArticlesEmpty")}</p>
+              ) : null}
+              <div className="published-list-table">
+                <div className="published-list-header">
+                  <span>{t("publishedUrlLabel")}</span>
+                  <span>{t("publishedClientLabel")}</span>
+                  <span>{t("publishedSiteLabel")}</span>
+                  <span>{t("publishedByLabel")}</span>
+                  <span>{t("publishedAtLabel")}</span>
+                </div>
+                {publishedArticles.map((item) => {
+                  const url = (item?.wp_post_url || "").trim();
+                  const publishedBy = (item?.published_by || "").trim() || t("publishedBySystem");
+                  const clientName = (item?.client_name || "").trim() || item?.client_id || t("notAvailable");
+                  const siteLabel = (item?.site_url || "").trim() || (item?.site_name || "").trim() || item?.site_id || t("notAvailable");
+                  return (
+                    <div key={item.job_id} className="published-item-row">
+                      {url ? (
+                        <a className="published-link" href={url} target="_blank" rel="noreferrer">
+                          {url}
+                        </a>
+                      ) : (
+                        <span className="muted-text">{t("notAvailable")}</span>
+                      )}
+                      <span>{clientName}</span>
+                      <span>{siteLabel}</span>
+                      <span>{publishedBy}</span>
+                      <span>{formatPublishedAt(item?.published_at)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="published-pagination">
+                <span className="muted-text">
+                  {t("publishedShowingLabel")} {publishedFrom}-{publishedTo} {t("publishedOfLabel")} {publishedTotal}
+                </span>
+                <div className="pagination-actions">
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => goToPublishedOffset(publishedOffset - publishedLimit)}
+                    disabled={!publishedCanPrev || publishedLoading}
+                  >
+                    {t("publishedPrevious")}
+                  </button>
+                  <span className="muted-text">
+                    {t("publishedPageLabel")} {publishedPage} {t("publishedOfLabel")} {publishedPageCount}
+                  </span>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => goToPublishedOffset(publishedOffset + publishedLimit)}
+                    disabled={!publishedCanNext || publishedLoading}
+                  >
+                    {t("publishedNext")}
+                  </button>
+                </div>
               </div>
             </div>
           ) : isAdminPendingSection ? (
@@ -2744,6 +2999,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "submit-article", label: t("navSubmitArticle") },
         { id: "create-article", label: t("navCreateArticle") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
+        { id: "published-articles", label: t("navPublishedArticles") },
       ]
     : [
         { id: "dashboard", label: t("navClientDashboard") },

@@ -182,6 +182,19 @@ def _strip_h1_tags(html: str) -> str:
     return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL)
 
 
+def _strip_empty_blocks(html: str) -> str:
+    cleaned = html or ""
+    empty_block = r"(?:\s|&nbsp;|&#160;|<br\s*/?>)*"
+    for tag in ("p", "h1", "h2", "h3"):
+        cleaned = re.sub(
+            rf"<{tag}[^>]*>{empty_block}</{tag}>",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    return cleaned
+
+
 def _strip_leading_empty_blocks(html: str) -> str:
     cleaned = (html or "").lstrip()
     pattern = (
@@ -337,6 +350,7 @@ def _generate_article_by_sections(
     if backlink_url and anchor_text and backlink_url not in article_html:
         article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
     article_html = _strip_h1_tags(article_html)
+    article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)
 
     word_count = word_count_from_html(article_html)
@@ -862,6 +876,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         art_html = _insert_backlink(art_html, backlink_url, anchor_text, phase4["backlink_placement"])
         warnings.append("backlink_inserted_post_generation")
     art_html = _strip_h1_tags(art_html)
+    art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
     article_payload["article_html"] = art_html
 

@@ -8,3 +8,4 @@ portal_backend/.env
 portal_frontend/.env
 .venv/
 node_modules/
+portal_frontend/dist/

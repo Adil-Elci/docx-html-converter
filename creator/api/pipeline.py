@@ -113,12 +113,13 @@ def _guess_brand_name(target_url: str, html: str) -> str:
 def _pick_backlink_url(target_url: str, html: str) -> str:
     canonical = extract_canonical_link(html)
     if canonical:
-        return canonical
-    links = extract_internal_links(html, target_url)
-    for keyword in ("services", "solutions", "product", "pricing", "about", "platform"):
-        for link in links:
-            if keyword in link:
-                return link
+        try:
+            target = urlparse(target_url)
+            canon = urlparse(canonical)
+            if target.netloc and canon.netloc and target.netloc == canon.netloc and target.path == canon.path:
+                return canonical
+        except Exception:
+            pass
     return target_url
 
 
@@ -179,6 +180,18 @@ def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
 
 def _strip_h1_tags(html: str) -> str:
     return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL)
+
+
+def _strip_leading_empty_blocks(html: str) -> str:
+    cleaned = (html or "").lstrip()
+    pattern = (
+        r"^(?:\s*(?:"
+        r"<p[^>]*>(?:\s|&nbsp;|&#160;|<br\s*/?>)*</p>"
+        r"|<br\s*/?>"
+        r"|<h1[^>]*>(?:\s|&nbsp;|&#160;)*</h1>"
+        r"))+"
+    )
+    return re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
 
 def _strip_non_backlinks(html: str, backlink_url: str) -> str:
@@ -324,6 +337,7 @@ def _generate_article_by_sections(
     if backlink_url and anchor_text and backlink_url not in article_html:
         article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
     article_html = _strip_h1_tags(article_html)
+    article_html = _strip_leading_empty_blocks(article_html)
 
     word_count = word_count_from_html(article_html)
     for _expand_pass in range(3):
@@ -848,6 +862,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         art_html = _insert_backlink(art_html, backlink_url, anchor_text, phase4["backlink_placement"])
         warnings.append("backlink_inserted_post_generation")
     art_html = _strip_h1_tags(art_html)
+    art_html = _strip_leading_empty_blocks(art_html)
     article_payload["article_html"] = art_html
 
     phase5 = article_payload

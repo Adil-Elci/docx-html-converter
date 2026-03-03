@@ -164,6 +164,7 @@ def _wrap_paragraphs(text: str) -> str:
 
 def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
     cleaned = _strip_code_fences(raw)
+    cleaned = re.sub(r"<h1[^>]*>.*?</h1>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     if "<h2" in cleaned:
         return cleaned
     body = _wrap_paragraphs(cleaned)
@@ -174,6 +175,10 @@ def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
     if body:
         html += body
     return html
+
+
+def _strip_h1_tags(html: str) -> str:
+    return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL)
 
 
 def _strip_non_backlinks(html: str, backlink_url: str) -> str:
@@ -318,6 +323,7 @@ def _generate_article_by_sections(
     article_html = _strip_non_backlinks(article_html, backlink_url)
     if backlink_url and anchor_text and backlink_url not in article_html:
         article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
+    article_html = _strip_h1_tags(article_html)
 
     word_count = word_count_from_html(article_html)
     for _expand_pass in range(3):

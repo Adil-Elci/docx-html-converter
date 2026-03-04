@@ -1272,6 +1272,7 @@ input:disabled {
 .request-container .request-form-panel .submission-block:not(.create-article-block) {
   grid-template-columns: minmax(200px, 1.2fr) minmax(200px, 1.2fr) auto auto;
   grid-template-areas:
+    "header header header header"
     "client site type submit"
     "file file file file";
 }
@@ -1294,6 +1295,11 @@ input:disabled {
   grid-area: submit;
   justify-self: end;
   width: fit-content;
+}
+
+.request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-header {
+  grid-area: header;
+  align-self: start;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file {
@@ -2487,6 +2493,7 @@ input:disabled {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
     grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto;
     grid-template-areas:
+      "header header header"
       "client site type"
       "submit . ."
       "file file file";
@@ -2501,6 +2508,7 @@ input:disabled {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
     grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr);
     grid-template-areas:
+      "header header"
       "client site"
       "type ."
       "submit ."
@@ -2512,6 +2520,7 @@ input:disabled {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
+      "header"
       "client"
       "site"
       "type"

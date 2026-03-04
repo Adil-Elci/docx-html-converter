@@ -1628,10 +1628,30 @@ export default function App() {
           if (isNarrowViewport) setSidebarHidden(true);
         }}
         pendingJobsCount={pendingJobs.length}
-        sidebarHidden={sidebarHidden}
-        onToggleSidebar={() => setSidebarHidden((prev) => !prev)}
-        isNarrowViewport={isNarrowViewport}
       />
+      <button
+        className="sidebar-collapse-btn"
+        type="button"
+        onClick={() => setSidebarHidden((prev) => !prev)}
+        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
+        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
+      >
+        <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+          {sidebarHidden ? (
+            <>
+              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M13 10l2 2-2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          ) : (
+            <>
+              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M15 10l-2 2 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          )}
+        </svg>
+      </button>
       {isNarrowViewport && !sidebarHidden ? (
         <button
           type="button"
@@ -3037,7 +3057,7 @@ function AuthGate({
   );
 }
 
-function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0, sidebarHidden, onToggleSidebar, isNarrowViewport }) {
+function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0 }) {
   const sectionIcons = {
     admin: (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
@@ -3155,29 +3175,6 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         ))}
       </nav>
 
-      <button
-        className="sidebar-collapse-btn"
-        type="button"
-        onClick={onToggleSidebar}
-        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
-        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
-      >
-        <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
-          {sidebarHidden ? (
-            <>
-              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M13 10l2 2-2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          ) : (
-            <>
-              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M15 10l-2 2 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
-        </svg>
-      </button>
     </aside>
   );
 }

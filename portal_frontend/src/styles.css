@@ -904,6 +904,17 @@ input:disabled {
   padding: 0 16px;
 }
 
+.submission-block .source-toggle {
+  height: var(--control-height);
+  width: fit-content;
+}
+
+.submission-block .source-toggle button {
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+}
+
 .submission-block-actions .btn {
   max-width: 100%;
   white-space: nowrap;
@@ -988,6 +999,14 @@ input:disabled {
 
 .request-builder-form .source-toggle button {
   flex: 1;
+}
+
+.request-container .request-form-panel .submission-block:not(.create-article-block) .source-toggle {
+  width: fit-content;
+}
+
+.request-container .request-form-panel .submission-block:not(.create-article-block) .source-toggle button {
+  flex: 0 0 auto;
 }
 
 .request-builder-form .submission-block-controls {
@@ -1163,34 +1182,39 @@ input:disabled {
   position: relative;
 }
 
+.request-container .request-form-panel .submission-block:not(.create-article-block) {
+  grid-template-columns: minmax(200px, 1.2fr) minmax(200px, 1.2fr) auto auto;
+  grid-template-areas:
+    "client site type submit"
+    "file file file file";
+}
+
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-client {
-  grid-column: span 3;
-  order: 1;
+  grid-area: client;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-site {
-  grid-column: span 3;
-  order: 2;
+  grid-area: site;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-type {
-  grid-column: span 3;
-  order: 3;
+  grid-area: type;
+  justify-self: start;
+  width: fit-content;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
-  grid-column: span 3;
-  justify-content: flex-end;
-  order: 4;
+  grid-area: submit;
+  justify-self: end;
+  width: fit-content;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file {
-  grid-column: 1 / -1;
-  order: 5;
+  grid-area: file;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .upload-meter {
-  order: 6;
+  grid-column: 1 / -1;
 }
 
 
@@ -2168,36 +2192,43 @@ input:disabled {
 }
 
 @media (max-width: 1280px) {
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-client,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-site,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-type {
-    grid-column: span 4;
+  .request-container .request-form-panel .submission-block:not(.create-article-block) {
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto;
+    grid-template-areas:
+      "client site type"
+      "submit . ."
+      "file file file";
   }
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
-    grid-column: span 4;
-    justify-content: flex-start;
+    justify-self: start;
   }
 }
 
 @media (max-width: 1100px) {
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-client,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-site,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-type,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
-    grid-column: span 6;
+  .request-container .request-form-panel .submission-block:not(.create-article-block) {
+    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr);
+    grid-template-areas:
+      "client site"
+      "type ."
+      "submit ."
+      "file file";
   }
 }
 
 @media (max-width: 900px) {
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-client,
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-site {
-    grid-column: 1 / -1;
+  .request-container .request-form-panel .submission-block:not(.create-article-block) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "client"
+      "site"
+      "type"
+      "submit"
+      "file";
   }
 
-  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-type,
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
-    grid-column: span 6;
+    justify-self: stretch;
   }
 }
 

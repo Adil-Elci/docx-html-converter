@@ -1455,7 +1455,9 @@ export default function App() {
   if (authLoading) {
     return (
       <div className="auth-shell">
-        <div className="auth-loading">{t("loading")}</div>
+        <div className="auth-loading" role="status" aria-live="polite">
+          <span className="sr-only">{t("loading")}</span>
+        </div>
       </div>
     );
   }
@@ -1715,7 +1717,11 @@ export default function App() {
             </div>
           ) : null}
 
-          {loading ? <div className="panel muted-text">{t("loading")}</div> : null}
+          {loading ? (
+            <div className="panel loading-panel" role="status" aria-live="polite">
+              <span className="sr-only">{t("loading")}</span>
+            </div>
+          ) : null}
           {error && error !== "Load failed" && error !== "Failed to fetch" ? (
             <div className="validation-error validation-error-banner">{error}</div>
           ) : null}
@@ -1738,7 +1744,11 @@ export default function App() {
                 </div>
               </div>
 
-              {adminLoading ? <p className="muted-text">{t("loading")}</p> : null}
+              {adminLoading ? (
+                <div className="loading-inline" role="status" aria-live="polite">
+                  <span className="sr-only">{t("loading")}</span>
+                </div>
+              ) : null}
             </div>
           ) : isClientDashboardSection ? (
             <ClientDashboardPanel
@@ -1879,7 +1889,11 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {publishedLoading ? <p className="muted-text">{t("loading")}</p> : null}
+              {publishedLoading ? (
+                <div className="loading-inline" role="status" aria-live="polite">
+                  <span className="sr-only">{t("loading")}</span>
+                </div>
+              ) : null}
               {!publishedLoading && publishedArticles.length === 0 ? (
                 <p className="muted-text">{t("publishedArticlesEmpty")}</p>
               ) : null}
@@ -1946,7 +1960,11 @@ export default function App() {
           ) : isAdminPendingSection ? (
             <div className="panel form-panel pending-panel">
               <h2>{t("navPendingJobs")}</h2>
-              {pendingLoading ? <p className="muted-text">{t("loading")}</p> : null}
+              {pendingLoading ? (
+                <div className="loading-inline" role="status" aria-live="polite">
+                  <span className="sr-only">{t("loading")}</span>
+                </div>
+              ) : null}
               {!pendingLoading && pendingJobs.length === 0 ? (
                 <p className="muted-text">
                   {t("pendingJobsEmpty")}
@@ -2283,29 +2301,37 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {!isCreateArticleSection && block.source_type === "google-doc" ? (
-                            <div className="submission-field submission-field-wide">
-                              <label>{t("googleDocLink")}</label>
-                              <input
-                                type="url"
-                                value={block.doc_url}
-                                onChange={(e) => setSubmissionBlockField(block.id, "doc_url", e.target.value)}
-                                placeholder={t("placeholderGoogleDoc")}
-                                required
-                              />
-                            </div>
-                          ) : !isCreateArticleSection && block.source_type === "word-doc" ? (
-                            <div className="submission-field submission-field-wide">
-                              <label>{t("fileUpload")}</label>
-                              <input
-                                type="file"
-                                accept=".doc,.docx"
-                                required
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0] || null;
-                                  setSubmissionBlockField(block.id, "docx_file", file);
-                                }}
-                              />
+                          {!isCreateArticleSection ? (
+                            <div
+                              className={`submission-field submission-field-wide submission-field-file ${
+                                block.source_type === "google-doc" || block.source_type === "word-doc" ? "" : "is-empty"
+                              }`.trim()}
+                            >
+                              {block.source_type === "google-doc" ? (
+                                <>
+                                  <label>{t("googleDocLink")}</label>
+                                  <input
+                                    type="url"
+                                    value={block.doc_url}
+                                    onChange={(e) => setSubmissionBlockField(block.id, "doc_url", e.target.value)}
+                                    placeholder={t("placeholderGoogleDoc")}
+                                    required
+                                  />
+                                </>
+                              ) : block.source_type === "word-doc" ? (
+                                <>
+                                  <label>{t("fileUpload")}</label>
+                                  <input
+                                    type="file"
+                                    accept=".doc,.docx"
+                                    required
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0] || null;
+                                      setSubmissionBlockField(block.id, "docx_file", file);
+                                    }}
+                                  />
+                                </>
+                              ) : null}
                             </div>
                           ) : null}
 
@@ -2374,7 +2400,7 @@ export default function App() {
                   </button>
                   {(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).length > 1 ? (
                     <button
-                      className="btn secondary block-control-btn"
+                      className="btn secondary block-control-btn block-control-remove"
                       type="button"
                       aria-label={t("removeBlock")}
                       onClick={() => {

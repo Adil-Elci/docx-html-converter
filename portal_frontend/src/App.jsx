@@ -1792,7 +1792,12 @@ export default function App() {
             </div>
           ) : isPublishedArticlesSection ? (
             <div className="panel form-panel published-panel">
-              <h2>{t("publishedArticlesTitle")}</h2>
+              <div className="published-header">
+                <h2>{t("publishedArticlesTitle")}</h2>
+                {!publishedLoading && publishedTotal > 0 ? (
+                  <span className="published-total-badge">{publishedTotal}</span>
+                ) : null}
+              </div>
               <div className="published-controls">
                 <div className="published-field">
                   <label>{t("publishedSearchLabel")}</label>
@@ -1915,17 +1920,17 @@ export default function App() {
                   return (
                     <div key={item.job_id} className="published-item-row">
                       {url ? (
-                        <a className="published-link" href={url} target="_blank" rel="noreferrer">
+                        <a className="published-link" href={url} target="_blank" rel="noreferrer" data-label={t("publishedUrlLabel")}>
                           {url}
                         </a>
                       ) : (
-                        <span className="muted-text">{t("notAvailable")}</span>
+                        <span className="muted-text" data-label={t("publishedUrlLabel")}>{t("notAvailable")}</span>
                       )}
-                      <span>{clientName}</span>
-                      <span>{siteLabel}</span>
-                      <span>{statusLabel}</span>
-                      <span>{publishedBy}</span>
-                      <span>{formatPublishedAt(item?.published_at)}</span>
+                      <span data-label={t("publishedClientLabel")}>{clientName}</span>
+                      <span data-label={t("publishedSiteLabel")}>{siteLabel}</span>
+                      <span data-label={t("publishedStatusLabel")}>{statusLabel}</span>
+                      <span data-label={t("publishedByLabel")}>{publishedBy}</span>
+                      <span data-label={t("publishedAtLabel")}>{formatPublishedAt(item?.published_at)}</span>
                     </div>
                   );
                 })}

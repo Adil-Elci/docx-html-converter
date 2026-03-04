@@ -1409,20 +1409,6 @@ input:disabled {
   color: #fff;
 }
 
-.btn.success {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--success) 90%, #0d2a1e) 0%, color-mix(in srgb, var(--success) 72%, #0b2014) 100%);
-  color: #fff;
-  box-shadow: 0 10px 20px color-mix(in srgb, var(--success) 25%, transparent);
-}
-
-.btn.success:hover {
-  box-shadow: 0 16px 28px color-mix(in srgb, var(--success) 28%, transparent);
-}
-
-.btn.success:active {
-  box-shadow: 0 8px 16px color-mix(in srgb, var(--success) 22%, transparent);
-}
-
 .btn.block-control-remove {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
@@ -1871,7 +1857,6 @@ input:disabled {
 .form-panel .admin-summary-card,
 .form-panel .admin-user-card,
 .form-panel .admin-entity-card,
-.form-panel .pending-item-wrap,
 .form-panel .published-item-row,
 .form-panel .client-dashboard-card,
 .form-panel .client-dashboard-metrics > div {
@@ -1883,10 +1868,24 @@ input:disabled {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
+.form-panel .pending-item-wrap {
+  background: color-mix(in srgb, var(--panel-3) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  box-shadow: none;
+}
+
+.form-panel .pending-item-wrap:hover {
+  background: color-mix(in srgb, var(--panel-3) 72%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 6%, transparent);
+  transform: none;
+}
+
 .form-panel .admin-user-card:hover,
 .form-panel .admin-entity-card:hover,
 .form-panel .client-dashboard-card:hover,
-.form-panel .pending-item-wrap:hover,
 .form-panel .published-item-row:hover {
   box-shadow: none;
   transform: none;
@@ -1896,16 +1895,18 @@ input:disabled {
 .form-panel .admin-summary-grid,
 .form-panel .admin-entity-list,
 .form-panel .admin-users-list,
-.form-panel .pending-list-table,
 .form-panel .published-list-table,
 .form-panel .client-dashboard-grid {
   gap: 0;
 }
 
+.form-panel .pending-list-table {
+  gap: 8px;
+}
+
 .form-panel .admin-summary-card:last-child,
 .form-panel .admin-user-card:last-child,
 .form-panel .admin-entity-card:last-child,
-.form-panel .pending-item-wrap:last-child,
 .form-panel .published-item-row:last-child,
 .form-panel .client-dashboard-card:last-child {
   border-bottom: none;
@@ -2044,41 +2045,69 @@ input:disabled {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.pending-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-4);
+}
+
+.pending-header h2 {
+  margin: 0;
+}
+
+.pending-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
 .pending-list-table {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .pending-list-header,
 .pending-item-row {
   display: grid;
-  grid-template-columns: 1.1fr 1.5fr 1.3fr 0.9fr 1.1fr 1.9fr;
-  gap: 10px;
+  grid-template-columns: 1fr 1.4fr 1.3fr 0.85fr 1fr auto;
+  gap: 12px;
   align-items: center;
 }
 
 .pending-list-header {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0 6px;
+  letter-spacing: 0.08em;
+  padding: 4px 16px;
+  margin-bottom: 2px;
 }
 
 .pending-item-wrap {
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--panel-3) 78%, transparent);
-  padding: 12px;
-  backdrop-filter: blur(calc(var(--glass-blur) - 6px));
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel-3) 60%, transparent);
+  padding: 14px 16px;
+  backdrop-filter: blur(var(--glass-blur));
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
 }
 
 .pending-item-wrap:hover {
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
-  box-shadow: var(--shadow);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--panel-3) 80%, transparent);
 }
 
 .pending-item-row > span {
@@ -2086,6 +2115,12 @@ input:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pending-item-row > span:first-child {
+  font-weight: 600;
 }
 
 .pending-actions {
@@ -2097,19 +2132,40 @@ input:disabled {
 }
 
 .pending-actions .btn {
-  min-width: 0;
   white-space: nowrap;
   font-size: 12px;
-  padding: 7px 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.pending-actions .btn.secondary {
+  background: color-mix(in srgb, var(--panel-3) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.pending-actions .btn.secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--panel-3) 100%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
 }
 
 .pending-reject-panel {
   width: 100%;
-  margin-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  padding-top: 10px;
+  margin-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding-top: 14px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
+}
+
+.pending-reject-panel label {
+  margin-bottom: 2px;
+}
+
+.pending-reject-panel select,
+.pending-reject-panel textarea {
+  max-width: 420px;
 }
 
 .pending-reject-actions {
@@ -2431,10 +2487,32 @@ input:disabled {
   .pending-item-row {
     grid-template-columns: 1fr;
     align-items: flex-start;
+    gap: 6px;
+  }
+
+  .pending-item-row > span {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .pending-item-row > span[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 1px;
   }
 
   .pending-actions {
     flex-wrap: wrap;
+    justify-content: flex-start;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    margin-top: 4px;
   }
 
   .published-list-header {

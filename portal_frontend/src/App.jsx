@@ -1959,7 +1959,12 @@ export default function App() {
             </div>
           ) : isAdminPendingSection ? (
             <div className="panel form-panel pending-panel">
-              <h2>{t("navPendingJobs")}</h2>
+              <div className="pending-header">
+                <h2>{t("navPendingJobs")}</h2>
+                {!pendingLoading && pendingJobs.length > 0 ? (
+                  <span className="pending-count">{pendingJobs.length}</span>
+                ) : null}
+              </div>
               {pendingLoading ? (
                 <div className="loading-inline" role="status" aria-live="polite">
                   <span className="sr-only">{t("loading")}</span>
@@ -1985,11 +1990,11 @@ export default function App() {
                   return (
                     <div key={item.job_id} className="pending-item-wrap">
                       <div className="pending-item-row">
-                        <span>{item.client_name}</span>
-                        <span>{item.site_url || item.site_name}</span>
-                        <span>{item.content_title || t("contentTitleFallback")}</span>
-                        <span>{requestKind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
-                        <span>{formatPublishedAt(item?.created_at)}</span>
+                        <span data-label={t("createdByLabel")}>{item.client_name}</span>
+                        <span data-label={t("targetWebsiteLabel")}>{item.site_url || item.site_name}</span>
+                        <span data-label={t("contentTitleLabel")}>{item.content_title || t("contentTitleFallback")}</span>
+                        <span data-label={t("jobTypeLabel")}>{requestKind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
+                        <span data-label={t("createdAtLabel")}>{formatPublishedAt(item?.created_at)}</span>
                         <div className="pending-actions">
                           {draftReviewUrl ? (
                             <a className="btn secondary" href={draftReviewUrl} target="_blank" rel="noreferrer">
@@ -2009,7 +2014,7 @@ export default function App() {
                             {regeneratingImageJobId === item.job_id ? t("regeneratingImage") : t("regeneratePostImage")}
                           </button>
                           <button
-                            className="btn success"
+                            className="btn"
                             type="button"
                             onClick={() => publishPendingJob(item.job_id)}
                             disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}

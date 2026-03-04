@@ -1682,35 +1682,35 @@ export default function App() {
 
           {isAdminSection ? (
             <div className="stats-grid admin-kpi-grid">
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 0}}>
                 <span className="stat-label">{t("statActiveSites")}</span>
                 <strong>{sites.length}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 1}}>
                 <span className="stat-label">{t("statActiveClients")}</span>
                 <strong>{clients.length}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 2}}>
                 <span className="stat-label">{t("kpiTotalUsers")}</span>
                 <strong>{adminUsers.length}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 3}}>
                 <span className="stat-label">{t("kpiAdmins")}</span>
                 <strong>{adminCount}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 4}}>
                 <span className="stat-label">{t("kpiClientUsers")}</span>
                 <strong>{clientUserCount}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 5}}>
                 <span className="stat-label">{t("kpiInactiveUsers")}</span>
                 <strong>{inactiveUserCount}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 6}}>
                 <span className="stat-label">{t("kpiMappedClientUsers")}</span>
                 <strong>{mappedClientUserCount}</strong>
               </div>
-              <div className="stat-card">
+              <div className="stat-card" style={{"--i": 7}}>
                 <span className="stat-label">{t("kpiUnmappedClientUsers")}</span>
                 <strong>{unmappedClientUserCount}</strong>
               </div>
@@ -1770,8 +1770,8 @@ export default function App() {
             <div className="panel form-panel">
               <h2>{t("navWebsites")}</h2>
               <div className="admin-entity-list">
-                {sites.map((site) => (
-                  <div key={site.id} className="admin-entity-card">
+                {sites.map((site, index) => (
+                  <div key={site.id} className="admin-entity-card" style={{"--i": index}}>
                     <strong>{site.name}</strong>
                     <span className="muted-text">{site.site_url}</span>
                   </div>
@@ -1782,8 +1782,8 @@ export default function App() {
             <div className="panel form-panel">
               <h2>{t("navClients")}</h2>
               <div className="admin-entity-list">
-                {clients.map((client) => (
-                  <div key={client.id} className="admin-entity-card">
+                {clients.map((client, index) => (
+                  <div key={client.id} className="admin-entity-card" style={{"--i": index}}>
                     <strong>{client.name}</strong>
                     <span className="muted-text">{client.email || client.phone_number || "-"}</span>
                   </div>
@@ -1911,14 +1911,14 @@ export default function App() {
                   <span>{t("publishedByLabel")}</span>
                   <span>{t("publishedAtLabel")}</span>
                 </div>
-                {publishedArticles.map((item) => {
+                {publishedArticles.map((item, index) => {
                   const url = (item?.wp_post_url || "").trim();
                   const publishedBy = (item?.published_by || "").trim() || t("publishedBySystem");
                   const clientName = (item?.client_name || "").trim() || item?.client_id || t("notAvailable");
                   const siteLabel = (item?.site_url || "").trim() || (item?.site_name || "").trim() || item?.site_id || t("notAvailable");
                   const statusLabel = formatPublishedStatus(item?.status);
                   return (
-                    <div key={item.job_id} className="published-item-row">
+                    <div key={item.job_id} className="published-item-row" style={{"--i": index}}>
                       {url ? (
                         <a className="published-link" href={url} target="_blank" rel="noreferrer" data-label={t("publishedUrlLabel")}>
                           {url}
@@ -1989,11 +1989,11 @@ export default function App() {
                   <span>{t("createdAtLabel")}</span>
                   <span>{t("actionsLabel")}</span>
                 </div>
-                {pendingJobs.map((item) => {
+                {pendingJobs.map((item, index) => {
                   const draftReviewUrl = getDraftReviewUrl(item);
                   const requestKind = item.request_kind === "create_article" ? "create_article" : "submit_article";
                   return (
-                    <div key={item.job_id} className="pending-item-wrap">
+                    <div key={item.job_id} className="pending-item-wrap" style={{"--i": index}}>
                       <div className="pending-item-row">
                         <span data-label={t("createdByLabel")}>{item.client_name}</span>
                         <span data-label={t("targetWebsiteLabel")}>{item.site_url || item.site_name}</span>

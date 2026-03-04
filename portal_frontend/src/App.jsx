@@ -1996,7 +1996,9 @@ export default function App() {
                               {t("viewDraft")}
                             </a>
                           ) : (
-                            <span className="muted-text small-text">{t("draftLinkUnavailable")}</span>
+                            <button className="btn secondary" type="button" disabled>
+                              {t("viewDraft")}
+                            </button>
                           )}
                           <button
                             className="btn secondary"
@@ -2007,7 +2009,7 @@ export default function App() {
                             {regeneratingImageJobId === item.job_id ? t("regeneratingImage") : t("regeneratePostImage")}
                           </button>
                           <button
-                            className="btn"
+                            className="btn success"
                             type="button"
                             onClick={() => publishPendingJob(item.job_id)}
                             disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}

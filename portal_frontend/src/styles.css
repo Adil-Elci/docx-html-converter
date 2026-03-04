@@ -1409,6 +1409,20 @@ input:disabled {
   color: #fff;
 }
 
+.btn.success {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--success) 90%, #0d2a1e) 0%, color-mix(in srgb, var(--success) 72%, #0b2014) 100%);
+  color: #fff;
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.btn.success:hover {
+  box-shadow: 0 16px 28px color-mix(in srgb, var(--success) 28%, transparent);
+}
+
+.btn.success:active {
+  box-shadow: 0 8px 16px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
 .btn.block-control-remove {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
@@ -2078,8 +2092,15 @@ input:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  justify-content: flex-start;
-  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.pending-actions .btn {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 7px 12px;
 }
 
 .pending-reject-panel {

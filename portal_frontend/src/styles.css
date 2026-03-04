@@ -1399,18 +1399,23 @@ input:disabled {
   border: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  text-align: left;
-  padding: 10px 14px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   margin-top: auto;
+  align-self: center;
   color: var(--muted);
   background: transparent;
   border-radius: var(--radius-sm);
-  font-size: 15px;
   cursor: pointer;
-  font-family: inherit;
-  font-weight: 600;
-  transition: background var(--transition-base), color var(--transition-base), transform var(--transition-base), box-shadow var(--transition-base);
+  transition: background var(--transition-base), color var(--transition-base);
+}
+
+.sidebar-collapse-btn svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 .sidebar-collapse-btn:hover {
@@ -1418,18 +1423,9 @@ input:disabled {
   color: var(--ink);
 }
 
-.sidebar-collapse-btn:hover .nav-icon {
-  color: var(--ink);
-}
-
 .sidebar-collapse-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.app-shell.sidebar-hidden .sidebar-collapse-btn {
-  justify-content: center;
-  padding: 10px;
 }
 
 .sidebar-backdrop {

@@ -3162,16 +3162,21 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
         title={sidebarHidden ? "Show side panel" : "Hide side panel"}
       >
-        <span className="nav-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" role="img" focusable="false">
-            {sidebarHidden ? (
-              <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-            ) : (
-              <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-            )}
-          </svg>
-        </span>
-        <span className="nav-label">{sidebarHidden ? "Expand" : "Collapse"}</span>
+        <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+          {sidebarHidden ? (
+            <>
+              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M13 10l2 2-2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          ) : (
+            <>
+              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M15 10l-2 2 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          )}
+        </svg>
       </button>
     </aside>
   );

@@ -1628,6 +1628,9 @@ export default function App() {
           if (isNarrowViewport) setSidebarHidden(true);
         }}
         pendingJobsCount={pendingJobs.length}
+        sidebarHidden={sidebarHidden}
+        onToggleSidebar={() => setSidebarHidden((prev) => !prev)}
+        isNarrowViewport={isNarrowViewport}
       />
       {isNarrowViewport && !sidebarHidden ? (
         <button
@@ -1637,16 +1640,6 @@ export default function App() {
           onClick={() => setSidebarHidden(true)}
         />
       ) : null}
-      <button
-        className={`sidebar-edge-toggle ${sidebarHidden ? "collapsed" : ""}`.trim()}
-        type="button"
-        onClick={() => setSidebarHidden((prev) => !prev)}
-        aria-pressed={!sidebarHidden}
-        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
-        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
-      >
-        <span aria-hidden="true">{isNarrowViewport ? (sidebarHidden ? "☰" : "×") : (sidebarHidden ? "›" : "‹")}</span>
-      </button>
 
       <div className="app-main">
         <div className="header">
@@ -3044,7 +3037,7 @@ function AuthGate({
   );
 }
 
-function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0 }) {
+function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0, sidebarHidden, onToggleSidebar, isNarrowViewport }) {
   const sectionIcons = {
     admin: (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
@@ -3161,6 +3154,25 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
           </button>
         ))}
       </nav>
+
+      <button
+        className="sidebar-collapse-btn"
+        type="button"
+        onClick={onToggleSidebar}
+        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
+        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
+      >
+        <span className="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img" focusable="false">
+            {sidebarHidden ? (
+              <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            ) : (
+              <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            )}
+          </svg>
+        </span>
+        <span className="nav-label">{sidebarHidden ? "Expand" : "Collapse"}</span>
+      </button>
     </aside>
   );
 }

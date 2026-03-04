@@ -336,7 +336,7 @@ h3,
 
 .app-shell.sidebar-hidden .sidebar {
   padding: 0 var(--space-2) var(--space-2);
-  gap: var(--space-3);
+  gap: var(--space-5);
   overflow: visible;
 }
 

@@ -478,9 +478,10 @@ h3,
 .app-shell.sidebar-hidden .brand span {
   opacity: 0;
   max-width: 0;
+  width: 0;
+  overflow: hidden;
   transform: translateX(-6px);
   pointer-events: none;
-  overflow: hidden;
 }
 
 .app-shell.sidebar-hidden .nav {
@@ -514,6 +515,8 @@ h3,
 .app-shell.sidebar-hidden .nav-badge {
   opacity: 0;
   max-width: 0;
+  width: 0;
+  overflow: hidden;
   transform: translateX(-8px);
   pointer-events: none;
 }

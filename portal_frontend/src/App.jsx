@@ -3007,6 +3007,78 @@ function AuthGate({
 }
 
 function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0 }) {
+  const sectionIcons = {
+    admin: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path
+          d="M12 3.5l7 3.2v5.1c0 4.3-2.8 8.1-7 9.7-4.2-1.6-7-5.4-7-9.7V6.7l7-3.2z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+        />
+        <path d="M12 7.5v6.2l3.2 1.8" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    ),
+    websites: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    ),
+    clients: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path
+          d="M8 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm8 1.5a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+        />
+        <path
+          d="M3.5 19c.6-3 3-4.7 6.1-4.7 2.8 0 5.2 1.4 6.2 4.2M12.8 18.2c.6-1.8 2.3-2.9 4.5-2.9 1.5 0 2.9.5 3.7 1.6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+    "submit-article": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path d="M4 12h10.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <path d="M12 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <path d="M4 7v10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    "create-article": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path
+          d="M4 17.5V20h2.5l9-9-2.5-2.5-9 9zM14.5 7.5l2.5 2.5 1.8-1.8a1.8 1.8 0 0 0 0-2.5l-.9-.9a1.8 1.8 0 0 0-2.5 0l-1.4 1.2z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    "pending-jobs": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    "published-articles": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path d="M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7l-3-3V6a2 2 0 0 1 2-2z" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M8 9h8M8 13h5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    dashboard: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    ),
+  };
+
   const sections = userRole === "admin"
     ? [
         { id: "admin", label: t("navAdmin") },
@@ -3041,7 +3113,12 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
             className={`nav-item ${activeSection === section.id ? "active" : ""}`}
             onClick={() => onSectionChange(section.id)}
           >
-            <span>{section.label}</span>
+            <span className="nav-item-content">
+              <span className="nav-icon" aria-hidden="true">
+                {sectionIcons[section.id]}
+              </span>
+              <span className="nav-label">{section.label}</span>
+            </span>
             {typeof section.badge === "number" ? <span className="nav-badge">{section.badge}</span> : null}
           </button>
         ))}

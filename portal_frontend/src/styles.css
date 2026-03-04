@@ -316,6 +316,34 @@ h3,
   transition: width var(--transition-base), background var(--transition-base), box-shadow var(--transition-base);
 }
 
+.nav-item-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, var(--muted) 75%, var(--ink) 10%);
+  transition: color var(--transition-base), transform var(--transition-base);
+}
+
+.nav-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 .nav-item:hover {
   background: color-mix(in srgb, var(--panel-2) 82%, transparent);
   color: var(--ink);
@@ -327,6 +355,15 @@ h3,
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, #19243a) 0%, color-mix(in srgb, var(--accent) 75%, #0f1626) 100%);
   box-shadow: var(--shadow-glow);
   transform: translateX(0);
+}
+
+.nav-item:hover .nav-icon {
+  color: var(--ink);
+  transform: translateX(2px);
+}
+
+.nav-item.active .nav-icon {
+  color: #fff;
 }
 
 .nav-item.active::before {

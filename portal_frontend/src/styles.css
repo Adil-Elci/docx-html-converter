@@ -2,7 +2,7 @@
 
 :root {
   --portal-sidebar-width: 264px;
-  --portal-sidebar-peek: 18px;
+  --portal-sidebar-peek: 64px;
   --font-sans: "Plus Jakarta Sans", "Segoe UI", sans-serif;
   --font-display: "Space Grotesk", "Plus Jakarta Sans", sans-serif;
   --bg: #0b1016;
@@ -255,6 +255,7 @@ h3,
 .app-shell.sidebar-hidden .sidebar {
   padding: var(--space-2);
   gap: var(--space-3);
+  overflow: visible;
 }
 
 .app-shell.sidebar-hidden .sidebar > * {
@@ -846,7 +847,7 @@ input:disabled {
   display: flex;
   justify-content: flex-end;
   align-self: end;
-  grid-column: 1 / -1;
+  grid-column: auto;
   min-width: 0;
 }
 
@@ -901,6 +902,13 @@ input:disabled {
   min-height: var(--control-height);
   height: var(--control-height);
   padding: 0 16px;
+}
+
+.submission-block-actions .btn {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .submission-field-file {
@@ -1175,7 +1183,7 @@ input:disabled {
 }
 
 .request-container .request-form-panel .submission-block-actions {
-  grid-column: 1 / -1;
+  grid-column: span 2;
   justify-content: flex-end;
 }
 

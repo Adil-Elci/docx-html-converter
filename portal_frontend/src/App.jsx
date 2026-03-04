@@ -1668,30 +1668,30 @@ export default function App() {
         />
       ) : null}
 
-      <div className="app-main">
-        <div className="header">
-          <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
-          <div className="inline header-actions">
-            <div className="user-chip">
-              <span>{`Hey ${
-                currentUser.role === "admin"
-                  ? (currentUser.full_name || currentUser.email)
-                  : (resolvedClientName || t("roleClient"))
-              }!`}</span>
-            </div>
-            <LanguageToggle
-              language={language}
-              onChange={(next) => {
-                setLanguage(next);
-                localStorage.setItem("ui_language", next);
-              }}
-            />
-            <ThemeToggle theme={theme} onChange={setTheme} t={t} />
-            <button className="btn secondary" type="button" onClick={handleLogout}>
-              {t("logout")}
-            </button>
+      <div className="header">
+        <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
+        <div className="inline header-actions">
+          <div className="user-chip">
+            <span>{`Hey ${
+              currentUser.role === "admin"
+                ? (currentUser.full_name || currentUser.email)
+                : (resolvedClientName || t("roleClient"))
+            }!`}</span>
           </div>
+          <LanguageToggle
+            language={language}
+            onChange={(next) => {
+              setLanguage(next);
+              localStorage.setItem("ui_language", next);
+            }}
+          />
+          <ThemeToggle theme={theme} onChange={setTheme} t={t} />
+          <button className="btn secondary" type="button" onClick={handleLogout}>
+            {t("logout")}
+          </button>
         </div>
+      </div>
+      <div className="app-main">
 
         <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (

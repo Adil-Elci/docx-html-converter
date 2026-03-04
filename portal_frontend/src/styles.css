@@ -314,6 +314,7 @@ h3,
   min-height: 100vh;
   display: grid;
   grid-template-columns: var(--portal-sidebar-width) minmax(0, 1fr);
+  transition: grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .app-shell.sidebar-hidden {
@@ -377,11 +378,15 @@ h3,
   font-size: 20px;
   line-height: 1;
   letter-spacing: -0.02em;
+  transition: opacity 0.25s ease, transform 0.25s ease, max-width 0.3s ease;
+  max-width: 200px;
 }
 
 .brand span {
   font-size: 12px;
   color: var(--muted);
+  transition: opacity 0.25s ease, transform 0.25s ease, max-width 0.3s ease;
+  max-width: 200px;
 }
 
 .nav {
@@ -406,7 +411,7 @@ h3,
   font-family: inherit;
   font-weight: 600;
   position: relative;
-  transition: background var(--transition-base), color var(--transition-base), transform var(--transition-base), box-shadow var(--transition-base);
+  transition: background var(--transition-base), color var(--transition-base), transform var(--transition-base), box-shadow var(--transition-base), padding 0.3s ease;
 }
 
 .nav-item-content {
@@ -414,12 +419,17 @@ h3,
   align-items: center;
   gap: 10px;
   min-width: 0;
+  transition: gap 0.3s ease;
 }
 
 .nav-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: opacity 0.25s ease, transform 0.25s ease, max-width 0.3s ease;
+  opacity: 1;
+  transform: translateX(0);
+  max-width: 200px;
 }
 
 .nav-icon {
@@ -466,7 +476,11 @@ h3,
 
 .app-shell.sidebar-hidden .brand strong,
 .app-shell.sidebar-hidden .brand span {
-  display: none;
+  opacity: 0;
+  max-width: 0;
+  transform: translateX(-6px);
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .app-shell.sidebar-hidden .nav {
@@ -482,13 +496,33 @@ h3,
   gap: 0;
 }
 
+/* Stagger label reveal on expand */
+.nav-item:nth-child(1) .nav-label { transition-delay: 0.04s; }
+.nav-item:nth-child(2) .nav-label { transition-delay: 0.08s; }
+.nav-item:nth-child(3) .nav-label { transition-delay: 0.12s; }
+.nav-item:nth-child(4) .nav-label { transition-delay: 0.16s; }
+.nav-item:nth-child(5) .nav-label { transition-delay: 0.20s; }
+.nav-item:nth-child(6) .nav-label { transition-delay: 0.24s; }
+.nav-item:nth-child(7) .nav-label { transition-delay: 0.28s; }
+
+/* No stagger delay when collapsing */
+.app-shell.sidebar-hidden .nav-item .nav-label {
+  transition-delay: 0s;
+}
+
 .app-shell.sidebar-hidden .nav-label,
 .app-shell.sidebar-hidden .nav-badge {
-  display: none;
+  opacity: 0;
+  max-width: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
 }
 
 
 .nav-badge {
+  transition: opacity 0.25s ease, transform 0.25s ease, max-width 0.3s ease;
+  opacity: 1;
+  max-width: 60px;
   min-width: 22px;
   height: 22px;
   border-radius: 999px;

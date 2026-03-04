@@ -551,6 +551,9 @@ h3,
 }
 
 .header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 82%, transparent);

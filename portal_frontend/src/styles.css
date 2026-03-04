@@ -548,11 +548,14 @@ h3,
 
 .app-main {
   min-width: 0;
+  padding-top: var(--header-height);
 }
 
 .header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: var(--portal-sidebar-width);
+  right: 0;
   z-index: 40;
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--border);
@@ -563,6 +566,11 @@ h3,
   align-items: center;
   gap: var(--space-4);
   height: var(--header-height);
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-shell.sidebar-hidden .header {
+  left: var(--portal-sidebar-peek);
 }
 
 .title {
@@ -2659,7 +2667,11 @@ input:disabled {
   }
 
   .header {
-    padding-left: 60px;
+    left: 0;
+  }
+
+  .app-shell.sidebar-hidden .header {
+    left: var(--portal-sidebar-peek);
   }
 
   .title {

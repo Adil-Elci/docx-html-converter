@@ -1619,6 +1619,13 @@ export default function App() {
 
   return (
     <div className={`app-shell ${sidebarHidden ? "sidebar-hidden" : ""}`.trim()}>
+      <div className="brand">
+        <div className="brand-logo">e</div>
+        <div>
+          <strong>Elci Solutions</strong>
+          <span>Operations Hub</span>
+        </div>
+      </div>
       <Sidebar
         t={t}
         userRole={currentUser.role}
@@ -3148,14 +3155,6 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-logo">e</div>
-        <div>
-          <strong>Elci Solutions</strong>
-          <span>Operations Hub</span>
-        </div>
-      </div>
-
       <nav className="nav">
         {sections.map((section) => (
           <button

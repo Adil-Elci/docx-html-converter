@@ -1397,15 +1397,14 @@ input:disabled {
 
 .sidebar-collapse-btn {
   position: fixed;
-  left: calc(var(--portal-sidebar-width) - 14px);
-  top: 50%;
-  translate: 0 -50%;
+  left: calc(var(--portal-sidebar-width) - 18px);
+  bottom: 32px;
   border: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   color: var(--muted);
   background: var(--sidebar);
@@ -1416,12 +1415,12 @@ input:disabled {
 }
 
 .app-shell.sidebar-hidden .sidebar-collapse-btn {
-  left: calc(var(--portal-sidebar-peek) - 14px);
+  left: calc(var(--portal-sidebar-peek) - 18px);
 }
 
 .sidebar-collapse-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 

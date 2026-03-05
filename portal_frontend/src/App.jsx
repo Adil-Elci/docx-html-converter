@@ -1614,96 +1614,10 @@ export default function App() {
     }
   };
 
-  if (authLoading) {
-    return (
-      <div className="auth-shell">
-        <div className="auth-loading" role="status" aria-live="polite">
-          <span className="sr-only">{t("loading")}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (isDbUpdaterDomain) {
-    const serverProgress = Number(dbUpdaterJob?.progress_percent || 0);
-    const overallProgress = dbUpdaterJobId
-      ? Math.max(25, Math.min(100, 25 + Math.round((serverProgress * 75) / 100)))
-      : Math.round((dbUpdaterUploadPercent * 25) / 100);
-    const stageLabel = dbUpdaterJob?.message || (dbUpdaterSubmitting ? "Uploading file..." : "Ready");
-
-    return (
-      <DbUpdaterWorkspace
-        file={dbUpdaterFile}
-        onFileChange={setDbUpdaterFile}
-        dryRun={dbUpdaterDryRun}
-        onDryRunChange={setDbUpdaterDryRun}
-        deleteMissingSites={dbUpdaterDeleteMissingSites}
-        onDeleteMissingSitesChange={setDbUpdaterDeleteMissingSites}
-        forceDeleteMissingSites={dbUpdaterForceDeleteMissingSites}
-        onForceDeleteMissingSitesChange={setDbUpdaterForceDeleteMissingSites}
-        onSubmit={submitDbUpdaterFile}
-        submitting={dbUpdaterSubmitting}
-        progressPercent={overallProgress}
-        uploadPercent={dbUpdaterUploadPercent}
-        stageLabel={stageLabel}
-        job={dbUpdaterJob}
-        error={dbUpdaterError}
-        success={dbUpdaterSuccess}
-        historyItems={dbUpdaterJobsHistory}
-        onLogout={currentUser ? handleLogout : null}
-      />
-    );
-  }
-
-  if (!currentUser) {
-    return (
-      <AuthGate
-        t={t}
-        language={language}
-        onLanguageChange={(next) => {
-          setLanguage(next);
-          localStorage.setItem("ui_language", next);
-        }}
-        theme={theme}
-        onThemeChange={setTheme}
-        loginForm={loginForm}
-        onLoginFormChange={setLoginForm}
-        loginFieldErrors={loginFieldErrors}
-        loginFieldShake={loginFieldShake}
-        onClearLoginFieldError={(field) => {
-          setLoginFieldErrors((prev) => ({ ...prev, [field]: false }));
-        }}
-        onLoginSubmit={handleLogin}
-        submittingLogin={authSubmitting}
-        error={authError}
-        onShowResetRequest={() => {
-          const params = new URLSearchParams(window.location.search);
-          params.set("mode", "reset-request");
-          window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
-          setResetMode(true);
-          setShowResetRequestForm(true);
-        }}
-        showResetRequestForm={showResetRequestForm || resetMode}
-        resetMode={resetMode}
-        resetRequestForm={resetRequestForm}
-        onResetRequestFormChange={setResetRequestForm}
-        onResetRequestSubmit={requestPasswordReset}
-        submittingResetRequest={resetRequestSubmitting}
-        resetRequestMessage={resetRequestMessage}
-        resetToken={resetToken}
-        resetConfirmForm={resetConfirmForm}
-        onResetConfirmFormChange={setResetConfirmForm}
-        onResetConfirmSubmit={confirmPasswordReset}
-        submittingResetConfirm={resetConfirmSubmitting}
-        resetConfirmMessage={resetConfirmMessage}
-      />
-    );
-  }
-
   const isAdminSection = activeSection === "admin";
   const isWebsitesSection = activeSection === "websites";
   const isClientsSection = activeSection === "clients";
-  const isAdminUser = currentUser.role === "admin";
+  const isAdminUser = currentUser?.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isPublishedArticlesSection = isAdminUser && activeSection === "published-articles";
   const isQueueDashboardSection = isAdminUser && activeSection === "queue-dashboard";
@@ -1981,6 +1895,92 @@ export default function App() {
       );
     });
   };
+
+  if (authLoading) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-loading" role="status" aria-live="polite">
+          <span className="sr-only">{t("loading")}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isDbUpdaterDomain) {
+    const serverProgress = Number(dbUpdaterJob?.progress_percent || 0);
+    const overallProgress = dbUpdaterJobId
+      ? Math.max(25, Math.min(100, 25 + Math.round((serverProgress * 75) / 100)))
+      : Math.round((dbUpdaterUploadPercent * 25) / 100);
+    const stageLabel = dbUpdaterJob?.message || (dbUpdaterSubmitting ? "Uploading file..." : "Ready");
+
+    return (
+      <DbUpdaterWorkspace
+        file={dbUpdaterFile}
+        onFileChange={setDbUpdaterFile}
+        dryRun={dbUpdaterDryRun}
+        onDryRunChange={setDbUpdaterDryRun}
+        deleteMissingSites={dbUpdaterDeleteMissingSites}
+        onDeleteMissingSitesChange={setDbUpdaterDeleteMissingSites}
+        forceDeleteMissingSites={dbUpdaterForceDeleteMissingSites}
+        onForceDeleteMissingSitesChange={setDbUpdaterForceDeleteMissingSites}
+        onSubmit={submitDbUpdaterFile}
+        submitting={dbUpdaterSubmitting}
+        progressPercent={overallProgress}
+        uploadPercent={dbUpdaterUploadPercent}
+        stageLabel={stageLabel}
+        job={dbUpdaterJob}
+        error={dbUpdaterError}
+        success={dbUpdaterSuccess}
+        historyItems={dbUpdaterJobsHistory}
+        onLogout={currentUser ? handleLogout : null}
+      />
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <AuthGate
+        t={t}
+        language={language}
+        onLanguageChange={(next) => {
+          setLanguage(next);
+          localStorage.setItem("ui_language", next);
+        }}
+        theme={theme}
+        onThemeChange={setTheme}
+        loginForm={loginForm}
+        onLoginFormChange={setLoginForm}
+        loginFieldErrors={loginFieldErrors}
+        loginFieldShake={loginFieldShake}
+        onClearLoginFieldError={(field) => {
+          setLoginFieldErrors((prev) => ({ ...prev, [field]: false }));
+        }}
+        onLoginSubmit={handleLogin}
+        submittingLogin={authSubmitting}
+        error={authError}
+        onShowResetRequest={() => {
+          const params = new URLSearchParams(window.location.search);
+          params.set("mode", "reset-request");
+          window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+          setResetMode(true);
+          setShowResetRequestForm(true);
+        }}
+        showResetRequestForm={showResetRequestForm || resetMode}
+        resetMode={resetMode}
+        resetRequestForm={resetRequestForm}
+        onResetRequestFormChange={setResetRequestForm}
+        onResetRequestSubmit={requestPasswordReset}
+        submittingResetRequest={resetRequestSubmitting}
+        resetRequestMessage={resetRequestMessage}
+        resetToken={resetToken}
+        resetConfirmForm={resetConfirmForm}
+        onResetConfirmFormChange={setResetConfirmForm}
+        onResetConfirmSubmit={confirmPasswordReset}
+        submittingResetConfirm={resetConfirmSubmitting}
+        resetConfirmMessage={resetConfirmMessage}
+      />
+    );
+  }
 
   return (
     <div className={`app-shell ${sidebarHidden ? "sidebar-hidden" : ""}`.trim()}>

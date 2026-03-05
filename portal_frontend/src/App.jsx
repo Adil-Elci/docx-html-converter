@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { getLabel } from "./i18n.js";
 
@@ -228,6 +228,11 @@ export default function App() {
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
   const [clientSuggestionsBlockId, setClientSuggestionsBlockId] = useState(null);
   const [targetSiteSuggestionsBlockId, setTargetSiteSuggestionsBlockId] = useState(null);
+  const submissionBlocksRef = useRef(null);
+  const clientSuggestInputRefs = useRef({});
+  const siteSuggestInputRefs = useRef({});
+  const targetSiteSuggestInputRefs = useRef({});
+  const [suggestionStyle, setSuggestionStyle] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
   const portalRefreshInFlightRef = useRef(false);
@@ -1774,6 +1779,208 @@ export default function App() {
   const publishedTo = publishedTotal === 0 ? 0 : Math.min(publishedOffset + publishedLimit, publishedTotal);
   const publishedCanPrev = publishedTotal > 0 && publishedOffset > 0;
   const publishedCanNext = publishedTotal > 0 && publishedOffset + publishedLimit < publishedTotal;
+  const activeSuggestion = useMemo(() => {
+    const activeBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
+    if (clientSuggestionsBlockId) {
+      const block = activeBlocks.find((item) => item.id === clientSuggestionsBlockId);
+      if (!block) return null;
+      const items = isAdminUser
+        ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
+            const q = (block.client_name || "").trim().toLowerCase();
+            if (!q) return true;
+            const name = ((client.name || "").trim()).toLowerCase();
+            return name.includes(q);
+          })
+        : [];
+      if (!items.length) return null;
+      return {
+        type: "client",
+        blockId: block.id,
+        items,
+      };
+    }
+    if (siteSuggestionsBlockId) {
+      const block = activeBlocks.find((item) => item.id === siteSuggestionsBlockId);
+      if (!block) return null;
+      const items = getFilteredSitesForQuery(block.publishing_site);
+      if (!items.length) return null;
+      return {
+        type: "site",
+        blockId: block.id,
+        items,
+      };
+    }
+    if (isCreateArticleSection && targetSiteSuggestionsBlockId) {
+      const block = activeBlocks.find((item) => item.id === targetSiteSuggestionsBlockId);
+      if (!block) return null;
+      const selectedClient = isAdminUser
+        ? clients.find((client) => (client.name || "").trim() === (block.client_name || "").trim())
+        : null;
+      const availableTargetSites = sortByLabel(
+        isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
+        (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
+      );
+      const query = (block.target_site_url || "").trim().toLowerCase();
+      const items = availableTargetSites.filter((row) => {
+        if (!query) return true;
+        const urlValue = (row.target_site_url || "").trim().toLowerCase();
+        const domainValue = (row.target_site_domain || "").trim().toLowerCase();
+        const domainUrlValue = domainValue ? `https://${domainValue}` : "";
+        return (
+          urlValue.includes(query)
+          || domainValue.includes(query)
+          || domainUrlValue.includes(query)
+        );
+      });
+      if (!items.length) return null;
+      return {
+        type: "target",
+        blockId: block.id,
+        items,
+      };
+    }
+    return null;
+  }, [
+    clientSuggestionsBlockId,
+    siteSuggestionsBlockId,
+    targetSiteSuggestionsBlockId,
+    isCreateArticleSection,
+    createArticleSubmissionBlocks,
+    submitArticleSubmissionBlocks,
+    clients,
+    sites,
+    isAdminUser,
+    clientTargetSites,
+    getFilteredSitesForQuery,
+  ]);
+  const activeSuggestionKey = activeSuggestion
+    ? `${activeSuggestion.type}:${activeSuggestion.blockId}:${activeSuggestion.items.length}`
+    : "";
+  const updateSuggestionPosition = useCallback(() => {
+    if (!activeSuggestion || !submissionBlocksRef.current) {
+      setSuggestionStyle(null);
+      return;
+    }
+    const anchorMap = activeSuggestion.type === "client"
+      ? clientSuggestInputRefs
+      : activeSuggestion.type === "site"
+        ? siteSuggestInputRefs
+        : targetSiteSuggestInputRefs;
+    const anchor = anchorMap.current[activeSuggestion.blockId];
+    if (!anchor) {
+      setSuggestionStyle(null);
+      return;
+    }
+    const containerRect = submissionBlocksRef.current.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    setSuggestionStyle({
+      top: Math.round(anchorRect.bottom - containerRect.top + 6),
+      left: Math.round(anchorRect.left - containerRect.left),
+      width: Math.round(anchorRect.width),
+    });
+  }, [activeSuggestion]);
+
+  useLayoutEffect(() => {
+    if (!activeSuggestion) {
+      setSuggestionStyle(null);
+      return;
+    }
+    let frame = 0;
+    const handle = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => updateSuggestionPosition());
+    };
+    handle();
+    window.addEventListener("scroll", handle, true);
+    window.addEventListener("resize", handle);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", handle, true);
+      window.removeEventListener("resize", handle);
+    };
+  }, [activeSuggestionKey, updateSuggestionPosition]);
+  const renderSuggestionItems = (suggestion) => {
+    if (!suggestion) return null;
+    if (suggestion.type === "client") {
+      return suggestion.items.slice(0, 30).map((client) => (
+        <button
+          key={client.id}
+          type="button"
+          className="site-suggest-item"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            const nextClientName = (client.name || "").trim();
+            const nextTargetRows = sortByLabel(
+              getTargetSitesForClient(client),
+              (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
+            );
+            const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
+            updateActiveSubmissionBlocks((prev) => prev.map((item) => (
+              item.id === suggestion.blockId
+                ? {
+                    ...item,
+                    client_name: nextClientName,
+                    target_site_id: nextPrimary ? String(nextPrimary.id || "") : "",
+                    target_site_url: nextPrimary ? (nextPrimary.target_site_url || "").trim() : "",
+                  }
+                : item
+            )));
+            setClientSuggestionsBlockId(null);
+          }}
+        >
+          <span>{(client.name || "").trim() || client.id}</span>
+          <span className="muted-text small-text">{client.email || client.id}</span>
+        </button>
+      ));
+    }
+    if (suggestion.type === "site") {
+      return suggestion.items.slice(0, 30).map((site) => (
+        <button
+          key={site.id}
+          type="button"
+          className="site-suggest-item"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setSubmissionBlockField(suggestion.blockId, "publishing_site", site.site_url);
+            setSiteSuggestionsBlockId(null);
+          }}
+        >
+          <span>{site.site_url}</span>
+          <span className="muted-text small-text">{site.name}</span>
+        </button>
+      ));
+    }
+    return suggestion.items.slice(0, 30).map((row) => {
+      const optionId = String(row.id || "");
+      const domainLabel = (row.target_site_domain || "").trim();
+      const urlLabel = (row.target_site_url || "").trim();
+      const label = urlLabel || (domainLabel ? `https://${domainLabel}` : "") || optionId;
+      return (
+        <button
+          key={optionId}
+          type="button"
+          className="site-suggest-item"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            const nextUrl = label;
+            updateActiveSubmissionBlocks((prev) => prev.map((item) => (
+              item.id === suggestion.blockId
+                ? {
+                    ...item,
+                    target_site_id: optionId,
+                    target_site_url: nextUrl,
+                  }
+                : item
+            )));
+            setTargetSiteSuggestionsBlockId(null);
+          }}
+        >
+          <span>{label}</span>
+          <span className="muted-text small-text">{domainLabel || optionId}</span>
+        </button>
+      );
+    });
+  };
 
   return (
     <div className={`app-shell ${sidebarHidden ? "sidebar-hidden" : ""}`.trim()}>
@@ -2297,17 +2504,8 @@ export default function App() {
           ) : (
             <div className="panel form-panel request-form-panel">
               <div className="submit-article-form request-builder-form">
-                <div className="submission-blocks">
+                <div className="submission-blocks" ref={submissionBlocksRef}>
                   {(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).map((block, blockIndex) => {
-                    const blockFilteredSites = getFilteredSitesForQuery(block.publishing_site);
-                    const blockFilteredClients = isAdminUser
-                      ? sortByLabel(clients, (client) => (client.name || "").trim() || String(client.id || "")).filter((client) => {
-                          const q = (block.client_name || "").trim().toLowerCase();
-                          if (!q) return true;
-                          const name = ((client.name || "").trim()).toLowerCase();
-                          return name.includes(q);
-                        })
-                      : [];
                     const selectedClient = isAdminUser
                       ? clients.find((client) => (client.name || "").trim() === (block.client_name || "").trim())
                       : null;
@@ -2315,41 +2513,15 @@ export default function App() {
                       isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
                       (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                     );
-                    const blockFilteredTargetSites = isCreateArticleSection
-                      ? availableTargetSites.filter((row) => {
-                          const query = (block.target_site_url || "").trim().toLowerCase();
-                          if (!query) return true;
-                          const urlValue = (row.target_site_url || "").trim().toLowerCase();
-                          const domainValue = (row.target_site_domain || "").trim().toLowerCase();
-                          const domainUrlValue = domainValue ? `https://${domainValue}` : "";
-                          return (
-                            urlValue.includes(query)
-                            || domainValue.includes(query)
-                            || domainUrlValue.includes(query)
-                          );
-                        })
-                      : [];
                     const showRemoveControl = blockIndex > 0;
                     const activeBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
                     const isBatchMode = activeBlocks.length > 1;
                     const blockStatus = batchBlockStatus[block.id] || null;
-                    const isClientSuggesting = clientSuggestionsBlockId === block.id && blockFilteredClients.length > 0;
-                    const isSiteSuggesting = siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0;
-                    const isTargetSiteSuggesting = isCreateArticleSection
-                      && targetSiteSuggestionsBlockId === block.id
-                      && blockFilteredTargetSites.length > 0;
-                    const isSuggestionsOpen = isClientSuggesting || isSiteSuggesting || isTargetSiteSuggesting;
-                    const getSuggestPad = (count) => Math.min(260, count * 44 + 8) + 16;
-                    const suggestPad = Math.max(
-                      isClientSuggesting ? getSuggestPad(blockFilteredClients.length) : 0,
-                      isSiteSuggesting ? getSuggestPad(blockFilteredSites.length) : 0,
-                      isTargetSiteSuggesting ? getSuggestPad(blockFilteredTargetSites.length) : 0,
-                    );
+                    const isSuggestionsOpen = activeSuggestion && activeSuggestion.blockId === block.id;
                     return (
                       <div
                         key={block.id}
                         className={`submission-block-wrap ${isSuggestionsOpen ? "suggestions-open" : ""}`.trim()}
-                        style={suggestPad ? { "--suggest-pad": `${suggestPad}px` } : undefined}
                       >
                         <div className={`submission-block panel ${isCreateArticleSection ? "create-article-block" : ""} ${blockStatus ? `batch-${blockStatus}` : ""}`.trim()}>
                           <div className="submission-block-header">
@@ -2368,7 +2540,16 @@ export default function App() {
                                 <input
                                   type="text"
                                   value={block.client_name || ""}
-                                  onFocus={() => setClientSuggestionsBlockId(block.id)}
+                                  ref={(node) => {
+                                    if (node) {
+                                      clientSuggestInputRefs.current[block.id] = node;
+                                    }
+                                  }}
+                                  onFocus={() => {
+                                    setClientSuggestionsBlockId(block.id);
+                                    setSiteSuggestionsBlockId(null);
+                                    setTargetSiteSuggestionsBlockId(null);
+                                  }}
                                   onBlur={() => setTimeout(() => {
                                     setClientSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
                                   }, 120)}
@@ -2385,44 +2566,12 @@ export default function App() {
                                         : item
                                     )));
                                     setClientSuggestionsBlockId(block.id);
+                                    setSiteSuggestionsBlockId(null);
+                                    setTargetSiteSuggestionsBlockId(null);
                                   }}
                                   placeholder={t("selectClient")}
                                   required
                                 />
-                                {isClientSuggesting ? (
-                                  <div className="site-suggest-list">
-                                    {blockFilteredClients.slice(0, 30).map((client) => (
-                                      <button
-                                        key={client.id}
-                                        type="button"
-                                        className="site-suggest-item"
-                                        onMouseDown={(event) => {
-                                          event.preventDefault();
-                                          const nextClientName = (client.name || "").trim();
-                                          const nextTargetRows = sortByLabel(
-                                            getTargetSitesForClient(client),
-                                            (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
-                                          );
-                                          const nextPrimary = nextTargetRows.find((row) => row?.is_primary) || nextTargetRows[0] || null;
-                                          updateActiveSubmissionBlocks((prev) => prev.map((item) => (
-                                            item.id === block.id
-                                              ? {
-                                                  ...item,
-                                                  client_name: nextClientName,
-                                                  target_site_id: nextPrimary ? String(nextPrimary.id || "") : "",
-                                                  target_site_url: nextPrimary ? (nextPrimary.target_site_url || "").trim() : "",
-                                                }
-                                              : item
-                                          )));
-                                          setClientSuggestionsBlockId(null);
-                                        }}
-                                      >
-                                        <span>{(client.name || "").trim() || client.id}</span>
-                                        <span className="muted-text small-text">{client.email || client.id}</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                ) : null}
                               </div>
                             </div>
                           ) : null}
@@ -2433,7 +2582,16 @@ export default function App() {
                               <input
                                 type="url"
                                 value={block.target_site_url || ""}
-                                onFocus={() => setTargetSiteSuggestionsBlockId(block.id)}
+                                ref={(node) => {
+                                  if (node) {
+                                    targetSiteSuggestInputRefs.current[block.id] = node;
+                                  }
+                                }}
+                                onFocus={() => {
+                                  setTargetSiteSuggestionsBlockId(block.id);
+                                  setClientSuggestionsBlockId(null);
+                                  setSiteSuggestionsBlockId(null);
+                                }}
                                 onBlur={() => setTimeout(() => {
                                   setTargetSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
                                 }, 120)}
@@ -2456,44 +2614,12 @@ export default function App() {
                                       : item
                                   )));
                                   setTargetSiteSuggestionsBlockId(block.id);
+                                  setClientSuggestionsBlockId(null);
+                                  setSiteSuggestionsBlockId(null);
                                 }}
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
-                              {isTargetSiteSuggesting ? (
-                                <div className="site-suggest-list">
-                                  {blockFilteredTargetSites.slice(0, 30).map((row) => {
-                                    const optionId = String(row.id || "");
-                                    const domainLabel = (row.target_site_domain || "").trim();
-                                    const urlLabel = (row.target_site_url || "").trim();
-                                    const label = urlLabel || (domainLabel ? `https://${domainLabel}` : "") || optionId;
-                                    return (
-                                      <button
-                                        key={optionId}
-                                        type="button"
-                                        className="site-suggest-item"
-                                        onMouseDown={(event) => {
-                                          event.preventDefault();
-                                          const nextUrl = label;
-                                          updateActiveSubmissionBlocks((prev) => prev.map((item) => (
-                                            item.id === block.id
-                                              ? {
-                                                  ...item,
-                                                  target_site_id: optionId,
-                                                  target_site_url: nextUrl,
-                                                }
-                                              : item
-                                          )));
-                                          setTargetSiteSuggestionsBlockId(null);
-                                        }}
-                                      >
-                                        <span>{label}</span>
-                                        <span className="muted-text small-text">{domainLabel || optionId}</span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              ) : null}
                             </div>
                           ) : null}
 
@@ -2502,36 +2628,28 @@ export default function App() {
                             <div className="site-suggest-wrap">
                               <input
                                 value={block.publishing_site}
-                                onFocus={() => setSiteSuggestionsBlockId(block.id)}
+                                ref={(node) => {
+                                  if (node) {
+                                    siteSuggestInputRefs.current[block.id] = node;
+                                  }
+                                }}
+                                onFocus={() => {
+                                  setSiteSuggestionsBlockId(block.id);
+                                  setClientSuggestionsBlockId(null);
+                                  setTargetSiteSuggestionsBlockId(null);
+                                }}
                                 onBlur={() => setTimeout(() => {
                                   setSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
                                 }, 120)}
                                 onChange={(e) => {
                                   setSubmissionBlockField(block.id, "publishing_site", e.target.value);
                                   setSiteSuggestionsBlockId(block.id);
+                                  setClientSuggestionsBlockId(null);
+                                  setTargetSiteSuggestionsBlockId(null);
                                 }}
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
-                              {isSiteSuggesting ? (
-                                <div className="site-suggest-list">
-                                  {blockFilteredSites.slice(0, 30).map((site) => (
-                                    <button
-                                      key={site.id}
-                                      type="button"
-                                      className="site-suggest-item"
-                                      onMouseDown={(event) => {
-                                        event.preventDefault();
-                                        setSubmissionBlockField(block.id, "publishing_site", site.site_url);
-                                        setSiteSuggestionsBlockId(null);
-                                      }}
-                                    >
-                                      <span>{site.site_url}</span>
-                                      <span className="muted-text small-text">{site.name}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              ) : null}
                             </div>
                           </div>
 
@@ -2666,6 +2784,13 @@ export default function App() {
                       </div>
                     );
                   })}
+                  {activeSuggestion && suggestionStyle ? (
+                    <div className="suggestion-layer">
+                      <div className="site-suggest-list" style={suggestionStyle}>
+                        {renderSuggestionItems(activeSuggestion)}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="submission-block-controls submission-block-controls-global">
                   <button

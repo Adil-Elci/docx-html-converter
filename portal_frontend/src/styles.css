@@ -930,6 +930,24 @@ input:disabled {
 .submission-blocks {
   display: grid;
   gap: 14px;
+  position: relative;
+  overflow: visible;
+}
+
+.suggestion-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 200;
+}
+
+.suggestion-layer .site-suggest-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: auto;
+  pointer-events: auto;
+  z-index: 201;
 }
 
 .request-form-panel .submission-blocks {
@@ -941,7 +959,6 @@ input:disabled {
   gap: var(--space-2);
   position: relative;
   z-index: 0;
-  transition: padding-bottom var(--transition-fast);
 }
 
 .submission-block-wrap:focus-within {
@@ -950,7 +967,6 @@ input:disabled {
 
 .submission-block-wrap.suggestions-open {
   z-index: 60;
-  padding-bottom: var(--suggest-pad, 280px);
 }
 
 .submission-block {

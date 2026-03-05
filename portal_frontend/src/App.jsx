@@ -183,6 +183,7 @@ export default function App() {
   const [submissionErrorCode, setSubmissionErrorCode] = useState("");
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
   const [submissionFieldErrors, setSubmissionFieldErrors] = useState({});
+  const [batchBlockStatus, setBatchBlockStatus] = useState({});
   const [creatorCanceling, setCreatorCanceling] = useState(false);
   const [creatorCancelError, setCreatorCancelError] = useState("");
   const [creatorCancelConfirm, setCreatorCancelConfirm] = useState(false);
@@ -277,6 +278,7 @@ export default function App() {
     setClientSuggestionsBlockId(null);
     setUploadProgressBlockId(null);
     setSubmissionFieldErrors({});
+    setBatchBlockStatus({});
   };
 
   const resetClientSubmissionState = () => {
@@ -296,6 +298,7 @@ export default function App() {
     setSubmissionErrorCode("");
     setSubmissionErrorMessage("");
     setSubmissionFieldErrors({});
+    setBatchBlockStatus({});
     setShowCreatorProgress(false);
     setCreatorJobIds([]);
     setCreatorProgress({});
@@ -1362,6 +1365,122 @@ export default function App() {
     }
   };
 
+  const submitAllBlocks = async () => {
+    setError("");
+    setSuccess("");
+    setShowSubmissionErrorModal(false);
+    setSubmissionErrorCode("");
+    setSubmissionErrorMessage("");
+    setSubmissionFieldErrors({});
+    setBatchBlockStatus({});
+
+    const blocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
+    const resolvedClientName = ((clients[0]?.name) || "").trim();
+    const requiresTargetSiteSelection = isCreateArticleSection;
+
+    // --- validate all blocks first ---
+    const fieldErrors = {};
+    const blockErrors = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const validationError = getSubmissionBlockError(block, {
+        isCreateArticle: isCreateArticleSection,
+        clientName: resolvedClientName,
+        requiresTargetSite: requiresTargetSiteSelection,
+      });
+      if (validationError) {
+        if (validationError === t("errorFileTypeRequired")) {
+          fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), source_type: true };
+        }
+        blockErrors.push(
+          t("batchBlockError").replace("{n}", String(i + 1)).replace("{error}", validationError)
+        );
+      }
+    }
+    if (blockErrors.length) {
+      setSubmissionFieldErrors(fieldErrors);
+      setError(blockErrors.join("\n"));
+      return;
+    }
+
+    // --- submit sequentially ---
+    try {
+      setSubmitting(true);
+      const collectedJobIds = [];
+      const collectedProgress = {};
+      let succeeded = 0;
+      let failed = 0;
+
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "submitting" }));
+        try {
+          const formData = buildSubmissionFormData(block, {
+            isCreateArticle: isCreateArticleSection,
+            clientName: resolvedClientName,
+          });
+          const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
+          let responseData = null;
+
+          if (effectiveSourceType === "word-doc" && block.docx_file) {
+            setUploadProgressBlockId(block.id);
+            setUploadProgress(0);
+            responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData);
+            setUploadProgress(100);
+          } else {
+            setUploadProgressBlockId(null);
+            const response = await fetch(`${baseApiUrl}/automation/submit-article-webhook`, {
+              method: "POST",
+              credentials: "include",
+              body: formData,
+            });
+            if (!response.ok) {
+              const detail = await readApiError(response, t("errorRequestFailed"));
+              const requestError = new Error(detail || t("errorRequestFailed"));
+              requestError.statusCode = response.status;
+              throw requestError;
+            }
+            responseData = await response.json().catch(() => ({}));
+          }
+
+          if (responseData?.job_id && isCreateArticleSection) {
+            collectedJobIds.push(responseData.job_id);
+            collectedProgress[responseData.job_id] = { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false };
+          }
+          succeeded++;
+          setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "success" }));
+        } catch (blockErr) {
+          failed++;
+          setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "error" }));
+        }
+      }
+
+      // --- show results ---
+      if (isCreateArticleSection && collectedJobIds.length) {
+        setCreatorJobIds(collectedJobIds);
+        setCreatorProgress(collectedProgress);
+        setShowCreatorProgress(true);
+      } else if (failed === 0) {
+        setShowSubmissionSuccessModal(true);
+      }
+
+      if (failed > 0 && succeeded > 0) {
+        setError(
+          t("batchPartialSuccess")
+            .replace("{succeeded}", String(succeeded))
+            .replace("{total}", String(blocks.length))
+            .replace("{failed}", String(failed))
+        );
+      } else if (failed > 0 && succeeded === 0) {
+        setError(t("errorRequestFailed"));
+      }
+    } finally {
+      setSubmitting(false);
+      setUploadProgress(null);
+      setUploadProgressBlockId(null);
+    }
+  };
+
   const setAdminUserEditField = (userId, field, value) => {
     setAdminUserEdits((prev) => ({
       ...prev,
@@ -2191,11 +2310,19 @@ export default function App() {
                       (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                     );
                     const showRemoveControl = blockIndex > 0;
+                    const activeBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
+                    const isBatchMode = activeBlocks.length > 1;
+                    const blockStatus = batchBlockStatus[block.id] || null;
                     return (
                       <div key={block.id} className="submission-block-wrap">
-                        <div className={`submission-block panel ${isCreateArticleSection ? "create-article-block" : ""}`.trim()}>
+                        <div className={`submission-block panel ${isCreateArticleSection ? "create-article-block" : ""} ${blockStatus ? `batch-${blockStatus}` : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
+                            {blockStatus ? (
+                              <span className={`batch-status-indicator batch-status-${blockStatus}`}>
+                                {blockStatus === "submitting" ? "⏳" : blockStatus === "success" ? "✓" : "✗"}
+                              </span>
+                            ) : null}
                           </div>
 
                           {isAdminUser ? (
@@ -2460,16 +2587,18 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          <div className="submission-block-actions">
-                            <button
-                              className="btn submit-btn"
-                              type="button"
-                              onClick={() => submitSubmissionBlock(block, blockIndex)}
-                              disabled={submitting}
-                            >
-                              {submitting ? t("submitting") : t("submitForReview")}
-                            </button>
-                          </div>
+                          {!isBatchMode ? (
+                            <div className="submission-block-actions">
+                              <button
+                                className="btn submit-btn"
+                                type="button"
+                                onClick={() => submitSubmissionBlock(block, blockIndex)}
+                                disabled={submitting}
+                              >
+                                {submitting ? t("submitting") : t("submitForReview")}
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -2503,6 +2632,20 @@ export default function App() {
                     </button>
                   ) : null}
                 </div>
+                {(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).length > 1 ? (
+                  <div className="batch-submit-bar">
+                    <button
+                      className="btn submit-btn batch-submit-btn"
+                      type="button"
+                      onClick={submitAllBlocks}
+                      disabled={submitting}
+                    >
+                      {submitting
+                        ? t("submittingAll")
+                        : `${t("submitAllArticles")} (${(isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks).length})`}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           )}

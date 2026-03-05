@@ -83,7 +83,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
@@ -220,6 +220,10 @@ export default function App() {
   const [publishedClientId, setPublishedClientId] = useState("");
   const [publishedSiteId, setPublishedSiteId] = useState("");
   const [publishedSort, setPublishedSort] = useState("published_at");
+  const [queueStats, setQueueStats] = useState(null);
+  const [queueStatsLoading, setQueueStatsLoading] = useState(false);
+  const [queueAutoRefresh, setQueueAutoRefresh] = useState(true);
+  const queueAutoRefreshRef = useRef(true);
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
   const [clientSuggestionsBlockId, setClientSuggestionsBlockId] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
@@ -561,6 +565,18 @@ export default function App() {
     }
   };
 
+  const loadQueueStats = async () => {
+    try {
+      setQueueStatsLoading(true);
+      const data = await api.get("/queue/stats");
+      setQueueStats(data);
+    } catch (err) {
+      console.error("Failed to load queue stats", err);
+    } finally {
+      setQueueStatsLoading(false);
+    }
+  };
+
   const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
@@ -888,6 +904,22 @@ export default function App() {
     if (activeSection !== "published-articles") return;
     loadPublishedArticles();
   }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection !== "queue-dashboard") return;
+    loadQueueStats();
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection !== "queue-dashboard") return;
+    if (!queueAutoRefreshRef.current) return;
+    const intervalId = window.setInterval(() => {
+      if (queueAutoRefreshRef.current) loadQueueStats();
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [currentUser, activeSection, queueAutoRefresh]);
 
   useEffect(() => {
     if (!currentUser || isDbUpdaterDomain) return;
@@ -1544,6 +1576,7 @@ export default function App() {
   const isAdminUser = currentUser.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isPublishedArticlesSection = isAdminUser && activeSection === "published-articles";
+  const isQueueDashboardSection = isAdminUser && activeSection === "queue-dashboard";
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isCreateArticleSection = activeSection === "create-article";
   const isSubmitArticleSection = activeSection === "submit-article";
@@ -1693,7 +1726,7 @@ export default function App() {
       </div>
       <div className="app-main">
 
-        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection || isQueueDashboardSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
               <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
@@ -2111,6 +2144,31 @@ export default function App() {
                 })}
               </div>
             </div>
+          ) : isQueueDashboardSection ? (
+            <QueueDashboardPanel
+              t={t}
+              queueStats={queueStats}
+              queueStatsLoading={queueStatsLoading}
+              queueAutoRefresh={queueAutoRefresh}
+              onToggleAutoRefresh={() => {
+                setQueueAutoRefresh((prev) => {
+                  const next = !prev;
+                  queueAutoRefreshRef.current = next;
+                  return next;
+                });
+              }}
+              onRefresh={async () => {
+                setQueueStatsLoading(true);
+                try {
+                  const data = await api.get("/queue/stats");
+                  setQueueStats(data);
+                } catch (err) {
+                  console.error("Failed to load queue stats", err);
+                } finally {
+                  setQueueStatsLoading(false);
+                }
+              }}
+            />
           ) : (
             <div className="panel form-panel request-form-panel">
               <div className="submit-article-form request-builder-form">
@@ -3130,6 +3188,13 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         <path d="M8 9h8M8 13h5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </svg>
     ),
+    "queue-dashboard": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path d="M4 6h16M4 10h12M4 14h14M4 18h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="20" cy="18" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M20 16v2l1.2.7" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
+    ),
     dashboard: (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -3146,6 +3211,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "create-article", label: t("navCreateArticle") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
         { id: "published-articles", label: t("navPublishedArticles") },
+        { id: "queue-dashboard", label: t("navQueueDashboard") },
       ]
     : [
         { id: "dashboard", label: t("navClientDashboard") },
@@ -3281,5 +3347,99 @@ function SystemIcon() {
         strokeLinecap="round"
       />
     </svg>
+  );
+}
+
+function QueueDashboardPanel({ t, queueStats, queueStatsLoading, queueAutoRefresh, onToggleAutoRefresh, onRefresh }) {
+  const data = queueStats || {};
+  const workerRunning = data.worker_running ?? false;
+  const hasData = queueStats !== null;
+  const startedAtFormatted = data.started_at
+    ? new Date(data.started_at).toLocaleString()
+    : "—";
+
+  return (
+    <div className="panel form-panel queue-dashboard-panel">
+      <div className="queue-dashboard-header">
+        <h2>{t("queueDashboardTitle")}</h2>
+        <div className="queue-dashboard-actions">
+          <label className="queue-auto-toggle">
+            <input
+              type="checkbox"
+              checked={queueAutoRefresh}
+              onChange={onToggleAutoRefresh}
+            />
+            <span>{t("queueAutoRefresh")}</span>
+          </label>
+          <button className="btn secondary small" type="button" onClick={onRefresh} disabled={queueStatsLoading}>
+            {queueStatsLoading ? t("loading") : t("queueRefresh")}
+          </button>
+        </div>
+      </div>
+
+      {!hasData && !queueStatsLoading ? (
+        <p className="muted-text">{t("queueNoData")}</p>
+      ) : null}
+
+      {queueStatsLoading && !hasData ? (
+        <div className="loading-inline" role="status" aria-live="polite">
+          <span className="sr-only">{t("loading")}</span>
+        </div>
+      ) : null}
+
+      {hasData ? (
+        <>
+          <div className="queue-status-badge-row">
+            <span className={`queue-status-badge ${workerRunning ? "queue-status-running" : "queue-status-stopped"}`}>
+              <span className="queue-status-dot" />
+              {workerRunning ? t("queueWorkerRunning") : t("queueWorkerStopped")}
+            </span>
+            {data.started_at ? (
+              <span className="queue-started-at">
+                {t("queueStartedAt")}: {startedAtFormatted}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="stats-grid queue-stats-grid">
+            <div className="stat-card" style={{"--i": 0}}>
+              <span className="stat-label">{t("queueConcurrency")}</span>
+              <strong>{data.concurrency ?? "—"}</strong>
+            </div>
+            <div className="stat-card queue-stat-active" style={{"--i": 1}}>
+              <span className="stat-label">{t("queueActiveJobs")}</span>
+              <strong>{data.active_jobs ?? 0}</strong>
+            </div>
+            <div className="stat-card queue-stat-queued" style={{"--i": 2}}>
+              <span className="stat-label">{t("queueQueuedJobs")}</span>
+              <strong>{data.queued_jobs ?? 0}</strong>
+            </div>
+            <div className="stat-card" style={{"--i": 3}}>
+              <span className="stat-label">{t("queueTotalProcessed")}</span>
+              <strong>{data.total_processed ?? 0}</strong>
+            </div>
+            <div className="stat-card queue-stat-succeeded" style={{"--i": 4}}>
+              <span className="stat-label">{t("queueTotalSucceeded")}</span>
+              <strong>{data.total_succeeded ?? 0}</strong>
+            </div>
+            <div className="stat-card queue-stat-failed" style={{"--i": 5}}>
+              <span className="stat-label">{t("queueTotalFailed")}</span>
+              <strong>{data.total_failed ?? 0}</strong>
+            </div>
+          </div>
+
+          {Array.isArray(data.active_job_ids) && data.active_job_ids.length > 0 ? (
+            <div className="queue-active-ids">
+              <h3>{t("queueActiveJobIds")}</h3>
+              <ul className="queue-id-list">
+                {data.active_job_ids.map((id) => (
+                  <li key={id}><code>{id}</code></li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }

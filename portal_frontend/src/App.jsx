@@ -134,12 +134,12 @@ export default function App() {
   const isDbUpdaterDomain = Boolean(dbUpdaterHost && currentHost === dbUpdaterHost);
   const [activeSection, setActiveSection] = useState("submit-article");
   const [language, setLanguage] = useState(getInitialLanguage());
-  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "system");
-  const [sidebarHidden, setSidebarHidden] = useState(getInitialSidebarHidden);
-  const [systemPrefersDark, setSystemPrefersDark] = useState(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem("theme");
+    return stored === "light" || stored === "dark" ? stored : "dark";
   });
+  const [sidebarHidden, setSidebarHidden] = useState(getInitialSidebarHidden);
+  const [readySites, setReadySites] = useState([]);
   const [isNarrowViewport, setIsNarrowViewport] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
     return window.matchMedia("(max-width: 1080px)").matches;
@@ -427,14 +427,13 @@ export default function App() {
   }, [clients, currentUser?.role]);
 
   useEffect(() => {
-    const effectiveTheme = theme === "system" ? (systemPrefersDark ? "dark" : "light") : theme;
-    if (effectiveTheme === "dark") {
+    if (theme === "dark") {
       document.documentElement.removeAttribute("data-theme");
     } else {
       document.documentElement.setAttribute("data-theme", "light");
     }
     localStorage.setItem("theme", theme);
-  }, [theme, systemPrefersDark]);
+  }, [theme]);
 
   useEffect(() => {
     localStorage.setItem("portal_sidebar_hidden", sidebarHidden ? "true" : "false");
@@ -442,33 +441,26 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
-    const themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
     const widthMedia = window.matchMedia("(max-width: 1080px)");
 
-    const onThemeMediaChange = (event) => setSystemPrefersDark(Boolean(event.matches));
     const onWidthMediaChange = (event) => {
       const narrow = Boolean(event.matches);
       setIsNarrowViewport(narrow);
       if (narrow) setSidebarHidden(true);
     };
 
-    setSystemPrefersDark(themeMedia.matches);
     setIsNarrowViewport(widthMedia.matches);
     if (widthMedia.matches) setSidebarHidden(true);
 
-    if (typeof themeMedia.addEventListener === "function") {
-      themeMedia.addEventListener("change", onThemeMediaChange);
+    if (typeof widthMedia.addEventListener === "function") {
       widthMedia.addEventListener("change", onWidthMediaChange);
       return () => {
-        themeMedia.removeEventListener("change", onThemeMediaChange);
         widthMedia.removeEventListener("change", onWidthMediaChange);
       };
     }
 
-    themeMedia.addListener(onThemeMediaChange);
     widthMedia.addListener(onWidthMediaChange);
     return () => {
-      themeMedia.removeListener(onThemeMediaChange);
       widthMedia.removeListener(onWidthMediaChange);
     };
   }, []);
@@ -488,10 +480,23 @@ export default function App() {
   const loadAll = async (forUser = currentUser) => {
     try {
       setError("");
+      const isAdmin = forUser?.role === "admin";
       const sitesPath = forUser?.role === "client" ? "/sites?status=active&ready_only=true" : "/sites";
-      const [clientsData, sitesData] = await Promise.all([api.get("/clients"), api.get(sitesPath)]);
-      setClients((clientsData || []).filter((item) => item.status === "active"));
-      setSites((sitesData || []).filter((item) => item.status === "active"));
+      if (isAdmin) {
+        const [clientsData, sitesData, readySitesData] = await Promise.all([
+          api.get("/clients"),
+          api.get("/sites"),
+          api.get("/sites?status=active&ready_only=true"),
+        ]);
+        setClients((clientsData || []).filter((item) => item.status === "active"));
+        setSites((sitesData || []).filter((item) => item.status === "active"));
+        setReadySites((readySitesData || []).filter((item) => item.status === "active"));
+      } else {
+        const [clientsData, sitesData] = await Promise.all([api.get("/clients"), api.get(sitesPath)]);
+        setClients((clientsData || []).filter((item) => item.status === "active"));
+        setSites((sitesData || []).filter((item) => item.status === "active"));
+        setReadySites((sitesData || []).filter((item) => item.status === "active"));
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -1874,12 +1879,12 @@ export default function App() {
           {isAdminSection ? (
             <div className="stats-grid admin-kpi-grid">
               <div className="stat-card" style={{"--i": 0}}>
-                <span className="stat-label">{t("statActiveSites")}</span>
+                <span className="stat-label">{t("statTotalSites")}</span>
                 <strong>{sites.length}</strong>
               </div>
               <div className="stat-card" style={{"--i": 1}}>
-                <span className="stat-label">{t("statActiveClients")}</span>
-                <strong>{clients.length}</strong>
+                <span className="stat-label">{t("statActiveSites")}</span>
+                <strong>{readySites.length}</strong>
               </div>
               <div className="stat-card" style={{"--i": 2}}>
                 <span className="stat-label">{t("kpiTotalUsers")}</span>
@@ -3449,14 +3454,6 @@ function ThemeToggle({ theme, onChange, t }) {
       </button>
       <button
         type="button"
-        className={theme === "system" ? "active" : ""}
-        onClick={() => onChange("system")}
-        aria-label={t("systemTheme")}
-      >
-        <SystemIcon />
-      </button>
-      <button
-        type="button"
         className={theme === "dark" ? "active" : ""}
         onClick={() => onChange("dark")}
         aria-label={t("darkTheme")}
@@ -3492,21 +3489,6 @@ function MoonIcon() {
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function SystemIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path
-        d="M8 20h8M12 17v3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
       />
     </svg>
   );

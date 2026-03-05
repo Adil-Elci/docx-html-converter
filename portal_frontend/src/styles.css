@@ -939,6 +939,8 @@ input:disabled {
 .submission-block-wrap {
   display: grid;
   gap: var(--space-2);
+  position: relative;
+  z-index: 1;
 }
 
 .submission-block {
@@ -2299,7 +2301,7 @@ input:disabled {
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   box-shadow: var(--shadow-lg);
-  z-index: 20;
+  z-index: 1000;
 }
 
 .site-suggest-item {

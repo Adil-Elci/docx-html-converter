@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import re
@@ -472,6 +473,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     progress = on_progress or _noop_progress
     warnings: List[str] = []
     debug: Dict[str, Any] = {"dry_run": dry_run, "timings_ms": {}, "fetched_pages": []}
+    current_year = datetime.datetime.now().year
 
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
@@ -651,6 +653,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     for attempt in range(1, 3):
         system_prompt = (
             "Create an SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
+            "Include a concise final H2 titled 'Conclusion' (counts toward the 3-5). "
+            f"If H1 includes a year, it must be {current_year} (no other years in titles). "
+            "Ensure H3 headings only appear under their respective H2 parents (no orphan H3). "
             "Choose backlink placement as intro or one specific section (section_2..section_5). "
             "Return JSON only."
         )
@@ -719,7 +724,11 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 "Write an SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Use neutral authoritative tone, "
                 "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
-                "Include H1 and 3-5 H2 sections. Each section should have 1-2 substantial paragraphs. "
+                "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Conclusion'. "
+                "Each section should have 1-2 substantial paragraphs. "
+                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
+                "In body content, historical years or specific dates only when necessary for factual accuracy. "
+                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "Return JSON only."
             )
             user_prompt = (
@@ -738,6 +747,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         elif attempt == 2 and last_article_html:
             system_prompt = (
                 "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
+                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
+                "Include a concise final H2 titled 'Conclusion'. "
+                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "Return JSON only."
             )
             user_prompt = (
@@ -758,6 +770,10 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             system_prompt = (
                 "Write a NEW article from scratch. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
+                "Include a concise final H2 titled 'Conclusion'. "
+                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
+                "In body content, historical years or specific dates only when necessary for factual accuracy. "
+                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "Do not return markdown fences. Return JSON only."
             )
             user_prompt = (
@@ -1031,7 +1047,9 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         system_prompt = (
             "Fix the HTML article to satisfy SEO checks. "
             f"{wc_instruction} "
-            "Keep exactly one hyperlink (the backlink). Keep 3-5 H2 sections. "
+            "Keep exactly one hyperlink (the backlink). Keep 3-5 H2 sections, ending with a concise 'Conclusion'. "
+            f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
+            "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
             "Return JSON only."
         )
         user_prompt = (

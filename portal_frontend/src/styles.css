@@ -1371,11 +1371,10 @@ input:disabled {
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) {
-  grid-template-columns: minmax(200px, 1.2fr) minmax(200px, 1.2fr) auto auto;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(140px, 0.8fr) auto minmax(0, 1.5fr) auto;
   grid-template-areas:
-    "header header header header"
-    "client site type submit"
-    "file file file file";
+    "header header header header header"
+    "client site type file submit";
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-client {
@@ -1398,6 +1397,11 @@ input:disabled {
   width: fit-content;
 }
 
+.request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions .btn {
+  padding: 0 12px;
+  font-size: 12px;
+}
+
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-header {
   grid-area: header;
   align-self: start;
@@ -1405,6 +1409,14 @@ input:disabled {
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file {
   grid-area: file;
+  min-height: 0;
+}
+
+.request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
+  visibility: hidden;
+  min-height: 0;
+  max-height: 0;
+  overflow: hidden;
 }
 
 .request-container .request-form-panel .submission-block:not(.create-article-block) .upload-meter {
@@ -2595,28 +2607,38 @@ input:disabled {
 
 @media (max-width: 1280px) {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
-    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto;
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
     grid-template-areas:
-      "header header header"
-      "client site type"
-      "submit . ."
-      "file file file";
+      "header header header header"
+      "client site type submit"
+      "file file file file";
   }
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
-    justify-self: start;
+    justify-self: end;
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
+    display: none;
   }
 }
 
 @media (max-width: 1100px) {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
-    grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr);
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr);
     grid-template-areas:
       "header header"
       "client site"
-      "type ."
-      "submit ."
+      "type submit"
       "file file";
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
+    justify-self: end;
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
+    display: none;
   }
 }
 
@@ -2628,12 +2650,16 @@ input:disabled {
       "client"
       "site"
       "type"
-      "submit"
-      "file";
+      "file"
+      "submit";
   }
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
     justify-self: stretch;
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
+    display: none;
   }
 }
 

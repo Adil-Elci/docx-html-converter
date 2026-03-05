@@ -1485,7 +1485,7 @@ input:disabled {
 .request-container .request-form-panel .site-suggest-list {
   border-radius: var(--radius-sm);
   border-color: var(--border-subtle);
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  background: var(--bg-subtle);
   box-shadow: 0 18px 34px rgba(7, 14, 32, 0.16);
 }
 
@@ -2297,10 +2297,9 @@ input:disabled {
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel-2) 92%, transparent);
+  background: var(--bg-subtle);
   box-shadow: var(--shadow-lg);
   z-index: 20;
-  backdrop-filter: blur(var(--glass-blur));
 }
 
 .site-suggest-item {

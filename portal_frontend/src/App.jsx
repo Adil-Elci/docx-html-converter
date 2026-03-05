@@ -86,7 +86,7 @@ const defaultDbUpdaterHost = "updatedb.elci.live";
 const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
-const ADMIN_IDLE_LOGOUT_MS = 2 * 60 * 60 * 1000;
+const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 
@@ -981,7 +981,7 @@ export default function App() {
       setAdminUserEdits({});
       setAdminUserForm(emptyAdminUserForm());
       resetClientSubmissionState();
-      setAuthError("Logged out due to inactivity.");
+      setAuthError("");
     };
 
     const resetInactivityTimer = () => {
@@ -990,14 +990,33 @@ export default function App() {
     };
 
     const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    const handleBeforeUnload = () => {
+      if (currentUser.role !== "admin") return;
+      const logoutUrl = `${baseApiUrl}/auth/logout`;
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(logoutUrl, new Blob([], { type: "application/json" }));
+        } else {
+          fetch(logoutUrl, {
+            method: "POST",
+            credentials: "include",
+            keepalive: true,
+          });
+        }
+      } catch {
+        // Best-effort logout on browser exit.
+      }
+    };
     for (const eventName of activityEvents) {
       window.addEventListener(eventName, resetInactivityTimer, { passive: true });
     }
 
+    window.addEventListener("beforeunload", handleBeforeUnload);
     resetInactivityTimer();
 
     return () => {
       clearInactivityTimer();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       for (const eventName of activityEvents) {
         window.removeEventListener(eventName, resetInactivityTimer);
       }

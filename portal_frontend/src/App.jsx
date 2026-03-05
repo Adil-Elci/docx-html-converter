@@ -995,33 +995,14 @@ export default function App() {
     };
 
     const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
-    const handleBeforeUnload = () => {
-      if (currentUser.role !== "admin") return;
-      const logoutUrl = `${baseApiUrl}/auth/logout`;
-      try {
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon(logoutUrl, new Blob([], { type: "application/json" }));
-        } else {
-          fetch(logoutUrl, {
-            method: "POST",
-            credentials: "include",
-            keepalive: true,
-          });
-        }
-      } catch {
-        // Best-effort logout on browser exit.
-      }
-    };
     for (const eventName of activityEvents) {
       window.addEventListener(eventName, resetInactivityTimer, { passive: true });
     }
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
     resetInactivityTimer();
 
     return () => {
       clearInactivityTimer();
-      window.removeEventListener("beforeunload", handleBeforeUnload);
       for (const eventName of activityEvents) {
         window.removeEventListener(eventName, resetInactivityTimer);
       }

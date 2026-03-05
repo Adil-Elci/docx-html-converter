@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import datetime
 import os
 import logging
 import threading
-import time
-from typing import Any, Dict, List, Optional
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 from uuid import UUID
 
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session, sessionmaker
 
 from .automation_service import (
@@ -33,36 +35,154 @@ logger = logging.getLogger("portal_backend.automation")
 
 
 class AutomationJobWorker:
+    """Queue worker that processes automation jobs using a thread pool.
+
+    Uses PostgreSQL ``FOR UPDATE SKIP LOCKED`` to safely claim jobs, and a
+    ``ThreadPoolExecutor`` so multiple jobs can run in parallel.
+
+    Env vars:
+        AUTOMATION_WORKER_CONCURRENCY – max parallel jobs (default 3).
+        AUTOMATION_WORKER_POLL_SECONDS – seconds between poll cycles (default 2).
+        AUTOMATION_WORKER_STALE_MINUTES – minutes before a "processing" job
+            is considered stale and auto-requeued (default 30).
+        AUTOMATION_WORKER_STALE_SWEEP_SECONDS – seconds between stale-job
+            recovery sweeps (default 300 = 5 minutes).
+    """
+
     def __init__(self, db_sessionmaker: sessionmaker):
         self._sessionmaker = db_sessionmaker
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._dispatcher_thread: Optional[threading.Thread] = None
+        self._sweeper_thread: Optional[threading.Thread] = None
+
+        self._concurrency = _read_int_env("AUTOMATION_WORKER_CONCURRENCY", 3)
+        self._pool: Optional[ThreadPoolExecutor] = None
+
+        # Track in-flight jobs so we never double-dispatch the same job_id.
+        self._in_flight_lock = threading.Lock()
+        self._in_flight: Set[UUID] = set()
+
+        # Lightweight counters for the stats endpoint.
+        self._total_processed = 0
+        self._total_succeeded = 0
+        self._total_failed = 0
+        self._started_at: Optional[datetime.datetime] = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if self._dispatcher_thread and self._dispatcher_thread.is_alive():
             return
-        logger.info("automation.worker.start")
-        self._thread = threading.Thread(target=self._run, name="automation-job-worker", daemon=True)
-        self._thread.start()
+        logger.info(
+            "automation.worker.start concurrency=%s",
+            self._concurrency,
+        )
+        self._started_at = datetime.datetime.utcnow()
+        self._pool = ThreadPoolExecutor(
+            max_workers=self._concurrency,
+            thread_name_prefix="job-worker",
+        )
+        self._dispatcher_thread = threading.Thread(
+            target=self._dispatch_loop,
+            name="job-dispatcher",
+            daemon=True,
+        )
+        self._dispatcher_thread.start()
+
+        self._sweeper_thread = threading.Thread(
+            target=self._stale_sweep_loop,
+            name="job-stale-sweeper",
+            daemon=True,
+        )
+        self._sweeper_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=5)
+        if self._dispatcher_thread:
+            self._dispatcher_thread.join(timeout=5)
+        if self._sweeper_thread:
+            self._sweeper_thread.join(timeout=5)
+        if self._pool:
+            self._pool.shutdown(wait=False)
         logger.info("automation.worker.stop")
 
-    def _run(self) -> None:
+    # ------------------------------------------------------------------
+    # Stats (consumed by /queue/stats endpoint)
+    # ------------------------------------------------------------------
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return a snapshot of queue / worker statistics."""
+        with self._in_flight_lock:
+            active = len(self._in_flight)
+            active_ids = sorted(str(jid) for jid in self._in_flight)
+
+        # Query queue depth directly from the DB.
+        queued_count = 0
+        try:
+            with self._sessionmaker() as session:
+                queued_count = (
+                    session.query(sa_func.count(Job.id))
+                    .filter(Job.job_status.in_(("queued", "retrying")))
+                    .scalar()
+                ) or 0
+        except Exception:
+            logger.debug("automation.worker.stats_query_error", exc_info=True)
+
+        return {
+            "worker_running": self._dispatcher_thread is not None
+            and self._dispatcher_thread.is_alive(),
+            "concurrency": self._concurrency,
+            "active_jobs": active,
+            "active_job_ids": active_ids,
+            "queued_jobs": queued_count,
+            "total_processed": self._total_processed,
+            "total_succeeded": self._total_succeeded,
+            "total_failed": self._total_failed,
+            "started_at": self._started_at.isoformat() + "Z" if self._started_at else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Dispatcher loop — polls DB and submits jobs to the pool
+    # ------------------------------------------------------------------
+
+    def _dispatch_loop(self) -> None:
         poll_interval = _read_int_env("AUTOMATION_WORKER_POLL_SECONDS", 2)
         while not self._stop_event.is_set():
             try:
-                processed = self._process_next_job()
+                dispatched = self._try_dispatch_jobs()
             except Exception:
-                logger.exception("automation.worker.loop_error")
-                processed = False
-            if not processed:
+                logger.exception("automation.worker.dispatch_loop_error")
+                dispatched = False
+            if not dispatched:
                 self._stop_event.wait(poll_interval)
 
-    def _process_next_job(self) -> bool:
+    def _available_slots(self) -> int:
+        with self._in_flight_lock:
+            return max(0, self._concurrency - len(self._in_flight))
+
+    def _try_dispatch_jobs(self) -> bool:
+        """Claim up to N available jobs and submit them to the thread pool.
+
+        Returns True if at least one job was dispatched.
+        """
+        slots = self._available_slots()
+        if slots <= 0:
+            return False
+
+        dispatched_any = False
+        for _ in range(slots):
+            job_id = self._claim_next_job()
+            if job_id is None:
+                break
+            dispatched_any = True
+            future = self._pool.submit(self._run_job_wrapper, job_id)  # type: ignore[union-attr]
+            future.add_done_callback(lambda f, jid=job_id: self._on_job_done(jid, f))
+        return dispatched_any
+
+    def _claim_next_job(self) -> Optional[UUID]:
+        """Atomically claim the oldest queued/retrying job and return its ID."""
         with self._sessionmaker() as session:
             job = (
                 session.query(Job)
@@ -73,17 +193,142 @@ class AutomationJobWorker:
             )
             if not job:
                 session.rollback()
-                return False
+                return None
+
+            # Guard against dispatcher racing itself (shouldn't happen, but
+            # defensive).
+            with self._in_flight_lock:
+                if job.id in self._in_flight:
+                    session.rollback()
+                    return None
+                self._in_flight.add(job.id)
 
             job.job_status = "processing"
             job.attempt_count = int(job.attempt_count or 0) + 1
+            job.updated_at = datetime.datetime.now(datetime.timezone.utc)
             session.add(job)
             session.commit()
-            job_id = job.id
-            logger.info("automation.worker.claimed job_id=%s attempt=%s", job_id, job.attempt_count)
+            logger.info(
+                "automation.worker.claimed job_id=%s attempt=%s",
+                job.id,
+                job.attempt_count,
+            )
+            return job.id
 
-        self._process_claimed_job(job_id)
-        return True
+    def _run_job_wrapper(self, job_id: UUID) -> None:
+        """Thin wrapper around _process_claimed_job for the thread pool."""
+        try:
+            self._process_claimed_job(job_id)
+        except Exception:
+            logger.exception("automation.worker.job_wrapper_error job_id=%s", job_id)
+
+    def _on_job_done(self, job_id: UUID, future: Future) -> None:  # type: ignore[type-arg]
+        """Callback executed when a job future completes — updates counters."""
+        with self._in_flight_lock:
+            self._in_flight.discard(job_id)
+
+        self._total_processed += 1
+
+        # Check final status to update succeeded/failed counters.
+        try:
+            with self._sessionmaker() as session:
+                row = session.query(Job.job_status).filter(Job.id == job_id).first()
+                if row:
+                    status = row[0]
+                    if status in ("succeeded", "pending_approval"):
+                        self._total_succeeded += 1
+                    elif status == "failed":
+                        self._total_failed += 1
+        except Exception:
+            logger.debug("automation.worker.on_done_query_error job_id=%s", job_id, exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Stale-job recovery sweep
+    # ------------------------------------------------------------------
+
+    def _stale_sweep_loop(self) -> None:
+        sweep_interval = _read_int_env("AUTOMATION_WORKER_STALE_SWEEP_SECONDS", 300)
+        stale_minutes = _read_int_env("AUTOMATION_WORKER_STALE_MINUTES", 30)
+        # Wait one full interval before the first sweep so normal startup
+        # jobs don't get immediately requeued.
+        self._stop_event.wait(sweep_interval)
+        while not self._stop_event.is_set():
+            try:
+                self._recover_stale_jobs(stale_minutes)
+            except Exception:
+                logger.exception("automation.worker.stale_sweep_error")
+            self._stop_event.wait(sweep_interval)
+
+    def _recover_stale_jobs(self, stale_minutes: int) -> None:
+        """Requeue jobs stuck in 'processing' for longer than *stale_minutes*.
+
+        Only requeues jobs that are NOT currently in-flight in this worker
+        instance (they might be legitimately running).
+        """
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=stale_minutes)
+        with self._sessionmaker() as session:
+            stale_jobs = (
+                session.query(Job)
+                .filter(
+                    Job.job_status == "processing",
+                    Job.updated_at < cutoff,
+                )
+                .with_for_update(skip_locked=True)
+                .all()
+            )
+            if not stale_jobs:
+                return
+
+            with self._in_flight_lock:
+                current_in_flight = set(self._in_flight)
+
+            requeued = 0
+            for job in stale_jobs:
+                if job.id in current_in_flight:
+                    continue
+                max_attempts = _read_int_env("AUTOMATION_JOB_MAX_ATTEMPTS", 3)
+                attempts = int(job.attempt_count or 0)
+                if attempts >= max_attempts:
+                    job.job_status = "failed"
+                    job.last_error = f"Stale: stuck in processing for >{stale_minutes}m (attempts exhausted)"
+                    session.add(
+                        JobEvent(
+                            job_id=job.id,
+                            event_type="failed",
+                            payload={
+                                "error": job.last_error,
+                                "attempt": attempts,
+                                "max_attempts": max_attempts,
+                                "stale_recovery": True,
+                            },
+                        )
+                    )
+                else:
+                    job.job_status = "retrying"
+                    job.last_error = f"Stale: stuck in processing for >{stale_minutes}m — auto-requeued"
+                    session.add(
+                        JobEvent(
+                            job_id=job.id,
+                            event_type="failed",
+                            payload={
+                                "error": job.last_error,
+                                "attempt": attempts,
+                                "max_attempts": max_attempts,
+                                "will_retry": True,
+                                "stale_recovery": True,
+                            },
+                        )
+                    )
+                session.add(job)
+                requeued += 1
+
+            if requeued:
+                session.commit()
+                logger.info(
+                    "automation.worker.stale_sweep requeued=%s stale_minutes=%s",
+                    requeued,
+                    stale_minutes,
+                )
 
     def _process_claimed_job(self, job_id: UUID) -> None:
         max_attempts = _read_int_env("AUTOMATION_JOB_MAX_ATTEMPTS", 3)

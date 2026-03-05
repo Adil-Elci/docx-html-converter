@@ -102,3 +102,11 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/queue/stats")
+async def queue_stats() -> dict:
+    """Return current queue depth, active workers, and throughput counters."""
+    if _automation_worker is None:
+        return {"ok": True, "worker_running": False, "message": "Worker is not enabled."}
+    return {"ok": True, **_automation_worker.get_stats()}

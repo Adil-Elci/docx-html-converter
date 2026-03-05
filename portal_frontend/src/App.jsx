@@ -227,6 +227,7 @@ export default function App() {
   const queueAutoRefreshRef = useRef(true);
   const [siteSuggestionsBlockId, setSiteSuggestionsBlockId] = useState(null);
   const [clientSuggestionsBlockId, setClientSuggestionsBlockId] = useState(null);
+  const [targetSiteSuggestionsBlockId, setTargetSiteSuggestionsBlockId] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
   const portalRefreshInFlightRef = useRef(false);
@@ -2314,12 +2315,42 @@ export default function App() {
                       isAdminUser ? getTargetSitesForClient(selectedClient) : clientTargetSites,
                       (row) => `${row.target_site_domain || ""} ${row.target_site_url || ""}`,
                     );
+                    const blockFilteredTargetSites = isCreateArticleSection
+                      ? availableTargetSites.filter((row) => {
+                          const query = (block.target_site_url || "").trim().toLowerCase();
+                          if (!query) return true;
+                          const urlValue = (row.target_site_url || "").trim().toLowerCase();
+                          const domainValue = (row.target_site_domain || "").trim().toLowerCase();
+                          const domainUrlValue = domainValue ? `https://${domainValue}` : "";
+                          return (
+                            urlValue.includes(query)
+                            || domainValue.includes(query)
+                            || domainUrlValue.includes(query)
+                          );
+                        })
+                      : [];
                     const showRemoveControl = blockIndex > 0;
                     const activeBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
                     const isBatchMode = activeBlocks.length > 1;
                     const blockStatus = batchBlockStatus[block.id] || null;
+                    const isClientSuggesting = clientSuggestionsBlockId === block.id && blockFilteredClients.length > 0;
+                    const isSiteSuggesting = siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0;
+                    const isTargetSiteSuggesting = isCreateArticleSection
+                      && targetSiteSuggestionsBlockId === block.id
+                      && blockFilteredTargetSites.length > 0;
+                    const isSuggestionsOpen = isClientSuggesting || isSiteSuggesting || isTargetSiteSuggesting;
+                    const getSuggestPad = (count) => Math.min(260, count * 44 + 8) + 16;
+                    const suggestPad = Math.max(
+                      isClientSuggesting ? getSuggestPad(blockFilteredClients.length) : 0,
+                      isSiteSuggesting ? getSuggestPad(blockFilteredSites.length) : 0,
+                      isTargetSiteSuggesting ? getSuggestPad(blockFilteredTargetSites.length) : 0,
+                    );
                     return (
-                      <div key={block.id} className="submission-block-wrap">
+                      <div
+                        key={block.id}
+                        className={`submission-block-wrap ${isSuggestionsOpen ? "suggestions-open" : ""}`.trim()}
+                        style={suggestPad ? { "--suggest-pad": `${suggestPad}px` } : undefined}
+                      >
                         <div className={`submission-block panel ${isCreateArticleSection ? "create-article-block" : ""} ${blockStatus ? `batch-${blockStatus}` : ""}`.trim()}>
                           <div className="submission-block-header">
                             <h3>{`${t("requestBlockLabel")} ${blockIndex + 1}`}</h3>
@@ -2358,7 +2389,7 @@ export default function App() {
                                   placeholder={t("selectClient")}
                                   required
                                 />
-                                {clientSuggestionsBlockId === block.id && blockFilteredClients.length > 0 ? (
+                                {isClientSuggesting ? (
                                   <div className="site-suggest-list">
                                     {blockFilteredClients.slice(0, 30).map((client) => (
                                       <button
@@ -2401,8 +2432,11 @@ export default function App() {
                               <label>{t("targetSiteForBacklink")}</label>
                               <input
                                 type="url"
-                                list={`target-site-list-${block.id}`}
                                 value={block.target_site_url || ""}
+                                onFocus={() => setTargetSiteSuggestionsBlockId(block.id)}
+                                onBlur={() => setTimeout(() => {
+                                  setTargetSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
+                                }, 120)}
                                 onChange={(e) => {
                                   const nextUrl = e.target.value;
                                   const nextTarget = availableTargetSites.find((row) => {
@@ -2421,21 +2455,45 @@ export default function App() {
                                         }
                                       : item
                                   )));
+                                  setTargetSiteSuggestionsBlockId(block.id);
                                 }}
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
-                              <datalist id={`target-site-list-${block.id}`}>
-                                {availableTargetSites.map((row) => {
-                                  const optionId = String(row.id || "");
-                                  const domainLabel = (row.target_site_domain || "").trim();
-                                  const urlLabel = (row.target_site_url || "").trim();
-                                  const label = urlLabel || (domainLabel ? `https://${domainLabel}` : "") || optionId;
-                                  return (
-                                    <option key={optionId} value={label} />
-                                  );
-                                })}
-                              </datalist>
+                              {isTargetSiteSuggesting ? (
+                                <div className="site-suggest-list">
+                                  {blockFilteredTargetSites.slice(0, 30).map((row) => {
+                                    const optionId = String(row.id || "");
+                                    const domainLabel = (row.target_site_domain || "").trim();
+                                    const urlLabel = (row.target_site_url || "").trim();
+                                    const label = urlLabel || (domainLabel ? `https://${domainLabel}` : "") || optionId;
+                                    return (
+                                      <button
+                                        key={optionId}
+                                        type="button"
+                                        className="site-suggest-item"
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          const nextUrl = label;
+                                          updateActiveSubmissionBlocks((prev) => prev.map((item) => (
+                                            item.id === block.id
+                                              ? {
+                                                  ...item,
+                                                  target_site_id: optionId,
+                                                  target_site_url: nextUrl,
+                                                }
+                                              : item
+                                          )));
+                                          setTargetSiteSuggestionsBlockId(null);
+                                        }}
+                                      >
+                                        <span>{label}</span>
+                                        <span className="muted-text small-text">{domainLabel || optionId}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 
@@ -2455,7 +2513,7 @@ export default function App() {
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
-                              {siteSuggestionsBlockId === block.id && blockFilteredSites.length > 0 ? (
+                              {isSiteSuggesting ? (
                                 <div className="site-suggest-list">
                                   {blockFilteredSites.slice(0, 30).map((site) => (
                                     <button

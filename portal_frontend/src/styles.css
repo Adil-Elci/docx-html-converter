@@ -940,6 +940,17 @@ input:disabled {
   display: grid;
   gap: var(--space-2);
   position: relative;
+  z-index: 0;
+  transition: padding-bottom var(--transition-fast);
+}
+
+.submission-block-wrap:focus-within {
+  z-index: 20;
+}
+
+.submission-block-wrap.suggestions-open {
+  z-index: 60;
+  padding-bottom: var(--suggest-pad, 280px);
 }
 
 .submission-block {
@@ -949,6 +960,12 @@ input:disabled {
   align-items: start;
   padding: 16px;
   background: color-mix(in srgb, var(--panel-3) 45%, transparent);
+  position: relative;
+  z-index: 0;
+}
+
+.submission-block:focus-within {
+  z-index: 30;
 }
 
 .request-form-panel .submission-block {
@@ -960,6 +977,12 @@ input:disabled {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   background: transparent;
   box-shadow: none;
+}
+
+.request-form-panel .submission-block.panel {
+  animation: none;
+  transform: none;
+  backdrop-filter: none;
 }
 
 .request-form-panel .submission-block:last-child {

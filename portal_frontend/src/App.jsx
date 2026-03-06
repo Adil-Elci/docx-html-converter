@@ -89,6 +89,8 @@ const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
+const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
+const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -118,6 +120,26 @@ const resolveSectionForRole = (role, section) => {
 
 const getLandingSectionForRole = (role) =>
   role === "admin" ? getDefaultSectionForRole(role) : resolveSectionForRole(role, getStoredSectionForRole(role));
+
+const getUserStorageSuffix = (user) => (
+  (user?.id || user?.email || user?.role || "default").toString().trim().toLowerCase()
+);
+
+const getCreateArticleBlocksStorageKey = (user) => `${CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX}:${getUserStorageSuffix(user)}`;
+const getCreatorJobsStorageKey = (user) => `${CREATOR_JOBS_STORAGE_PREFIX}:${getUserStorageSuffix(user)}`;
+
+const clearCreatorDraftStorage = () => {
+  if (typeof window === "undefined") return;
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    if (key.startsWith(`${CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX}:`) || key.startsWith(`${CREATOR_JOBS_STORAGE_PREFIX}:`)) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
+};
 
 async function readApiError(response, fallbackMessage) {
   const rawBody = await response.text();
@@ -196,6 +218,7 @@ export default function App() {
   const [creatorJobsByBlock, setCreatorJobsByBlock] = useState({});
   const [creatorProgress, setCreatorProgress] = useState({});
   const creatorPollRef = useRef(null);
+  const [creatorDraftsHydrated, setCreatorDraftsHydrated] = useState(false);
 
   const [clients, setClients] = useState([]);
   const [sites, setSites] = useState([]);
@@ -243,6 +266,29 @@ export default function App() {
   const portalRefreshInFlightRef = useRef(false);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
+
+  const serializeCreateArticleBlock = useCallback((block) => ({
+    id: Number(block?.id || 0),
+    client_name: (block?.client_name || "").trim(),
+    publishing_site: (block?.publishing_site || "").trim(),
+    target_site_id: (block?.target_site_id || "").trim(),
+    target_site_url: (block?.target_site_url || "").trim(),
+    anchor: (block?.anchor || "").trim(),
+    topic: (block?.topic || "").trim(),
+  }), []);
+
+  const deserializeCreateArticleBlock = useCallback((raw, fallbackId) => {
+    const parsedId = Number(raw?.id);
+    const id = Number.isFinite(parsedId) && parsedId > 0 ? Math.floor(parsedId) : fallbackId;
+    return createSubmissionBlock(id, {
+      client_name: (raw?.client_name || "").trim(),
+      publishing_site: (raw?.publishing_site || "").trim(),
+      target_site_id: (raw?.target_site_id || "").trim(),
+      target_site_url: (raw?.target_site_url || "").trim(),
+      anchor: (raw?.anchor || "").trim(),
+      topic: (raw?.topic || "").trim(),
+    });
+  }, []);
 
   const getTargetSitesForClient = (client) => {
     if (!client) return [];
@@ -293,6 +339,7 @@ export default function App() {
   };
 
   const resetClientSubmissionState = () => {
+    clearCreatorDraftStorage();
     setClients([]);
     setSites([]);
     setError("");
@@ -315,6 +362,7 @@ export default function App() {
     setCreatorCancelErrorByBlock({});
     setCreatorCancelingByBlock({});
     setCreatorCancelConfirmByBlock({});
+    setCreatorDraftsHydrated(false);
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
@@ -922,6 +970,122 @@ export default function App() {
   }, [currentUser, activeSection]);
 
   useEffect(() => {
+    if (!currentUser) {
+      setCreatorDraftsHydrated(false);
+      return;
+    }
+    if (typeof window === "undefined") {
+      setCreatorDraftsHydrated(true);
+      return;
+    }
+
+    const blocksKey = getCreateArticleBlocksStorageKey(currentUser);
+    const jobsKey = getCreatorJobsStorageKey(currentUser);
+
+    let restoredBlocks = [createSubmissionBlock(1)];
+    try {
+      const parsedBlocks = JSON.parse(localStorage.getItem(blocksKey) || "[]");
+      if (Array.isArray(parsedBlocks) && parsedBlocks.length > 0) {
+        restoredBlocks = parsedBlocks
+          .map((item, index) => deserializeCreateArticleBlock(item, index + 1))
+          .filter((item) => Number(item.id) > 0);
+      }
+    } catch {
+      restoredBlocks = [createSubmissionBlock(1)];
+    }
+
+    let restoredJobsByBlock = {};
+    try {
+      const parsedJobs = JSON.parse(localStorage.getItem(jobsKey) || "{}");
+      if (parsedJobs && typeof parsedJobs === "object" && !Array.isArray(parsedJobs)) {
+        restoredJobsByBlock = Object.fromEntries(
+          Object.entries(parsedJobs)
+            .map(([blockId, jobIds]) => {
+              const normalizedBlockId = Number(blockId);
+              if (!Number.isFinite(normalizedBlockId) || normalizedBlockId <= 0) return null;
+              const normalizedJobIds = Array.isArray(jobIds)
+                ? Array.from(new Set(jobIds.map((jid) => String(jid || "").trim()).filter(Boolean)))
+                : [];
+              if (normalizedJobIds.length === 0) return null;
+              return [normalizedBlockId, normalizedJobIds];
+            })
+            .filter(Boolean)
+        );
+      }
+    } catch {
+      restoredJobsByBlock = {};
+    }
+
+    const blockIds = new Set(restoredBlocks.map((block) => Number(block.id)));
+    Object.keys(restoredJobsByBlock).forEach((rawBlockId) => {
+      const blockId = Number(rawBlockId);
+      if (blockIds.has(blockId)) return;
+      restoredBlocks.push(createSubmissionBlock(blockId));
+      blockIds.add(blockId);
+    });
+
+    restoredBlocks.sort((a, b) => Number(a.id) - Number(b.id));
+    setCreateArticleSubmissionBlocks(restoredBlocks);
+
+    const maxBlockId = restoredBlocks.reduce((max, block) => Math.max(max, Number(block.id) || 0), 0);
+    createArticleBlockIdRef.current = Math.max(2, maxBlockId + 1);
+
+    setCreatorJobsByBlock(restoredJobsByBlock);
+    setCreatorProgress(() => {
+      const seeded = {};
+      Object.values(restoredJobsByBlock).flat().forEach((jobId) => {
+        seeded[jobId] = {
+          phase: 0,
+          label: "",
+          percent: 0,
+          done: false,
+          failed: false,
+          canceled: false,
+        };
+      });
+      return seeded;
+    });
+    setCreatorCancelErrorByBlock({});
+    setCreatorCancelingByBlock({});
+    setCreatorCancelConfirmByBlock({});
+    setCreatorDraftsHydrated(true);
+  }, [currentUser, deserializeCreateArticleBlock]);
+
+  useEffect(() => {
+    if (!currentUser || !creatorDraftsHydrated) return;
+    if (typeof window === "undefined") return;
+
+    const blocksKey = getCreateArticleBlocksStorageKey(currentUser);
+    const jobsKey = getCreatorJobsStorageKey(currentUser);
+
+    const serializedBlocks = (createArticleSubmissionBlocks || [])
+      .map((block) => serializeCreateArticleBlock(block))
+      .filter((block) => Number(block.id) > 0);
+
+    localStorage.setItem(blocksKey, JSON.stringify(serializedBlocks.length ? serializedBlocks : [serializeCreateArticleBlock(createSubmissionBlock(1))]));
+
+    const serializedJobsByBlock = Object.fromEntries(
+      Object.entries(creatorJobsByBlock || {})
+        .map(([blockId, jobIds]) => {
+          const normalizedBlockId = Number(blockId);
+          if (!Number.isFinite(normalizedBlockId) || normalizedBlockId <= 0) return null;
+          const normalizedJobIds = Array.isArray(jobIds)
+            ? Array.from(new Set(jobIds.map((jid) => String(jid || "").trim()).filter(Boolean)))
+            : [];
+          if (normalizedJobIds.length === 0) return null;
+          return [normalizedBlockId, normalizedJobIds];
+        })
+        .filter(Boolean)
+    );
+
+    if (Object.keys(serializedJobsByBlock).length > 0) {
+      localStorage.setItem(jobsKey, JSON.stringify(serializedJobsByBlock));
+    } else {
+      localStorage.removeItem(jobsKey);
+    }
+  }, [currentUser, creatorDraftsHydrated, createArticleSubmissionBlocks, creatorJobsByBlock, serializeCreateArticleBlock]);
+
+  useEffect(() => {
     if (!currentUser) return;
     if (!adminPortalHost || !clientPortalHost || adminPortalHost === clientPortalHost) return;
     const currentHostName = (window.location.hostname || "").trim().toLowerCase();
@@ -1377,12 +1541,16 @@ export default function App() {
     const poll = async () => {
       const updates = {};
       let allDone = true;
+      const movedToPendingApproval = new Set();
       for (const jid of trackedCreatorJobIds) {
         try {
           const data = await api.get(`/automation/status?job_id=${encodeURIComponent(jid)}`);
           if (!data?.found) { allDone = false; continue; }
           const phaseEvents = (data.events || []).filter((e) => e.event_type === "creator_phase");
           const last = phaseEvents.length > 0 ? phaseEvents[phaseEvents.length - 1] : null;
+          if (data.job_status === "pending_approval") {
+            movedToPendingApproval.add(jid);
+          }
           const jobDone = data.job_status === "pending_approval"
             || data.job_status === "succeeded"
             || data.job_status === "failed"
@@ -1402,7 +1570,24 @@ export default function App() {
         }
       }
       if (!cancelled) {
-        setCreatorProgress((prev) => ({ ...prev, ...updates }));
+        const movedToPendingIds = movedToPendingApproval;
+        if (movedToPendingIds.size > 0) {
+          setCreatorJobsByBlock((prev) => {
+            const next = {};
+            for (const [blockId, jobIds] of Object.entries(prev || {})) {
+              const filtered = (jobIds || []).filter((jid) => !movedToPendingIds.has(jid));
+              if (filtered.length > 0) next[blockId] = filtered;
+            }
+            return next;
+          });
+        }
+        setCreatorProgress((prev) => {
+          const next = { ...prev, ...updates };
+          movedToPendingIds.forEach((jid) => {
+            delete next[jid];
+          });
+          return next;
+        });
         if (allDone) stopCreatorPolling();
       }
     };

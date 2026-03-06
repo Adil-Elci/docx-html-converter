@@ -2767,6 +2767,10 @@ input:disabled {
       "submit submit submit submit";
   }
 
+  .request-container .request-form-panel .submission-block:not(.create-article-block):has(.submission-field-file.is-empty) {
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
+  }
+
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
     justify-self: stretch;
   }
@@ -2785,6 +2789,10 @@ input:disabled {
       "type type"
       "file file"
       "submit submit";
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block):has(.submission-field-file.is-empty) {
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr);
   }
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {
@@ -2806,6 +2814,10 @@ input:disabled {
       "type"
       "file"
       "submit";
+  }
+
+  .request-container .request-form-panel .submission-block:not(.create-article-block):has(.submission-field-file.is-empty) {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-block-actions {

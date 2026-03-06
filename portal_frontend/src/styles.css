@@ -2852,6 +2852,10 @@ input:disabled {
     margin-left: 0;
   }
 
+  .app-shell.sidebar-hidden .app-main {
+    margin-left: var(--portal-sidebar-peek);
+  }
+
   .sidebar-collapse-btn {
     left: auto;
     right: calc(100vw - min(50vw, 420px) - 14px);
@@ -2888,6 +2892,10 @@ input:disabled {
 
   .header {
     left: 0;
+  }
+
+  .app-shell.sidebar-hidden .header {
+    left: var(--portal-sidebar-peek);
   }
 
   .title {

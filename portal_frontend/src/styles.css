@@ -1553,6 +1553,15 @@ input:disabled {
   min-width: 190px;
 }
 
+.request-container .request-form-panel .create-article-block .creator-progress-inline {
+  order: 7;
+  flex: 1 0 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+  align-self: center;
+}
+
 .request-container .request-form-panel .submission-field-wide {
   grid-column: 1 / -1;
 }
@@ -1954,7 +1963,7 @@ input:disabled {
   justify-self: center;
   align-self: end;
   width: min(100%, 720px);
-  margin-top: auto;
+  margin-top: 8px;
   padding: 10px 0 2px;
   display: flex;
   align-items: center;

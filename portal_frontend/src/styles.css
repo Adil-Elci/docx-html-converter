@@ -1499,48 +1499,58 @@ input:disabled {
 }
 
 .request-container .request-form-panel .create-article-block {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-areas:
-    "header header header header header header header header header header header header"
-    "client client target target site site anchor anchor topic topic submit submit";
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-block-header {
-  grid-area: header;
+  order: 0;
+  width: 100%;
 }
 
 .request-container .request-form-panel .create-article-block .submission-field-client {
-  grid-area: client;
+  order: 1;
+  flex: 1 1 210px;
+  min-width: 170px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-field-target-site {
-  grid-area: target;
+  order: 2;
+  flex: 1.2 1 250px;
+  min-width: 190px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-field-site {
-  grid-area: site;
+  order: 3;
+  flex: 1.2 1 250px;
+  min-width: 190px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-field-anchor {
-  grid-area: anchor;
+  order: 4;
+  flex: 1 1 220px;
+  min-width: 170px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-field-topic {
-  grid-area: topic;
+  order: 5;
+  flex: 1 1 220px;
+  min-width: 170px;
 }
 
 .request-container .request-form-panel .create-article-block .submission-block-actions {
-  grid-area: submit;
-  grid-column: auto;
-  justify-self: end;
+  order: 6;
+  flex: 0 1 220px;
+  min-width: 190px;
+  margin-left: auto;
   justify-content: flex-end;
-  min-width: 0;
 }
 
 .request-container .request-form-panel .create-article-block .submission-block-actions .submit-btn {
-  width: clamp(150px, 100%, 240px);
-  min-width: 0;
+  width: 100%;
+  min-width: 190px;
 }
 
 .request-container .request-form-panel .submission-field-wide {
@@ -2764,17 +2774,6 @@ input:disabled {
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
     display: none;
   }
-
-  .request-container .request-form-panel .create-article-block {
-    grid-template-areas:
-      "header header header header header header header header header header header header"
-      "client client target target site site anchor anchor topic topic topic topic"
-      "submit submit submit submit submit submit submit submit submit submit submit submit";
-  }
-
-  .request-container .request-form-panel .create-article-block .submission-block-actions {
-    justify-self: stretch;
-  }
 }
 
 @media (max-width: 1100px) {
@@ -2794,13 +2793,6 @@ input:disabled {
 
   .request-container .request-form-panel .submission-block:not(.create-article-block) .submission-field-file.is-empty {
     display: none;
-  }
-
-  .request-container .request-form-panel .create-article-block {
-    grid-template-areas:
-      "header header header header header header header header header header header header"
-      "client client client target target target site site site anchor anchor anchor"
-      "topic topic topic topic topic topic submit submit submit submit submit submit";
   }
 }
 
@@ -2834,7 +2826,6 @@ input:disabled {
     width: min(100%, 320px);
     min-width: 0;
   }
-
 }
 
 @media (max-width: 1080px) {
@@ -2934,26 +2925,11 @@ input:disabled {
     min-width: 0;
   }
 
-  .request-container .request-form-panel .create-article-block {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    grid-template-areas:
-      "header header header header header header"
-      "client client client target target target"
-      "site site site site site site"
-      "anchor anchor anchor topic topic topic"
-      "submit submit submit submit submit submit";
+  .request-container .request-form-panel .create-article-block .submission-field-target-site,
+  .request-container .request-form-panel .create-article-block .submission-field-site {
+    flex-basis: 220px;
   }
-}
 
-@media (max-width: 900px) {
-  .request-container .request-form-panel .create-article-block {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    grid-template-areas:
-      "header header header header header header"
-      "client client target target site site"
-      "anchor anchor anchor topic topic topic"
-      "submit submit submit submit submit submit";
-  }
 }
 
 @media (max-width: 720px) {
@@ -3077,16 +3053,15 @@ input:disabled {
     grid-column: 1 / -1;
   }
 
-  .request-container .request-form-panel .create-article-block {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "header"
-      "client"
-      "target"
-      "site"
-      "anchor"
-      "topic"
-      "submit";
+  .request-container .request-form-panel .create-article-block .submission-field-client,
+  .request-container .request-form-panel .create-article-block .submission-field-target-site,
+  .request-container .request-form-panel .create-article-block .submission-field-site,
+  .request-container .request-form-panel .create-article-block .submission-field-anchor,
+  .request-container .request-form-panel .create-article-block .submission-field-topic,
+  .request-container .request-form-panel .create-article-block .submission-block-actions {
+    flex-basis: 100%;
+    min-width: 0;
+    margin-left: 0;
   }
 
   .request-container .request-form-panel .submit-btn {

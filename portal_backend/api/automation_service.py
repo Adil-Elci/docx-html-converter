@@ -747,6 +747,8 @@ def call_creator_service(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    phase1_cache_payload: Optional[Dict[str, Any]] = None,
+    phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
     timeout_seconds: int,
@@ -765,6 +767,11 @@ def call_creator_service(
         body["topic"] = topic
     if exclude_topics:
         body["exclude_topics"] = exclude_topics
+    if phase1_cache_payload and phase1_cache_content_hash:
+        body["phase1_cache"] = {
+            "content_hash": phase1_cache_content_hash,
+            "payload": phase1_cache_payload,
+        }
     if phase2_cache_payload and phase2_cache_content_hash:
         body["phase2_cache"] = {
             "content_hash": phase2_cache_content_hash,
@@ -867,6 +874,8 @@ def run_create_article_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    phase1_cache_payload: Optional[Dict[str, Any]] = None,
+    phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
     on_phase: Optional[Callable[[int, str, int], None]] = None,
@@ -903,6 +912,8 @@ def run_create_article_pipeline(
         anchor=anchor,
         topic=topic,
         exclude_topics=exclude_topics,
+        phase1_cache_payload=phase1_cache_payload,
+        phase1_cache_content_hash=phase1_cache_content_hash,
         phase2_cache_payload=phase2_cache_payload,
         phase2_cache_content_hash=phase2_cache_content_hash,
         timeout_seconds=creator_timeout_seconds,

@@ -24,6 +24,7 @@ class CreatorRequest(BaseModel):
     anchor: Optional[str] = None
     topic: Optional[str] = None
     exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
+    phase1_cache: Optional[Phase2CacheEnvelope] = None
     phase2_cache: Optional[Phase2CacheEnvelope] = None
     dry_run: bool = False
 

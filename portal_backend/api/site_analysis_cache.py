@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 
 from .portal_models import SiteAnalysisCache, utcnow
 
+PHASE1_TARGET_ANALYSIS_CACHE_KIND = "phase1_target_analysis"
 PHASE2_SITE_ANALYSIS_CACHE_KIND = "phase2_site_analysis"
 DEFAULT_CACHE_PROMPT_VERSION = "v1"
+SITE_TYPE_PUBLISHING = "publishing_site"
+SITE_TYPE_TARGET = "target_site"
 
 
 def normalize_site_analysis_url(value: str) -> str:
@@ -31,10 +34,18 @@ def build_site_analysis_content_hash(content: str) -> str:
     return hashlib.sha256(normalized).hexdigest()
 
 
+def _resolve_site_type(site_role: str, explicit_site_type: str = "") -> str:
+    cleaned = (explicit_site_type or "").strip().lower()
+    if cleaned in {SITE_TYPE_PUBLISHING, SITE_TYPE_TARGET}:
+        return cleaned
+    return SITE_TYPE_TARGET if (site_role or "").strip().lower() == "target" else SITE_TYPE_PUBLISHING
+
+
 def get_site_analysis_cache(
     db: Session,
     *,
     site_role: str,
+    site_type: str = "",
     normalized_url: str,
     content_hash: str,
     generator_mode: str,
@@ -44,9 +55,11 @@ def get_site_analysis_cache(
     publishing_site_id: Optional[UUID] = None,
     client_target_site_id: Optional[UUID] = None,
 ) -> Optional[SiteAnalysisCache]:
+    resolved_site_type = _resolve_site_type(site_role, site_type)
     query = db.query(SiteAnalysisCache).filter(
         SiteAnalysisCache.cache_kind == cache_kind,
         SiteAnalysisCache.site_role == site_role,
+        SiteAnalysisCache.site_type == resolved_site_type,
         SiteAnalysisCache.normalized_url == normalized_url,
         SiteAnalysisCache.content_hash == content_hash,
         SiteAnalysisCache.generator_mode == generator_mode,
@@ -68,14 +81,17 @@ def get_latest_site_analysis_cache(
     db: Session,
     *,
     site_role: str,
+    site_type: str = "",
     normalized_url: str,
     cache_kind: str = PHASE2_SITE_ANALYSIS_CACHE_KIND,
     publishing_site_id: Optional[UUID] = None,
     client_target_site_id: Optional[UUID] = None,
 ) -> Optional[SiteAnalysisCache]:
+    resolved_site_type = _resolve_site_type(site_role, site_type)
     query = db.query(SiteAnalysisCache).filter(
         SiteAnalysisCache.cache_kind == cache_kind,
         SiteAnalysisCache.site_role == site_role,
+        SiteAnalysisCache.site_type == resolved_site_type,
         SiteAnalysisCache.normalized_url == normalized_url,
     )
     if publishing_site_id is None:
@@ -93,6 +109,7 @@ def upsert_site_analysis_cache(
     db: Session,
     *,
     site_role: str,
+    site_type: str = "",
     normalized_url: str,
     content_hash: str,
     generator_mode: str,
@@ -103,9 +120,11 @@ def upsert_site_analysis_cache(
     publishing_site_id: Optional[UUID] = None,
     client_target_site_id: Optional[UUID] = None,
 ) -> SiteAnalysisCache:
+    resolved_site_type = _resolve_site_type(site_role, site_type)
     record = get_site_analysis_cache(
         db,
         site_role=site_role,
+        site_type=resolved_site_type,
         normalized_url=normalized_url,
         content_hash=content_hash,
         generator_mode=generator_mode,
@@ -119,6 +138,7 @@ def upsert_site_analysis_cache(
         record = SiteAnalysisCache(
             cache_kind=cache_kind,
             site_role=site_role,
+            site_type=resolved_site_type,
             publishing_site_id=publishing_site_id,
             client_target_site_id=client_target_site_id,
             normalized_url=normalized_url,

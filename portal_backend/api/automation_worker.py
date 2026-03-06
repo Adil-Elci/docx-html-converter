@@ -31,6 +31,7 @@ from .portal_models import (
     Submission,
 )
 from .site_analysis_cache import (
+    PHASE1_TARGET_ANALYSIS_CACHE_KIND,
     get_latest_site_analysis_cache,
     normalize_site_analysis_url,
     upsert_site_analysis_cache,
@@ -386,6 +387,8 @@ class AutomationJobWorker:
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
+                    phase1_cache_payload=payload.get("phase1_cache_payload"),
+                    phase1_cache_content_hash=payload.get("phase1_cache_content_hash"),
                     phase2_cache_payload=payload.get("phase2_cache_payload"),
                     phase2_cache_content_hash=payload.get("phase2_cache_content_hash"),
                     on_phase=_on_phase,
@@ -542,6 +545,13 @@ class AutomationJobWorker:
                 post_status = "draft"
 
             target_site_url = parsed_notes.get("client_target_site_url", "")
+            target_site_id: Optional[UUID] = None
+            raw_target_site_id = (parsed_notes.get("client_target_site_id") or "").strip()
+            if raw_target_site_id:
+                try:
+                    target_site_id = UUID(raw_target_site_id)
+                except ValueError:
+                    target_site_id = None
             anchor = parsed_notes.get("anchor")
             topic = parsed_notes.get("topic")
 
@@ -641,13 +651,30 @@ class AutomationJobWorker:
                     if isinstance(prev_topic, str) and prev_topic.strip():
                         exclude_topics.append(prev_topic.strip())
 
+            phase1_cache_payload: Optional[Dict[str, Any]] = None
+            phase1_cache_content_hash = ""
             phase2_cache_payload: Optional[Dict[str, Any]] = None
             phase2_cache_content_hash = ""
             if creator_mode:
+                if target_site_url:
+                    normalized_target_url = normalize_site_analysis_url(target_site_url)
+                    latest_phase1_cache = get_latest_site_analysis_cache(
+                        session,
+                        site_role="target",
+                        site_type="target_site",
+                        normalized_url=normalized_target_url,
+                        cache_kind=PHASE1_TARGET_ANALYSIS_CACHE_KIND,
+                        client_target_site_id=target_site_id,
+                    )
+                    if latest_phase1_cache and isinstance(latest_phase1_cache.payload, dict):
+                        phase1_cache_payload = latest_phase1_cache.payload
+                        phase1_cache_content_hash = str(latest_phase1_cache.content_hash or "").strip()
+
                 normalized_site_url = normalize_site_analysis_url(site.site_url)
                 latest_phase2_cache = get_latest_site_analysis_cache(
                     session,
                     site_role="host",
+                    site_type="publishing_site",
                     normalized_url=normalized_site_url,
                     publishing_site_id=site.id,
                 )
@@ -673,6 +700,9 @@ class AutomationJobWorker:
                 "anchor": anchor,
                 "topic": topic,
                 "exclude_topics": exclude_topics,
+                "target_site_id": str(target_site_id) if target_site_id else "",
+                "phase1_cache_payload": phase1_cache_payload,
+                "phase1_cache_content_hash": phase1_cache_content_hash,
                 "phase2_cache_payload": phase2_cache_payload,
                 "phase2_cache_content_hash": phase2_cache_content_hash,
             }
@@ -861,6 +891,38 @@ class AutomationJobWorker:
                     payload=creator_output,
                 )
             )
+            parsed_notes = _parse_notes(submission.notes)
+            target_site_id: Optional[UUID] = None
+            raw_target_site_id = (parsed_notes.get("client_target_site_id") or "").strip()
+            if raw_target_site_id:
+                try:
+                    target_site_id = UUID(raw_target_site_id)
+                except ValueError:
+                    target_site_id = None
+
+            phase1 = creator_output.get("phase1")
+            phase1_cache_meta = creator_output.get("phase1_cache_meta")
+            if isinstance(phase1, dict) and isinstance(phase1_cache_meta, dict):
+                normalized_url = str(phase1_cache_meta.get("normalized_url") or "").strip()
+                content_hash = str(phase1_cache_meta.get("content_hash") or "").strip()
+                prompt_version = str(phase1_cache_meta.get("prompt_version") or "").strip()
+                generator_mode = str(phase1_cache_meta.get("generator_mode") or "").strip()
+                model_name = str(phase1_cache_meta.get("model_name") or "").strip()
+                if normalized_url and content_hash and prompt_version and generator_mode:
+                    upsert_site_analysis_cache(
+                        session,
+                        site_role="target",
+                        site_type="target_site",
+                        normalized_url=normalized_url,
+                        content_hash=content_hash,
+                        generator_mode=generator_mode,
+                        payload=phase1,
+                        prompt_version=prompt_version,
+                        model_name=model_name,
+                        cache_kind=PHASE1_TARGET_ANALYSIS_CACHE_KIND,
+                        client_target_site_id=target_site_id,
+                    )
+
             phase2 = creator_output.get("phase2")
             phase2_cache_meta = creator_output.get("phase2_cache_meta")
             if isinstance(phase2, dict) and isinstance(phase2_cache_meta, dict):
@@ -873,6 +935,7 @@ class AutomationJobWorker:
                     upsert_site_analysis_cache(
                         session,
                         site_role="host",
+                        site_type="publishing_site",
                         normalized_url=normalized_url,
                         content_hash=content_hash,
                         generator_mode=generator_mode,

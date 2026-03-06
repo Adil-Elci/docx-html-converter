@@ -340,8 +340,9 @@ class CreatorOutput(Base):
 class SiteAnalysisCache(Base):
     __tablename__ = "site_analysis_cache"
     __table_args__ = (
-        CheckConstraint("cache_kind IN ('phase2_site_analysis')", name="site_analysis_cache_kind_check"),
+        CheckConstraint("cache_kind IN ('phase1_target_analysis','phase2_site_analysis')", name="site_analysis_cache_kind_check"),
         CheckConstraint("site_role IN ('host','target')", name="site_analysis_cache_role_check"),
+        CheckConstraint("site_type IN ('publishing_site','target_site')", name="site_analysis_cache_site_type_check"),
         CheckConstraint("generator_mode IN ('llm','deterministic','hybrid')", name="site_analysis_cache_mode_check"),
         CheckConstraint(
             "(CASE WHEN publishing_site_id IS NULL THEN 0 ELSE 1 END + "
@@ -352,6 +353,11 @@ class SiteAnalysisCache(Base):
             "((site_role = 'host' AND client_target_site_id IS NULL) "
             "OR (site_role = 'target' AND publishing_site_id IS NULL))",
             name="site_analysis_cache_role_ref_check",
+        ),
+        CheckConstraint(
+            "((site_role = 'host' AND site_type = 'publishing_site') "
+            "OR (site_role = 'target' AND site_type = 'target_site'))",
+            name="site_analysis_cache_role_type_check",
         ),
         UniqueConstraint(
             "cache_kind",
@@ -368,6 +374,7 @@ class SiteAnalysisCache(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     cache_kind = Column(Text, nullable=False, default="phase2_site_analysis")
     site_role = Column(Text, nullable=False)
+    site_type = Column(Text, nullable=False, default="publishing_site")
     publishing_site_id = Column(UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=True)
     client_target_site_id = Column(UUID(as_uuid=True), ForeignKey("client_target_sites.id", ondelete="CASCADE"), nullable=True)
     normalized_url = Column(Text, nullable=False)

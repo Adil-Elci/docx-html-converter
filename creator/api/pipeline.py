@@ -44,6 +44,7 @@ DEFAULT_IMAGE_WIDTH = 1024
 DEFAULT_IMAGE_HEIGHT = 576
 DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
+PHASE1_CACHE_PROMPT_VERSION = "v1"
 PHASE2_CACHE_PROMPT_VERSION = "v1"
 
 NEGATIVE_PROMPT = "text, watermark, logo, letters, UI, low quality, blurry, deformed"
@@ -131,6 +132,25 @@ def _coerce_phase2_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "internal_linking_opportunities": [
             str(item).strip() for item in (internal_linking_opportunities or []) if str(item).strip()
         ],
+    }
+
+
+def _coerce_phase1_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    brand_name = str(value.get("brand_name") or "").strip()
+    backlink_url = str(value.get("backlink_url") or "").strip()
+    anchor_type = str(value.get("anchor_type") or "").strip()
+    keyword_cluster = value.get("keyword_cluster")
+    if anchor_type not in {"brand", "contextual_generic", "partial_match"}:
+        return None
+    if not isinstance(keyword_cluster, list):
+        return None
+    return {
+        "brand_name": brand_name,
+        "backlink_url": backlink_url,
+        "anchor_type": anchor_type,
+        "keyword_cluster": [str(item).strip() for item in keyword_cluster if str(item).strip()],
     }
 
 
@@ -718,6 +738,8 @@ def run_creator_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    phase1_cache_payload: Optional[Dict[str, Any]] = None,
+    phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
     dry_run: bool,
@@ -805,6 +827,8 @@ def run_creator_pipeline(
         retries=http_retries,
     )
     target_text = sanitize_html(target_html)
+    target_content_hash = _hash_text(target_text)
+    normalized_target_url = _normalize_url(target_site_url)
     brand_name = _guess_brand_name(target_site_url, target_html)
     keyword_cluster = _extract_keywords(target_text, max_terms=10)
     backlink_url = _pick_backlink_url(target_site_url, target_html) or target_site_url
@@ -819,6 +843,36 @@ def run_creator_pipeline(
         "anchor_type": anchor_type,
         "keyword_cluster": keyword_cluster,
     }
+    phase1_cache_hit = False
+    phase1_cache_meta = {
+        "normalized_url": normalized_target_url,
+        "content_hash": target_content_hash,
+        "prompt_version": PHASE1_CACHE_PROMPT_VERSION,
+        "generator_mode": "deterministic",
+        "model_name": "",
+        "cache_hit": False,
+        "cacheable": bool(target_text),
+    }
+    cached_phase1 = _coerce_phase1_payload(phase1_cache_payload)
+    if target_text and cached_phase1 and (phase1_cache_content_hash or "").strip() == target_content_hash:
+        phase1 = cached_phase1
+        phase1_cache_hit = True
+        phase1_cache_meta["cache_hit"] = True
+
+    brand_name = str(phase1.get("brand_name") or "").strip()
+    backlink_url = str(phase1.get("backlink_url") or "").strip() or (target_site_url or "")
+    anchor_type = str(phase1.get("anchor_type") or "").strip()
+    keyword_cluster = [str(item).strip() for item in (phase1.get("keyword_cluster") or []) if str(item).strip()]
+    if anchor_type not in {"brand", "contextual_generic", "partial_match"}:
+        anchor_type = "partial_match" if (not brand_name and keyword_cluster) else ("brand" if brand_name else "contextual_generic")
+    phase1 = {
+        "brand_name": brand_name,
+        "backlink_url": backlink_url,
+        "anchor_type": anchor_type,
+        "keyword_cluster": keyword_cluster,
+    }
+
+    debug["phase1_cache_hit"] = phase1_cache_hit
     debug["timings_ms"]["phase1"] = int((time.time() - phase_start) * 1000)
     progress(1, PHASE_LABELS[1], 14)
 
@@ -1498,6 +1552,7 @@ def run_creator_pipeline(
         "target_site_url": target_site_url,
         "host_site_url": publishing_site_url,
         "phase1": phase1,
+        "phase1_cache_meta": phase1_cache_meta,
         "phase2": phase2,
         "phase2_cache_meta": phase2_cache_meta,
         "phase3": phase3,

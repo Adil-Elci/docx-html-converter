@@ -358,6 +358,13 @@ export default function App() {
     setShowSubmissionErrorModal(true);
   };
 
+  const openClientNameRequiredModal = (blockIndex) => {
+    const prefix = typeof blockIndex === "number" ? `Block ${blockIndex + 1}: ` : "";
+    setSubmissionErrorCode("CLIENT_NAME_REQUIRED");
+    setSubmissionErrorMessage(`${prefix}${t("errorClientRequired")}`);
+    setShowSubmissionErrorModal(true);
+  };
+
   const getSubmissionBlockError = (block, { isCreateArticle, clientName, requiresTargetSite }) => {
     const publishingSite = (block.publishing_site || "").trim();
     if (!publishingSite) return t("errorTargetRequired");
@@ -1321,6 +1328,9 @@ export default function App() {
         }));
         return;
       }
+      if (validationError === t("errorClientRequired")) {
+        openClientNameRequiredModal(blockIndex);
+      }
       setError(`Block ${blockIndex + 1}: ${validationError}`);
       return;
     }
@@ -1409,6 +1419,13 @@ export default function App() {
       }
     }
     if (blockErrors.length) {
+      const firstMissingClientNameIndex = blocks.findIndex((block) => {
+        const effectiveClientName = ((block.client_name || "").trim() || resolvedClientName);
+        return !effectiveClientName;
+      });
+      if (firstMissingClientNameIndex >= 0) {
+        openClientNameRequiredModal(firstMissingClientNameIndex);
+      }
       setSubmissionFieldErrors(fieldErrors);
       setError(blockErrors.join("\n"));
       return;

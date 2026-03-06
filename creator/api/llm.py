@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 import requests
 
@@ -133,18 +133,37 @@ def _read_env_float(name: str, default: float) -> float:
         return default
 
 
-def _log_usage(provider: str, request_label: str, model: str, usage: Any) -> None:
+def _to_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_usage(
+    provider: str,
+    request_label: str,
+    model: str,
+    usage: Any,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> None:
     if not isinstance(usage, dict):
         return
-    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
-    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
-    total_tokens = usage.get("total_tokens")
-    cache_creation_input_tokens = usage.get("cache_creation_input_tokens")
-    cache_read_input_tokens = usage.get("cache_read_input_tokens")
+    prompt_tokens = _to_int(usage.get("prompt_tokens", usage.get("input_tokens")))
+    completion_tokens = _to_int(usage.get("completion_tokens", usage.get("output_tokens")))
+    total_tokens = _to_int(usage.get("total_tokens"))
+    cache_creation_input_tokens = _to_int(usage.get("cache_creation_input_tokens"))
+    cache_read_input_tokens = _to_int(usage.get("cache_read_input_tokens"))
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+
+    label = request_label or "unspecified"
     logger.info(
         "creator.llm_usage provider=%s label=%s model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s cache_creation_input_tokens=%s cache_read_input_tokens=%s",
         provider,
-        request_label or "unspecified",
+        label,
         model,
         prompt_tokens,
         completion_tokens,
@@ -152,6 +171,22 @@ def _log_usage(provider: str, request_label: str, model: str, usage: Any) -> Non
         cache_creation_input_tokens,
         cache_read_input_tokens,
     )
+    if usage_collector is not None:
+        try:
+            usage_collector(
+                {
+                    "provider": provider,
+                    "label": label,
+                    "model": model,
+                    "prompt_tokens": prompt_tokens or 0,
+                    "completion_tokens": completion_tokens or 0,
+                    "total_tokens": total_tokens or 0,
+                    "cache_creation_input_tokens": cache_creation_input_tokens or 0,
+                    "cache_read_input_tokens": cache_read_input_tokens or 0,
+                }
+            )
+        except Exception:
+            logger.warning("creator.llm_usage_collector_failed", exc_info=True)
 
 
 def _call_openai(
@@ -165,6 +200,7 @@ def _call_openai(
     max_tokens: int,
     temperature: float,
     request_label: str,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -192,7 +228,7 @@ def _call_openai(
         body = response.json()
     except ValueError as exc:
         raise LLMError("LLM returned non-JSON response.") from exc
-    _log_usage("openai", request_label, model, body.get("usage"))
+    _log_usage("openai", request_label, model, body.get("usage"), usage_collector)
 
     content: Optional[str] = None
     choices = body.get("choices")
@@ -216,6 +252,7 @@ def _call_anthropic(
     max_tokens: int,
     temperature: float,
     request_label: str,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     url = base_url.rstrip("/") + "/messages"
     headers = {
@@ -242,7 +279,7 @@ def _call_anthropic(
         body = response.json()
     except ValueError as exc:
         raise LLMError("LLM returned non-JSON response.") from exc
-    _log_usage("anthropic", request_label, model, body.get("usage"))
+    _log_usage("anthropic", request_label, model, body.get("usage"), usage_collector)
 
     content_blocks = body.get("content")
     if isinstance(content_blocks, list):
@@ -269,6 +306,7 @@ def call_llm_json(
     temperature: float = 0.3,
     allow_html_fallback: bool = False,
     request_label: str = "",
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -290,6 +328,7 @@ def call_llm_json(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     request_label=request_label,
+                    usage_collector=usage_collector,
                 )
             else:
                 raw = _call_openai(
@@ -302,6 +341,7 @@ def call_llm_json(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     request_label=request_label,
+                    usage_collector=usage_collector,
                 )
             raw_text = str(raw)
             try:
@@ -341,6 +381,7 @@ def call_llm_text(
     max_tokens: int = 1200,
     temperature: float = 0.3,
     request_label: str = "",
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -362,6 +403,7 @@ def call_llm_text(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     request_label=request_label,
+                    usage_collector=usage_collector,
                 )
             else:
                 raw = _call_openai(
@@ -374,6 +416,7 @@ def call_llm_text(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     request_label=request_label,
+                    usage_collector=usage_collector,
                 )
             return str(raw)
         except LLMError as exc:

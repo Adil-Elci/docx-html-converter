@@ -326,6 +326,66 @@ def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: 
     return html[:start] + anchor_html + html[start:]
 
 
+def _new_token_bucket() -> Dict[str, int]:
+    return {
+        "calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+
+
+def _as_non_negative_int(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, parsed)
+
+
+def _phase_from_request_label(label: str) -> str:
+    cleaned = (label or "").strip().lower()
+    if cleaned.startswith("phase2"):
+        return "phase2"
+    if cleaned.startswith("phase3"):
+        return "phase3"
+    if cleaned.startswith("phase4"):
+        return "phase4"
+    if cleaned.startswith("phase5"):
+        return "phase5"
+    if cleaned.startswith("phase7"):
+        return "phase7"
+    return "unknown"
+
+
+def _is_link_only_error(error: str) -> bool:
+    value = (error or "").strip()
+    return (
+        value.startswith("hyperlink_count_invalid")
+        or value.startswith("backlink_missing")
+        or value.startswith("backlink_wrong_placement")
+    )
+
+
+def _repair_link_constraints(
+    *,
+    article_html: str,
+    backlink_url: str,
+    backlink_placement: str,
+    anchor_text: str,
+) -> str:
+    # Remove all hyperlinks and then insert exactly one backlink at the required location.
+    repaired = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", article_html or "", flags=re.IGNORECASE | re.DOTALL)
+    if backlink_url and anchor_text:
+        repaired = _insert_backlink(repaired, backlink_url, anchor_text, backlink_placement)
+    repaired = _strip_h1_tags(repaired)
+    repaired = _strip_empty_blocks(repaired)
+    repaired = _strip_leading_empty_blocks(repaired)
+    return repaired
+
+
 def _generate_article_by_sections(
     *,
     phase4: Dict[str, Any],
@@ -335,6 +395,7 @@ def _generate_article_by_sections(
     llm_base_url: str,
     llm_model: str,
     http_timeout: int,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Optional[Dict[str, Any]]:
     outline_items = phase4.get("outline") or []
     if not isinstance(outline_items, list) or not outline_items:
@@ -371,6 +432,7 @@ def _generate_article_by_sections(
             max_tokens=320,
             temperature=0.2,
             request_label="phase5_fallback_intro",
+            usage_collector=usage_collector,
         )
     except LLMError:
         intro_raw = ""
@@ -411,6 +473,7 @@ def _generate_article_by_sections(
                 max_tokens=750,
                 temperature=0.2,
                 request_label=f"phase5_fallback_section_{index}",
+                usage_collector=usage_collector,
             )
         except LLMError:
             raw = ""
@@ -447,6 +510,7 @@ def _generate_article_by_sections(
                 max_tokens=220,
                 temperature=0.2,
                 request_label="phase5_fallback_expand",
+                usage_collector=usage_collector,
             )
             article_html += _wrap_paragraphs(extra)
             word_count = word_count_from_html(article_html)
@@ -555,11 +619,25 @@ def run_creator_pipeline(
 ) -> Dict[str, Any]:
     progress = on_progress or _noop_progress
     warnings: List[str] = []
-    debug: Dict[str, Any] = {"dry_run": dry_run, "timings_ms": {}, "fetched_pages": []}
+    phase_names = [f"phase{i}" for i in range(1, 8)]
+    tokens_by_phase: Dict[str, Dict[str, int]] = {phase: _new_token_bucket() for phase in phase_names}
+    tokens_by_label: Dict[str, Dict[str, int]] = {}
+    debug: Dict[str, Any] = {
+        "dry_run": dry_run,
+        "timings_ms": {},
+        "fetched_pages": [],
+        "tokens_by_phase": tokens_by_phase,
+        "tokens_by_label": tokens_by_label,
+    }
     current_year = datetime.datetime.now().year
 
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
+    phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
+    phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
+    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
+    phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 1800)
+    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
     explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -587,6 +665,27 @@ def run_creator_pipeline(
         llm_api_key = explicit_llm_key or anthropic_key or openai_key
     else:
         llm_api_key = explicit_llm_key or openai_key or anthropic_key
+
+    def _collect_llm_usage(record: Dict[str, Any]) -> None:
+        label = str(record.get("label") or "unspecified")
+        phase_key = _phase_from_request_label(label)
+        bucket = tokens_by_phase.get(phase_key)
+        if bucket is None:
+            bucket = _new_token_bucket()
+            tokens_by_phase[phase_key] = bucket
+
+        label_bucket = tokens_by_label.get(label)
+        if label_bucket is None:
+            label_bucket = _new_token_bucket()
+            tokens_by_label[label] = label_bucket
+
+        for target_bucket in (bucket, label_bucket):
+            target_bucket["calls"] += 1
+            target_bucket["prompt_tokens"] += _as_non_negative_int(record.get("prompt_tokens"))
+            target_bucket["completion_tokens"] += _as_non_negative_int(record.get("completion_tokens"))
+            target_bucket["total_tokens"] += _as_non_negative_int(record.get("total_tokens"))
+            target_bucket["cache_creation_input_tokens"] += _as_non_negative_int(record.get("cache_creation_input_tokens"))
+            target_bucket["cache_read_input_tokens"] += _as_non_negative_int(record.get("cache_read_input_tokens"))
 
     progress(1, PHASE_LABELS[1], 0)
     phase_start = time.time()
@@ -663,7 +762,7 @@ def run_creator_pipeline(
             )
             user_prompt = (
                 "Publishing site text:\n"
-                f"{publishing_text[:4000]}\n\n"
+                f"{publishing_text[:phase2_prompt_chars]}\n\n"
                 "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...]}."
             )
             try:
@@ -674,8 +773,9 @@ def run_creator_pipeline(
                     base_url=llm_base_url,
                     model=planning_model,
                     timeout_seconds=http_timeout,
-                    max_tokens=600,
+                    max_tokens=phase2_max_tokens,
                     request_label="phase2",
+                    usage_collector=_collect_llm_usage,
                 )
                 phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
                 phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
@@ -742,6 +842,7 @@ def run_creator_pipeline(
                 max_tokens=300,
                 temperature=phase3_temperature,
                 request_label="phase3",
+                usage_collector=_collect_llm_usage,
             )
             resolved_topic = llm_out.get("final_article_topic") or ""
             resolved_primary = llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else "")
@@ -799,6 +900,7 @@ def run_creator_pipeline(
                 timeout_seconds=http_timeout,
                 max_tokens=500,
                 request_label="phase4",
+                usage_collector=_collect_llm_usage,
             )
         except LLMError as exc:
             outline_errors.append(str(exc))
@@ -839,7 +941,7 @@ def run_creator_pipeline(
     backlink_url = phase1["backlink_url"]
     last_article_html = ""
     last_validation_errors: List[str] = []
-    for attempt in range(1, 4):
+    for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             system_prompt = (
                 "Write an SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
@@ -863,9 +965,10 @@ def run_creator_pipeline(
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 2500
+            model_for_attempt = planning_model
+            max_tokens = phase5_max_tokens_attempt1
             temperature = 0.3
-        elif attempt == 2 and last_article_html:
+        elif last_article_html:
             system_prompt = (
                 "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
@@ -885,7 +988,8 @@ def run_creator_pipeline(
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 2500
+            model_for_attempt = writing_model
+            max_tokens = phase5_max_tokens_retry
             temperature = 0.2
         else:
             system_prompt = (
@@ -910,7 +1014,8 @@ def run_creator_pipeline(
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            max_tokens = 2500
+            model_for_attempt = writing_model
+            max_tokens = phase5_max_tokens_retry
             temperature = 0.2
         try:
             llm_out = call_llm_json(
@@ -918,12 +1023,13 @@ def run_creator_pipeline(
                 user_prompt=user_prompt,
                 api_key=llm_api_key,
                 base_url=llm_base_url,
-                model=writing_model,
+                model=model_for_attempt,
                 timeout_seconds=http_timeout,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 allow_html_fallback=True,
                 request_label=f"phase5_attempt_{attempt}",
+                usage_collector=_collect_llm_usage,
             )
         except LLMError as exc:
             errors.append(str(exc))
@@ -956,6 +1062,36 @@ def run_creator_pipeline(
             validation_errors.append("h2_count_invalid")
 
         if validation_errors:
+            if all(_is_link_only_error(err) for err in validation_errors):
+                repaired_html = _repair_link_constraints(
+                    article_html=article_html,
+                    backlink_url=backlink_url,
+                    backlink_placement=phase4["backlink_placement"],
+                    anchor_text=phase4["anchor_text_final"],
+                )
+                repaired_errors: List[str] = []
+                for check in (
+                    validate_word_count(repaired_html, 600, 850),
+                    validate_hyperlink_count(repaired_html, 1),
+                    validate_backlink_placement(repaired_html, backlink_url, phase4["backlink_placement"]),
+                ):
+                    if check:
+                        repaired_errors.append(check)
+                if not (3 <= count_h2(repaired_html) <= 5):
+                    repaired_errors.append("h2_count_invalid")
+                if not repaired_errors:
+                    warnings.append("phase5_link_constraints_repaired_deterministically")
+                    article_payload = {
+                        "meta_title": llm_out.get("meta_title") or phase4["h1"],
+                        "meta_description": llm_out.get("meta_description") or "",
+                        "slug": llm_out.get("slug") or "",
+                        "excerpt": llm_out.get("excerpt") or "",
+                        "article_html": repaired_html,
+                    }
+                    break
+                validation_errors = repaired_errors
+                article_html = repaired_html
+
             errors.extend(validation_errors)
             last_article_html = article_html
             last_validation_errors = validation_errors
@@ -979,6 +1115,7 @@ def run_creator_pipeline(
             llm_base_url=llm_base_url,
             llm_model=planning_model,
             http_timeout=http_timeout,
+            usage_collector=_collect_llm_usage,
         )
         if fallback_payload:
             article_html = (fallback_payload.get("article_html") or "").strip()
@@ -1167,6 +1304,7 @@ def run_creator_pipeline(
                 max_tokens=1600,
                 allow_html_fallback=True,
                 request_label="phase7_repair",
+                usage_collector=_collect_llm_usage,
             )
             fixed_html = (llm_out.get("article_html") or "").strip()
             fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
@@ -1204,6 +1342,24 @@ def run_creator_pipeline(
         images.append({"type": "featured", "id_or_url": featured_image_url})
     if in_content_image_url:
         images.append({"type": "in_content", "id_or_url": in_content_image_url})
+
+    debug["token_phase_ranking"] = sorted(
+        [{"phase": phase_name, **tokens_by_phase.get(phase_name, _new_token_bucket())} for phase_name in phase_names],
+        key=lambda item: (
+            -item["total_tokens"],
+            -item["prompt_tokens"],
+            -item["completion_tokens"],
+            -item["calls"],
+        ),
+    )
+    debug["llm_tokens_total"] = {
+        "calls": sum(bucket.get("calls", 0) for bucket in tokens_by_phase.values()),
+        "prompt_tokens": sum(bucket.get("prompt_tokens", 0) for bucket in tokens_by_phase.values()),
+        "completion_tokens": sum(bucket.get("completion_tokens", 0) for bucket in tokens_by_phase.values()),
+        "total_tokens": sum(bucket.get("total_tokens", 0) for bucket in tokens_by_phase.values()),
+        "cache_creation_input_tokens": sum(bucket.get("cache_creation_input_tokens", 0) for bucket in tokens_by_phase.values()),
+        "cache_read_input_tokens": sum(bucket.get("cache_read_input_tokens", 0) for bucket in tokens_by_phase.values()),
+    }
 
     return {
         "ok": True,

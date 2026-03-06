@@ -452,7 +452,7 @@ export default function App() {
   useEffect(() => {
     const activeKeys = new Set();
     for (const [blockId, errors] of Object.entries(submissionFieldErrors || {})) {
-      for (const field of ["client_name", "publishing_site"]) {
+      for (const field of ["client_name", "publishing_site", "target_site"]) {
         if (!errors?.[field]) continue;
         const timerKey = `${blockId}:${field}`;
         activeKeys.add(timerKey);
@@ -1360,6 +1360,7 @@ export default function App() {
         validationError === t("errorFileTypeRequired")
         || validationError === t("errorClientRequired")
         || validationError === t("errorTargetRequired")
+        || validationError === t("errorClientTargetSiteRequired")
       ) {
         const blockId = block.id;
         setSubmissionFieldErrors((prev) => ({
@@ -1369,6 +1370,7 @@ export default function App() {
             ...(validationError === t("errorFileTypeRequired") ? { source_type: true } : {}),
             ...(validationError === t("errorClientRequired") ? { client_name: true } : {}),
             ...(validationError === t("errorTargetRequired") ? { publishing_site: true } : {}),
+            ...(validationError === t("errorClientTargetSiteRequired") ? { target_site: true } : {}),
           },
         }));
         return;
@@ -1458,6 +1460,8 @@ export default function App() {
           fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), client_name: true };
         } else if (validationError === t("errorTargetRequired")) {
           fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), publishing_site: true };
+        } else if (validationError === t("errorClientTargetSiteRequired")) {
+          fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), target_site: true };
         }
         blockErrors.push(
           t("batchBlockError").replace("{n}", String(i + 1)).replace("{error}", validationError)
@@ -1944,6 +1948,7 @@ export default function App() {
                   }
                 : item
             )));
+            clearSubmissionFieldError(suggestion.blockId, "target_site");
             setTargetSiteSuggestionsBlockId(null);
           }}
         >
@@ -2654,6 +2659,7 @@ export default function App() {
                                   }
                                 }}
                                 onFocus={() => {
+                                  clearSubmissionFieldError(block.id, "target_site");
                                   setTargetSiteSuggestionsBlockId(block.id);
                                   setClientSuggestionsBlockId(null);
                                   setSiteSuggestionsBlockId(null);
@@ -2679,6 +2685,7 @@ export default function App() {
                                         }
                                       : item
                                   )));
+                                  clearSubmissionFieldError(block.id, "target_site");
                                   setTargetSiteSuggestionsBlockId(block.id);
                                   setClientSuggestionsBlockId(null);
                                   setSiteSuggestionsBlockId(null);
@@ -2686,6 +2693,12 @@ export default function App() {
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
+                              {submissionFieldErrors[block.id]?.target_site ? (
+                                <div className="file-type-tooltip" role="alert">
+                                  <span className="file-type-tooltip-icon">!</span>
+                                  <span>{t("errorClientTargetSiteRequired")}</span>
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 

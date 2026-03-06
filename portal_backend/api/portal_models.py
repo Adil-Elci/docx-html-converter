@@ -337,6 +337,49 @@ class CreatorOutput(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class SiteAnalysisCache(Base):
+    __tablename__ = "site_analysis_cache"
+    __table_args__ = (
+        CheckConstraint("cache_kind IN ('phase2_site_analysis')", name="site_analysis_cache_kind_check"),
+        CheckConstraint("site_role IN ('host','target')", name="site_analysis_cache_role_check"),
+        CheckConstraint("generator_mode IN ('llm','deterministic','hybrid')", name="site_analysis_cache_mode_check"),
+        CheckConstraint(
+            "(CASE WHEN publishing_site_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN client_target_site_id IS NULL THEN 0 ELSE 1 END) <= 1",
+            name="site_analysis_cache_ref_count_check",
+        ),
+        CheckConstraint(
+            "((site_role = 'host' AND client_target_site_id IS NULL) "
+            "OR (site_role = 'target' AND publishing_site_id IS NULL))",
+            name="site_analysis_cache_role_ref_check",
+        ),
+        UniqueConstraint(
+            "cache_kind",
+            "site_role",
+            "normalized_url",
+            "content_hash",
+            "generator_mode",
+            "model_name",
+            "prompt_version",
+            name="site_analysis_cache_lookup_unique",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cache_kind = Column(Text, nullable=False, default="phase2_site_analysis")
+    site_role = Column(Text, nullable=False)
+    publishing_site_id = Column(UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=True)
+    client_target_site_id = Column(UUID(as_uuid=True), ForeignKey("client_target_sites.id", ondelete="CASCADE"), nullable=True)
+    normalized_url = Column(Text, nullable=False)
+    content_hash = Column(Text, nullable=False)
+    generator_mode = Column(Text, nullable=False)
+    model_name = Column(Text, nullable=False, default="")
+    prompt_version = Column(Text, nullable=False, default="v1")
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class Asset(Base):
     __tablename__ = "assets"
     __table_args__ = (

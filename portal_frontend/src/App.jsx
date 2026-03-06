@@ -366,10 +366,10 @@ export default function App() {
   };
 
   const getSubmissionBlockError = (block, { isCreateArticle, clientName, requiresTargetSite }) => {
-    const publishingSite = (block.publishing_site || "").trim();
-    if (!publishingSite) return t("errorTargetRequired");
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
     if (!effectiveClientName) return t("errorClientRequired");
+    const publishingSite = (block.publishing_site || "").trim();
+    if (!publishingSite) return t("errorTargetRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim() && !(block.target_site_url || "").trim()) {
       return t("errorClientTargetSiteRequired");
     }

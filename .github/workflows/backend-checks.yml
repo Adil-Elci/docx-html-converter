@@ -1,0 +1,31 @@
+name: Backend Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  backend-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r portal_backend/requirements.txt
+
+      - name: Install creator dependencies
+        run: pip install -r creator/requirements.txt
+
+      - name: Run Alembic revision-chain test
+        run: PYTHONPATH=. pytest portal_backend/tests/test_alembic_revisions.py
+
+      - name: Run creator validation tests
+        run: PYTHONPATH=. pytest creator/tests/test_validations.py

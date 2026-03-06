@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "0024_site_analysis_cache"
-down_revision = "0023_update_request_kind_check"
+down_revision = "0023_request_kind_check"
 branch_labels = None
 depends_on = None
 

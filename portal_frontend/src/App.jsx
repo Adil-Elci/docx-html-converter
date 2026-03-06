@@ -2650,55 +2650,57 @@ export default function App() {
                           {isCreateArticleSection ? (
                             <div className="submission-field submission-field-site submission-field-target-site">
                               <label>{t("targetSiteForBacklink")}</label>
-                              <input
-                                type="url"
-                                value={block.target_site_url || ""}
-                                ref={(node) => {
-                                  if (node) {
-                                    targetSiteSuggestInputRefs.current[block.id] = node;
-                                  }
-                                }}
-                                onFocus={() => {
-                                  clearSubmissionFieldError(block.id, "target_site");
-                                  setTargetSiteSuggestionsBlockId(block.id);
-                                  setClientSuggestionsBlockId(null);
-                                  setSiteSuggestionsBlockId(null);
-                                }}
-                                onBlur={() => setTimeout(() => {
-                                  setTargetSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
-                                }, 120)}
-                                onChange={(e) => {
-                                  const nextUrl = e.target.value;
-                                  const nextTarget = availableTargetSites.find((row) => {
-                                    const urlValue = (row.target_site_url || "").trim();
-                                    const domainValue = (row.target_site_domain || "").trim();
-                                    const domainUrlValue = domainValue ? `https://${domainValue}` : "";
-                                    return urlValue === nextUrl || domainUrlValue === nextUrl;
-                                  });
-                                  const nextId = nextTarget ? String(nextTarget.id || "") : "";
-                                  updateActiveSubmissionBlocks((prev) => prev.map((item) => (
-                                    item.id === block.id
-                                      ? {
-                                          ...item,
-                                          target_site_id: nextId,
-                                          target_site_url: nextUrl,
-                                        }
-                                      : item
-                                  )));
-                                  clearSubmissionFieldError(block.id, "target_site");
-                                  setTargetSiteSuggestionsBlockId(block.id);
-                                  setClientSuggestionsBlockId(null);
-                                  setSiteSuggestionsBlockId(null);
-                                }}
-                                placeholder={t("placeholderTargetWebsite")}
-                                required
-                              />
-                              {submissionFieldErrors[block.id]?.target_site ? (
-                                <div className="file-type-tooltip" role="alert">
-                                  <span className="file-type-tooltip-icon">!</span>
-                                  <span>{t("errorClientTargetSiteRequired")}</span>
-                                </div>
-                              ) : null}
+                              <div className="site-suggest-wrap">
+                                <input
+                                  type="url"
+                                  value={block.target_site_url || ""}
+                                  ref={(node) => {
+                                    if (node) {
+                                      targetSiteSuggestInputRefs.current[block.id] = node;
+                                    }
+                                  }}
+                                  onFocus={() => {
+                                    clearSubmissionFieldError(block.id, "target_site");
+                                    setTargetSiteSuggestionsBlockId(block.id);
+                                    setClientSuggestionsBlockId(null);
+                                    setSiteSuggestionsBlockId(null);
+                                  }}
+                                  onBlur={() => setTimeout(() => {
+                                    setTargetSiteSuggestionsBlockId((prev) => (prev === block.id ? null : prev));
+                                  }, 120)}
+                                  onChange={(e) => {
+                                    const nextUrl = e.target.value;
+                                    const nextTarget = availableTargetSites.find((row) => {
+                                      const urlValue = (row.target_site_url || "").trim();
+                                      const domainValue = (row.target_site_domain || "").trim();
+                                      const domainUrlValue = domainValue ? `https://${domainValue}` : "";
+                                      return urlValue === nextUrl || domainUrlValue === nextUrl;
+                                    });
+                                    const nextId = nextTarget ? String(nextTarget.id || "") : "";
+                                    updateActiveSubmissionBlocks((prev) => prev.map((item) => (
+                                      item.id === block.id
+                                        ? {
+                                            ...item,
+                                            target_site_id: nextId,
+                                            target_site_url: nextUrl,
+                                          }
+                                        : item
+                                    )));
+                                    clearSubmissionFieldError(block.id, "target_site");
+                                    setTargetSiteSuggestionsBlockId(block.id);
+                                    setClientSuggestionsBlockId(null);
+                                    setSiteSuggestionsBlockId(null);
+                                  }}
+                                  placeholder={t("placeholderTargetWebsite")}
+                                  required
+                                />
+                                {submissionFieldErrors[block.id]?.target_site ? (
+                                  <div className="file-type-tooltip" role="alert">
+                                    <span className="file-type-tooltip-icon">!</span>
+                                    <span>{t("errorClientTargetSiteRequired")}</span>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           ) : null}
 

@@ -3049,6 +3049,7 @@ export default function App() {
                             <CreatorProgressInline
                               jobIds={creatorJobIds}
                               progress={creatorProgress}
+                              t={t}
                             />
                           ) : null}
                         </div>
@@ -3164,7 +3165,9 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
 function CreatorProgressInline({
   jobIds,
   progress,
+  t,
 }) {
+  const translate = typeof t === "function" ? t : (key) => key;
   const firstId = jobIds[0];
   const info = progress[firstId] || { phase: 0, percent: 0, done: false, failed: false };
   const allDone = jobIds.length > 0 && jobIds.every((jid) => progress[jid]?.done);
@@ -3188,7 +3191,7 @@ function CreatorProgressInline({
                 {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
               </div>
               <div className="progress-step-content progress-step-content-inline">
-                <span className="progress-step-label">{t(CREATOR_PHASE_LABELS[step])}</span>
+                <span className="progress-step-label">{translate(CREATOR_PHASE_LABELS[step])}</span>
               </div>
             </div>
           );

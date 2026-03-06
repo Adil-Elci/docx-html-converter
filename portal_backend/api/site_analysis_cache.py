@@ -64,6 +64,31 @@ def get_site_analysis_cache(
     return query.order_by(SiteAnalysisCache.updated_at.desc(), SiteAnalysisCache.created_at.desc()).first()
 
 
+def get_latest_site_analysis_cache(
+    db: Session,
+    *,
+    site_role: str,
+    normalized_url: str,
+    cache_kind: str = PHASE2_SITE_ANALYSIS_CACHE_KIND,
+    publishing_site_id: Optional[UUID] = None,
+    client_target_site_id: Optional[UUID] = None,
+) -> Optional[SiteAnalysisCache]:
+    query = db.query(SiteAnalysisCache).filter(
+        SiteAnalysisCache.cache_kind == cache_kind,
+        SiteAnalysisCache.site_role == site_role,
+        SiteAnalysisCache.normalized_url == normalized_url,
+    )
+    if publishing_site_id is None:
+        query = query.filter(SiteAnalysisCache.publishing_site_id.is_(None))
+    else:
+        query = query.filter(SiteAnalysisCache.publishing_site_id == publishing_site_id)
+    if client_target_site_id is None:
+        query = query.filter(SiteAnalysisCache.client_target_site_id.is_(None))
+    else:
+        query = query.filter(SiteAnalysisCache.client_target_site_id == client_target_site_id)
+    return query.order_by(SiteAnalysisCache.updated_at.desc(), SiteAnalysisCache.created_at.desc()).first()
+
+
 def upsert_site_analysis_cache(
     db: Session,
     *,

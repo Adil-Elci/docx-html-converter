@@ -89,6 +89,8 @@ async def create(request: Request) -> JSONResponse:
             anchor=payload.anchor,
             topic=payload.topic,
             exclude_topics=payload.exclude_topics,
+            phase2_cache_payload=payload.phase2_cache.payload if payload.phase2_cache else None,
+            phase2_cache_content_hash=payload.phase2_cache.content_hash if payload.phase2_cache else None,
             dry_run=payload.dry_run,
         )
     except (CreatorError, LLMError) as exc:
@@ -122,6 +124,8 @@ async def create_stream(request: Request) -> EventSourceResponse:
                 anchor=payload.anchor,
                 topic=payload.topic,
                 exclude_topics=payload.exclude_topics,
+                phase2_cache_payload=payload.phase2_cache.payload if payload.phase2_cache else None,
+                phase2_cache_content_hash=payload.phase2_cache.content_hash if payload.phase2_cache else None,
                 dry_run=payload.dry_run,
                 on_progress=on_progress,
             )

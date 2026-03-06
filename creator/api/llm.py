@@ -133,6 +133,27 @@ def _read_env_float(name: str, default: float) -> float:
         return default
 
 
+def _log_usage(provider: str, request_label: str, model: str, usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+    total_tokens = usage.get("total_tokens")
+    cache_creation_input_tokens = usage.get("cache_creation_input_tokens")
+    cache_read_input_tokens = usage.get("cache_read_input_tokens")
+    logger.info(
+        "creator.llm_usage provider=%s label=%s model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s cache_creation_input_tokens=%s cache_read_input_tokens=%s",
+        provider,
+        request_label or "unspecified",
+        model,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+    )
+
+
 def _call_openai(
     *,
     system_prompt: str,
@@ -143,6 +164,7 @@ def _call_openai(
     timeout_seconds: int,
     max_tokens: int,
     temperature: float,
+    request_label: str,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -170,6 +192,7 @@ def _call_openai(
         body = response.json()
     except ValueError as exc:
         raise LLMError("LLM returned non-JSON response.") from exc
+    _log_usage("openai", request_label, model, body.get("usage"))
 
     content: Optional[str] = None
     choices = body.get("choices")
@@ -192,6 +215,7 @@ def _call_anthropic(
     timeout_seconds: int,
     max_tokens: int,
     temperature: float,
+    request_label: str,
 ) -> str:
     url = base_url.rstrip("/") + "/messages"
     headers = {
@@ -218,6 +242,7 @@ def _call_anthropic(
         body = response.json()
     except ValueError as exc:
         raise LLMError("LLM returned non-JSON response.") from exc
+    _log_usage("anthropic", request_label, model, body.get("usage"))
 
     content_blocks = body.get("content")
     if isinstance(content_blocks, list):
@@ -243,11 +268,12 @@ def call_llm_json(
     max_tokens: int = 1200,
     temperature: float = 0.3,
     allow_html_fallback: bool = False,
+    request_label: str = "",
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = _read_env_int("CREATOR_LLM_RETRIES", 2)
+    retries = _read_env_int("CREATOR_LLM_RETRIES", 0)
     backoff_seconds = _read_env_float("CREATOR_LLM_RETRY_BACKOFF_SECONDS", 2.0)
 
     last_error: Optional[LLMError] = None
@@ -263,6 +289,7 @@ def call_llm_json(
                     timeout_seconds=timeout_seconds,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_label=request_label,
                 )
             else:
                 raw = _call_openai(
@@ -274,6 +301,7 @@ def call_llm_json(
                     timeout_seconds=timeout_seconds,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_label=request_label,
                 )
             raw_text = str(raw)
             try:
@@ -312,11 +340,12 @@ def call_llm_text(
     timeout_seconds: int,
     max_tokens: int = 1200,
     temperature: float = 0.3,
+    request_label: str = "",
 ) -> str:
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = _read_env_int("CREATOR_LLM_RETRIES", 2)
+    retries = _read_env_int("CREATOR_LLM_RETRIES", 0)
     backoff_seconds = _read_env_float("CREATOR_LLM_RETRY_BACKOFF_SECONDS", 2.0)
 
     last_error: Optional[LLMError] = None
@@ -332,6 +361,7 @@ def call_llm_text(
                     timeout_seconds=timeout_seconds,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_label=request_label,
                 )
             else:
                 raw = _call_openai(
@@ -343,6 +373,7 @@ def call_llm_text(
                     timeout_seconds=timeout_seconds,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_label=request_label,
                 )
             return str(raw)
         except LLMError as exc:

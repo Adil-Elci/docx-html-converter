@@ -30,6 +30,11 @@ from .portal_models import (
     SiteDefaultCategory,
     Submission,
 )
+from .site_analysis_cache import (
+    get_latest_site_analysis_cache,
+    normalize_site_analysis_url,
+    upsert_site_analysis_cache,
+)
 
 logger = logging.getLogger("portal_backend.automation")
 
@@ -381,6 +386,8 @@ class AutomationJobWorker:
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
+                    phase2_cache_payload=payload.get("phase2_cache_payload"),
+                    phase2_cache_content_hash=payload.get("phase2_cache_content_hash"),
                     on_phase=_on_phase,
                     site_url=payload["site_url"],
                     wp_rest_base=payload["wp_rest_base"],
@@ -634,6 +641,20 @@ class AutomationJobWorker:
                     if isinstance(prev_topic, str) and prev_topic.strip():
                         exclude_topics.append(prev_topic.strip())
 
+            phase2_cache_payload: Optional[Dict[str, Any]] = None
+            phase2_cache_content_hash = ""
+            if creator_mode:
+                normalized_site_url = normalize_site_analysis_url(site.site_url)
+                latest_phase2_cache = get_latest_site_analysis_cache(
+                    session,
+                    site_role="host",
+                    normalized_url=normalized_site_url,
+                    publishing_site_id=site.id,
+                )
+                if latest_phase2_cache and isinstance(latest_phase2_cache.payload, dict):
+                    phase2_cache_payload = latest_phase2_cache.payload
+                    phase2_cache_content_hash = str(latest_phase2_cache.content_hash or "").strip()
+
             return {
                 "source_url": source_url,
                 "converter_publishing_site": converter_publishing_site,
@@ -652,6 +673,8 @@ class AutomationJobWorker:
                 "anchor": anchor,
                 "topic": topic,
                 "exclude_topics": exclude_topics,
+                "phase2_cache_payload": phase2_cache_payload,
+                "phase2_cache_content_hash": phase2_cache_content_hash,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:
@@ -838,6 +861,27 @@ class AutomationJobWorker:
                     payload=creator_output,
                 )
             )
+            phase2 = creator_output.get("phase2")
+            phase2_cache_meta = creator_output.get("phase2_cache_meta")
+            if isinstance(phase2, dict) and isinstance(phase2_cache_meta, dict):
+                normalized_url = str(phase2_cache_meta.get("normalized_url") or "").strip()
+                content_hash = str(phase2_cache_meta.get("content_hash") or "").strip()
+                prompt_version = str(phase2_cache_meta.get("prompt_version") or "").strip()
+                generator_mode = str(phase2_cache_meta.get("generator_mode") or "").strip()
+                model_name = str(phase2_cache_meta.get("model_name") or "").strip()
+                cacheable = bool(phase2_cache_meta.get("cacheable"))
+                if cacheable and normalized_url and content_hash and prompt_version and generator_mode:
+                    upsert_site_analysis_cache(
+                        session,
+                        site_role="host",
+                        normalized_url=normalized_url,
+                        content_hash=content_hash,
+                        generator_mode=generator_mode,
+                        payload=phase2,
+                        prompt_version=prompt_version,
+                        model_name=model_name,
+                        publishing_site_id=submission.site_id,
+                    )
             session.commit()
 
     def _mark_failed_or_retry(self, job_id: UUID, *, max_attempts: int, error_message: str) -> None:

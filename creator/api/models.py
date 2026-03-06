@@ -5,12 +5,26 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, HttpUrl, validator
 
 
+class Phase2CacheEnvelope(BaseModel):
+    content_hash: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+    @validator("content_hash")
+    def _trim_content_hash(cls, value: str) -> str:
+        return (value or "").strip()
+
+    @validator("payload", pre=True, always=True)
+    def _validate_payload(cls, value: Any) -> Dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+
 class CreatorRequest(BaseModel):
     target_site_url: HttpUrl
     publishing_site_url: HttpUrl = Field(..., description="Publishing site URL (required for analysis)")
     anchor: Optional[str] = None
     topic: Optional[str] = None
     exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
+    phase2_cache: Optional[Phase2CacheEnvelope] = None
     dry_run: bool = False
 
     @validator("anchor", "topic")

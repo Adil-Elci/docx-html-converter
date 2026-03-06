@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import logging
 import os
 import re
@@ -32,7 +33,9 @@ from .web import (
 logger = logging.getLogger("creator.pipeline")
 
 DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_ANTHROPIC_PLANNING_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_ANTHROPIC_WRITING_MODEL = "claude-sonnet-4-6"
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_HTTP_RETRIES = 2
 DEFAULT_LEONARDO_BASE_URL = "https://cloud.leonardo.ai/api/rest/v1"
@@ -41,6 +44,7 @@ DEFAULT_IMAGE_WIDTH = 1024
 DEFAULT_IMAGE_HEIGHT = 576
 DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
+PHASE2_CACHE_PROMPT_VERSION = "v1"
 
 NEGATIVE_PROMPT = "text, watermark, logo, letters, UI, low quality, blurry, deformed"
 
@@ -84,6 +88,71 @@ def _normalize_url(url: str) -> str:
         return cleaned
     normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path or ''}"
     return normalized.rstrip("/")
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()
+
+
+def _model_prefers_anthropic(*models: str) -> bool:
+    return any((model or "").strip().lower().startswith("claude") for model in models)
+
+
+def _coerce_phase2_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    allowed_topics = value.get("allowed_topics")
+    content_style_constraints = value.get("content_style_constraints")
+    internal_linking_opportunities = value.get("internal_linking_opportunities")
+    if not isinstance(allowed_topics, list) or not isinstance(content_style_constraints, list):
+        return None
+    return {
+        "allowed_topics": [str(item).strip() for item in allowed_topics if str(item).strip()],
+        "content_style_constraints": [str(item).strip() for item in content_style_constraints if str(item).strip()],
+        "internal_linking_opportunities": [
+            str(item).strip() for item in (internal_linking_opportunities or []) if str(item).strip()
+        ],
+    }
+
+
+def _infer_meta_description(html: str) -> str:
+    excerpt = ""
+    match = re.search(r"<p[^>]*>(.*?)</p>", html or "", flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        excerpt = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+    return excerpt[:160]
+
+
+def _derive_slug(value: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", "", value or "").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
+    return cleaned.strip("-")[:80]
+
+
+def _fill_article_metadata(article_payload: Dict[str, Any], fallback_title: str) -> Dict[str, Any]:
+    html = str(article_payload.get("article_html") or "").strip()
+    excerpt = str(article_payload.get("excerpt") or "").strip()
+    if not excerpt:
+        excerpt = _infer_meta_description(html)[:200]
+    meta_title = str(article_payload.get("meta_title") or "").strip() or fallback_title
+    meta_description = str(article_payload.get("meta_description") or "").strip() or _infer_meta_description(html)
+    slug = str(article_payload.get("slug") or "").strip() or _derive_slug(meta_title or fallback_title)
+    article_payload["meta_title"] = meta_title
+    article_payload["meta_description"] = meta_description
+    article_payload["slug"] = slug
+    article_payload["excerpt"] = excerpt
+    return article_payload
+
+
+def _build_deterministic_image_prompts(topic: str) -> Dict[str, Any]:
+    cleaned_topic = (topic or "").strip() or "Industry insights"
+    return {
+        "featured_prompt": f"Editorial hero image illustrating: {cleaned_topic}",
+        "featured_alt": cleaned_topic,
+        "include_in_content": False,
+        "in_content_prompt": "",
+        "in_content_alt": "",
+    }
 
 
 def _extract_keywords(text: str, max_terms: int = 10) -> List[str]:
@@ -299,8 +368,9 @@ def _generate_article_by_sections(
             base_url=llm_base_url,
             model=llm_model,
             timeout_seconds=http_timeout,
-            max_tokens=500,
+            max_tokens=320,
             temperature=0.2,
+            request_label="phase5_fallback_intro",
         )
     except LLMError:
         intro_raw = ""
@@ -338,8 +408,9 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=1200,
+                max_tokens=750,
                 temperature=0.2,
+                request_label=f"phase5_fallback_section_{index}",
             )
         except LLMError:
             raw = ""
@@ -373,8 +444,9 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=400,
+                max_tokens=220,
                 temperature=0.2,
+                request_label="phase5_fallback_expand",
             )
             article_html += _wrap_paragraphs(extra)
             word_count = word_count_from_html(article_html)
@@ -469,7 +541,18 @@ def _noop_progress(phase: int, label: str, percent: int) -> None:
     pass
 
 
-def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anchor: Optional[str], topic: Optional[str], exclude_topics: Optional[List[str]] = None, dry_run: bool, on_progress: Optional[Callable[[int, str, int], None]] = None) -> Dict[str, Any]:
+def run_creator_pipeline(
+    *,
+    target_site_url: str,
+    publishing_site_url: str,
+    anchor: Optional[str],
+    topic: Optional[str],
+    exclude_topics: Optional[List[str]] = None,
+    phase2_cache_payload: Optional[Dict[str, Any]] = None,
+    phase2_cache_content_hash: Optional[str] = None,
+    dry_run: bool,
+    on_progress: Optional[Callable[[int, str, int], None]] = None,
+) -> Dict[str, Any]:
     progress = on_progress or _noop_progress
     warnings: List[str] = []
     debug: Dict[str, Any] = {"dry_run": dry_run, "timings_ms": {}, "fetched_pages": []}
@@ -480,23 +563,30 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    llm_api_key = explicit_llm_key or openai_key or anthropic_key
-
+    explicit_shared_model = os.getenv("CREATOR_LLM_MODEL", "").strip()
+    explicit_planning_model = os.getenv("CREATOR_LLM_MODEL_PLANNING", "").strip()
+    explicit_writing_model = os.getenv("CREATOR_LLM_MODEL_WRITING", "").strip()
+    planning_model = explicit_planning_model or explicit_shared_model
+    writing_model = explicit_writing_model or explicit_shared_model
     explicit_base_url = os.getenv("CREATOR_LLM_BASE_URL", "").strip()
+    if not planning_model:
+        planning_model = DEFAULT_ANTHROPIC_PLANNING_MODEL if anthropic_key else DEFAULT_OPENAI_LLM_MODEL
+    if not writing_model:
+        writing_model = DEFAULT_ANTHROPIC_WRITING_MODEL if anthropic_key else DEFAULT_OPENAI_LLM_MODEL
+
     if explicit_base_url:
         llm_base_url = explicit_base_url
+    elif anthropic_key and _model_prefers_anthropic(planning_model, writing_model):
+        llm_base_url = "https://api.anthropic.com/v1"
     elif anthropic_key and not openai_key:
         llm_base_url = "https://api.anthropic.com/v1"
     else:
         llm_base_url = DEFAULT_LLM_BASE_URL
 
-    explicit_model = os.getenv("CREATOR_LLM_MODEL", "").strip()
-    if explicit_model:
-        llm_model = explicit_model
-    elif "anthropic" in llm_base_url.lower():
-        llm_model = "claude-haiku-4-5-20251001"
+    if "anthropic" in llm_base_url.lower():
+        llm_api_key = explicit_llm_key or anthropic_key or openai_key
     else:
-        llm_model = DEFAULT_LLM_MODEL
+        llm_api_key = explicit_llm_key or openai_key or anthropic_key
 
     progress(1, PHASE_LABELS[1], 0)
     phase_start = time.time()
@@ -539,6 +629,8 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         retries=http_retries,
     )
     publishing_text = sanitize_html(publishing_html)
+    publishing_content_hash = _hash_text(publishing_text)
+    normalized_publishing_url = _normalize_url(publishing_site_url)
     if not publishing_text:
         warnings.append("publishing_site_fetch_empty")
     phase2 = {
@@ -546,38 +638,62 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         "content_style_constraints": [],
         "internal_linking_opportunities": [],
     }
+    phase2_cache_hit = False
+    phase2_cache_meta = {
+        "normalized_url": normalized_publishing_url,
+        "content_hash": publishing_content_hash,
+        "prompt_version": PHASE2_CACHE_PROMPT_VERSION,
+        "generator_mode": "llm",
+        "model_name": planning_model,
+        "cache_hit": False,
+        "cacheable": False,
+    }
     if publishing_text:
-        system_prompt = (
-            "You analyze publishing site content for safe submitted article topics. "
-            "Use only the provided site text. Return JSON with allowed_topics (5-10), "
-            "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only)."
-        )
-        user_prompt = (
-            "Publishing site text:\n"
-            f"{publishing_text[:4000]}\n\n"
-            "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...]}."
-        )
-        try:
-            llm_out = call_llm_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                model=llm_model,
-                timeout_seconds=http_timeout,
-                max_tokens=900,
+        cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
+        if cached_phase2 and (phase2_cache_content_hash or "").strip() == publishing_content_hash:
+            phase2 = cached_phase2
+            phase2_cache_hit = True
+            phase2_cache_meta["cache_hit"] = True
+            phase2_cache_meta["cacheable"] = True
+        else:
+            system_prompt = (
+                "You analyze publishing site content for safe submitted article topics. "
+                "Use only the provided site text. Return JSON with allowed_topics (5-10), "
+                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only)."
             )
-            phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
-            phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
-            phase2["internal_linking_opportunities"] = llm_out.get("internal_linking_opportunities") or []
-        except LLMError as exc:
-            warnings.append(f"phase2_llm_failed:{exc}")
-            phase2["allowed_topics"] = _extract_keywords(publishing_text, max_terms=8)
-            phase2["content_style_constraints"] = ["Neutral, authoritative tone", "Avoid promotional language"]
+            user_prompt = (
+                "Publishing site text:\n"
+                f"{publishing_text[:4000]}\n\n"
+                "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...]}."
+            )
+            try:
+                llm_out = call_llm_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    api_key=llm_api_key,
+                    base_url=llm_base_url,
+                    model=planning_model,
+                    timeout_seconds=http_timeout,
+                    max_tokens=600,
+                    request_label="phase2",
+                )
+                phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
+                phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
+                phase2["internal_linking_opportunities"] = llm_out.get("internal_linking_opportunities") or []
+                phase2_cache_meta["cacheable"] = True
+            except LLMError as exc:
+                warnings.append(f"phase2_llm_failed:{exc}")
+                phase2["allowed_topics"] = _extract_keywords(publishing_text, max_terms=8)
+                phase2["content_style_constraints"] = ["Neutral, authoritative tone", "Avoid promotional language"]
+                phase2_cache_meta["generator_mode"] = "deterministic"
+                phase2_cache_meta["model_name"] = ""
     else:
         phase2["allowed_topics"] = []
         phase2["content_style_constraints"] = []
+        phase2_cache_meta["generator_mode"] = "deterministic"
+        phase2_cache_meta["model_name"] = ""
 
+    debug["phase2_cache_hit"] = phase2_cache_hit
     debug["timings_ms"]["phase2"] = int((time.time() - phase_start) * 1000)
     progress(2, PHASE_LABELS[2], 28)
 
@@ -586,60 +702,64 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     logger.info("creator.phase3.start")
     safe_exclude = list(exclude_topics or [])
     requested_topic = (topic or "").strip()
-    system_prompt = (
-        "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
-        "Avoid promotional topics and exact match money keywords. "
-        "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
-        "Return JSON only."
-    )
-    exclude_block = ""
-    if safe_exclude:
-        exclude_block = (
-            "Previously used topics (DO NOT reuse or closely paraphrase these):\n"
-            + "\n".join(f"- {t}" for t in safe_exclude)
-            + "\n\n"
-        )
-    user_prompt = (
-        f"{exclude_block}"
-        f"Allowed topics: {phase2['allowed_topics']}\n"
-        f"Target keyword cluster: {keyword_cluster}\n"
-        f"Requested topic (optional): {requested_topic}\n"
-        "If a requested topic is provided, you MUST use it verbatim as final_article_topic.\n"
-        "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
-        "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"
-    )
-    # Use higher temperature when we need to differentiate from existing topics.
-    phase3_temperature = 0.7 if safe_exclude else 0.3
-    try:
-        llm_out = call_llm_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            api_key=llm_api_key,
-            base_url=llm_base_url,
-            model=llm_model,
-            timeout_seconds=http_timeout,
-            max_tokens=500,
-            temperature=phase3_temperature,
-        )
-        resolved_topic = requested_topic or (llm_out.get("final_article_topic") or "")
-        resolved_primary = llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else "")
-        if requested_topic:
-            resolved_primary = requested_topic
+    if requested_topic:
         phase3 = {
-            "final_article_topic": resolved_topic,
-            "search_intent_type": llm_out.get("search_intent_type") or "informational",
-            "primary_keyword": resolved_primary,
-            "secondary_keywords": llm_out.get("secondary_keywords") or [],
-        }
-    except LLMError as exc:
-        warnings.append(f"phase3_llm_failed:{exc}")
-        fallback_topic = requested_topic or (phase2["allowed_topics"][0] if phase2["allowed_topics"] else "Industry insights")
-        phase3 = {
-            "final_article_topic": fallback_topic,
+            "final_article_topic": requested_topic,
             "search_intent_type": "informational",
-            "primary_keyword": requested_topic or (keyword_cluster[0] if keyword_cluster else fallback_topic),
+            "primary_keyword": requested_topic,
             "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
         }
+    else:
+        system_prompt = (
+            "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
+            "Avoid promotional topics and exact match money keywords. "
+            "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
+            "Return JSON only."
+        )
+        exclude_block = ""
+        if safe_exclude:
+            exclude_block = (
+                "Previously used topics (DO NOT reuse or closely paraphrase these):\n"
+                + "\n".join(f"- {t}" for t in safe_exclude)
+                + "\n\n"
+            )
+        user_prompt = (
+            f"{exclude_block}"
+            f"Allowed topics: {phase2['allowed_topics']}\n"
+            f"Target keyword cluster: {keyword_cluster}\n"
+            "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
+            "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"
+        )
+        phase3_temperature = 0.7 if safe_exclude else 0.3
+        try:
+            llm_out = call_llm_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                api_key=llm_api_key,
+                base_url=llm_base_url,
+                model=planning_model,
+                timeout_seconds=http_timeout,
+                max_tokens=300,
+                temperature=phase3_temperature,
+                request_label="phase3",
+            )
+            resolved_topic = llm_out.get("final_article_topic") or ""
+            resolved_primary = llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else "")
+            phase3 = {
+                "final_article_topic": resolved_topic,
+                "search_intent_type": llm_out.get("search_intent_type") or "informational",
+                "primary_keyword": resolved_primary,
+                "secondary_keywords": llm_out.get("secondary_keywords") or [],
+            }
+        except LLMError as exc:
+            warnings.append(f"phase3_llm_failed:{exc}")
+            fallback_topic = phase2["allowed_topics"][0] if phase2["allowed_topics"] else "Industry insights"
+            phase3 = {
+                "final_article_topic": fallback_topic,
+                "search_intent_type": "informational",
+                "primary_keyword": keyword_cluster[0] if keyword_cluster else fallback_topic,
+                "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
+            }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
     progress(3, PHASE_LABELS[3], 42)
 
@@ -675,9 +795,10 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 user_prompt=user_prompt,
                 api_key=llm_api_key,
                 base_url=llm_base_url,
-                model=llm_model,
+                model=planning_model,
                 timeout_seconds=http_timeout,
-                max_tokens=700,
+                max_tokens=500,
+                request_label="phase4",
             )
         except LLMError as exc:
             outline_errors.append(str(exc))
@@ -797,11 +918,12 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 user_prompt=user_prompt,
                 api_key=llm_api_key,
                 base_url=llm_base_url,
-                model=llm_model,
+                model=writing_model,
                 timeout_seconds=http_timeout,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 allow_html_fallback=True,
+                request_label=f"phase5_attempt_{attempt}",
             )
         except LLMError as exc:
             errors.append(str(exc))
@@ -855,7 +977,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             backlink_url=backlink_url,
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
-            llm_model=llm_model,
+            llm_model=planning_model,
             http_timeout=http_timeout,
         )
         if fallback_payload:
@@ -895,6 +1017,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
     article_payload["article_html"] = art_html
+    article_payload = _fill_article_metadata(article_payload, phase4["h1"])
 
     phase5 = article_payload
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
@@ -909,36 +1032,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         "in_content_image": {},
     }
 
-    image_prompts = None
-    system_prompt = (
-        "Generate image prompts for a blog post. Featured image is required. "
-        "Optional in-content image if helpful. Return JSON only."
-    )
-    user_prompt = (
-        f"Article topic: {phase3['final_article_topic']}\n"
-        f"Outline: {phase4['outline']}\n"
-        "Return JSON: {\"featured_prompt\":\"...\",\"featured_alt\":\"...\","
-        "\"include_in_content\":true|false,\"in_content_prompt\":\"...\",\"in_content_alt\":\"...\"}"
-    )
-    try:
-        image_prompts = call_llm_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            api_key=llm_api_key,
-            base_url=llm_base_url,
-            model=llm_model,
-            timeout_seconds=http_timeout,
-            max_tokens=500,
-        )
-    except LLMError as exc:
-        warnings.append(f"phase6_llm_failed:{exc}")
-        image_prompts = {
-            "featured_prompt": f"Editorial photo illustrating: {phase3['final_article_topic']}",
-            "featured_alt": phase3["final_article_topic"],
-            "include_in_content": False,
-            "in_content_prompt": "",
-            "in_content_alt": "",
-        }
+    image_prompts = _build_deterministic_image_prompts(phase3["final_article_topic"])
 
     featured_prompt = (image_prompts.get("featured_prompt") or "").strip()
     featured_alt = (image_prompts.get("featured_alt") or "").strip()
@@ -1021,7 +1115,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
     if allowed_topics:
         topic_lower = (phase3["final_article_topic"] or "").lower()
         if not any(topic in topic_lower for topic in allowed_topics):
-            phase7_errors.append("topic_not_in_allowed_topics")
+            warnings.append("topic_not_in_allowed_topics")
     if validate_hyperlink_count(phase5["article_html"], 1):
         phase7_errors.append("hyperlink_count_invalid")
     if validate_word_count(phase5["article_html"], 600, 850):
@@ -1068,10 +1162,11 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
                 user_prompt=user_prompt,
                 api_key=llm_api_key,
                 base_url=llm_base_url,
-                model=llm_model,
+                model=planning_model,
                 timeout_seconds=http_timeout,
-                max_tokens=3000,
+                max_tokens=1600,
                 allow_html_fallback=True,
+                request_label="phase7_repair",
             )
             fixed_html = (llm_out.get("article_html") or "").strip()
             fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
@@ -1087,6 +1182,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
             phase5["slug"] = llm_out.get("slug") or phase5["slug"]
             phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
+            phase5 = _fill_article_metadata(phase5, phase4["h1"])
             phase7_errors = []
             if validate_hyperlink_count(phase5["article_html"], 1):
                 phase7_errors.append("hyperlink_count_invalid")
@@ -1115,6 +1211,7 @@ def run_creator_pipeline(*, target_site_url: str, publishing_site_url: str, anch
         "host_site_url": publishing_site_url,
         "phase1": phase1,
         "phase2": phase2,
+        "phase2_cache_meta": phase2_cache_meta,
         "phase3": phase3,
         "phase4": phase4,
         "phase5": phase5,

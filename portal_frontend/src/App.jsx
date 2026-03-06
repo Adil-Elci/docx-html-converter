@@ -358,13 +358,6 @@ export default function App() {
     setShowSubmissionErrorModal(true);
   };
 
-  const openClientNameRequiredModal = (blockIndex) => {
-    const prefix = typeof blockIndex === "number" ? `Block ${blockIndex + 1}: ` : "";
-    setSubmissionErrorCode("CLIENT_NAME_REQUIRED");
-    setSubmissionErrorMessage(`${prefix}${t("errorClientRequired")}`);
-    setShowSubmissionErrorModal(true);
-  };
-
   const getSubmissionBlockError = (block, { isCreateArticle, clientName, requiresTargetSite }) => {
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
     if (!effectiveClientName) return t("errorClientRequired");
@@ -1317,19 +1310,17 @@ export default function App() {
       requiresTargetSite: requiresTargetSiteSelection,
     });
     if (validationError) {
-      if (validationError === t("errorFileTypeRequired")) {
+      if (validationError === t("errorFileTypeRequired") || validationError === t("errorClientRequired")) {
         const blockId = block.id;
         setSubmissionFieldErrors((prev) => ({
           ...prev,
           [blockId]: {
             ...(prev[blockId] || {}),
-            source_type: true,
+            ...(validationError === t("errorFileTypeRequired") ? { source_type: true } : {}),
+            ...(validationError === t("errorClientRequired") ? { client_name: true } : {}),
           },
         }));
         return;
-      }
-      if (validationError === t("errorClientRequired")) {
-        openClientNameRequiredModal(blockIndex);
       }
       setError(`Block ${blockIndex + 1}: ${validationError}`);
       return;
@@ -1412,6 +1403,8 @@ export default function App() {
       if (validationError) {
         if (validationError === t("errorFileTypeRequired")) {
           fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), source_type: true };
+        } else if (validationError === t("errorClientRequired")) {
+          fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), client_name: true };
         }
         blockErrors.push(
           t("batchBlockError").replace("{n}", String(i + 1)).replace("{error}", validationError)
@@ -1419,13 +1412,6 @@ export default function App() {
       }
     }
     if (blockErrors.length) {
-      const firstMissingClientNameIndex = blocks.findIndex((block) => {
-        const effectiveClientName = ((block.client_name || "").trim() || resolvedClientName);
-        return !effectiveClientName;
-      });
-      if (firstMissingClientNameIndex >= 0) {
-        openClientNameRequiredModal(firstMissingClientNameIndex);
-      }
       setSubmissionFieldErrors(fieldErrors);
       setError(blockErrors.join("\n"));
       return;
@@ -2582,6 +2568,13 @@ export default function App() {
                                           }
                                         : item
                                     )));
+                                    setSubmissionFieldErrors((prev) => ({
+                                      ...prev,
+                                      [block.id]: {
+                                        ...(prev[block.id] || {}),
+                                        client_name: false,
+                                      },
+                                    }));
                                     setClientSuggestionsBlockId(block.id);
                                     setSiteSuggestionsBlockId(null);
                                     setTargetSiteSuggestionsBlockId(null);
@@ -2589,6 +2582,12 @@ export default function App() {
                                   placeholder={t("selectClient")}
                                   required
                                 />
+                                {submissionFieldErrors[block.id]?.client_name ? (
+                                  <div className="file-type-tooltip" role="alert">
+                                    <span className="file-type-tooltip-icon">!</span>
+                                    <span>{t("errorClientRequired")}</span>
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           ) : null}

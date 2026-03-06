@@ -1309,7 +1309,7 @@ export default function App() {
       setError(t("errorSelectArticleSection"));
       return;
     }
-    const resolvedClientName = ((clients[0]?.name) || "").trim();
+    const resolvedClientName = isAdminUser ? "" : ((clients[0]?.name) || "").trim();
     const requiresTargetSiteSelection = isCreateArticleSection;
     const validationError = getSubmissionBlockError(block, {
       isCreateArticle: isCreateArticleSection,
@@ -1396,7 +1396,7 @@ export default function App() {
     setBatchBlockStatus({});
 
     const blocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
-    const resolvedClientName = ((clients[0]?.name) || "").trim();
+    const resolvedClientName = isAdminUser ? "" : ((clients[0]?.name) || "").trim();
     const requiresTargetSiteSelection = isCreateArticleSection;
 
     // --- validate all blocks first ---

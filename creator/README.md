@@ -21,6 +21,9 @@ uvicorn api.server:app --reload --port 8100
 - `CREATOR_PHASE5_MAX_ATTEMPTS` (default: 2, capped at 2)
 - `CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1` (default: 1800)
 - `CREATOR_PHASE5_MAX_TOKENS_RETRY` (default: 1200)
+- `CREATOR_KEYWORD_TRENDS_ENABLED` (default: true; fetches DE query suggestions for keyword enrichment)
+- `CREATOR_KEYWORD_TRENDS_TIMEOUT_SECONDS` (default: 4)
+- `CREATOR_KEYWORD_TRENDS_MAX_TERMS` (default: 10)
 
 ## Tests
 ```bash

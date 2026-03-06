@@ -75,6 +75,11 @@ GENERIC_CONCLUSION_PHRASES = (
     "addressing the challenges and opportunities presented by this subject matter",
 )
 
+KEYWORD_MIN_SECONDARY = 4
+KEYWORD_MAX_SECONDARY = 6
+KEYWORD_MIN_WORDS = 2
+KEYWORD_MAX_WORDS = 8
+
 
 class CreatorError(RuntimeError):
     pass
@@ -314,6 +319,324 @@ def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
     return out
 
 
+def _normalize_keyword_phrase(value: str) -> str:
+    cleaned = re.sub(r"[^\wäöüÄÖÜß\s-]", " ", (value or "").strip().lower())
+    cleaned = re.sub(r"[_-]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _keyword_token_set(value: str) -> set[str]:
+    tokens = _tokenize_words(_normalize_keyword_phrase(value))
+    return {
+        token
+        for token in tokens
+        if token not in STOPWORDS
+        and token not in GERMAN_FUNCTION_WORDS
+        and token not in ENGLISH_FUNCTION_WORDS
+    }
+
+
+def _is_valid_keyword_phrase(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return False
+    words = normalized.split()
+    if not (KEYWORD_MIN_WORDS <= len(words) <= KEYWORD_MAX_WORDS):
+        return False
+    if len(normalized) < 6 or len(normalized) > 90:
+        return False
+    if any(token.isdigit() for token in words):
+        return False
+    return len(_keyword_token_set(normalized)) >= 2
+
+
+def _keyword_similarity(a: str, b: str) -> float:
+    ta = _keyword_token_set(a)
+    tb = _keyword_token_set(b)
+    if not ta or not tb:
+        return 0.0
+    intersection = len(ta & tb)
+    union = len(ta | tb)
+    if union == 0:
+        return 0.0
+    return intersection / union
+
+
+def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
+    out: List[str] = []
+    for item in values:
+        normalized = _normalize_keyword_phrase(item)
+        if not _is_valid_keyword_phrase(normalized):
+            continue
+        if any(_keyword_similarity(normalized, existing) >= 0.75 for existing in out):
+            continue
+        out.append(normalized)
+    return out
+
+
+def _build_topic_phrase(topic: str) -> str:
+    normalized = _normalize_keyword_phrase(topic)
+    words = normalized.split()
+    if len(words) > KEYWORD_MAX_WORDS:
+        normalized = " ".join(words[:KEYWORD_MAX_WORDS])
+    return normalized
+
+
+def _extract_candidate_phrases_from_topics(topics: List[str], *, max_phrases: int = 16) -> List[str]:
+    out: List[str] = []
+    for topic in topics:
+        normalized = _normalize_keyword_phrase(topic)
+        if not normalized:
+            continue
+        words = normalized.split()
+        if len(words) > KEYWORD_MAX_WORDS:
+            out.append(" ".join(words[:KEYWORD_MAX_WORDS]))
+        out.append(normalized)
+        if len(out) >= max_phrases:
+            break
+    return out[:max_phrases]
+
+
+def _fetch_google_de_suggestions(query: str, *, timeout_seconds: int) -> List[str]:
+    cleaned = _normalize_keyword_phrase(query)
+    if not cleaned:
+        return []
+    url = "https://suggestqueries.google.com/complete/search"
+    try:
+        response = requests.get(
+            url,
+            params={"client": "firefox", "hl": "de", "gl": "de", "q": cleaned},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return []
+
+    if not isinstance(payload, list) or len(payload) < 2:
+        return []
+    suggestions_raw = payload[1]
+    if not isinstance(suggestions_raw, list):
+        return []
+    out: List[str] = []
+    for item in suggestions_raw:
+        if isinstance(item, str) and item.strip():
+            out.append(_normalize_keyword_phrase(item))
+    return out
+
+
+def _fetch_keyword_trend_candidates(
+    *,
+    topic: str,
+    primary_hint: str,
+    timeout_seconds: int,
+    max_terms: int,
+) -> List[str]:
+    seeds = [_build_topic_phrase(topic)]
+    if primary_hint:
+        seeds.append(_normalize_keyword_phrase(primary_hint))
+    candidates: List[str] = []
+    for seed in seeds:
+        if not seed:
+            continue
+        candidates.extend(_fetch_google_de_suggestions(seed, timeout_seconds=timeout_seconds))
+    deduped = _dedupe_keyword_phrases(candidates)
+    return deduped[:max_terms]
+
+
+def _score_keyword_candidate(
+    candidate: str,
+    *,
+    topic_tokens: set[str],
+    cluster_tokens: set[str],
+    allowed_tokens: set[str],
+    trend_tokens: set[str],
+) -> float:
+    candidate_tokens = _keyword_token_set(candidate)
+    if not candidate_tokens:
+        return -1.0
+    score = 0.0
+    score += 3.0 * len(candidate_tokens & topic_tokens)
+    score += 1.5 * len(candidate_tokens & cluster_tokens)
+    score += 1.0 * len(candidate_tokens & allowed_tokens)
+    score += 2.0 * len(candidate_tokens & trend_tokens)
+    score += min(1.5, len(candidate_tokens) * 0.3)
+    return score
+
+
+def _select_keywords(
+    *,
+    topic: str,
+    llm_primary: str,
+    llm_secondary: List[str],
+    keyword_cluster: List[str],
+    allowed_topics: List[str],
+    trend_candidates: List[str],
+) -> Dict[str, Any]:
+    topic_phrase = _build_topic_phrase(topic)
+    topic_tokens = _keyword_token_set(topic_phrase)
+    cluster_tokens = set(keyword_cluster)
+    allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
+    trend_tokens = _keyword_token_set(" ".join(trend_candidates))
+
+    primary_pool = _dedupe_keyword_phrases(
+        [llm_primary, topic_phrase] + trend_candidates + _extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8)
+    )
+    if not primary_pool and _is_valid_keyword_phrase(topic_phrase):
+        primary_pool = [topic_phrase]
+    if not primary_pool:
+        fallback = _normalize_keyword_phrase(topic) or "branchen einblicke"
+        primary_pool = [fallback]
+    primary_ranked = sorted(
+        primary_pool,
+        key=lambda item: _score_keyword_candidate(
+            item,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            allowed_tokens=allowed_tokens,
+            trend_tokens=trend_tokens,
+        ),
+        reverse=True,
+    )
+    primary_keyword = primary_ranked[0]
+
+    secondary_pool = _dedupe_keyword_phrases(
+        llm_secondary
+        + trend_candidates
+        + _extract_candidate_phrases_from_topics(allowed_topics)
+        + [topic_phrase]
+    )
+    ranked_secondary = sorted(
+        [
+            candidate
+            for candidate in secondary_pool
+            if _keyword_similarity(candidate, primary_keyword) < 0.8
+        ],
+        key=lambda item: _score_keyword_candidate(
+            item,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            allowed_tokens=allowed_tokens,
+            trend_tokens=trend_tokens,
+        ),
+        reverse=True,
+    )
+    secondary_keywords = ranked_secondary[:KEYWORD_MAX_SECONDARY]
+    if len(secondary_keywords) < KEYWORD_MIN_SECONDARY:
+        fallback_secondary = _dedupe_keyword_phrases(
+            [f"{primary_keyword} tipps", f"{primary_keyword} ratgeber", f"{primary_keyword} auswirkungen"]
+        )
+        for candidate in fallback_secondary:
+            if len(secondary_keywords) >= KEYWORD_MIN_SECONDARY:
+                break
+            if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in secondary_keywords):
+                continue
+            if _keyword_similarity(candidate, primary_keyword) >= 0.8:
+                continue
+            secondary_keywords.append(candidate)
+
+    return {
+        "primary_keyword": primary_keyword,
+        "secondary_keywords": secondary_keywords[:KEYWORD_MAX_SECONDARY],
+        "trend_candidates": trend_candidates,
+    }
+
+
+def _normalize_text_for_keyword_search(value: str) -> str:
+    normalized = _normalize_keyword_phrase(value)
+    return f" {normalized} " if normalized else " "
+
+
+def _keyword_present(text: str, keyword_phrase: str) -> bool:
+    normalized_text = _normalize_text_for_keyword_search(text)
+    normalized_keyword = _normalize_keyword_phrase(keyword_phrase)
+    if not normalized_keyword:
+        return False
+    return f" {normalized_keyword} " in normalized_text
+
+
+def _keyword_token_approx_match(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5:
+        return False
+    prefix = 0
+    for left, right in zip(a, b):
+        if left != right:
+            break
+        prefix += 1
+    return prefix >= (min(len(a), len(b)) - 2)
+
+
+def _keyword_present_relaxed(text: str, keyword_phrase: str) -> bool:
+    if _keyword_present(text, keyword_phrase):
+        return True
+    keyword_tokens = list(_keyword_token_set(keyword_phrase))
+    text_tokens = list(_keyword_token_set(text))
+    if not keyword_tokens or not text_tokens:
+        return False
+    matched = 0
+    for keyword_token in keyword_tokens:
+        if any(_keyword_token_approx_match(keyword_token, text_token) for text_token in text_tokens):
+            matched += 1
+    return matched >= max(1, len(keyword_tokens) - 1)
+
+
+def _count_keyword_occurrences(text: str, keyword_phrase: str) -> int:
+    normalized_text = _normalize_keyword_phrase(text)
+    normalized_keyword = _normalize_keyword_phrase(keyword_phrase)
+    if not normalized_text or not normalized_keyword:
+        return 0
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(token) for token in normalized_keyword.split()) + r"(?!\w)"
+    return len(re.findall(pattern, normalized_text))
+
+
+def _extract_h1_text(html: str) -> str:
+    match = re.search(r"<h1[^>]*>(.*?)</h1>", html or "", flags=re.IGNORECASE | re.DOTALL)
+    return _strip_html_tags(match.group(1)).strip() if match else ""
+
+
+def _extract_first_paragraph_text(html: str) -> str:
+    match = re.search(r"<p[^>]*>(.*?)</p>", html or "", flags=re.IGNORECASE | re.DOTALL)
+    return _strip_html_tags(match.group(1)).strip() if match else ""
+
+
+def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondary_keywords: List[str]) -> List[str]:
+    errors: List[str] = []
+    primary = _normalize_keyword_phrase(primary_keyword)
+    secondaries = _dedupe_keyword_phrases(secondary_keywords)[:KEYWORD_MAX_SECONDARY]
+    if not _is_valid_keyword_phrase(primary):
+        errors.append("primary_keyword_invalid")
+        return errors
+
+    h1_text = _extract_h1_text(article_html)
+    intro_text = _extract_first_paragraph_text(article_html)
+    h2_text = " ".join(_extract_h2_headings(article_html))
+    plain_text = _strip_html_tags(article_html)
+
+    if not _keyword_present(h1_text, primary):
+        errors.append("primary_keyword_missing_h1")
+    if not _keyword_present(intro_text, primary):
+        errors.append("primary_keyword_missing_intro")
+    if not _keyword_present(h2_text, primary):
+        errors.append("primary_keyword_missing_h2")
+
+    required_secondaries = secondaries[:KEYWORD_MIN_SECONDARY]
+    missing_secondaries = [kw for kw in required_secondaries if not _keyword_present_relaxed(plain_text, kw)]
+    if missing_secondaries:
+        errors.append("secondary_keywords_missing:" + ",".join(missing_secondaries[:3]))
+
+    words = max(1, word_count_from_html(article_html))
+    max_occurrences = max(3, int((words / 300.0) * 3))
+    for keyword in [primary] + required_secondaries:
+        occurrences = _count_keyword_occurrences(plain_text, keyword)
+        if occurrences > max_occurrences:
+            errors.append(f"keyword_overused:{keyword}:{occurrences}")
+
+    return errors
+
+
 def _contains_generic_conclusion(text: str) -> bool:
     lowered = (text or "").lower()
     return any(phrase in lowered for phrase in GENERIC_CONCLUSION_PHRASES)
@@ -536,8 +859,10 @@ def _generate_article_by_sections(
     intro_user = (
         f"Topic: {phase3.get('final_article_topic','')}\n"
         f"H1: {phase4.get('h1','')}\n"
+        f"Primary keyword: {phase3.get('primary_keyword','')}\n"
         f"Length: {intro_target - 15}-{intro_target + 15} words.\n"
-        "No hyperlinks unless explicitly requested. Language: German (de-DE)."
+        "No hyperlinks unless explicitly requested. Language: German (de-DE). "
+        "Include the primary keyword naturally in this first paragraph."
     )
     if backlink_placement == "intro":
         intro_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
@@ -576,6 +901,8 @@ def _generate_article_by_sections(
         section_user = (
             f"H2: {h2}\n"
             f"H3s: {h3s_list}\n"
+            f"Primary keyword: {phase3.get('primary_keyword','')}\n"
+            f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
             f"Length: {per_min}-{per_max} words.\n"
             "Write in a neutral authoritative tone in German (de-DE). Do not use bullet lists unless necessary."
             "\nDo not include any hyperlinks unless explicitly requested."
@@ -621,6 +948,8 @@ def _generate_article_by_sections(
         expand_system = "Write an additional paragraph for a German (de-DE) blog post in HTML. Return only HTML."
         expand_user = (
             f"Topic: {phase3.get('final_article_topic','')}\n"
+            f"Primary keyword: {phase3.get('primary_keyword','')}\n"
+            f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
             f"Current word count: {word_count}. Need at least 650 words.\n"
             f"Write one additional paragraph of 80-120 words that fits the article. "
             "No hyperlinks. Language: German (de-DE)."
@@ -766,6 +1095,9 @@ def run_creator_pipeline(
     phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 1800)
     phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    keyword_trends_enabled = _read_bool_env("CREATOR_KEYWORD_TRENDS_ENABLED", True)
+    keyword_trends_timeout = max(1, _read_int_env("CREATOR_KEYWORD_TRENDS_TIMEOUT_SECONDS", 4))
+    keyword_trends_max_terms = max(4, min(20, _read_int_env("CREATOR_KEYWORD_TRENDS_MAX_TERMS", 10)))
     explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -793,6 +1125,8 @@ def run_creator_pipeline(
         llm_api_key = explicit_llm_key or anthropic_key or openai_key
     else:
         llm_api_key = explicit_llm_key or openai_key or anthropic_key
+
+    debug["keyword_trends_enabled"] = keyword_trends_enabled
 
     def _collect_llm_usage(record: Dict[str, Any]) -> None:
         label = str(record.get("label") or "unspecified")
@@ -1021,6 +1355,30 @@ def run_creator_pipeline(
                 "primary_keyword": keyword_cluster[0] if keyword_cluster else fallback_topic,
                 "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
             }
+
+    trend_candidates: List[str] = []
+    if keyword_trends_enabled and phase3.get("final_article_topic"):
+        trend_candidates = _fetch_keyword_trend_candidates(
+            topic=phase3.get("final_article_topic", ""),
+            primary_hint=phase3.get("primary_keyword", ""),
+            timeout_seconds=keyword_trends_timeout,
+            max_terms=keyword_trends_max_terms,
+        )
+    keyword_selection = _select_keywords(
+        topic=phase3.get("final_article_topic", ""),
+        llm_primary=phase3.get("primary_keyword", ""),
+        llm_secondary=phase3.get("secondary_keywords") or [],
+        keyword_cluster=keyword_cluster,
+        allowed_topics=phase2.get("allowed_topics") or [],
+        trend_candidates=trend_candidates,
+    )
+    phase3["primary_keyword"] = keyword_selection["primary_keyword"]
+    phase3["secondary_keywords"] = keyword_selection["secondary_keywords"]
+    debug["keyword_selection"] = {
+        "primary_keyword": phase3["primary_keyword"],
+        "secondary_keywords": phase3["secondary_keywords"],
+        "trend_candidates": keyword_selection.get("trend_candidates") or [],
+    }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
     progress(3, PHASE_LABELS[3], 42)
 
@@ -1035,6 +1393,8 @@ def run_creator_pipeline(
         system_prompt = (
             "Create a German (de-DE) SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
             "Include a concise final H2 titled 'Fazit' (counts toward the 3-5). "
+            "Ensure keyword intent mapping: include the primary keyword in H1 and in at least one H2; "
+            "cover secondary keywords naturally across remaining H2/H3 headings. "
             f"If H1 includes a year, it must be {current_year} (no other years in titles). "
             "Ensure H3 headings only appear under their respective H2 parents (no orphan H3). "
             "Choose backlink placement as intro or one specific section (section_2..section_5). "
@@ -1076,6 +1436,18 @@ def run_creator_pipeline(
             continue
         if backlink_placement not in {"intro", "section_2", "section_3", "section_4", "section_5"}:
             outline_errors.append("invalid_backlink_placement")
+            continue
+        primary_keyword_phase3 = _normalize_keyword_phrase(phase3.get("primary_keyword", ""))
+        h1_lower = _normalize_keyword_phrase(h1)
+        outline_h2_combined = " ".join(
+            _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
+            for item in outline_items
+        )
+        if primary_keyword_phase3 and not (
+            _keyword_present(h1_lower, primary_keyword_phase3)
+            or _keyword_present(outline_h2_combined, primary_keyword_phase3)
+        ):
+            outline_errors.append("primary_keyword_missing_in_outline")
             continue
         last_item = outline_items[-1] if outline_items else {}
         last_h2 = ""
@@ -1119,6 +1491,8 @@ def run_creator_pipeline(
                 "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
                 "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Fazit'. "
                 "Each section should have 1-2 substantial paragraphs. "
+                "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
+                "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
@@ -1135,6 +1509,7 @@ def run_creator_pipeline(
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
+                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -1148,6 +1523,7 @@ def run_creator_pipeline(
                 "Include a concise final H2 titled 'Fazit'. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
+                "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
                 "Return JSON only."
             )
             user_prompt = (
@@ -1161,6 +1537,7 @@ def run_creator_pipeline(
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
+                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -1172,6 +1549,8 @@ def run_creator_pipeline(
                 "Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
                 "Include a concise final H2 titled 'Fazit'. "
+                "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
+                "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
@@ -1190,6 +1569,7 @@ def run_creator_pipeline(
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
+                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -1240,6 +1620,13 @@ def run_creator_pipeline(
         if not (3 <= count_h2(article_html) <= 5):
             validation_errors.append("h2_count_invalid")
         validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
+        validation_errors.extend(
+            _validate_keyword_coverage(
+                article_html,
+                phase3.get("primary_keyword", ""),
+                phase3.get("secondary_keywords") or [],
+            )
+        )
 
         if validation_errors:
             if all(_is_link_only_error(err) for err in validation_errors):
@@ -1259,6 +1646,14 @@ def run_creator_pipeline(
                         repaired_errors.append(check)
                 if not (3 <= count_h2(repaired_html) <= 5):
                     repaired_errors.append("h2_count_invalid")
+                repaired_errors.extend(_validate_language_and_conclusion(repaired_html, phase3["final_article_topic"]))
+                repaired_errors.extend(
+                    _validate_keyword_coverage(
+                        repaired_html,
+                        phase3.get("primary_keyword", ""),
+                        phase3.get("secondary_keywords") or [],
+                    )
+                )
                 if not repaired_errors:
                     warnings.append("phase5_link_constraints_repaired_deterministically")
                     article_payload = {
@@ -1310,6 +1705,13 @@ def run_creator_pipeline(
             if not (3 <= count_h2(article_html) <= 5):
                 validation_errors.append("h2_count_invalid")
             validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
+            validation_errors.extend(
+                _validate_keyword_coverage(
+                    article_html,
+                    phase3.get("primary_keyword", ""),
+                    phase3.get("secondary_keywords") or [],
+                )
+            )
             if not validation_errors:
                 article_payload = fallback_payload
             else:
@@ -1441,6 +1843,13 @@ def run_creator_pipeline(
     if not (3 <= count_h2(phase5["article_html"]) <= 5):
         phase7_errors.append("h2_count_invalid")
     phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
+    phase7_errors.extend(
+        _validate_keyword_coverage(
+            phase5["article_html"],
+            phase3.get("primary_keyword", ""),
+            phase3.get("secondary_keywords") or [],
+        )
+    )
 
     if phase7_errors:
         # one fix pass
@@ -1464,6 +1873,7 @@ def run_creator_pipeline(
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
             "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
+            "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
             "Return JSON only."
         )
         user_prompt = (
@@ -1473,6 +1883,8 @@ def run_creator_pipeline(
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
+            f"Primary keyword: {phase3['primary_keyword']}\n"
+            f"Secondary keywords: {phase3['secondary_keywords']}\n"
             f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
             "Language: German (de-DE).\n"
             "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
@@ -1514,6 +1926,13 @@ def run_creator_pipeline(
             if not (3 <= count_h2(phase5["article_html"]) <= 5):
                 phase7_errors.append("h2_count_invalid")
             phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
+            phase7_errors.extend(
+                _validate_keyword_coverage(
+                    phase5["article_html"],
+                    phase3.get("primary_keyword", ""),
+                    phase3.get("secondary_keywords") or [],
+                )
+            )
         except LLMError as exc:
             phase7_errors.append(f"phase7_fix_failed:{exc}")
 

@@ -14,10 +14,7 @@ import requests
 from .llm import LLMError, call_llm_json, call_llm_text
 from .validators import (
     count_h2,
-    count_hyperlinks,
-    locate_backlink,
     validate_backlink_placement,
-    validate_hyperlink_count,
     validate_word_count,
     word_count_from_html,
 )
@@ -79,6 +76,8 @@ KEYWORD_MIN_SECONDARY = 4
 KEYWORD_MAX_SECONDARY = 6
 KEYWORD_MIN_WORDS = 2
 KEYWORD_MAX_WORDS = 8
+DEFAULT_INTERNAL_LINK_MIN = 2
+DEFAULT_INTERNAL_LINK_MAX = 4
 
 
 class CreatorError(RuntimeError):
@@ -721,21 +720,155 @@ def _strip_leading_empty_blocks(html: str) -> str:
     return re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
 
-def _strip_non_backlinks(html: str, backlink_url: str) -> str:
-    if not backlink_url:
-        return re.sub(r"<a[^>]*>(.*?)</a>", r"\1", html, flags=re.IGNORECASE | re.DOTALL)
+def _host_variants(url: str) -> set[str]:
+    parsed = urlparse((url or "").strip())
+    host = (parsed.netloc or "").strip().lower()
+    if not host:
+        return set()
+    variants = {host}
+    if host.startswith("www."):
+        variants.add(host[4:])
+    else:
+        variants.add(f"www.{host}")
+    return variants
 
+
+def _absolutize_url(href: str, base_url: str) -> str:
+    raw = (href or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    parsed_base = urlparse((base_url or "").strip())
+    host = (parsed_base.netloc or "").strip()
+    scheme = (parsed_base.scheme or "https").strip()
+    if not host:
+        return raw
+    if raw.startswith("/"):
+        return f"{scheme}://{host}{raw}"
+    return raw
+
+
+def _is_internal_href(href: str, publishing_site_url: str) -> bool:
+    absolute = _absolutize_url(href, publishing_site_url)
+    parsed = urlparse(absolute)
+    if absolute.startswith("/") and not parsed.netloc:
+        return True
+    host = (parsed.netloc or "").strip().lower()
+    if not host:
+        return False
+    return host in _host_variants(publishing_site_url)
+
+
+def _is_backlink_href(href: str, backlink_url: str) -> bool:
+    if not backlink_url:
+        return False
+    return _normalize_url(_absolutize_url(href, backlink_url)) == _normalize_url(backlink_url)
+
+
+def _normalize_internal_link_candidates(
+    links: List[str],
+    *,
+    publishing_site_url: str,
+    backlink_url: str,
+    max_items: int,
+) -> List[str]:
+    out: List[str] = []
+    backlink_norm = _normalize_url(backlink_url)
+    for href in links:
+        absolute = _absolutize_url(str(href), publishing_site_url)
+        if not absolute:
+            continue
+        if not _is_internal_href(absolute, publishing_site_url):
+            continue
+        if _normalize_url(absolute) == backlink_norm:
+            continue
+        parsed = urlparse(absolute)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        cleaned = absolute.strip()
+        if cleaned in out:
+            continue
+        out.append(cleaned)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _internal_anchor_text(url: str) -> str:
+    parsed = urlparse((url or "").strip())
+    tail = (parsed.path or "").strip("/").split("/")[-1] if parsed.path else ""
+    cleaned = re.sub(r"[-_]+", " ", tail).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if len(cleaned) >= 3:
+        return cleaned.capitalize()
+    return "Weiterfuehrende Informationen"
+
+
+def _extract_link_stats(article_html: str, *, backlink_url: str, publishing_site_url: str) -> Dict[str, Any]:
+    links = re.findall(r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", article_html or "", flags=re.IGNORECASE | re.DOTALL)
+    backlink_count = 0
+    internal_count = 0
+    external_count = 0
+    internal_urls: List[str] = []
+    for href, _inner in links:
+        absolute = _absolutize_url(href, publishing_site_url)
+        if _is_backlink_href(absolute, backlink_url):
+            backlink_count += 1
+            continue
+        if _is_internal_href(absolute, publishing_site_url):
+            internal_count += 1
+            norm = _normalize_url(absolute)
+            if norm and norm not in internal_urls:
+                internal_urls.append(norm)
+            continue
+        external_count += 1
+    return {
+        "backlink_count": backlink_count,
+        "internal_count": internal_count,
+        "external_count": external_count,
+        "internal_unique_count": len(internal_urls),
+    }
+
+
+def _validate_link_strategy(
+    article_html: str,
+    *,
+    backlink_url: str,
+    publishing_site_url: str,
+    min_internal_links: int,
+    max_internal_links: int,
+) -> List[str]:
+    stats = _extract_link_stats(article_html, backlink_url=backlink_url, publishing_site_url=publishing_site_url)
+    errors: List[str] = []
+    if stats["backlink_count"] != 1:
+        errors.append(f"backlink_count_invalid:{stats['backlink_count']}")
+    if stats["external_count"] != 0:
+        errors.append(f"external_link_count_invalid:{stats['external_count']}")
+    if stats["internal_count"] < min_internal_links:
+        errors.append(f"internal_link_count_too_low:{stats['internal_count']}")
+    if stats["internal_count"] > max_internal_links:
+        errors.append(f"internal_link_count_too_high:{stats['internal_count']}")
+    if stats["internal_unique_count"] < min_internal_links:
+        errors.append(f"internal_link_uniqueness_too_low:{stats['internal_unique_count']}")
+    return errors
+
+
+def _strip_disallowed_links(html: str, *, backlink_url: str, publishing_site_url: str) -> str:
     def replacer(match: re.Match[str]) -> str:
         href = match.group(1) or ""
         inner = match.group(2) or ""
-        if backlink_url in href:
+        absolute = _absolutize_url(href, publishing_site_url)
+        if _is_backlink_href(absolute, backlink_url):
+            return match.group(0)
+        if _is_internal_href(absolute, publishing_site_url):
             return match.group(0)
         return inner
 
     return re.sub(
         r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
         replacer,
-        html,
+        html or "",
         flags=re.IGNORECASE | re.DOTALL,
     )
 
@@ -768,6 +901,49 @@ def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: 
         insert_at = start + p_match.start()
         return html[:insert_at] + f" {anchor_html}" + html[insert_at:]
     return html[:start] + anchor_html + html[start:]
+
+
+def _insert_internal_links(
+    html: str,
+    *,
+    internal_links: List[str],
+    target_internal_count: int,
+) -> str:
+    if target_internal_count <= 0 or not internal_links:
+        return html
+    working = html or ""
+    h2_matches = list(re.finditer(r"<h2[^>]*>(.*?)</h2>", working, flags=re.IGNORECASE | re.DOTALL))
+    usable_section_indexes = list(range(len(h2_matches)))
+    if h2_matches:
+        last_h2_text = _strip_html_tags(h2_matches[-1].group(1)).strip().lower()
+        if "fazit" in last_h2_text and len(usable_section_indexes) > 1:
+            usable_section_indexes = usable_section_indexes[:-1]
+    if not usable_section_indexes:
+        usable_section_indexes = [0]
+
+    for idx in range(min(target_internal_count, len(internal_links))):
+        href = internal_links[idx]
+        anchor_text = _internal_anchor_text(href)
+        link_html = f'<a href="{href}">{anchor_text}</a>'
+        section_idx = usable_section_indexes[idx % len(usable_section_indexes)]
+
+        section_starts = list(re.finditer(r"<h2[^>]*>", working, flags=re.IGNORECASE))
+        if section_starts:
+            section_start = section_starts[min(section_idx, len(section_starts) - 1)].end()
+            tail = working[section_start:]
+            p_match = re.search(r"</p>", tail, flags=re.IGNORECASE)
+            if p_match:
+                insert_at = section_start + p_match.start()
+                working = working[:insert_at] + f" Mehr dazu: {link_html}" + working[insert_at:]
+                continue
+
+        match = re.search(r"</p>", working, flags=re.IGNORECASE)
+        if match:
+            working = working[:match.start()] + f" Mehr dazu: {link_html}" + working[match.start():]
+        else:
+            working += f"<p>Mehr dazu: {link_html}</p>"
+
+    return working
 
 
 def _new_token_bucket() -> Dict[str, int]:
@@ -807,9 +983,13 @@ def _phase_from_request_label(label: str) -> str:
 def _is_link_only_error(error: str) -> bool:
     value = (error or "").strip()
     return (
-        value.startswith("hyperlink_count_invalid")
-        or value.startswith("backlink_missing")
+        value.startswith("backlink_missing")
         or value.startswith("backlink_wrong_placement")
+        or value.startswith("backlink_count_invalid")
+        or value.startswith("internal_link_count_too_low")
+        or value.startswith("internal_link_count_too_high")
+        or value.startswith("internal_link_uniqueness_too_low")
+        or value.startswith("external_link_count_invalid")
     )
 
 
@@ -817,13 +997,31 @@ def _repair_link_constraints(
     *,
     article_html: str,
     backlink_url: str,
+    publishing_site_url: str,
+    internal_links: List[str],
+    min_internal_links: int,
+    max_internal_links: int,
     backlink_placement: str,
     anchor_text: str,
 ) -> str:
-    # Remove all hyperlinks and then insert exactly one backlink at the required location.
+    # Remove all hyperlinks and then insert the required backlink + internal links.
     repaired = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", article_html or "", flags=re.IGNORECASE | re.DOTALL)
     if backlink_url and anchor_text:
         repaired = _insert_backlink(repaired, backlink_url, anchor_text, backlink_placement)
+    normalized_internal = _normalize_internal_link_candidates(
+        internal_links,
+        publishing_site_url=publishing_site_url,
+        backlink_url=backlink_url,
+        max_items=max_internal_links,
+    )
+    target_internal_count = min(max_internal_links, max(min_internal_links, 0))
+    target_internal_count = min(target_internal_count, len(normalized_internal))
+    repaired = _insert_internal_links(
+        repaired,
+        internal_links=normalized_internal,
+        target_internal_count=target_internal_count,
+    )
+    repaired = _strip_disallowed_links(repaired, backlink_url=backlink_url, publishing_site_url=publishing_site_url)
     repaired = _strip_h1_tags(repaired)
     repaired = _strip_empty_blocks(repaired)
     repaired = _strip_leading_empty_blocks(repaired)
@@ -835,6 +1033,10 @@ def _generate_article_by_sections(
     phase4: Dict[str, Any],
     phase3: Dict[str, Any],
     backlink_url: str,
+    publishing_site_url: str,
+    internal_link_candidates: List[str],
+    min_internal_links: int,
+    max_internal_links: int,
     llm_api_key: str,
     llm_base_url: str,
     llm_model: str,
@@ -854,6 +1056,7 @@ def _generate_article_by_sections(
 
     backlink_placement = phase4.get("backlink_placement") or "intro"
     anchor_text = phase4.get("anchor_text_final") or "this resource"
+    internal_links_prompt = internal_link_candidates[:max_internal_links]
 
     intro_system = "Write a short introduction paragraph in German (de-DE) in HTML. Return only HTML."
     intro_user = (
@@ -861,7 +1064,7 @@ def _generate_article_by_sections(
         f"H1: {phase4.get('h1','')}\n"
         f"Primary keyword: {phase3.get('primary_keyword','')}\n"
         f"Length: {intro_target - 15}-{intro_target + 15} words.\n"
-        "No hyperlinks unless explicitly requested. Language: German (de-DE). "
+        "Do not include links unless explicitly requested. Language: German (de-DE). "
         "Include the primary keyword naturally in this first paragraph."
     )
     if backlink_placement == "intro":
@@ -905,7 +1108,7 @@ def _generate_article_by_sections(
             f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
             f"Length: {per_min}-{per_max} words.\n"
             "Write in a neutral authoritative tone in German (de-DE). Do not use bullet lists unless necessary."
-            "\nDo not include any hyperlinks unless explicitly requested."
+            "\nDo not include links unless explicitly requested."
         )
         if "fazit" in h2.lower():
             section_user += (
@@ -914,6 +1117,11 @@ def _generate_article_by_sections(
             )
         if include_backlink:
             section_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
+        if internal_links_prompt:
+            section_user += (
+                f"\nUse up to one internal link from this allowed list when contextually relevant: {internal_links_prompt}. "
+                "Do not use external links."
+            )
 
         try:
             raw = call_llm_text(
@@ -934,9 +1142,16 @@ def _generate_article_by_sections(
         sections_html.append(_normalize_section_html(h2, h3s_list, raw))
 
     article_html = intro_html + "".join(sections_html)
-    article_html = _strip_non_backlinks(article_html, backlink_url)
-    if backlink_url and anchor_text and backlink_url not in article_html:
-        article_html = _insert_backlink(article_html, backlink_url, anchor_text, backlink_placement)
+    article_html = _repair_link_constraints(
+        article_html=article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        min_internal_links=min_internal_links,
+        max_internal_links=max_internal_links,
+        backlink_placement=backlink_placement,
+        anchor_text=anchor_text,
+    )
     article_html = _strip_h1_tags(article_html)
     article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)
@@ -1095,6 +1310,9 @@ def run_creator_pipeline(
     phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 1800)
     phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
+    internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
+    internal_link_candidates_max = max(internal_link_max, _read_int_env("CREATOR_INTERNAL_LINK_CANDIDATES_MAX", 10))
     keyword_trends_enabled = _read_bool_env("CREATOR_KEYWORD_TRENDS_ENABLED", True)
     keyword_trends_timeout = max(1, _read_int_env("CREATOR_KEYWORD_TRENDS_TIMEOUT_SECONDS", 4))
     keyword_trends_max_terms = max(4, min(20, _read_int_env("CREATOR_KEYWORD_TRENDS_MAX_TERMS", 10)))
@@ -1224,6 +1442,25 @@ def run_creator_pipeline(
     publishing_text = sanitize_html(publishing_html)
     publishing_content_hash = _hash_text(publishing_text)
     normalized_publishing_url = _normalize_url(publishing_site_url)
+    raw_internal_links = extract_internal_links(publishing_html, publishing_site_url, limit=internal_link_candidates_max)
+    internal_link_candidates = _normalize_internal_link_candidates(
+        raw_internal_links,
+        publishing_site_url=publishing_site_url,
+        backlink_url=backlink_url,
+        max_items=internal_link_candidates_max,
+    )
+    effective_internal_min = min(internal_link_min, len(internal_link_candidates))
+    effective_internal_max = min(internal_link_max, len(internal_link_candidates))
+    if effective_internal_max < effective_internal_min:
+        effective_internal_max = effective_internal_min
+    debug["internal_linking"] = {
+        "configured_min": internal_link_min,
+        "configured_max": internal_link_max,
+        "effective_min": effective_internal_min,
+        "effective_max": effective_internal_max,
+        "candidate_count": len(internal_link_candidates),
+        "candidates": internal_link_candidates[:8],
+    }
     if not publishing_text:
         warnings.append("publishing_site_fetch_empty")
     phase2 = {
@@ -1483,12 +1720,14 @@ def run_creator_pipeline(
     backlink_url = phase1["backlink_url"]
     last_article_html = ""
     last_validation_errors: List[str] = []
+    internal_links_prompt_text = internal_link_candidates[:effective_internal_max]
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             system_prompt = (
                 "Write a German (de-DE) SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Use neutral authoritative tone, "
-                "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
+                "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
+                "No external links beyond the backlink, no CTA spam, no 'visit our site' language. "
                 "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Fazit'. "
                 "Each section should have 1-2 substantial paragraphs. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
@@ -1507,6 +1746,8 @@ def run_creator_pipeline(
                 f"Anchor text: {phase4['anchor_text_final']}\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
+                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
@@ -1524,6 +1765,8 @@ def run_creator_pipeline(
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
                 "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
+                "Enforce link contract: exactly one backlink to Backlink URL, "
+                f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
                 "Return JSON only."
             )
             user_prompt = (
@@ -1531,10 +1774,12 @@ def run_creator_pipeline(
                 f"Issues: {last_validation_errors}\n"
                 f"Required H1: {phase4['h1']}\n"
                 f"Required outline: {phase4['outline']}\n"
-                "Constraints: 650-800 words, H1 + 3-5 H2 sections, exactly one hyperlink in the HTML.\n"
+                "Constraints: 650-800 words, H1 + 3-5 H2 sections.\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
+                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
@@ -1549,6 +1794,8 @@ def run_creator_pipeline(
                 "Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
                 "Include a concise final H2 titled 'Fazit'. "
+                "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
+                "No external links beyond the backlink. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
                 "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
@@ -1563,7 +1810,9 @@ def run_creator_pipeline(
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
-                "Constraints: 650-800 words (aim for 750), H1 + 3-5 H2 sections, exactly one hyperlink in the HTML, "
+                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
+                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
+                "Constraints: 650-800 words (aim for 750), H1 + 3-5 H2 sections, "
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
@@ -1612,11 +1861,19 @@ def run_creator_pipeline(
         validation_errors: List[str] = []
         for check in (
             validate_word_count(article_html, 600, 850),
-            validate_hyperlink_count(article_html, 1),
             validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
         ):
             if check:
                 validation_errors.append(check)
+        validation_errors.extend(
+            _validate_link_strategy(
+                article_html,
+                backlink_url=backlink_url,
+                publishing_site_url=publishing_site_url,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
+            )
+        )
         if not (3 <= count_h2(article_html) <= 5):
             validation_errors.append("h2_count_invalid")
         validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
@@ -1633,17 +1890,29 @@ def run_creator_pipeline(
                 repaired_html = _repair_link_constraints(
                     article_html=article_html,
                     backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    internal_links=internal_link_candidates,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
                     backlink_placement=phase4["backlink_placement"],
                     anchor_text=phase4["anchor_text_final"],
                 )
                 repaired_errors: List[str] = []
                 for check in (
                     validate_word_count(repaired_html, 600, 850),
-                    validate_hyperlink_count(repaired_html, 1),
                     validate_backlink_placement(repaired_html, backlink_url, phase4["backlink_placement"]),
                 ):
                     if check:
                         repaired_errors.append(check)
+                repaired_errors.extend(
+                    _validate_link_strategy(
+                        repaired_html,
+                        backlink_url=backlink_url,
+                        publishing_site_url=publishing_site_url,
+                        min_internal_links=effective_internal_min,
+                        max_internal_links=effective_internal_max,
+                    )
+                )
                 if not (3 <= count_h2(repaired_html) <= 5):
                     repaired_errors.append("h2_count_invalid")
                 repaired_errors.extend(_validate_language_and_conclusion(repaired_html, phase3["final_article_topic"]))
@@ -1686,6 +1955,10 @@ def run_creator_pipeline(
             phase4=phase4,
             phase3=phase3,
             backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+            internal_link_candidates=internal_link_candidates,
+            min_internal_links=effective_internal_min,
+            max_internal_links=effective_internal_max,
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             llm_model=planning_model,
@@ -1697,11 +1970,19 @@ def run_creator_pipeline(
             validation_errors: List[str] = []
             for check in (
                 validate_word_count(article_html, 600, 850),
-                validate_hyperlink_count(article_html, 1),
                 validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
             ):
                 if check:
                     validation_errors.append(check)
+            validation_errors.extend(
+                _validate_link_strategy(
+                    article_html,
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                )
+            )
             if not (3 <= count_h2(article_html) <= 5):
                 validation_errors.append("h2_count_invalid")
             validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
@@ -1722,17 +2003,16 @@ def run_creator_pipeline(
 
     # ── post-generation repairs ──────────────────────────────────────
     art_html = (article_payload.get("article_html") or "").strip()
-    pre_repair_links = count_hyperlinks(art_html)
-    # Strip stray hyperlinks (keep only the backlink)
-    art_html = _strip_non_backlinks(art_html, backlink_url)
-    post_repair_links = count_hyperlinks(art_html)
-    if pre_repair_links != post_repair_links:
-        logger.info("creator.repair.stripped_links before=%s after=%s", pre_repair_links, post_repair_links)
-    # Insert backlink if missing
-    if backlink_url and backlink_url not in art_html:
-        anchor_text = phase4.get("anchor_text_final") or "this resource"
-        art_html = _insert_backlink(art_html, backlink_url, anchor_text, phase4["backlink_placement"])
-        warnings.append("backlink_inserted_post_generation")
+    art_html = _repair_link_constraints(
+        article_html=art_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        min_internal_links=effective_internal_min,
+        max_internal_links=effective_internal_max,
+        backlink_placement=phase4["backlink_placement"],
+        anchor_text=phase4.get("anchor_text_final") or "this resource",
+    )
     art_html = _strip_h1_tags(art_html)
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
@@ -1836,8 +2116,15 @@ def run_creator_pipeline(
         topic_lower = (phase3["final_article_topic"] or "").lower()
         if not any(topic in topic_lower for topic in allowed_topics):
             warnings.append("topic_not_in_allowed_topics")
-    if validate_hyperlink_count(phase5["article_html"], 1):
-        phase7_errors.append("hyperlink_count_invalid")
+    phase7_errors.extend(
+        _validate_link_strategy(
+            phase5["article_html"],
+            backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+            min_internal_links=effective_internal_min,
+            max_internal_links=effective_internal_max,
+        )
+    )
     if validate_word_count(phase5["article_html"], 600, 850):
         phase7_errors.append("word_count_invalid")
     if not (3 <= count_h2(phase5["article_html"]) <= 5):
@@ -1858,7 +2145,7 @@ def run_creator_pipeline(
         wc_ok = 600 <= current_wc <= 850
         if wc_ok:
             wc_instruction = (
-                f"The word count ({current_wc}) is fine — do NOT add or remove content. "
+                f"The word count ({current_wc}) is fine - do NOT add or remove content. "
                 "Only fix the specific issues listed below."
             )
         else:
@@ -1869,7 +2156,9 @@ def run_creator_pipeline(
         system_prompt = (
             "Fix the HTML article to satisfy SEO checks. "
             f"{wc_instruction} "
-            "Keep exactly one hyperlink (the backlink). Keep 3-5 H2 sections, ending with a concise 'Fazit'. "
+            "Keep 3-5 H2 sections, ending with a concise 'Fazit'. "
+            "Enforce link contract: exactly one backlink to Backlink URL, "
+            f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
             "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
@@ -1883,6 +2172,8 @@ def run_creator_pipeline(
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
+            f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
+            f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
             f"Primary keyword: {phase3['primary_keyword']}\n"
             f"Secondary keywords: {phase3['secondary_keywords']}\n"
             f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
@@ -1913,14 +2204,31 @@ def run_creator_pipeline(
                 # Fix went out of bounds; keep original if it was in bounds
                 if not wc_ok:
                     phase5["article_html"] = fixed_html
+            phase5["article_html"] = _repair_link_constraints(
+                article_html=phase5["article_html"],
+                backlink_url=backlink_url,
+                publishing_site_url=publishing_site_url,
+                internal_links=internal_link_candidates,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
+                backlink_placement=phase4["backlink_placement"],
+                anchor_text=phase4["anchor_text_final"],
+            )
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
             phase5["slug"] = llm_out.get("slug") or phase5["slug"]
             phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
             phase5 = _fill_article_metadata(phase5, phase4["h1"])
             phase7_errors = []
-            if validate_hyperlink_count(phase5["article_html"], 1):
-                phase7_errors.append("hyperlink_count_invalid")
+            phase7_errors.extend(
+                _validate_link_strategy(
+                    phase5["article_html"],
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                )
+            )
             if validate_word_count(phase5["article_html"], 600, 850):
                 phase7_errors.append("word_count_invalid")
             if not (3 <= count_h2(phase5["article_html"]) <= 5):

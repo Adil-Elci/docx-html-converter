@@ -144,6 +144,11 @@ export default function App() {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
     return window.matchMedia("(max-width: 1080px)").matches;
   });
+  const [isMobileViewport, setIsMobileViewport] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(max-width: 900px)").matches;
+  });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -546,6 +551,30 @@ export default function App() {
     widthMedia.addListener(onWidthMediaChange);
     return () => {
       widthMedia.removeListener(onWidthMediaChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const mobileMedia = window.matchMedia("(max-width: 900px)");
+
+    const onMobileMediaChange = (event) => {
+      const mobile = Boolean(event.matches);
+      setIsMobileViewport(mobile);
+      if (!mobile) setMobileMenuOpen(false);
+    };
+
+    setIsMobileViewport(mobileMedia.matches);
+    if (typeof mobileMedia.addEventListener === "function") {
+      mobileMedia.addEventListener("change", onMobileMediaChange);
+      return () => {
+        mobileMedia.removeEventListener("change", onMobileMediaChange);
+      };
+    }
+
+    mobileMedia.addListener(onMobileMediaChange);
+    return () => {
+      mobileMedia.removeListener(onMobileMediaChange);
     };
   }, []);
 
@@ -2140,34 +2169,37 @@ export default function App() {
         activeSection={activeSection}
         onSectionChange={(next) => {
           setActiveSection(next);
-          if (isNarrowViewport) setSidebarHidden(true);
+          if (isMobileViewport) setMobileMenuOpen(false);
+          if (isNarrowViewport && !isMobileViewport) setSidebarHidden(true);
         }}
         pendingJobsCount={pendingJobs.length}
       />
-      <button
-        className="sidebar-collapse-btn"
-        type="button"
-        onClick={() => setSidebarHidden((prev) => !prev)}
-        aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
-        title={sidebarHidden ? "Show side panel" : "Hide side panel"}
-      >
-        <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
-          {sidebarHidden ? (
-            <>
-              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M13 10l2 2-2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          ) : (
-            <>
-              <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M15 10l-2 2 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
-        </svg>
-      </button>
-      {isNarrowViewport && !sidebarHidden ? (
+      {!isMobileViewport ? (
+        <button
+          className="sidebar-collapse-btn"
+          type="button"
+          onClick={() => setSidebarHidden((prev) => !prev)}
+          aria-label={sidebarHidden ? "Show side panel" : "Hide side panel"}
+          title={sidebarHidden ? "Show side panel" : "Hide side panel"}
+        >
+          <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+            {sidebarHidden ? (
+              <>
+                <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M13 10l2 2-2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </>
+            ) : (
+              <>
+                <rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <line x1="9" y1="3" x2="9" y2="21" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M15 10l-2 2 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </>
+            )}
+          </svg>
+        </button>
+      ) : null}
+      {!isMobileViewport && isNarrowViewport && !sidebarHidden ? (
         <button
           type="button"
           className="sidebar-backdrop"
@@ -2178,26 +2210,88 @@ export default function App() {
 
       <div className="header">
         <div className="title">{isAdminUser ? t("heroAdminPanel") : t("clientsPortal")}</div>
-        <div className="inline header-actions">
-          <div className="user-chip">
-            <span>{`Hey ${
-              currentUser.role === "admin"
-                ? (currentUser.full_name || currentUser.email)
-                : (resolvedClientName || t("roleClient"))
-            }!`}</span>
+        {!isMobileViewport ? (
+          <div className="inline header-actions">
+            <div className="user-chip">
+              <span>{`Hey ${
+                currentUser.role === "admin"
+                  ? (currentUser.full_name || currentUser.email)
+                  : (resolvedClientName || t("roleClient"))
+              }!`}</span>
+            </div>
+            <LanguageToggle
+              language={language}
+              onChange={(next) => {
+                setLanguage(next);
+                localStorage.setItem("ui_language", next);
+              }}
+            />
+            <ThemeToggle theme={theme} onChange={setTheme} t={t} />
+            <button className="btn secondary" type="button" onClick={handleLogout}>
+              {t("logout")}
+            </button>
           </div>
-          <LanguageToggle
-            language={language}
-            onChange={(next) => {
-              setLanguage(next);
-              localStorage.setItem("ui_language", next);
-            }}
-          />
-          <ThemeToggle theme={theme} onChange={setTheme} t={t} />
-          <button className="btn secondary" type="button" onClick={handleLogout}>
-            {t("logout")}
-          </button>
-        </div>
+        ) : (
+          <>
+            <button
+              type="button"
+              className={`mobile-menu-btn ${mobileMenuOpen ? "open" : ""}`.trim()}
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+            >
+              <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+                {mobileMenuOpen ? (
+                  <path
+                    d="M6 6l12 12M18 6L6 18"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                ) : (
+                  <path
+                    d="M4 7h16M4 12h16M4 17h16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                )}
+              </svg>
+            </button>
+            {mobileMenuOpen ? (
+              <>
+                <button
+                  type="button"
+                  className="mobile-menu-backdrop"
+                  aria-label="Close account controls"
+                  onClick={() => setMobileMenuOpen(false)}
+                />
+                <div className="mobile-menu-panel">
+                  <div className="user-chip mobile-menu-user">
+                    <span>{`Hey ${
+                      currentUser.role === "admin"
+                        ? (currentUser.full_name || currentUser.email)
+                        : (resolvedClientName || t("roleClient"))
+                    }!`}</span>
+                  </div>
+                  <LanguageToggle
+                    language={language}
+                    onChange={(next) => {
+                      setLanguage(next);
+                      localStorage.setItem("ui_language", next);
+                    }}
+                  />
+                  <ThemeToggle theme={theme} onChange={setTheme} t={t} />
+                  <button className="btn secondary mobile-menu-logout" type="button" onClick={handleLogout}>
+                    {t("logout")}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </>
+        )}
       </div>
       <div className="app-main">
 

@@ -378,11 +378,11 @@ export default function App() {
   const getSubmissionBlockError = (block, { isCreateArticle, clientName, requiresTargetSite }) => {
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
     if (!effectiveClientName) return t("errorClientRequired");
-    const publishingSite = (block.publishing_site || "").trim();
-    if (!publishingSite) return t("errorTargetRequired");
     if (requiresTargetSite && !(block.target_site_id || "").trim() && !(block.target_site_url || "").trim()) {
       return t("errorClientTargetSiteRequired");
     }
+    const publishingSite = (block.publishing_site || "").trim();
+    if (!publishingSite) return t("errorTargetRequired");
     const sourceType = isCreateArticle ? "" : (block.source_type || "").trim();
     if (!isCreateArticle && !sourceType) return t("errorFileTypeRequired");
     if (!isCreateArticle && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");

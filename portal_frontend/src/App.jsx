@@ -232,6 +232,7 @@ export default function App() {
   const clientSuggestInputRefs = useRef({});
   const siteSuggestInputRefs = useRef({});
   const targetSiteSuggestInputRefs = useRef({});
+  const submissionFieldErrorTimersRef = useRef({});
   const [suggestionStyle, setSuggestionStyle] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
@@ -314,6 +315,22 @@ export default function App() {
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
+
+  const clearSubmissionFieldError = useCallback((blockId, field) => {
+    setSubmissionFieldErrors((prev) => ({
+      ...prev,
+      [blockId]: {
+        ...(prev[blockId] || {}),
+        [field]: false,
+      },
+    }));
+    const timerKey = `${blockId}:${field}`;
+    const existingTimer = submissionFieldErrorTimersRef.current[timerKey];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete submissionFieldErrorTimersRef.current[timerKey];
+    }
+  }, []);
 
   const updateActiveSubmissionBlocks = (updater) => {
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
@@ -431,6 +448,35 @@ export default function App() {
       (block.client_name || "").trim() ? block : { ...block, client_name: fallbackClientName }
     )));
   }, [clients, currentUser?.role]);
+
+  useEffect(() => {
+    const activeKeys = new Set();
+    for (const [blockId, errors] of Object.entries(submissionFieldErrors || {})) {
+      for (const field of ["client_name", "publishing_site"]) {
+        if (!errors?.[field]) continue;
+        const timerKey = `${blockId}:${field}`;
+        activeKeys.add(timerKey);
+        if (!submissionFieldErrorTimersRef.current[timerKey]) {
+          submissionFieldErrorTimersRef.current[timerKey] = setTimeout(() => {
+            clearSubmissionFieldError(blockId, field);
+          }, 5000);
+        }
+      }
+    }
+    for (const timerKey of Object.keys(submissionFieldErrorTimersRef.current)) {
+      if (!activeKeys.has(timerKey)) {
+        clearTimeout(submissionFieldErrorTimersRef.current[timerKey]);
+        delete submissionFieldErrorTimersRef.current[timerKey];
+      }
+    }
+  }, [submissionFieldErrors, clearSubmissionFieldError]);
+
+  useEffect(() => () => {
+    for (const timer of Object.values(submissionFieldErrorTimersRef.current)) {
+      clearTimeout(timer);
+    }
+    submissionFieldErrorTimersRef.current = {};
+  }, []);
 
   useEffect(() => {
     if (theme === "dark") {
@@ -1310,7 +1356,11 @@ export default function App() {
       requiresTargetSite: requiresTargetSiteSelection,
     });
     if (validationError) {
-      if (validationError === t("errorFileTypeRequired") || validationError === t("errorClientRequired")) {
+      if (
+        validationError === t("errorFileTypeRequired")
+        || validationError === t("errorClientRequired")
+        || validationError === t("errorTargetRequired")
+      ) {
         const blockId = block.id;
         setSubmissionFieldErrors((prev) => ({
           ...prev,
@@ -1318,6 +1368,7 @@ export default function App() {
             ...(prev[blockId] || {}),
             ...(validationError === t("errorFileTypeRequired") ? { source_type: true } : {}),
             ...(validationError === t("errorClientRequired") ? { client_name: true } : {}),
+            ...(validationError === t("errorTargetRequired") ? { publishing_site: true } : {}),
           },
         }));
         return;
@@ -1405,6 +1456,8 @@ export default function App() {
           fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), source_type: true };
         } else if (validationError === t("errorClientRequired")) {
           fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), client_name: true };
+        } else if (validationError === t("errorTargetRequired")) {
+          fieldErrors[block.id] = { ...(fieldErrors[block.id] || {}), publishing_site: true };
         }
         blockErrors.push(
           t("batchBlockError").replace("{n}", String(i + 1)).replace("{error}", validationError)
@@ -1842,6 +1895,7 @@ export default function App() {
                   }
                 : item
             )));
+            clearSubmissionFieldError(suggestion.blockId, "client_name");
             setClientSuggestionsBlockId(null);
           }}
         >
@@ -1859,6 +1913,7 @@ export default function App() {
           onMouseDown={(event) => {
             event.preventDefault();
             setSubmissionBlockField(suggestion.blockId, "publishing_site", site.site_url);
+            clearSubmissionFieldError(suggestion.blockId, "publishing_site");
             setSiteSuggestionsBlockId(null);
           }}
         >
@@ -2549,6 +2604,7 @@ export default function App() {
                                     }
                                   }}
                                   onFocus={() => {
+                                    clearSubmissionFieldError(block.id, "client_name");
                                     setClientSuggestionsBlockId(block.id);
                                     setSiteSuggestionsBlockId(null);
                                     setTargetSiteSuggestionsBlockId(null);
@@ -2568,13 +2624,7 @@ export default function App() {
                                           }
                                         : item
                                     )));
-                                    setSubmissionFieldErrors((prev) => ({
-                                      ...prev,
-                                      [block.id]: {
-                                        ...(prev[block.id] || {}),
-                                        client_name: false,
-                                      },
-                                    }));
+                                    clearSubmissionFieldError(block.id, "client_name");
                                     setClientSuggestionsBlockId(block.id);
                                     setSiteSuggestionsBlockId(null);
                                     setTargetSiteSuggestionsBlockId(null);
@@ -2650,6 +2700,7 @@ export default function App() {
                                   }
                                 }}
                                 onFocus={() => {
+                                  clearSubmissionFieldError(block.id, "publishing_site");
                                   setSiteSuggestionsBlockId(block.id);
                                   setClientSuggestionsBlockId(null);
                                   setTargetSiteSuggestionsBlockId(null);
@@ -2659,6 +2710,7 @@ export default function App() {
                                 }, 120)}
                                 onChange={(e) => {
                                   setSubmissionBlockField(block.id, "publishing_site", e.target.value);
+                                  clearSubmissionFieldError(block.id, "publishing_site");
                                   setSiteSuggestionsBlockId(block.id);
                                   setClientSuggestionsBlockId(null);
                                   setTargetSiteSuggestionsBlockId(null);
@@ -2666,6 +2718,12 @@ export default function App() {
                                 placeholder={t("placeholderTargetWebsite")}
                                 required
                               />
+                              {submissionFieldErrors[block.id]?.publishing_site ? (
+                                <div className="file-type-tooltip" role="alert">
+                                  <span className="file-type-tooltip-icon">!</span>
+                                  <span>{t("errorTargetRequired")}</span>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
 

@@ -2953,16 +2953,8 @@ export default function App() {
 
                           {isCreateArticleSection && creatorJobIds.length > 0 ? (
                             <CreatorProgressInline
-                              t={t}
                               jobIds={creatorJobIds}
                               progress={creatorProgress}
-                              onClose={() => closeCreatorProgress(block.id)}
-                              onCancel={() => cancelCreatorJobs(block.id)}
-                              canceling={Boolean(creatorCancelingByBlock[block.id])}
-                              cancelError={creatorCancelErrorByBlock[block.id] || ""}
-                              cancelConfirm={Boolean(creatorCancelConfirmByBlock[block.id])}
-                              onRequestCancel={() => requestCancelCreatorJobs(block.id)}
-                              onDismissCancel={() => dismissCancelConfirm(block.id)}
                             />
                           ) : null}
                         </div>
@@ -3076,38 +3068,20 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
 }
 
 function CreatorProgressInline({
-  t,
   jobIds,
   progress,
-  onClose,
-  onCancel,
-  canceling,
-  cancelError,
-  cancelConfirm,
-  onRequestCancel,
-  onDismissCancel,
 }) {
   const firstId = jobIds[0];
-  const info = progress[firstId] || { phase: 0, label: "", percent: 0, done: false, failed: false };
+  const info = progress[firstId] || { phase: 0, percent: 0, done: false, failed: false };
   const allDone = jobIds.length > 0 && jobIds.every((jid) => progress[jid]?.done);
-  const anyFailed = jobIds.some((jid) => progress[jid]?.failed);
-  const anyCanceled = jobIds.some((jid) => progress[jid]?.canceled);
   const aggPercent = jobIds.length > 0
     ? Math.round(jobIds.reduce((sum, jid) => sum + (progress[jid]?.percent || 0), 0) / jobIds.length)
     : 0;
   const currentPhase = info.phase || 0;
 
   return (
-    <div className="creator-progress-inline" role="status" aria-live="polite" aria-labelledby={`creator-progress-title-${firstId || "pending"}`}>
-      <div className="creator-progress-inline-header">
-        <div className="creator-progress-inline-heading">
-          <h4 id={`creator-progress-title-${firstId || "pending"}`}>{t("createArticleProgressTitle")}</h4>
-          <p className="muted-text">{currentPhase === 0 && !allDone ? t("progressWaiting") : info.label}</p>
-        </div>
-        <strong className="creator-progress-inline-percent">{allDone ? 100 : aggPercent}%</strong>
-      </div>
-
-      <div className="progress-steps progress-steps-inline">
+    <div className="creator-progress-inline" role="status" aria-live="polite" aria-label="Creator progress">
+      <div className="progress-steps progress-steps-inline" aria-hidden="true">
         {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
           const step = i + 1;
           const isCompleted = allDone || step < currentPhase;
@@ -3126,44 +3100,9 @@ function CreatorProgressInline({
           );
         })}
       </div>
-
-      <div className="progress-bar-container creator-progress-inline-bar">
-        <div className="progress-bar-track">
-          <div className="progress-bar-fill" style={{ width: `${allDone ? 100 : aggPercent}%` }} />
-        </div>
+      <div className={`creator-progress-inline-end ${allDone ? "is-complete" : ""}`.trim()} aria-live="polite">
+        {allDone ? <span className="creator-progress-inline-check">✓</span> : <strong>{aggPercent}%</strong>}
       </div>
-
-      {!allDone ? (
-        <div className="creator-progress-inline-actions">
-          {!cancelConfirm ? (
-            <button className="btn danger" type="button" onClick={onRequestCancel} disabled={canceling}>
-              {t("cancel")}
-            </button>
-          ) : (
-            <div className="cancel-confirm-row">
-              <span className="muted-text">{t("cancelCreateArticleConfirm")}</span>
-              <div className="cancel-confirm-actions">
-                <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
-                  {canceling ? t("canceling") : t("cancel")}
-                </button>
-                <button className="btn secondary" type="button" onClick={onDismissCancel} disabled={canceling}>
-                  {t("close")}
-                </button>
-              </div>
-            </div>
-          )}
-          {cancelError ? <p className="muted-text">{cancelError}</p> : null}
-        </div>
-      ) : (
-        <div className="creator-progress-inline-actions">
-          <p className="muted-text">
-            {anyCanceled ? t("createArticleCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
-          </p>
-          <button className="btn secondary" type="button" onClick={onClose}>
-            {t("close")}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

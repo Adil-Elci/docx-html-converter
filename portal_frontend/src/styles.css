@@ -1881,89 +1881,67 @@ input:disabled {
 }
 
 .creator-progress-inline {
-  width: 100%;
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-subtle);
-  display: grid;
+  grid-column: 1 / -1;
+  justify-self: center;
+  align-self: end;
+  width: min(100%, 720px);
+  margin-top: auto;
+  padding: 10px 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 14px;
 }
 
-.creator-progress-inline-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.creator-progress-inline-heading {
-  display: grid;
-  gap: 4px;
-}
-
-.creator-progress-inline-heading h4 {
-  margin: 0;
-  font-size: 15px;
-  letter-spacing: -0.01em;
-}
-
-.creator-progress-inline-heading p {
-  margin: 0;
-}
-
-.creator-progress-inline-percent {
-  font-size: 18px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
 .progress-steps-inline {
+  flex: 1;
   display: grid;
-  grid-template-columns: repeat(7, minmax(96px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  min-width: 0;
 }
 
 .progress-step-inline {
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 0;
   min-height: auto;
-  min-width: 96px;
+  min-width: 0;
 }
 
 .progress-step-indicator-inline {
   width: 100%;
   flex-direction: row;
-  gap: 8px;
+  gap: 6px;
   padding-top: 0;
 }
 
 .progress-step-line-inline {
   width: 100%;
-  min-height: 2px;
+  min-height: 3px;
   margin: 0;
 }
 
 .progress-step-content-inline {
-  padding: 0;
-  text-align: center;
+  display: none;
 }
 
-.creator-progress-inline-bar {
-  gap: 0;
-}
-
-.creator-progress-inline-actions {
-  display: flex;
+.creator-progress-inline-end {
+  min-width: 48px;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.creator-progress-inline-actions .muted-text {
-  margin: 0;
+.creator-progress-inline-end.is-complete {
+  color: var(--success);
+}
+
+.creator-progress-inline-check {
+  font-size: 22px;
 }
 
 @keyframes progress-pulse {
@@ -1977,11 +1955,7 @@ input:disabled {
 
 @media (max-width: 900px) {
   .progress-steps-inline {
-    grid-template-columns: repeat(7, minmax(120px, 1fr));
-  }
-
-  .creator-progress-inline-actions {
-    align-items: flex-start;
+    gap: 0;
   }
 }
 

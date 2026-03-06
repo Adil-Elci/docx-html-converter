@@ -869,8 +869,7 @@ class AutomationJobWorker:
                 prompt_version = str(phase2_cache_meta.get("prompt_version") or "").strip()
                 generator_mode = str(phase2_cache_meta.get("generator_mode") or "").strip()
                 model_name = str(phase2_cache_meta.get("model_name") or "").strip()
-                cacheable = bool(phase2_cache_meta.get("cacheable"))
-                if cacheable and normalized_url and content_hash and prompt_version and generator_mode:
+                if normalized_url and content_hash and prompt_version and generator_mode:
                     upsert_site_analysis_cache(
                         session,
                         site_role="host",

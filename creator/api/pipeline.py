@@ -55,6 +55,25 @@ STOPWORDS = {
     "such", "use", "using", "used", "more", "most", "some", "any", "each", "other", "its", "it's", "our", "we",
 }
 
+GERMAN_FUNCTION_WORDS = {
+    "der", "die", "das", "und", "ist", "nicht", "mit", "auf", "von", "für", "im", "in", "den", "dem", "ein",
+    "eine", "als", "auch", "bei", "zu", "des", "sich", "dass", "zum", "zur", "am", "an", "oder", "wie", "wird",
+}
+
+ENGLISH_FUNCTION_WORDS = {
+    "the", "and", "is", "are", "with", "for", "this", "that", "to", "of", "in", "on", "as", "be", "by", "an",
+    "or", "from", "it", "at", "we", "you", "your", "our", "has", "have", "was", "were", "will", "can",
+}
+
+GENERIC_CONCLUSION_PHRASES = (
+    "this article has examined the key factors",
+    "the evidence presented demonstrates",
+    "further investigation and analysis remain necessary",
+    "moving forward, stakeholders must prioritize",
+    "ultimately, a multifaceted approach",
+    "addressing the challenges and opportunities presented by this subject matter",
+)
+
 
 class CreatorError(RuntimeError):
     pass
@@ -221,6 +240,88 @@ def _strip_code_fences(text: str) -> str:
         cleaned = re.sub(r"^```(?:html)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     return cleaned.strip()
+
+
+def _strip_html_tags(value: str) -> str:
+    return re.sub(r"<[^>]+>", " ", value or "", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _tokenize_words(text: str) -> List[str]:
+    return re.findall(r"\b[a-zA-ZäöüÄÖÜß]{2,}\b", (text or "").lower())
+
+
+def _looks_english_heavy(text: str) -> bool:
+    words = _tokenize_words(text)
+    if len(words) < 120:
+        return False
+    de_hits = sum(1 for word in words if word in GERMAN_FUNCTION_WORDS)
+    en_hits = sum(1 for word in words if word in ENGLISH_FUNCTION_WORDS)
+    return en_hits >= 10 and en_hits > int(de_hits * 1.2)
+
+
+def _extract_h2_headings(html: str) -> List[str]:
+    headings: List[str] = []
+    for match in re.finditer(r"<h2[^>]*>(.*?)</h2>", html or "", flags=re.IGNORECASE | re.DOTALL):
+        heading = _strip_html_tags(match.group(1)).strip()
+        if heading:
+            headings.append(heading)
+    return headings
+
+
+def _extract_last_h2_section_text(html: str) -> str:
+    matches = list(re.finditer(r"<h2[^>]*>.*?</h2>", html or "", flags=re.IGNORECASE | re.DOTALL))
+    if not matches:
+        return ""
+    start = matches[-1].end()
+    return _strip_html_tags((html or "")[start:]).strip()
+
+
+def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
+    words = _tokenize_words(topic)
+    out: List[str] = []
+    seen: set[str] = set()
+    for word in words:
+        if len(word) < 4:
+            continue
+        if word in STOPWORDS or word in GERMAN_FUNCTION_WORDS or word in ENGLISH_FUNCTION_WORDS:
+            continue
+        if word in seen:
+            continue
+        seen.add(word)
+        out.append(word)
+        if len(out) >= max_terms:
+            break
+    return out
+
+
+def _contains_generic_conclusion(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in GENERIC_CONCLUSION_PHRASES)
+
+
+def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str]:
+    errors: List[str] = []
+    plain_text = _strip_html_tags(article_html)
+    if _looks_english_heavy(plain_text):
+        errors.append("language_not_german")
+
+    headings = _extract_h2_headings(article_html)
+    if headings:
+        last_h2 = headings[-1].strip().lower()
+        if "fazit" not in last_h2:
+            errors.append("final_h2_not_fazit")
+
+    conclusion_text = _extract_last_h2_section_text(article_html)
+    if conclusion_text:
+        if _contains_generic_conclusion(conclusion_text):
+            errors.append("conclusion_generic")
+        topic_terms = _topic_keywords(topic)
+        if topic_terms:
+            lowered = conclusion_text.lower()
+            if not any(term in lowered for term in topic_terms):
+                errors.append("conclusion_not_topic_specific")
+
+    return errors
 
 
 def _wrap_paragraphs(text: str) -> str:
@@ -411,12 +512,12 @@ def _generate_article_by_sections(
     backlink_placement = phase4.get("backlink_placement") or "intro"
     anchor_text = phase4.get("anchor_text_final") or "this resource"
 
-    intro_system = "Write a short introduction paragraph in HTML. Return only HTML."
+    intro_system = "Write a short introduction paragraph in German (de-DE) in HTML. Return only HTML."
     intro_user = (
         f"Topic: {phase3.get('final_article_topic','')}\n"
         f"H1: {phase4.get('h1','')}\n"
         f"Length: {intro_target - 15}-{intro_target + 15} words.\n"
-        "No hyperlinks unless explicitly requested."
+        "No hyperlinks unless explicitly requested. Language: German (de-DE)."
     )
     if backlink_placement == "intro":
         intro_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
@@ -451,14 +552,19 @@ def _generate_article_by_sections(
                 placement_index = None
         include_backlink = placement_index == (index - 1)
 
-        section_system = "Write HTML for a single H2 section of a submitted article. Return only HTML."
+        section_system = "Write HTML for a single H2 section of a submitted article in German (de-DE). Return only HTML."
         section_user = (
             f"H2: {h2}\n"
             f"H3s: {h3s_list}\n"
             f"Length: {per_min}-{per_max} words.\n"
-            "Write in a neutral authoritative tone. Do not use bullet lists unless necessary."
+            "Write in a neutral authoritative tone in German (de-DE). Do not use bullet lists unless necessary."
             "\nDo not include any hyperlinks unless explicitly requested."
         )
+        if "fazit" in h2.lower():
+            section_user += (
+                f"\nThis is the final 'Fazit' section. Summarize concrete takeaways for topic: "
+                f"{phase3.get('final_article_topic','')}. Avoid generic statements."
+            )
         if include_backlink:
             section_user += f"\nInclude exactly one hyperlink to {backlink_url} with anchor text: {anchor_text}."
 
@@ -492,12 +598,12 @@ def _generate_article_by_sections(
     for _expand_pass in range(3):
         if word_count >= 650:
             break
-        expand_system = "Write an additional paragraph for a blog post in HTML. Return only HTML."
+        expand_system = "Write an additional paragraph for a German (de-DE) blog post in HTML. Return only HTML."
         expand_user = (
             f"Topic: {phase3.get('final_article_topic','')}\n"
             f"Current word count: {word_count}. Need at least 650 words.\n"
             f"Write one additional paragraph of 80-120 words that fits the article. "
-            "No hyperlinks."
+            "No hyperlinks. Language: German (de-DE)."
         )
         try:
             extra = call_llm_text(
@@ -745,7 +851,7 @@ def run_creator_pipeline(
         "generator_mode": "llm",
         "model_name": planning_model,
         "cache_hit": False,
-        "cacheable": False,
+        "cacheable": True,
     }
     if publishing_text:
         cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
@@ -758,7 +864,8 @@ def run_creator_pipeline(
             system_prompt = (
                 "You analyze publishing site content for safe submitted article topics. "
                 "Use only the provided site text. Return JSON with allowed_topics (5-10), "
-                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only)."
+                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only). "
+                "All returned natural-language text must be in German (de-DE)."
             )
             user_prompt = (
                 "Publishing site text:\n"
@@ -780,11 +887,10 @@ def run_creator_pipeline(
                 phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
                 phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
                 phase2["internal_linking_opportunities"] = llm_out.get("internal_linking_opportunities") or []
-                phase2_cache_meta["cacheable"] = True
             except LLMError as exc:
                 warnings.append(f"phase2_llm_failed:{exc}")
                 phase2["allowed_topics"] = _extract_keywords(publishing_text, max_terms=8)
-                phase2["content_style_constraints"] = ["Neutral, authoritative tone", "Avoid promotional language"]
+                phase2["content_style_constraints"] = ["Neutraler, fachlich-serioeser Ton", "Werbliche Sprache vermeiden"]
                 phase2_cache_meta["generator_mode"] = "deterministic"
                 phase2_cache_meta["model_name"] = ""
     else:
@@ -814,7 +920,7 @@ def run_creator_pipeline(
             "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
             "Avoid promotional topics and exact match money keywords. "
             "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
-            "Return JSON only."
+            "All returned natural-language fields must be in German (de-DE). Return JSON only."
         )
         exclude_block = ""
         if safe_exclude:
@@ -873,8 +979,8 @@ def run_creator_pipeline(
     outline_errors: List[str] = []
     for attempt in range(1, 3):
         system_prompt = (
-            "Create an SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
-            "Include a concise final H2 titled 'Conclusion' (counts toward the 3-5). "
+            "Create a German (de-DE) SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
+            "Include a concise final H2 titled 'Fazit' (counts toward the 3-5). "
             f"If H1 includes a year, it must be {current_year} (no other years in titles). "
             "Ensure H3 headings only appear under their respective H2 parents (no orphan H3). "
             "Choose backlink placement as intro or one specific section (section_2..section_5). "
@@ -887,6 +993,7 @@ def run_creator_pipeline(
             f"Secondary keywords: {phase3['secondary_keywords']}\n"
             f"Anchor provided: {anchor or ''}\n"
             f"Anchor safe: {anchor_safe}\n"
+            "Language: German (de-DE).\n"
             "Return JSON: {\"h1\":\"...\",\"outline\":[{\"h2\":\"...\",\"h3\":[\"...\"]}],"
             "\"backlink_placement\":\"intro|section_2|section_3|section_4|section_5\",\"anchor_text_final\":\"...\"}"
         )
@@ -916,6 +1023,15 @@ def run_creator_pipeline(
         if backlink_placement not in {"intro", "section_2", "section_3", "section_4", "section_5"}:
             outline_errors.append("invalid_backlink_placement")
             continue
+        last_item = outline_items[-1] if outline_items else {}
+        last_h2 = ""
+        if isinstance(last_item, dict):
+            last_h2 = str(last_item.get("h2") or "").strip()
+        else:
+            last_h2 = str(last_item).strip()
+        if "fazit" not in last_h2.lower():
+            outline_errors.append("final_h2_not_fazit")
+            continue
         if not anchor_text_final:
             anchor_text_final = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
         outline = {
@@ -944,14 +1060,15 @@ def run_creator_pipeline(
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             system_prompt = (
-                "Write an SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
+                "Write a German (de-DE) SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Use neutral authoritative tone, "
                 "exactly one hyperlink in the entire HTML, no CTA spam, no 'visit our site' language. "
-                "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Conclusion'. "
+                "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Fazit'. "
                 "Each section should have 1-2 substantial paragraphs. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Return JSON only."
             )
             user_prompt = (
@@ -962,6 +1079,8 @@ def run_creator_pipeline(
                 f"Anchor text: {phase4['anchor_text_final']}\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
+                "Language: German (de-DE).\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -972,8 +1091,9 @@ def run_creator_pipeline(
             system_prompt = (
                 "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "Include a concise final H2 titled 'Conclusion'. "
+                "Include a concise final H2 titled 'Fazit'. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
                 "Return JSON only."
             )
             user_prompt = (
@@ -985,6 +1105,8 @@ def run_creator_pipeline(
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
+                "Language: German (de-DE).\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -993,12 +1115,13 @@ def run_creator_pipeline(
             temperature = 0.2
         else:
             system_prompt = (
-                "Write a NEW article from scratch. CRITICAL: the article body MUST be 650-800 words "
+                "Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
-                "Include a concise final H2 titled 'Conclusion'. "
+                "Include a concise final H2 titled 'Fazit'. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Do not return markdown fences. Return JSON only."
             )
             user_prompt = (
@@ -1011,6 +1134,8 @@ def run_creator_pipeline(
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
+                "Language: German (de-DE).\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -1060,6 +1185,7 @@ def run_creator_pipeline(
                 validation_errors.append(check)
         if not (3 <= count_h2(article_html) <= 5):
             validation_errors.append("h2_count_invalid")
+        validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
 
         if validation_errors:
             if all(_is_link_only_error(err) for err in validation_errors):
@@ -1129,6 +1255,7 @@ def run_creator_pipeline(
                     validation_errors.append(check)
             if not (3 <= count_h2(article_html) <= 5):
                 validation_errors.append("h2_count_invalid")
+            validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
             if not validation_errors:
                 article_payload = fallback_payload
             else:
@@ -1259,6 +1386,7 @@ def run_creator_pipeline(
         phase7_errors.append("word_count_invalid")
     if not (3 <= count_h2(phase5["article_html"]) <= 5):
         phase7_errors.append("h2_count_invalid")
+    phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
 
     if phase7_errors:
         # one fix pass
@@ -1278,9 +1406,10 @@ def run_creator_pipeline(
         system_prompt = (
             "Fix the HTML article to satisfy SEO checks. "
             f"{wc_instruction} "
-            "Keep exactly one hyperlink (the backlink). Keep 3-5 H2 sections, ending with a concise 'Conclusion'. "
+            "Keep exactly one hyperlink (the backlink). Keep 3-5 H2 sections, ending with a concise 'Fazit'. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+            "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
             "Return JSON only."
         )
         user_prompt = (
@@ -1290,6 +1419,8 @@ def run_creator_pipeline(
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
+            f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
+            "Language: German (de-DE).\n"
             "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
             "\"excerpt\":\"...\",\"article_html\":\"...\"}"
         )
@@ -1328,6 +1459,7 @@ def run_creator_pipeline(
                 phase7_errors.append("word_count_invalid")
             if not (3 <= count_h2(phase5["article_html"]) <= 5):
                 phase7_errors.append("h2_count_invalid")
+            phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
         except LLMError as exc:
             phase7_errors.append(f"phase7_fix_failed:{exc}")
 

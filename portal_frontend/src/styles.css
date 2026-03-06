@@ -1512,6 +1512,12 @@ input:disabled {
   justify-content: flex-end;
 }
 
+.request-container .request-form-panel .create-article-block .submission-block-actions {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  justify-content: flex-end;
+}
+
 @media (min-width: 1200px) {
   .request-container .request-form-panel .create-article-block {
     grid-template-columns: repeat(12, minmax(0, 1fr));
@@ -1994,7 +2000,7 @@ input:disabled {
   align-items: center;
   gap: 6px;
   padding: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--panel-3) 82%, transparent);
   backdrop-filter: blur(calc(var(--glass-blur) - 8px));
@@ -2004,8 +2010,10 @@ input:disabled {
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 6px;
-  border-radius: 999px;
+  min-width: 40px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: calc(var(--radius-sm) - 2px);
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
 }

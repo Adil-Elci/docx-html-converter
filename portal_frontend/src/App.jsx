@@ -184,13 +184,12 @@ export default function App() {
   const [submissionErrorMessage, setSubmissionErrorMessage] = useState("");
   const [submissionFieldErrors, setSubmissionFieldErrors] = useState({});
   const [batchBlockStatus, setBatchBlockStatus] = useState({});
-  const [creatorCanceling, setCreatorCanceling] = useState(false);
-  const [creatorCancelError, setCreatorCancelError] = useState("");
-  const [creatorCancelConfirm, setCreatorCancelConfirm] = useState(false);
+  const [creatorCancelingByBlock, setCreatorCancelingByBlock] = useState({});
+  const [creatorCancelErrorByBlock, setCreatorCancelErrorByBlock] = useState({});
+  const [creatorCancelConfirmByBlock, setCreatorCancelConfirmByBlock] = useState({});
   const [imageRegenToast, setImageRegenToast] = useState({ open: false, message: "", closing: false });
-  const [creatorJobIds, setCreatorJobIds] = useState([]);
+  const [creatorJobsByBlock, setCreatorJobsByBlock] = useState({});
   const [creatorProgress, setCreatorProgress] = useState({});
-  const [showCreatorProgress, setShowCreatorProgress] = useState(false);
   const creatorPollRef = useRef(null);
 
   const [clients, setClients] = useState([]);
@@ -306,9 +305,11 @@ export default function App() {
     setSubmissionErrorMessage("");
     setSubmissionFieldErrors({});
     setBatchBlockStatus({});
-    setShowCreatorProgress(false);
-    setCreatorJobIds([]);
+    setCreatorJobsByBlock({});
     setCreatorProgress({});
+    setCreatorCancelErrorByBlock({});
+    setCreatorCancelingByBlock({});
+    setCreatorCancelConfirmByBlock({});
   };
 
   const setSubmissionBlockField = (blockId, field, value) => {
@@ -356,6 +357,7 @@ export default function App() {
   };
 
   const removeSubmissionBlock = (blockId) => {
+    const trackedJobIds = creatorJobsByBlock[blockId] || [];
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     setter((prev) => {
       if (prev.length <= 1) return prev;
@@ -364,7 +366,37 @@ export default function App() {
     });
     setSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setClientSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
+    setTargetSiteSuggestionsBlockId((prev) => (prev === blockId ? null : prev));
     setUploadProgressBlockId((prev) => (prev === blockId ? null : prev));
+    setCreatorJobsByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelErrorByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelingByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelConfirmByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    if (trackedJobIds.length > 0) {
+      setCreatorProgress((prev) => {
+        const next = { ...prev };
+        trackedJobIds.forEach((jobId) => {
+          delete next[jobId];
+        });
+        return next;
+      });
+    }
   };
 
   const openSubmissionErrorSupportModal = ({ statusCode, message, blockIndex }) => {
@@ -1223,15 +1255,61 @@ export default function App() {
     }
   }, []);
 
-  const closeCreatorProgress = useCallback(() => {
-    stopCreatorPolling();
-    setShowCreatorProgress(false);
-    setCreatorJobIds([]);
-    setCreatorProgress({});
-    setCreatorCancelError("");
-    setCreatorCanceling(false);
-    setCreatorCancelConfirm(false);
-  }, [stopCreatorPolling]);
+  const attachCreatorJobsToBlock = useCallback((blockId, jobIds) => {
+    const nextJobIds = (jobIds || []).filter(Boolean);
+    if (nextJobIds.length === 0) return;
+    setCreatorJobsByBlock((prev) => ({ ...prev, [blockId]: nextJobIds }));
+    setCreatorProgress((prev) => {
+      const next = { ...prev };
+      nextJobIds.forEach((jobId) => {
+        next[jobId] = next[jobId] || {
+          phase: 0,
+          label: "",
+          percent: 0,
+          done: false,
+          failed: false,
+          canceled: false,
+        };
+      });
+      return next;
+    });
+    setCreatorCancelErrorByBlock((prev) => ({ ...prev, [blockId]: "" }));
+    setCreatorCancelingByBlock((prev) => ({ ...prev, [blockId]: false }));
+    setCreatorCancelConfirmByBlock((prev) => ({ ...prev, [blockId]: false }));
+  }, []);
+
+  const closeCreatorProgress = useCallback((blockId) => {
+    const trackedJobIds = creatorJobsByBlock[blockId] || [];
+    setCreatorJobsByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelErrorByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelingByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    setCreatorCancelConfirmByBlock((prev) => {
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+    if (trackedJobIds.length > 0) {
+      setCreatorProgress((prev) => {
+        const next = { ...prev };
+        trackedJobIds.forEach((jobId) => {
+          delete next[jobId];
+        });
+        return next;
+      });
+    }
+  }, [creatorJobsByBlock]);
 
   const dismissImageRegenToast = useCallback(() => {
     setImageRegenToast((prev) => {
@@ -1256,13 +1334,21 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [imageRegenToast.closing]);
 
+  const trackedCreatorJobIds = useMemo(
+    () => Array.from(new Set(Object.values(creatorJobsByBlock).flat().filter(Boolean))),
+    [creatorJobsByBlock],
+  );
+
   useEffect(() => {
-    if (!showCreatorProgress || creatorJobIds.length === 0) return;
+    if (trackedCreatorJobIds.length === 0) {
+      stopCreatorPolling();
+      return undefined;
+    }
     let cancelled = false;
     const poll = async () => {
       const updates = {};
       let allDone = true;
-      for (const jid of creatorJobIds) {
+      for (const jid of trackedCreatorJobIds) {
         try {
           const data = await api.get(`/automation/status?job_id=${encodeURIComponent(jid)}`);
           if (!data?.found) { allDone = false; continue; }
@@ -1294,12 +1380,13 @@ export default function App() {
     poll();
     creatorPollRef.current = setInterval(poll, 3000);
     return () => { cancelled = true; stopCreatorPolling(); };
-  }, [showCreatorProgress, creatorJobIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trackedCreatorJobIds, stopCreatorPolling]);
 
-  const cancelCreatorJobs = useCallback(async () => {
-    if (creatorCanceling || creatorJobIds.length === 0) return;
-    setCreatorCanceling(true);
-    setCreatorCancelError("");
+  const cancelCreatorJobs = useCallback(async (blockId) => {
+    const creatorJobIds = creatorJobsByBlock[blockId] || [];
+    if (creatorCancelingByBlock[blockId] || creatorJobIds.length === 0) return;
+    setCreatorCancelingByBlock((prev) => ({ ...prev, [blockId]: true }));
+    setCreatorCancelErrorByBlock((prev) => ({ ...prev, [blockId]: "" }));
     try {
       await Promise.all(creatorJobIds.map((jid) => api.post(`/jobs/${jid}/cancel`, {})));
       setCreatorProgress((prev) => {
@@ -1317,24 +1404,23 @@ export default function App() {
         });
         return next;
       });
-      stopCreatorPolling();
     } catch (err) {
-      setCreatorCancelError(err?.message || t("errorRequestFailed"));
+      setCreatorCancelErrorByBlock((prev) => ({ ...prev, [blockId]: err?.message || t("errorRequestFailed") }));
     } finally {
-      setCreatorCanceling(false);
+      setCreatorCancelingByBlock((prev) => ({ ...prev, [blockId]: false }));
     }
-  }, [creatorCanceling, creatorJobIds, stopCreatorPolling, t]);
+  }, [creatorCancelingByBlock, creatorJobsByBlock, t]);
 
-  const requestCancelCreatorJobs = useCallback(() => {
-    if (creatorCanceling) return;
-    setCreatorCancelConfirm(true);
-    setCreatorCancelError("");
-  }, [creatorCanceling]);
+  const requestCancelCreatorJobs = useCallback((blockId) => {
+    if (creatorCancelingByBlock[blockId]) return;
+    setCreatorCancelConfirmByBlock((prev) => ({ ...prev, [blockId]: true }));
+    setCreatorCancelErrorByBlock((prev) => ({ ...prev, [blockId]: "" }));
+  }, [creatorCancelingByBlock]);
 
-  const dismissCancelConfirm = useCallback(() => {
-    if (creatorCanceling) return;
-    setCreatorCancelConfirm(false);
-  }, [creatorCanceling]);
+  const dismissCancelConfirm = useCallback((blockId) => {
+    if (creatorCancelingByBlock[blockId]) return;
+    setCreatorCancelConfirmByBlock((prev) => ({ ...prev, [blockId]: false }));
+  }, [creatorCancelingByBlock]);
 
   const submitSubmissionBlock = async (block, blockIndex) => {
     setError("");
@@ -1411,11 +1497,7 @@ export default function App() {
 
       if (responseData?.job_id && isCreateArticleSection) {
         const jobId = responseData.job_id;
-        setCreatorJobIds([jobId]);
-        setCreatorProgress({
-          [jobId]: { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false },
-        });
-        setShowCreatorProgress(true);
+        attachCreatorJobsToBlock(block.id, [jobId]);
       } else {
         setShowSubmissionSuccessModal(true);
       }
@@ -1477,8 +1559,7 @@ export default function App() {
     // --- submit sequentially ---
     try {
       setSubmitting(true);
-      const collectedJobIds = [];
-      const collectedProgress = {};
+      const collectedJobsByBlock = {};
       let succeeded = 0;
       let failed = 0;
 
@@ -1515,8 +1596,7 @@ export default function App() {
           }
 
           if (responseData?.job_id && isCreateArticleSection) {
-            collectedJobIds.push(responseData.job_id);
-            collectedProgress[responseData.job_id] = { phase: 0, label: "", percent: 0, done: false, failed: false, canceled: false };
+            collectedJobsByBlock[block.id] = [responseData.job_id];
           }
           succeeded++;
           setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "success" }));
@@ -1527,10 +1607,10 @@ export default function App() {
       }
 
       // --- show results ---
-      if (isCreateArticleSection && collectedJobIds.length) {
-        setCreatorJobIds(collectedJobIds);
-        setCreatorProgress(collectedProgress);
-        setShowCreatorProgress(true);
+      if (isCreateArticleSection && Object.keys(collectedJobsByBlock).length > 0) {
+        Object.entries(collectedJobsByBlock).forEach(([blockId, jobIds]) => {
+          attachCreatorJobsToBlock(Number(blockId), jobIds);
+        });
       } else if (failed === 0) {
         setShowSubmissionSuccessModal(true);
       }
@@ -2581,6 +2661,7 @@ export default function App() {
                     const isBatchMode = activeBlocks.length > 1;
                     const blockStatus = batchBlockStatus[block.id] || null;
                     const isSuggestionsOpen = activeSuggestion && activeSuggestion.blockId === block.id;
+                    const creatorJobIds = creatorJobsByBlock[block.id] || [];
                     return (
                       <div
                         key={block.id}
@@ -2869,6 +2950,21 @@ export default function App() {
                               </button>
                             </div>
                           ) : null}
+
+                          {isCreateArticleSection && creatorJobIds.length > 0 ? (
+                            <CreatorProgressInline
+                              t={t}
+                              jobIds={creatorJobIds}
+                              progress={creatorProgress}
+                              onClose={() => closeCreatorProgress(block.id)}
+                              onCancel={() => cancelCreatorJobs(block.id)}
+                              canceling={Boolean(creatorCancelingByBlock[block.id])}
+                              cancelError={creatorCancelErrorByBlock[block.id] || ""}
+                              cancelConfirm={Boolean(creatorCancelConfirmByBlock[block.id])}
+                              onRequestCancel={() => requestCancelCreatorJobs(block.id)}
+                              onDismissCancel={() => dismissCancelConfirm(block.id)}
+                            />
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -2936,19 +3032,6 @@ export default function App() {
           setShowSubmissionSuccessModal(false);
         }}
       />
-      <CreatorProgressModal
-        t={t}
-        open={showCreatorProgress}
-        jobIds={creatorJobIds}
-        progress={creatorProgress}
-        onClose={closeCreatorProgress}
-        onCancel={cancelCreatorJobs}
-        canceling={creatorCanceling}
-        cancelError={creatorCancelError}
-        cancelConfirm={creatorCancelConfirm}
-        onRequestCancel={requestCancelCreatorJobs}
-        onDismissCancel={dismissCancelConfirm}
-      />
       <SubmissionErrorModal
         t={t}
         open={showSubmissionErrorModal}
@@ -2992,9 +3075,8 @@ function SubmissionSuccessModal({ t, open, onClose, onCreateAnother }) {
   );
 }
 
-function CreatorProgressModal({
+function CreatorProgressInline({
   t,
-  open,
   jobIds,
   progress,
   onClose,
@@ -3005,88 +3087,83 @@ function CreatorProgressModal({
   onRequestCancel,
   onDismissCancel,
 }) {
-  if (!open) return null;
-  // Aggregate progress across all jobs — use the first job for the step display
   const firstId = jobIds[0];
   const info = progress[firstId] || { phase: 0, label: "", percent: 0, done: false, failed: false };
   const allDone = jobIds.length > 0 && jobIds.every((jid) => progress[jid]?.done);
   const anyFailed = jobIds.some((jid) => progress[jid]?.failed);
   const anyCanceled = jobIds.some((jid) => progress[jid]?.canceled);
-  // Compute aggregate percent
   const aggPercent = jobIds.length > 0
     ? Math.round(jobIds.reduce((sum, jid) => sum + (progress[jid]?.percent || 0), 0) / jobIds.length)
     : 0;
   const currentPhase = info.phase || 0;
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="creator-progress-title">
-      <div className="progress-modal-card panel">
-        <h3 id="creator-progress-title">{t("createArticleProgressTitle")}</h3>
-
-        <div className="progress-steps">
-          {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
-            const step = i + 1;
-            const isCompleted = allDone || step < currentPhase;
-            const isActive = !allDone && step === currentPhase;
-            const cls = isCompleted ? "completed" : isActive ? "active" : "";
-            return (
-              <div key={step} className={`progress-step ${cls}`}>
-                <div className="progress-step-indicator">
-                  <div className="progress-step-dot" />
-                  {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line" />}
-                </div>
-                <div className="progress-step-content">
-                  <span className="progress-step-label">{t(CREATOR_PHASE_LABELS[step])}</span>
-                </div>
-              </div>
-            );
-          })}
+    <div className="creator-progress-inline" role="status" aria-live="polite" aria-labelledby={`creator-progress-title-${firstId || "pending"}`}>
+      <div className="creator-progress-inline-header">
+        <div className="creator-progress-inline-heading">
+          <h4 id={`creator-progress-title-${firstId || "pending"}`}>{t("createArticleProgressTitle")}</h4>
+          <p className="muted-text">{currentPhase === 0 && !allDone ? t("progressWaiting") : info.label}</p>
         </div>
-
-        <div className="progress-bar-container">
-          <div className="progress-bar-header">
-            <span>{currentPhase === 0 && !allDone ? t("progressWaiting") : info.label}</span>
-            <strong>{allDone ? 100 : aggPercent}%</strong>
-          </div>
-          <div className="progress-bar-track">
-            <div className="progress-bar-fill" style={{ width: `${allDone ? 100 : aggPercent}%` }} />
-          </div>
-        </div>
-
-        {!allDone && (
-          <div className="progress-modal-actions">
-            {!cancelConfirm ? (
-              <button className="btn danger" type="button" onClick={onRequestCancel} disabled={canceling}>
-                {t("cancel")}
-              </button>
-            ) : (
-              <div className="cancel-confirm-row">
-                <span className="muted-text">{t("cancelCreateArticleConfirm")}</span>
-                <div className="cancel-confirm-actions">
-                  <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
-                    {canceling ? t("canceling") : t("cancel")}
-                  </button>
-                  <button className="btn secondary" type="button" onClick={onDismissCancel} disabled={canceling}>
-                    {t("close")}
-                  </button>
-                </div>
-              </div>
-            )}
-            {cancelError ? <p className="muted-text">{cancelError}</p> : null}
-          </div>
-        )}
-
-        {allDone && (
-          <div className="progress-modal-actions">
-            <p className="muted-text">
-              {anyCanceled ? t("createArticleCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
-            </p>
-            <button className="btn" type="button" onClick={onClose}>
-              {t("close")}
-            </button>
-          </div>
-        )}
+        <strong className="creator-progress-inline-percent">{allDone ? 100 : aggPercent}%</strong>
       </div>
+
+      <div className="progress-steps progress-steps-inline">
+        {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
+          const step = i + 1;
+          const isCompleted = allDone || step < currentPhase;
+          const isActive = !allDone && step === currentPhase;
+          const cls = isCompleted ? "completed" : isActive ? "active" : "";
+          return (
+            <div key={step} className={`progress-step progress-step-inline ${cls}`}>
+              <div className="progress-step-indicator progress-step-indicator-inline">
+                <div className="progress-step-dot" />
+                {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
+              </div>
+              <div className="progress-step-content progress-step-content-inline">
+                <span className="progress-step-label">{t(CREATOR_PHASE_LABELS[step])}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="progress-bar-container creator-progress-inline-bar">
+        <div className="progress-bar-track">
+          <div className="progress-bar-fill" style={{ width: `${allDone ? 100 : aggPercent}%` }} />
+        </div>
+      </div>
+
+      {!allDone ? (
+        <div className="creator-progress-inline-actions">
+          {!cancelConfirm ? (
+            <button className="btn danger" type="button" onClick={onRequestCancel} disabled={canceling}>
+              {t("cancel")}
+            </button>
+          ) : (
+            <div className="cancel-confirm-row">
+              <span className="muted-text">{t("cancelCreateArticleConfirm")}</span>
+              <div className="cancel-confirm-actions">
+                <button className="btn danger" type="button" onClick={onCancel} disabled={canceling}>
+                  {canceling ? t("canceling") : t("cancel")}
+                </button>
+                <button className="btn secondary" type="button" onClick={onDismissCancel} disabled={canceling}>
+                  {t("close")}
+                </button>
+              </div>
+            </div>
+          )}
+          {cancelError ? <p className="muted-text">{cancelError}</p> : null}
+        </div>
+      ) : (
+        <div className="creator-progress-inline-actions">
+          <p className="muted-text">
+            {anyCanceled ? t("createArticleCanceled") : anyFailed ? t("errorRequestFailed") : t("submissionSuccessBody")}
+          </p>
+          <button className="btn secondary" type="button" onClick={onClose}>
+            {t("close")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

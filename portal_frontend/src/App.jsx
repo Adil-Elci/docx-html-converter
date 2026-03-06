@@ -3712,23 +3712,30 @@ function LanguageToggle({ language, onChange }) {
 
 function ThemeToggle({ theme, onChange, t }) {
   return (
-    <div className="theme-toggle">
-      <button
-        type="button"
-        className={theme === "light" ? "active" : ""}
-        onClick={() => onChange("light")}
-        aria-label={t("lightTheme")}
-      >
+    <div className="inline">
+      <span className="icon" aria-hidden="true">
         <SunIcon />
-      </button>
-      <button
-        type="button"
-        className={theme === "dark" ? "active" : ""}
-        onClick={() => onChange("dark")}
-        aria-label={t("darkTheme")}
-      >
-        <MoonIcon />
-      </button>
+      </span>
+      <div className="toggle theme-toggle">
+        <button
+          type="button"
+          className={theme === "light" ? "active" : ""}
+          onClick={() => onChange("light")}
+          aria-label={t("lightTheme")}
+          title={t("lightTheme")}
+        >
+          <SunIcon />
+        </button>
+        <button
+          type="button"
+          className={theme === "dark" ? "active" : ""}
+          onClick={() => onChange("dark")}
+          aria-label={t("darkTheme")}
+          title={t("darkTheme")}
+        >
+          <MoonIcon />
+        </button>
+      </div>
     </div>
   );
 }

@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 from .llm import LLMError, call_llm_json, call_llm_text
 from .trend_cache import (
@@ -100,6 +101,8 @@ GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
 DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 FAQ_MIN_QUESTIONS = 3
 FAQ_MIN_WORDS = 80
+ARTICLE_MIN_WORDS = 650
+ARTICLE_MAX_WORDS = 800
 
 GERMAN_KEYWORD_MODIFIERS = (
     "tipps",
@@ -1449,6 +1452,45 @@ def _ensure_primary_keyword_in_intro(html: str, primary_keyword: str) -> str:
     return f"<p>{sentence}</p>{article_html}"
 
 
+def _trim_article_to_word_limit(html: str, max_words: int) -> str:
+    article_html = html or ""
+    if word_count_from_html(article_html) <= max_words:
+        return article_html
+
+    soup = BeautifulSoup(article_html, "lxml")
+    body = soup.body or soup
+    paragraphs = body.find_all("p")
+    if not paragraphs:
+        return article_html
+
+    first_paragraph = paragraphs[0] if paragraphs else None
+    current_count = word_count_from_html(str(body))
+    candidates = [p for p in paragraphs if p is not first_paragraph and not p.find("a")]
+    if not candidates:
+        candidates = [p for p in paragraphs if p is not first_paragraph]
+
+    for paragraph in reversed(candidates):
+        if current_count <= max_words:
+            break
+        text = re.sub(r"\s+", " ", paragraph.get_text(" ")).strip()
+        words = re.findall(r"\b\w+\b", text)
+        if len(words) <= 28:
+            continue
+        overflow = current_count - max_words
+        target_words = max(28, len(words) - overflow)
+        trimmed_text = " ".join(words[:target_words]).strip()
+        if not trimmed_text:
+            continue
+        if trimmed_text[-1] not in ".!?":
+            trimmed_text += "."
+        paragraph.clear()
+        paragraph.append(trimmed_text)
+        current_count = word_count_from_html(str(body))
+
+    result = body.decode_contents() if getattr(body, "decode_contents", None) else str(body)
+    return result
+
+
 def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondary_keywords: List[str]) -> List[str]:
     errors: List[str] = []
     primary = _normalize_keyword_phrase(primary_keyword)
@@ -2280,10 +2322,10 @@ def _generate_article_by_sections(
 
     h2_count = len(outline_items)
     intro_target = 100
-    target_total = 750
-    per_section = max(100, int((target_total - intro_target) / max(1, h2_count)))
-    per_min = max(80, per_section - 20)
-    per_max = min(200, per_section + 30)
+    target_total = 700
+    per_section = max(85, int((target_total - intro_target) / max(1, h2_count)))
+    per_min = max(70, per_section - 15)
+    per_max = min(150, per_section + 15)
 
     backlink_placement = phase4.get("backlink_placement") or "intro"
     anchor_text = phase4.get("anchor_text_final") or "this resource"
@@ -2346,7 +2388,7 @@ def _generate_article_by_sections(
         if "faq" in h2.lower():
             section_user += (
                 f"\nThis is the FAQ section. Answer these questions clearly and directly: {faq_candidates[:3]}. "
-                "Use the H3 questions as subheadings, avoid duplicate questions, and write 35-60 words per answer in German."
+                "Use the H3 questions as subheadings, avoid duplicate questions, and write 25-45 words per answer in German."
             )
         elif structured_mode == "list" and index == 1:
             section_user += "\nInclude a meaningful HTML list (<ul> or <ol>) in this section."
@@ -2399,17 +2441,18 @@ def _generate_article_by_sections(
     article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)
     article_html = _ensure_required_h1(article_html, phase4.get("h1", ""))
+    article_html = _trim_article_to_word_limit(article_html, ARTICLE_MAX_WORDS)
 
     word_count = word_count_from_html(article_html)
     for _expand_pass in range(max(0, expand_passes)):
-        if word_count >= 650:
+        if word_count >= ARTICLE_MIN_WORDS:
             break
         expand_system = "Write an additional paragraph for a German (de-DE) blog post in HTML. Return only HTML."
         expand_user = (
             f"Topic: {phase3.get('final_article_topic','')}\n"
             f"Primary keyword: {phase3.get('primary_keyword','')}\n"
             f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
-            f"Current word count: {word_count}. Need at least 650 words.\n"
+            f"Current word count: {word_count}. Need at least {ARTICLE_MIN_WORDS} words.\n"
             f"Write one additional paragraph of 80-120 words that fits the article. "
             "No hyperlinks. Language: German (de-DE)."
         )
@@ -2431,6 +2474,7 @@ def _generate_article_by_sections(
         except LLMError:
             break
     article_html = _ensure_required_h1(article_html, phase4.get("h1", ""))
+    article_html = _trim_article_to_word_limit(article_html, ARTICLE_MAX_WORDS)
 
     meta_title = phase4.get("h1") or ""
     excerpt = ""
@@ -3572,11 +3616,16 @@ def run_creator_pipeline(
     height = _read_int_env("CREATOR_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT)
     poll_timeout = _read_int_env("CREATOR_IMAGE_POLL_TIMEOUT_SECONDS", DEFAULT_POLL_TIMEOUT_SECONDS)
     poll_interval = _read_int_env("CREATOR_IMAGE_POLL_INTERVAL_SECONDS", DEFAULT_POLL_SECONDS)
+    image_generation_enabled = _read_bool_env("CREATOR_IMAGE_GENERATION_ENABLED", False)
     image_required = _read_bool_env("CREATOR_IMAGE_REQUIRED", False)
 
     featured_image_url = ""
     in_content_image_url = ""
-    if not dry_run:
+    if not image_generation_enabled:
+        warnings.append("phase6_image_generation_disabled")
+        logger.info("creator.phase6.skip reason=image_generation_disabled")
+        include_in_content = False
+    elif not dry_run:
         try:
             featured_image_url = _call_leonardo(
                 prompt=featured_prompt,
@@ -3611,7 +3660,7 @@ def run_creator_pipeline(
                 warnings.append(f"phase6_in_content_image_failed:{exc}")
                 in_content_image_url = ""
 
-    if image_required and not featured_image_url and not dry_run:
+    if image_required and image_generation_enabled and not featured_image_url and not dry_run:
         raise CreatorError("Featured image generation failed.")
 
     phase6["featured_image"] = {

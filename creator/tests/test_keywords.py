@@ -8,6 +8,7 @@ from creator.api.pipeline import (
     _build_site_snapshot,
     _build_keyword_query_variants,
     _ensure_primary_keyword_in_intro,
+    _trim_article_to_word_limit,
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
@@ -21,6 +22,7 @@ from creator.api.pipeline import (
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
 )
+from creator.api.validators import word_count_from_html
 
 
 def test_build_keyword_query_variants_contract():
@@ -180,6 +182,25 @@ def test_ensure_primary_keyword_in_intro_injects_missing_keyword():
         "eltern sucht schwangerschaft",
         ["hilfe fuer familien", "schwangerschaft belastung", "unterstuetzung", "beratung"],
     )
+
+
+def test_trim_article_to_word_limit_reduces_overflow():
+    html = (
+        "<h1>Titel</h1>"
+        "<p>Einleitung mit primaerem begriff und genug woertern fuer den einstieg ohne links.</p>"
+        "<h2>Abschnitt</h2>"
+        f"<p>{'wort ' * 220}</p>"
+        "<h2>Fazit</h2>"
+        f"<p>{'schluss ' * 120}</p>"
+        "<h2>FAQ</h2>"
+        "<h3>Was ist wichtig?</h3>"
+        f"<p>{'antwort ' * 60}</p>"
+    )
+
+    trimmed = _trim_article_to_word_limit(html, 180)
+
+    assert word_count_from_html(trimmed) <= 180
+    assert "<h1>Titel</h1>" in trimmed
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

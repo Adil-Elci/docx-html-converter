@@ -15,6 +15,7 @@ uvicorn api.server:app --reload --port 8100
 - `CREATOR_LLM_MODEL_PLANNING` / `CREATOR_LLM_MODEL_WRITING` (override per-purpose models)
 - `LEONARDO_API_KEY` (required for image generation)
 - `LEONARDO_BASE_URL` (default: https://cloud.leonardo.ai/api/rest/v1)
+- `CREATOR_IMAGE_GENERATION_ENABLED` (default: false; skips Phase 6 entirely while testing)
 - `CREATOR_HTTP_TIMEOUT_SECONDS` (default: 20)
 - `CREATOR_HTTP_RETRIES` (default: 0; one fetch attempt, no retry loop)
 - `CREATOR_SITE_ANALYSIS_MAX_PAGES` (default: 4; homepage + additional internal pages for richer site-analysis caching)

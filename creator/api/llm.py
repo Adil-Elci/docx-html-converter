@@ -17,11 +17,70 @@ class LLMError(RuntimeError):
     pass
 
 
-def _extract_json(text: str) -> Dict[str, Any]:
-    cleaned = text.strip()
+_SMART_QUOTES = str.maketrans(
+    {
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+        "’": "'",
+        "‘": "'",
+        "‚": "'",
+        "‛": "'",
+    }
+)
+
+
+def _normalize_json_text(text: str) -> str:
+    cleaned = (text or "").strip().translate(_SMART_QUOTES)
+    cleaned = cleaned.lstrip("\ufeff")
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _extract_balanced_object(text: str) -> str:
+    start = text.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    in_string = False
+    escape = False
+    quote_char = ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+            continue
+        if char in {'"', "'"}:
+            in_string = True
+            quote_char = char
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
+
+
+def _repair_json_like_text(text: str) -> str:
+    repaired = _normalize_json_text(text)
+    repaired = _extract_balanced_object(repaired) or repaired
+    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    repaired = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_\-]*)(\s*:)", r'\1"\2"\3', repaired)
+    return repaired.strip()
+
+
+def _extract_json(text: str) -> Dict[str, Any]:
+    cleaned = _normalize_json_text(text)
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
@@ -33,10 +92,8 @@ def _extract_json(text: str) -> Dict[str, Any]:
     if parsed is not None:
         return parsed
 
-    first = cleaned.find("{")
-    last = cleaned.rfind("}")
-    if first >= 0 and last > first:
-        snippet = cleaned[first:last + 1]
+    snippet = _extract_balanced_object(cleaned)
+    if snippet:
         try:
             parsed = json.loads(snippet)
             if isinstance(parsed, dict):
@@ -44,6 +101,18 @@ def _extract_json(text: str) -> Dict[str, Any]:
         except ValueError:
             pass
         parsed = _try_literal_eval(snippet)
+        if parsed is not None:
+            return parsed
+
+    repaired = _repair_json_like_text(cleaned)
+    if repaired and repaired != cleaned:
+        try:
+            parsed = json.loads(repaired)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+        parsed = _try_literal_eval(repaired)
         if parsed is not None:
             return parsed
 

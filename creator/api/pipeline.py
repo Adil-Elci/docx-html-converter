@@ -3017,6 +3017,7 @@ def run_creator_pipeline(
                 model=planning_model,
                 timeout_seconds=http_timeout,
                 max_tokens=500,
+                temperature=0.1,
                 request_label="phase4",
                 usage_collector=_collect_llm_usage,
             )

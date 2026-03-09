@@ -12,7 +12,12 @@ from urllib.parse import urlparse
 import requests
 
 from .llm import LLMError, call_llm_json, call_llm_text
-from .trend_cache import get_keyword_trend_cache_entry, upsert_keyword_trend_cache_entry
+from .trend_cache import (
+    get_keyword_trend_cache_entry,
+    get_keyword_trend_cache_family_entries,
+    record_keyword_trend_cache_hit,
+    upsert_keyword_trend_cache_entry,
+)
 from .validators import (
     count_h2,
     validate_backlink_placement,
@@ -42,10 +47,16 @@ DEFAULT_IMAGE_WIDTH = 1024
 DEFAULT_IMAGE_HEIGHT = 576
 DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
-PHASE1_CACHE_PROMPT_VERSION = "v2"
-PHASE2_CACHE_PROMPT_VERSION = "v2"
+PHASE1_CACHE_PROMPT_VERSION = "v3"
+PHASE2_CACHE_PROMPT_VERSION = "v3"
 DEFAULT_SITE_ANALYSIS_MAX_PAGES = 4
 DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS = 1400
+SEO_TITLE_MIN_CHARS = 45
+SEO_TITLE_MAX_CHARS = 68
+SEO_DESCRIPTION_MIN_CHARS = 120
+SEO_DESCRIPTION_MAX_CHARS = 160
+SEO_SLUG_MAX_CHARS = 80
+INTERNAL_LINK_ANCHOR_MIN_UNIQUE = 2
 
 NEGATIVE_PROMPT = "text, watermark, logo, letters, UI, low quality, blurry, deformed"
 
@@ -115,6 +126,8 @@ GERMAN_QUESTION_PREFIXES = (
 )
 
 GOOGLE_SUGGEST_CACHE: Dict[str, Dict[str, Any]] = {}
+STRUCTURED_LIST_HINTS = {"tipps", "checkliste", "schritte", "anleitung", "symptome", "ursachen"}
+STRUCTURED_TABLE_HINTS = {"vergleich", "kosten", "unterschied", "vs", "tabelle"}
 
 
 class CreatorError(RuntimeError):
@@ -189,6 +202,140 @@ def _extract_inventory_categories(items: List[Dict[str, Any]], *, max_items: int
             continue
         categories.extend(str(category).strip() for category in raw if str(category).strip())
     return _merge_string_lists(categories, max_items=max_items)
+
+
+def _extract_inventory_topic_clusters(items: List[Dict[str, Any]], *, max_items: int = 8) -> List[str]:
+    scores: Dict[str, int] = {}
+    for item in items:
+        title = _normalize_keyword_phrase(str(item.get("title") or ""))
+        categories = [str(value).strip() for value in (item.get("categories") or []) if str(value).strip()]
+        for category in categories:
+            normalized_category = _normalize_keyword_phrase(category)
+            if normalized_category:
+                scores[normalized_category] = scores.get(normalized_category, 0) + 4
+        words = title.split()
+        for size in (2, 3):
+            for index in range(0, max(0, len(words) - size + 1)):
+                phrase = " ".join(words[index : index + size]).strip()
+                if not _is_valid_keyword_phrase(phrase):
+                    continue
+                scores[phrase] = scores.get(phrase, 0) + (3 if size == 2 else 2)
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return [phrase for phrase, _score in ranked[:max_items]]
+
+
+def _build_inventory_topic_insights(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    categories = _extract_inventory_categories(items)
+    topic_clusters = _extract_inventory_topic_clusters(items)
+    prominent_titles = _merge_string_lists(
+        [str(item.get("title") or "").strip() for item in items if str(item.get("title") or "").strip()],
+        max_items=8,
+    )
+    internal_linking_opportunities = []
+    for item in items[:8]:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        categories_for_item = [str(value).strip() for value in (item.get("categories") or []) if str(value).strip()]
+        if categories_for_item:
+            internal_linking_opportunities.append(f"{categories_for_item[0]} -> {title}")
+        else:
+            internal_linking_opportunities.append(title)
+    return {
+        "site_categories": categories,
+        "topic_clusters": topic_clusters,
+        "prominent_titles": prominent_titles,
+        "internal_linking_opportunities": _merge_string_lists(internal_linking_opportunities, max_items=10),
+    }
+
+
+def _structured_content_mode(topic: str, primary_keyword: str, search_intent_type: str) -> str:
+    normalized = _normalize_keyword_phrase(f"{topic} {primary_keyword}")
+    tokens = set(normalized.split())
+    if tokens & STRUCTURED_TABLE_HINTS or (search_intent_type or "").strip().lower() == "commercial":
+        return "table"
+    if tokens & STRUCTURED_LIST_HINTS:
+        return "list"
+    return "none"
+
+
+def _format_title_case(value: str) -> str:
+    words = [word for word in re.split(r"\s+", (value or "").strip()) if word]
+    out: List[str] = []
+    for word in words:
+        if word.isupper():
+            out.append(word)
+        else:
+            out.append(word[:1].upper() + word[1:])
+    return " ".join(out)
+
+
+def _truncate_title(value: str, *, max_chars: int = SEO_TITLE_MAX_CHARS) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    clipped = cleaned[:max_chars].rsplit(" ", 1)[0].strip()
+    return clipped or cleaned[:max_chars].strip()
+
+
+def _build_deterministic_title_package(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    search_intent_type: str,
+    structured_mode: str,
+    current_year: int,
+) -> Dict[str, str]:
+    keyword_title = _format_title_case(primary_keyword or topic or "Ratgeber")
+    secondary_hint = _format_title_case(secondary_keywords[0]) if secondary_keywords else ""
+    normalized_topic = _normalize_keyword_phrase(topic)
+    include_year = "checkliste" in normalized_topic or "trend" in normalized_topic
+    if structured_mode == "table":
+        suffix = "Vergleich und Orientierung"
+    elif structured_mode == "list":
+        suffix = "Checkliste und Tipps" if "checkliste" in normalized_topic else "Tipps und Orientierung"
+    elif (search_intent_type or "").strip().lower() == "commercial":
+        suffix = "Vergleich, Kosten und Tipps"
+    else:
+        suffix = "Einordnung und Hilfe"
+    if secondary_hint and _keyword_similarity(secondary_hint, keyword_title) < 0.55:
+        suffix = secondary_hint
+    h1 = _truncate_title(f"{keyword_title}: {suffix}")
+    if len(h1) < SEO_TITLE_MIN_CHARS:
+        h1 = _truncate_title(f"{h1} fuer Betroffene und Familien")
+    if include_year and str(current_year) not in h1:
+        h1 = _truncate_title(f"{h1} {current_year}")
+    meta_title = _truncate_title(h1)
+    slug_seed = primary_keyword or topic
+    slug = _derive_slug(slug_seed)[:SEO_SLUG_MAX_CHARS]
+    return {"h1": h1, "meta_title": meta_title, "slug": slug}
+
+
+def _build_deterministic_meta_description(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    structured_mode: str,
+) -> str:
+    opening = _format_title_case(primary_keyword or topic or "Ratgeber")
+    if structured_mode == "table":
+        suffix = "mit Vergleich, Einordnung und klaren Unterschieden."
+    elif structured_mode == "list":
+        suffix = "mit Checkliste, Tipps und klaren Schritten."
+    else:
+        suffix = "mit Einordnung, Tipps und konkreten Hinweisen."
+    supporting = ""
+    if secondary_keywords:
+        supporting = f" Fokus auf {_format_title_case(secondary_keywords[0])}."
+    description = _truncate_title(f"{opening} {suffix}{supporting}", max_chars=SEO_DESCRIPTION_MAX_CHARS)
+    if len(description) < SEO_DESCRIPTION_MIN_CHARS and secondary_keywords[1:2]:
+        description = _truncate_title(
+            f"{description} Auch {_format_title_case(secondary_keywords[1])} wird kompakt erklaert.",
+            max_chars=SEO_DESCRIPTION_MAX_CHARS,
+        )
+    return description
 
 
 def _serialize_site_snapshot_pages(pages: List[Dict[str, str]]) -> str:
@@ -294,6 +441,8 @@ def _merge_phase2_analysis(
             inventory_categories,
             max_items=10,
         )
+        current["topic_clusters"] = _merge_string_lists(current.get("topic_clusters") or [], max_items=8)
+        current["prominent_titles"] = _merge_string_lists(current.get("prominent_titles") or [], max_items=8)
         current["sample_page_titles"] = _merge_string_lists(current.get("sample_page_titles") or [], max_items=8)
         current["sample_urls"] = _merge_string_lists(current.get("sample_urls") or [], max_items=8)
         current["site_summary"] = str(current.get("site_summary") or "").strip()
@@ -319,6 +468,16 @@ def _merge_phase2_analysis(
         cached.get("site_categories") or [],
         inventory_categories,
         max_items=10,
+    )
+    current["topic_clusters"] = _merge_string_lists(
+        current.get("topic_clusters") or [],
+        cached.get("topic_clusters") or [],
+        max_items=8,
+    )
+    current["prominent_titles"] = _merge_string_lists(
+        current.get("prominent_titles") or [],
+        cached.get("prominent_titles") or [],
+        max_items=8,
     )
     current["sample_page_titles"] = _merge_string_lists(
         current.get("sample_page_titles") or [],
@@ -354,6 +513,8 @@ def _coerce_phase2_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str
         ],
         "site_summary": str(value.get("site_summary") or "").strip(),
         "site_categories": [str(item).strip() for item in (value.get("site_categories") or []) if str(item).strip()],
+        "topic_clusters": [str(item).strip() for item in (value.get("topic_clusters") or []) if str(item).strip()],
+        "prominent_titles": [str(item).strip() for item in (value.get("prominent_titles") or []) if str(item).strip()],
         "sample_page_titles": [str(item).strip() for item in (value.get("sample_page_titles") or []) if str(item).strip()],
         "sample_urls": [str(item).strip() for item in (value.get("sample_urls") or []) if str(item).strip()],
     }
@@ -681,6 +842,19 @@ def _build_keyword_query_variants(
     return deduped[:max_queries]
 
 
+def _derive_trend_query_family(value: str) -> str:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    if len(words) >= 2 and any(normalized.startswith(f"{prefix} ") for prefix in GERMAN_QUESTION_PREFIXES):
+        words = words[2:] if words[0] in {"was", "wie", "wann", "warum", "welche", "welcher", "welches", "wo", "woran", "kann", "darf"} else words[1:]
+    words = [word for word in words if word not in GERMAN_KEYWORD_MODIFIERS]
+    if len(words) > 4:
+        words = words[:4]
+    return " ".join(words).strip()
+
+
 def _get_cached_google_suggestions(query: str) -> Optional[List[str]]:
     normalized_query = _normalize_keyword_phrase(query)
     if not normalized_query:
@@ -777,6 +951,7 @@ def _fetch_google_de_suggestions(
     cleaned = _normalize_keyword_phrase(query)
     if not cleaned:
         return []
+    query_family = _derive_trend_query_family(cleaned)
     cached = _get_cached_google_suggestions(cleaned)
     if cached is not None:
         if cache_metadata_collector is not None:
@@ -793,6 +968,7 @@ def _fetch_google_de_suggestions(
     db_is_fresh = isinstance(db_entry, dict) and _trend_entry_is_fresh(db_entry)
     if db_results and db_is_fresh:
         _set_cached_google_suggestions(cleaned, db_results)
+        record_keyword_trend_cache_hit(cleaned)
         if cache_metadata_collector is not None:
             cache_metadata_collector.append(
                 {
@@ -804,13 +980,39 @@ def _fetch_google_de_suggestions(
             )
         return db_results
 
+    family_entries = get_keyword_trend_cache_family_entries(query_family) if query_family else []
+    family_suggestions = _merge_string_lists(
+        *[
+            [
+                str(item).strip()
+                for item in ((entry.get("payload") or {}).get("suggestions") or [])
+                if str(item).strip()
+            ]
+            for entry in family_entries
+            if _trend_entry_is_fresh(entry)
+        ],
+        max_items=12,
+    )
+    if family_suggestions:
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append(
+                {
+                    "query": cleaned,
+                    "source": "db_family",
+                    "status": "fresh_family_support",
+                    "query_family": query_family,
+                }
+            )
+
     live_results = _fetch_google_de_suggestions_live(cleaned, timeout_seconds=timeout_seconds)
     if live_results:
-        _set_cached_google_suggestions(cleaned, live_results)
+        merged_live_results = _merge_string_lists(live_results, family_suggestions, max_items=12)
+        _set_cached_google_suggestions(cleaned, merged_live_results)
         upsert_keyword_trend_cache_entry(
             seed_query=query,
             normalized_seed_query=cleaned,
-            payload={"suggestions": live_results},
+            query_family=query_family,
+            payload={"suggestions": merged_live_results},
             ttl_seconds=trend_cache_ttl_seconds,
         )
         if cache_metadata_collector is not None:
@@ -821,10 +1023,11 @@ def _fetch_google_de_suggestions(
                     "status": "refreshed" if db_results else "miss_refreshed",
                 }
             )
-        return live_results
+        return merged_live_results
 
     if db_results:
         _set_cached_google_suggestions(cleaned, db_results)
+        record_keyword_trend_cache_hit(cleaned)
         if cache_metadata_collector is not None:
             cache_metadata_collector.append(
                 {
@@ -835,6 +1038,19 @@ def _fetch_google_de_suggestions(
                 }
             )
         return db_results
+
+    if family_suggestions:
+        _set_cached_google_suggestions(cleaned, family_suggestions)
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append(
+                {
+                    "query": cleaned,
+                    "source": "db_family",
+                    "status": "fresh_family_fallback",
+                    "query_family": query_family,
+                }
+            )
+        return family_suggestions
 
     if cache_metadata_collector is not None:
         cache_metadata_collector.append({"query": cleaned, "source": "none", "status": "empty"})
@@ -1098,14 +1314,17 @@ def _score_internal_link_inventory_item(
     secondary_tokens = _keyword_token_set(" ".join(secondary_keywords))
     title_tokens = _keyword_token_set(str(item.get("title") or ""))
     excerpt_tokens = _keyword_token_set(str(item.get("excerpt") or ""))
+    slug_tokens = _keyword_token_set(str(item.get("slug") or ""))
     category_tokens = _keyword_token_set(" ".join(item.get("categories") or []))
-    combined = title_tokens | excerpt_tokens | category_tokens
+    combined = title_tokens | excerpt_tokens | slug_tokens | category_tokens
     if not combined:
         return 0.0
     score = 0.0
     score += 4.0 * len(combined & topic_tokens)
     score += 3.0 * len(combined & primary_tokens)
     score += 1.5 * len(combined & secondary_tokens)
+    score += 1.0 * _keyword_similarity(str(item.get("title") or ""), primary_keyword)
+    score += 0.8 * _keyword_similarity(str(item.get("title") or ""), topic)
     score += min(1.0, len(title_tokens) * 0.2)
     if str(item.get("published_at") or "").strip():
         score += 0.3
@@ -1235,6 +1454,184 @@ def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondar
         if occurrences > max_occurrences:
             errors.append(f"keyword_overused:{keyword}:{occurrences}")
 
+    return errors
+
+
+def _extract_internal_anchor_texts(article_html: str, *, backlink_url: str, publishing_site_url: str) -> List[str]:
+    anchors: List[str] = []
+    for href, inner in re.findall(
+        r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        article_html or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        absolute = _absolutize_url(href, publishing_site_url)
+        if _is_backlink_href(absolute, backlink_url):
+            continue
+        if not _is_internal_href(absolute, publishing_site_url):
+            continue
+        anchor_text = _strip_html_tags(inner).strip()
+        if anchor_text:
+            anchors.append(anchor_text)
+    return anchors
+
+
+def _validate_internal_anchor_texts(article_html: str, *, backlink_url: str, publishing_site_url: str) -> List[str]:
+    anchors = _extract_internal_anchor_texts(article_html, backlink_url=backlink_url, publishing_site_url=publishing_site_url)
+    if not anchors:
+        return []
+    errors: List[str] = []
+    unique_normalized = {_normalize_keyword_phrase(anchor) for anchor in anchors if _normalize_keyword_phrase(anchor)}
+    if len(unique_normalized) < min(INTERNAL_LINK_ANCHOR_MIN_UNIQUE, len(anchors)):
+        errors.append("internal_anchor_diversity_too_low")
+    generic_count = sum(1 for anchor in anchors if _normalize_keyword_phrase(anchor) in {"mehr dazu", "siehe auch", "passend dazu", "weiterfuehrende informationen"})
+    if generic_count >= len(anchors):
+        errors.append("internal_anchor_too_generic")
+    return errors
+
+
+def _validate_structured_content(article_html: str, structured_mode: str) -> List[str]:
+    mode = (structured_mode or "").strip().lower()
+    if mode == "list":
+        if not re.search(r"<(?:ul|ol)\b", article_html or "", flags=re.IGNORECASE):
+            return ["structured_list_missing"]
+    if mode == "table":
+        if not re.search(r"<table\b", article_html or "", flags=re.IGNORECASE):
+            return ["structured_table_missing"]
+    return []
+
+
+def _validate_seo_metadata(
+    *,
+    article_html: str,
+    primary_keyword: str,
+    required_h1: str,
+    meta_title: str,
+    meta_description: str,
+    slug: str,
+    structured_mode: str,
+) -> List[str]:
+    errors: List[str] = []
+    if len((meta_title or "").strip()) < SEO_TITLE_MIN_CHARS or len((meta_title or "").strip()) > SEO_TITLE_MAX_CHARS:
+        errors.append(f"meta_title_length_invalid:{len((meta_title or '').strip())}")
+    if len((meta_description or "").strip()) < SEO_DESCRIPTION_MIN_CHARS or len((meta_description or "").strip()) > SEO_DESCRIPTION_MAX_CHARS:
+        errors.append(f"meta_description_length_invalid:{len((meta_description or '').strip())}")
+    if not _keyword_present_relaxed(meta_title, primary_keyword):
+        errors.append("meta_title_missing_primary_keyword")
+    normalized_slug = _derive_slug(slug or "")
+    if normalized_slug != (slug or "").strip():
+        errors.append("slug_format_invalid")
+    slug_tokens = _keyword_token_set(slug or "")
+    primary_tokens = _keyword_token_set(primary_keyword)
+    if len(slug_tokens & primary_tokens) < min(2, max(1, len(primary_tokens))):
+        errors.append("slug_missing_primary_keyword")
+    h1_text = _extract_h1_text(article_html)
+    if _normalize_keyword_phrase(h1_text) != _normalize_keyword_phrase(required_h1):
+        errors.append("h1_not_required_title")
+    errors.extend(_validate_structured_content(article_html, structured_mode))
+    return errors
+
+
+def _score_seo_output(
+    *,
+    article_html: str,
+    meta_title: str,
+    meta_description: str,
+    slug: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    required_h1: str,
+    structured_mode: str,
+    backlink_url: str,
+    publishing_site_url: str,
+    min_internal_links: int,
+    max_internal_links: int,
+    topic: str,
+) -> Dict[str, Any]:
+    checks = {
+        "keyword_coverage": _validate_keyword_coverage(article_html, primary_keyword, secondary_keywords),
+        "language_conclusion": _validate_language_and_conclusion(article_html, topic),
+        "link_strategy": _validate_link_strategy(
+            article_html,
+            backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+            min_internal_links=min_internal_links,
+            max_internal_links=max_internal_links,
+        ),
+        "anchor_quality": _validate_internal_anchor_texts(
+            article_html,
+            backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+        ),
+        "metadata": _validate_seo_metadata(
+            article_html=article_html,
+            primary_keyword=primary_keyword,
+            required_h1=required_h1,
+            meta_title=meta_title,
+            meta_description=meta_description,
+            slug=slug,
+            structured_mode=structured_mode,
+        ),
+    }
+    error_count = sum(len(value) for value in checks.values())
+    score = max(0, 100 - (error_count * 8))
+    return {"score": score, "checks": checks}
+
+
+def _collect_article_validation_errors(
+    *,
+    article_html: str,
+    meta_title: str,
+    meta_description: str,
+    slug: str,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    required_h1: str,
+    structured_mode: str,
+    backlink_url: str,
+    backlink_placement: str,
+    publishing_site_url: str,
+    min_internal_links: int,
+    max_internal_links: int,
+) -> List[str]:
+    errors: List[str] = []
+    for check in (
+        validate_word_count(article_html, 600, 850),
+        validate_backlink_placement(article_html, backlink_url, backlink_placement),
+    ):
+        if check:
+            errors.append(check)
+    errors.extend(
+        _validate_link_strategy(
+            article_html,
+            backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+            min_internal_links=min_internal_links,
+            max_internal_links=max_internal_links,
+        )
+    )
+    errors.extend(
+        _validate_internal_anchor_texts(
+            article_html,
+            backlink_url=backlink_url,
+            publishing_site_url=publishing_site_url,
+        )
+    )
+    if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
+        errors.append("h2_count_invalid")
+    errors.extend(_validate_language_and_conclusion(article_html, topic))
+    errors.extend(_validate_keyword_coverage(article_html, primary_keyword, secondary_keywords))
+    errors.extend(
+        _validate_seo_metadata(
+            article_html=article_html,
+            primary_keyword=primary_keyword,
+            required_h1=required_h1,
+            meta_title=meta_title,
+            meta_description=meta_description,
+            slug=slug,
+            structured_mode=structured_mode,
+        )
+    )
     return errors
 
 
@@ -1493,7 +1890,14 @@ def _normalize_internal_link_candidates(
 def _internal_anchor_text(url: str, anchor_map: Optional[Dict[str, str]] = None) -> str:
     normalized_url = _normalize_url(url)
     if anchor_map and normalized_url in anchor_map:
-        preferred = re.sub(r"\s+", " ", str(anchor_map[normalized_url] or "").strip())
+        raw_value = anchor_map[normalized_url]
+        if isinstance(raw_value, (list, tuple)):
+            for candidate in raw_value:
+                preferred = re.sub(r"\s+", " ", str(candidate or "").strip())
+                if preferred:
+                    words = preferred.split()
+                    return " ".join(words[:8])
+        preferred = re.sub(r"\s+", " ", str(raw_value or "").strip())
         if preferred:
             words = preferred.split()
             return " ".join(words[:8])
@@ -1504,6 +1908,25 @@ def _internal_anchor_text(url: str, anchor_map: Optional[Dict[str, str]] = None)
     if len(cleaned) >= 3:
         return cleaned.capitalize()
     return "Weiterfuehrende Informationen"
+
+
+def _build_internal_anchor_variants(item: Dict[str, Any]) -> List[str]:
+    variants: List[str] = []
+    title = str(item.get("title") or "").strip()
+    slug = str(item.get("slug") or "").strip()
+    categories = [str(value).strip() for value in (item.get("categories") or []) if str(value).strip()]
+    if title:
+        variants.append(title)
+        title_words = title.split()
+        if len(title_words) > 4:
+            variants.append(" ".join(title_words[:4]))
+    if categories and title:
+        variants.append(f"{categories[0]}: {title}")
+    if slug:
+        slug_variant = re.sub(r"[-_]+", " ", slug).strip()
+        if slug_variant:
+            variants.append(_format_title_case(slug_variant))
+    return _merge_string_lists(variants, max_items=4)
 
 
 def _extract_link_stats(article_html: str, *, backlink_url: str, publishing_site_url: str) -> Dict[str, Any]:
@@ -1746,6 +2169,7 @@ def _generate_article_by_sections(
     min_internal_links: int,
     max_internal_links: int,
     faq_candidates: List[str],
+    structured_mode: str,
     llm_api_key: str,
     llm_base_url: str,
     llm_model: str,
@@ -1824,6 +2248,10 @@ def _generate_article_by_sections(
                 f"\nThis is the FAQ section. Answer these questions clearly and directly: {faq_candidates[:3]}. "
                 "Use the H3 questions as subheadings, avoid duplicate questions, and write 35-60 words per answer in German."
             )
+        elif structured_mode == "list" and index == 1:
+            section_user += "\nInclude a meaningful HTML list (<ul> or <ol>) in this section."
+        elif structured_mode == "table" and index == 1:
+            section_user += "\nInclude a meaningful HTML table in this section."
         if "fazit" in h2.lower():
             section_user += (
                 f"\nThis is the final 'Fazit' section. Summarize concrete takeaways for topic: "
@@ -2211,6 +2639,7 @@ def run_creator_pipeline(
         retries=http_retries,
     )
     normalized_publishing_url = _normalize_url(publishing_site_url)
+    inventory_topic_insights = _build_inventory_topic_insights(provided_internal_link_inventory)
     raw_internal_links = extract_internal_links(
         publishing_html,
         publishing_site_url,
@@ -2246,7 +2675,9 @@ def run_creator_pipeline(
         "content_style_constraints": [],
         "internal_linking_opportunities": [],
         "site_summary": str(publishing_snapshot.get("site_summary") or "").strip(),
-        "site_categories": _extract_inventory_categories(provided_internal_link_inventory),
+        "site_categories": inventory_topic_insights.get("site_categories") or [],
+        "topic_clusters": inventory_topic_insights.get("topic_clusters") or [],
+        "prominent_titles": inventory_topic_insights.get("prominent_titles") or [],
         "sample_page_titles": list(publishing_snapshot.get("sample_page_titles") or []),
         "sample_urls": list(publishing_snapshot.get("sample_urls") or []),
     }
@@ -2278,22 +2709,26 @@ def run_creator_pipeline(
                     f"Vorherige gecachte Zusammenfassung: {cached_phase2.get('site_summary') or ''}\n"
                     f"Vorherige gecachte Themen: {cached_phase2.get('allowed_topics') or []}\n"
                     f"Vorherige gecachte Kategorien: {cached_phase2.get('site_categories') or []}\n"
+                    f"Vorherige gecachte Themencluster: {cached_phase2.get('topic_clusters') or []}\n"
                     f"Vorherige gecachte Seitentitel: {cached_phase2.get('sample_page_titles') or []}\n"
                 )
             system_prompt = (
                 "You analyze publishing site content for safe submitted article topics. "
                 "Use only the provided site text. Return JSON with allowed_topics (5-10), "
                 "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only), "
-                "site_summary (1 short sentence in German), site_categories (up to 8), sample_page_titles (up to 6). "
+                "site_summary (1 short sentence in German), site_categories (up to 8), topic_clusters (up to 8), "
+                "prominent_titles (up to 6), sample_page_titles (up to 6). "
                 "All returned natural-language text must be in German (de-DE)."
             )
             user_prompt = (
                 "Publishing site snapshot text:\n"
                 f"{publishing_text[:phase2_prompt_chars]}\n\n"
                 f"Bekannte Kategorien aus dem internen Inventar: {phase2.get('site_categories') or []}\n"
+                f"Bekannte Themencluster aus dem Inventar: {phase2.get('topic_clusters') or []}\n"
+                f"Bekannte prominente Titel aus dem Inventar: {phase2.get('prominent_titles') or []}\n"
                 f"{cached_context}"
                 "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...],"
-                "\"site_summary\":\"...\",\"site_categories\":[...],\"sample_page_titles\":[...]}."
+                "\"site_summary\":\"...\",\"site_categories\":[...],\"topic_clusters\":[...],\"prominent_titles\":[...],\"sample_page_titles\":[...]}."
             )
             try:
                 llm_out = call_llm_json(
@@ -2314,6 +2749,12 @@ def run_creator_pipeline(
                 phase2["site_categories"] = [
                     str(item).strip() for item in (llm_out.get("site_categories") or []) if str(item).strip()
                 ]
+                phase2["topic_clusters"] = [
+                    str(item).strip() for item in (llm_out.get("topic_clusters") or []) if str(item).strip()
+                ]
+                phase2["prominent_titles"] = [
+                    str(item).strip() for item in (llm_out.get("prominent_titles") or []) if str(item).strip()
+                ]
                 phase2["sample_page_titles"] = [
                     str(item).strip() for item in (llm_out.get("sample_page_titles") or []) if str(item).strip()
                 ]
@@ -2326,7 +2767,7 @@ def run_creator_pipeline(
             phase2 = _merge_phase2_analysis(
                 phase2,
                 cached_phase2,
-                inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+                inventory_categories=inventory_topic_insights.get("site_categories") or [],
             )
     else:
         cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
@@ -2334,7 +2775,7 @@ def run_creator_pipeline(
             phase2 = _merge_phase2_analysis(
                 cached_phase2,
                 None,
-                inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+                inventory_categories=inventory_topic_insights.get("site_categories") or [],
             )
             phase2_cache_warm = True
             warnings.append("phase2_cache_fallback_used")
@@ -2347,7 +2788,7 @@ def run_creator_pipeline(
     phase2 = _merge_phase2_analysis(
         phase2,
         None,
-        inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+        inventory_categories=inventory_topic_insights.get("site_categories") or [],
     )
     debug["phase2_cache_hit"] = phase2_cache_hit
     debug["phase2_snapshot"] = {
@@ -2390,6 +2831,8 @@ def run_creator_pipeline(
             f"Allowed topics: {phase2['allowed_topics']}\n"
             f"Publishing site summary: {phase2.get('site_summary') or ''}\n"
             f"Publishing site categories: {phase2.get('site_categories') or []}\n"
+            f"Publishing site topic clusters: {phase2.get('topic_clusters') or []}\n"
+            f"Publishing site prominent titles: {(phase2.get('prominent_titles') or [])[:6]}\n"
             f"Existing publishing page titles: {(phase2.get('sample_page_titles') or [])[:6]}\n"
             f"Target keyword cluster: {keyword_cluster}\n"
             "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
@@ -2453,6 +2896,20 @@ def run_creator_pipeline(
         phase3.get("final_article_topic", ""),
         keyword_selection.get("faq_candidates") or [],
     )
+    phase3["structured_content_mode"] = _structured_content_mode(
+        phase3.get("final_article_topic", ""),
+        phase3.get("primary_keyword", ""),
+        phase3.get("search_intent_type", ""),
+    )
+    title_package = _build_deterministic_title_package(
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        search_intent_type=phase3.get("search_intent_type", ""),
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        current_year=current_year,
+    )
+    phase3["title_package"] = title_package
     ranked_internal_link_inventory = _rank_internal_link_inventory(
         provided_internal_link_inventory,
         topic=phase3.get("final_article_topic", ""),
@@ -2471,7 +2928,7 @@ def run_creator_pipeline(
         )
         internal_link_source = "inventory"
         internal_link_anchor_map = {
-            _normalize_url(str(item.get("url") or "").strip()): str(item.get("title") or "").strip()
+            _normalize_url(str(item.get("url") or "").strip()): _build_internal_anchor_variants(item)
             for item in ranked_internal_link_inventory
             if str(item.get("url") or "").strip()
         }
@@ -2500,6 +2957,8 @@ def run_creator_pipeline(
         "faq_candidates": keyword_selection.get("faq_candidates") or [],
         "query_variants": keyword_discovery.get("query_variants") or [],
         "trend_cache_events": keyword_discovery.get("trend_cache_events") or [],
+        "structured_content_mode": phase3.get("structured_content_mode", "none"),
+        "title_package": title_package,
     }
     debug["internal_linking"] = {
         "configured_min": internal_link_min,
@@ -2524,11 +2983,12 @@ def run_creator_pipeline(
     faq_candidates = _ensure_faq_candidates(phase3.get("final_article_topic", ""), phase3.get("faq_candidates") or [])
     for attempt in range(1, 3):
         system_prompt = (
-            f"Create a German (de-DE) SEO article outline. Provide H1 and {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, optional H3. "
+            f"Create a German (de-DE) SEO article outline using the REQUIRED H1 exactly. Provide {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, optional H3. "
             "The penultimate H2 must be titled 'Fazit'. "
             "The final H2 must be titled 'FAQ'. "
             "Ensure keyword intent mapping: include the primary keyword in H1 and in at least one H2; "
             "cover secondary keywords naturally across remaining H2/H3 headings. "
+            "When a structured content mode is provided, make room for that structure naturally in the outline. "
             f"If H1 includes a year, it must be {current_year} (no other years in titles). "
             "Ensure H3 headings only appear under their respective H2 parents (no orphan H3). "
             "Choose backlink placement as intro or one specific section (section_2..section_5). "
@@ -2536,14 +2996,16 @@ def run_creator_pipeline(
         )
         user_prompt = (
             f"Topic: {phase3['final_article_topic']}\n"
+            f"Required H1: {phase3['title_package']['h1']}\n"
             f"Allowed topics: {phase2['allowed_topics']}\n"
             f"Primary keyword: {phase3['primary_keyword']}\n"
             f"Secondary keywords: {phase3['secondary_keywords']}\n"
+            f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
             f"FAQ candidates: {faq_candidates[:3]}\n"
             f"Anchor provided: {anchor or ''}\n"
             f"Anchor safe: {anchor_safe}\n"
             "Language: German (de-DE).\n"
-            "Return JSON: {\"h1\":\"...\",\"outline\":[{\"h2\":\"...\",\"h3\":[\"...\"]}],"
+            "Return JSON: {\"outline\":[{\"h2\":\"...\",\"h3\":[\"...\"]}],"
             "\"backlink_placement\":\"intro|section_2|section_3|section_4|section_5\",\"anchor_text_final\":\"...\"}"
         )
         try:
@@ -2562,7 +3024,7 @@ def run_creator_pipeline(
             outline_errors.append(str(exc))
             continue
 
-        h1 = (llm_out.get("h1") or "").strip()
+        h1 = phase3["title_package"]["h1"]
         outline_items = llm_out.get("outline") or []
         backlink_placement = (llm_out.get("backlink_placement") or "").strip()
         anchor_text_final = (llm_out.get("anchor_text_final") or "").strip()
@@ -2637,21 +3099,28 @@ def run_creator_pipeline(
                 "Each section should have 1-2 substantial paragraphs. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
                 "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
+                "Follow the required meta title and slug exactly unless they violate a hard validation rule. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "If structured content mode is 'list', include at least one meaningful HTML list. "
+                "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Return JSON only."
             )
             user_prompt = (
                 f"H1: {phase4['h1']}\n"
+                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
+                f"Required slug: {phase3['title_package']['slug']}\n"
+                f"Target meta_description: {_build_deterministic_meta_description(topic=phase3['final_article_topic'], primary_keyword=phase3['primary_keyword'], secondary_keywords=phase3['secondary_keywords'], structured_mode=phase3.get('structured_content_mode','none'))}\n"
                 f"Outline: {phase4['outline']}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Anchor text: {phase4['anchor_text_final']}\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
                 f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
@@ -2673,6 +3142,9 @@ def run_creator_pipeline(
                 "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
                 "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
+                "Preserve the required meta title and slug unless they violate a hard validation rule. "
+                "If structured content mode is 'list', include at least one meaningful HTML list. "
+                "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "Enforce link contract: exactly one backlink to Backlink URL, "
                 f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
                 "Return JSON only."
@@ -2681,11 +3153,14 @@ def run_creator_pipeline(
                 f"Current article_html:\n{last_article_html}\n\n"
                 f"Issues: {last_validation_errors}\n"
                 f"Required H1: {phase4['h1']}\n"
+                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
+                f"Required slug: {phase3['title_package']['slug']}\n"
                 f"Required outline: {phase4['outline']}\n"
                 f"Constraints: 650-800 words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
                 f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
@@ -2707,15 +3182,20 @@ def run_creator_pipeline(
                 "No external links beyond the backlink. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
                 "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
+                "Follow the required meta title and slug exactly unless they violate a hard validation rule. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "If structured content mode is 'list', include at least one meaningful HTML list. "
+                "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Do not return markdown fences. Return JSON only."
             )
             user_prompt = (
                 f"H1: {phase4['h1']}\n"
+                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
+                f"Required slug: {phase3['title_package']['slug']}\n"
                 f"Outline: {phase4['outline']}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Backlink URL: {backlink_url}\n"
@@ -2726,6 +3206,7 @@ def run_creator_pipeline(
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
                 f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
@@ -2769,31 +3250,26 @@ def run_creator_pipeline(
         if html_fallback:
             warnings.append("llm_html_fallback")
 
-        validation_errors: List[str] = []
-        for check in (
-            validate_word_count(article_html, 600, 850),
-            validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
-        ):
-            if check:
-                validation_errors.append(check)
-        validation_errors.extend(
-            _validate_link_strategy(
-                article_html,
-                backlink_url=backlink_url,
-                publishing_site_url=publishing_site_url,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-            )
-        )
-        if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
-            validation_errors.append("h2_count_invalid")
-        validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
-        validation_errors.extend(
-            _validate_keyword_coverage(
-                article_html,
-                phase3.get("primary_keyword", ""),
-                phase3.get("secondary_keywords") or [],
-            )
+        validation_errors = _collect_article_validation_errors(
+            article_html=article_html,
+            meta_title=phase3["title_package"]["meta_title"],
+            meta_description=_build_deterministic_meta_description(
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3["primary_keyword"],
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                structured_mode=phase3.get("structured_content_mode", "none"),
+            ),
+            slug=phase3["title_package"]["slug"],
+            topic=phase3["final_article_topic"],
+            primary_keyword=phase3.get("primary_keyword", ""),
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            required_h1=phase4["h1"],
+            structured_mode=phase3.get("structured_content_mode", "none"),
+            backlink_url=backlink_url,
+            backlink_placement=phase4["backlink_placement"],
+            publishing_site_url=publishing_site_url,
+            min_internal_links=effective_internal_min,
+            max_internal_links=effective_internal_max,
         )
 
         if validation_errors:
@@ -2809,31 +3285,26 @@ def run_creator_pipeline(
                     backlink_placement=phase4["backlink_placement"],
                     anchor_text=phase4["anchor_text_final"],
                 )
-                repaired_errors: List[str] = []
-                for check in (
-                    validate_word_count(repaired_html, 600, 850),
-                    validate_backlink_placement(repaired_html, backlink_url, phase4["backlink_placement"]),
-                ):
-                    if check:
-                        repaired_errors.append(check)
-                repaired_errors.extend(
-                    _validate_link_strategy(
-                        repaired_html,
-                        backlink_url=backlink_url,
-                        publishing_site_url=publishing_site_url,
-                        min_internal_links=effective_internal_min,
-                        max_internal_links=effective_internal_max,
-                    )
-                )
-                if not (ARTICLE_MIN_H2 <= count_h2(repaired_html) <= ARTICLE_MAX_H2):
-                    repaired_errors.append("h2_count_invalid")
-                repaired_errors.extend(_validate_language_and_conclusion(repaired_html, phase3["final_article_topic"]))
-                repaired_errors.extend(
-                    _validate_keyword_coverage(
-                        repaired_html,
-                        phase3.get("primary_keyword", ""),
-                        phase3.get("secondary_keywords") or [],
-                    )
+                repaired_errors = _collect_article_validation_errors(
+                    article_html=repaired_html,
+                    meta_title=phase3["title_package"]["meta_title"],
+                    meta_description=_build_deterministic_meta_description(
+                        topic=phase3["final_article_topic"],
+                        primary_keyword=phase3["primary_keyword"],
+                        secondary_keywords=phase3.get("secondary_keywords") or [],
+                        structured_mode=phase3.get("structured_content_mode", "none"),
+                    ),
+                    slug=phase3["title_package"]["slug"],
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3.get("primary_keyword", ""),
+                    secondary_keywords=phase3.get("secondary_keywords") or [],
+                    required_h1=phase4["h1"],
+                    structured_mode=phase3.get("structured_content_mode", "none"),
+                    backlink_url=backlink_url,
+                    backlink_placement=phase4["backlink_placement"],
+                    publishing_site_url=publishing_site_url,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
                 )
                 if not repaired_errors:
                     warnings.append("phase5_link_constraints_repaired_deterministically")
@@ -2873,6 +3344,7 @@ def run_creator_pipeline(
             min_internal_links=effective_internal_min,
             max_internal_links=effective_internal_max,
             faq_candidates=faq_prompt_text,
+            structured_mode=phase3.get("structured_content_mode", "none"),
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             llm_model=planning_model,
@@ -2881,31 +3353,26 @@ def run_creator_pipeline(
         )
         if fallback_payload:
             article_html = (fallback_payload.get("article_html") or "").strip()
-            validation_errors: List[str] = []
-            for check in (
-                validate_word_count(article_html, 600, 850),
-                validate_backlink_placement(article_html, backlink_url, phase4["backlink_placement"]),
-            ):
-                if check:
-                    validation_errors.append(check)
-            validation_errors.extend(
-                _validate_link_strategy(
-                    article_html,
-                    backlink_url=backlink_url,
-                    publishing_site_url=publishing_site_url,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                )
-            )
-            if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
-                validation_errors.append("h2_count_invalid")
-            validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
-            validation_errors.extend(
-                _validate_keyword_coverage(
-                    article_html,
-                    phase3.get("primary_keyword", ""),
-                    phase3.get("secondary_keywords") or [],
-                )
+            validation_errors = _collect_article_validation_errors(
+                article_html=article_html,
+                meta_title=phase3["title_package"]["meta_title"],
+                meta_description=_build_deterministic_meta_description(
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3["primary_keyword"],
+                    secondary_keywords=phase3.get("secondary_keywords") or [],
+                    structured_mode=phase3.get("structured_content_mode", "none"),
+                ),
+                slug=phase3["title_package"]["slug"],
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3.get("primary_keyword", ""),
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                required_h1=phase4["h1"],
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                backlink_url=backlink_url,
+                backlink_placement=phase4["backlink_placement"],
+                publishing_site_url=publishing_site_url,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
             )
             if not validation_errors:
                 article_payload = fallback_payload
@@ -2932,6 +3399,14 @@ def run_creator_pipeline(
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
     article_payload["article_html"] = art_html
+    article_payload["meta_title"] = phase3["title_package"]["meta_title"]
+    article_payload["slug"] = phase3["title_package"]["slug"]
+    article_payload["meta_description"] = _build_deterministic_meta_description(
+        topic=phase3["final_article_topic"],
+        primary_keyword=phase3["primary_keyword"],
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        structured_mode=phase3.get("structured_content_mode", "none"),
+    )
     article_payload = _fill_article_metadata(article_payload, phase4["h1"])
 
     phase5 = article_payload
@@ -3031,26 +3506,26 @@ def run_creator_pipeline(
         topic_lower = (phase3["final_article_topic"] or "").lower()
         if not any(topic in topic_lower for topic in allowed_topics):
             warnings.append("topic_not_in_allowed_topics")
-    phase7_errors.extend(
-        _validate_link_strategy(
-            phase5["article_html"],
-            backlink_url=backlink_url,
-            publishing_site_url=publishing_site_url,
-            min_internal_links=effective_internal_min,
-            max_internal_links=effective_internal_max,
-        )
-    )
-    if validate_word_count(phase5["article_html"], 600, 850):
-        phase7_errors.append("word_count_invalid")
-    if not (ARTICLE_MIN_H2 <= count_h2(phase5["article_html"]) <= ARTICLE_MAX_H2):
-        phase7_errors.append("h2_count_invalid")
-    phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
-    phase7_errors.extend(
-        _validate_keyword_coverage(
-            phase5["article_html"],
-            phase3.get("primary_keyword", ""),
-            phase3.get("secondary_keywords") or [],
-        )
+    phase7_errors = _collect_article_validation_errors(
+        article_html=phase5["article_html"],
+        meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
+        meta_description=phase5.get("meta_description") or _build_deterministic_meta_description(
+            topic=phase3["final_article_topic"],
+            primary_keyword=phase3["primary_keyword"],
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            structured_mode=phase3.get("structured_content_mode", "none"),
+        ),
+        slug=phase5.get("slug") or phase3["title_package"]["slug"],
+        topic=phase3["final_article_topic"],
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        required_h1=phase4["h1"],
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        backlink_url=backlink_url,
+        backlink_placement=phase4["backlink_placement"],
+        publishing_site_url=publishing_site_url,
+        min_internal_links=effective_internal_min,
+        max_internal_links=effective_internal_max,
     )
 
     if phase7_errors:
@@ -3077,6 +3552,9 @@ def run_creator_pipeline(
             f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+            "Keep the required meta title and slug aligned with the SEO contract. "
+            "If structured content mode is 'list', include at least one meaningful HTML list. "
+            "If structured content mode is 'table', include at least one meaningful HTML table. "
             "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
             "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
             "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
@@ -3086,6 +3564,8 @@ def run_creator_pipeline(
             f"Article_html: {phase5['article_html']}\n"
             f"Issues to fix: {phase7_errors}\n"
             f"Current word count: {current_wc}\n"
+            f"Required meta_title: {phase3['title_package']['meta_title']}\n"
+            f"Required slug: {phase3['title_package']['slug']}\n"
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
@@ -3094,6 +3574,7 @@ def run_creator_pipeline(
             f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
             f"Primary keyword: {phase3['primary_keyword']}\n"
             f"Secondary keywords: {phase3['secondary_keywords']}\n"
+            f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
             f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
             "Language: German (de-DE).\n"
             "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
@@ -3137,34 +3618,53 @@ def run_creator_pipeline(
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
             phase5["slug"] = llm_out.get("slug") or phase5["slug"]
             phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
-            phase5 = _fill_article_metadata(phase5, phase4["h1"])
-            phase7_errors = []
-            phase7_errors.extend(
-                _validate_link_strategy(
-                    phase5["article_html"],
-                    backlink_url=backlink_url,
-                    publishing_site_url=publishing_site_url,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                )
+            phase5["meta_title"] = phase3["title_package"]["meta_title"]
+            phase5["slug"] = phase3["title_package"]["slug"]
+            phase5["meta_description"] = _build_deterministic_meta_description(
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3["primary_keyword"],
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                structured_mode=phase3.get("structured_content_mode", "none"),
             )
-            if validate_word_count(phase5["article_html"], 600, 850):
-                phase7_errors.append("word_count_invalid")
-            if not (ARTICLE_MIN_H2 <= count_h2(phase5["article_html"]) <= ARTICLE_MAX_H2):
-                phase7_errors.append("h2_count_invalid")
-            phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
-            phase7_errors.extend(
-                _validate_keyword_coverage(
-                    phase5["article_html"],
-                    phase3.get("primary_keyword", ""),
-                    phase3.get("secondary_keywords") or [],
-                )
+            phase5 = _fill_article_metadata(phase5, phase4["h1"])
+            phase7_errors = _collect_article_validation_errors(
+                article_html=phase5["article_html"],
+                meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
+                meta_description=phase5.get("meta_description") or "",
+                slug=phase5.get("slug") or phase3["title_package"]["slug"],
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3.get("primary_keyword", ""),
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                required_h1=phase4["h1"],
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                backlink_url=backlink_url,
+                backlink_placement=phase4["backlink_placement"],
+                publishing_site_url=publishing_site_url,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
             )
         except LLMError as exc:
             phase7_errors.append(f"phase7_fix_failed:{exc}")
 
     if phase7_errors:
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")
+
+    seo_evaluation = _score_seo_output(
+        article_html=phase5["article_html"],
+        meta_title=phase5.get("meta_title") or "",
+        meta_description=phase5.get("meta_description") or "",
+        slug=phase5.get("slug") or "",
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        required_h1=phase4["h1"],
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        min_internal_links=effective_internal_min,
+        max_internal_links=effective_internal_max,
+        topic=phase3["final_article_topic"],
+    )
+    debug["seo_evaluation"] = seo_evaluation
 
     debug["timings_ms"]["phase7"] = int((time.time() - phase_start) * 1000)
     progress(7, PHASE_LABELS[7], 100)
@@ -3205,6 +3705,7 @@ def run_creator_pipeline(
         "phase4": phase4,
         "phase5": phase5,
         "phase6": phase6,
+        "seo_evaluation": seo_evaluation,
         "images": images,
         "warnings": warnings,
         "debug": debug,

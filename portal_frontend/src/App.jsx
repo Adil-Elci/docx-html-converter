@@ -2628,6 +2628,7 @@ export default function App() {
                         <div className="admin-trend-meta">
                           <span>{item.locale}</span>
                           <span>{t("adminTrendCacheSuggestionCount")}: {item.suggestion_count || 0}</span>
+                          <span>{t("adminTrendCacheHitCount")}: {item.hit_count || 0}</span>
                           <span>{t("adminTrendCacheLatestRefresh")}: {item.fetched_at ? formatPublishedAt(item.fetched_at) : t("notAvailable")}</span>
                         </div>
                       </div>
@@ -2800,6 +2801,7 @@ export default function App() {
                   <span>{t("publishedClientLabel")}</span>
                   <span>{t("publishedSiteLabel")}</span>
                   <span>{t("publishedStatusLabel")}</span>
+                  <span>{t("seoScoreLabel")}</span>
                   <span>{t("publishedByLabel")}</span>
                   <span>{t("publishedAtLabel")}</span>
                 </div>
@@ -2821,6 +2823,7 @@ export default function App() {
                       <span data-label={t("publishedClientLabel")}>{clientName}</span>
                       <span data-label={t("publishedSiteLabel")}>{siteLabel}</span>
                       <span data-label={t("publishedStatusLabel")}>{statusLabel}</span>
+                      <span data-label={t("seoScoreLabel")}>{item?.seo_score ?? t("notAvailable")}</span>
                       <span data-label={t("publishedByLabel")}>{publishedBy}</span>
                       <span data-label={t("publishedAtLabel")}>{formatPublishedAt(item?.published_at)}</span>
                     </div>

@@ -26,7 +26,7 @@ from ..automation_service import (
 )
 from ..db import get_db
 from ..internal_linking import upsert_publishing_site_article
-from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
+from ..portal_models import Asset, Client, CreatorOutput, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
     AssetCreate,
     AssetOut,
@@ -314,6 +314,21 @@ def list_published_articles(
         return PublishedArticlesPageOut(items=[], total=total, limit=limit, offset=offset)
 
     job_ids = [job.id for job, _, _ in rows]
+    creator_output_rows = (
+        db.query(CreatorOutput.job_id, CreatorOutput.payload)
+        .filter(CreatorOutput.job_id.in_(job_ids))
+        .order_by(CreatorOutput.created_at.desc())
+        .all()
+    )
+    seo_score_by_job: dict[UUID, int] = {}
+    for creator_job_id, payload in creator_output_rows:
+        if creator_job_id in seo_score_by_job or not isinstance(payload, dict):
+            continue
+        seo_evaluation = payload.get("seo_evaluation") or (payload.get("debug") or {}).get("seo_evaluation") or {}
+        score = seo_evaluation.get("score") if isinstance(seo_evaluation, dict) else None
+        if isinstance(score, (int, float)):
+            seo_score_by_job[creator_job_id] = int(score)
+
     event_rows = (
         db.query(JobEvent.job_id, JobEvent.created_at)
         .filter(
@@ -343,6 +358,7 @@ def list_published_articles(
                 wp_post_url=url,
                 published_by=published_by,
                 published_at=published_at,
+                seo_score=seo_score_by_job.get(job.id),
                 status=job.job_status,
                 client_id=client.id,
                 client_name=(client.name or "").strip(),

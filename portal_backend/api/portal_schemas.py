@@ -690,6 +690,7 @@ class PublishedArticleOut(BaseModel):
     wp_post_url: str
     published_by: Optional[str]
     published_at: Optional[datetime]
+    seo_score: Optional[int] = None
     status: str
     client_id: UUID
     client_name: str

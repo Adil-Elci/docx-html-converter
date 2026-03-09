@@ -58,6 +58,7 @@ def keyword_trend_dashboard(db: Session = Depends(get_db)) -> Dict[str, Any]:
                 "updated_at": _iso_or_none(row.updated_at),
                 "is_fresh": bool(row.expires_at and row.expires_at > now),
                 "suggestion_count": len(suggestions) if isinstance(suggestions, list) else 0,
+                "hit_count": int(row.hit_count or 0),
             }
         )
 

@@ -2,15 +2,20 @@ from creator.api.pipeline import (
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
+    _build_deterministic_title_package,
+    _build_deterministic_meta_description,
     _build_site_snapshot,
     _build_keyword_query_variants,
     _discover_keyword_candidates,
+    _derive_trend_query_family,
     _ensure_faq_candidates,
     _fetch_google_de_suggestions,
     _inject_faq_section,
     _merge_phase2_analysis,
     _select_keywords,
+    _structured_content_mode,
     _trend_entry_is_fresh,
+    _validate_seo_metadata,
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
 )
@@ -291,6 +296,60 @@ def test_merge_phase2_analysis_keeps_cached_context_and_inventory_categories():
     assert "Kliniktasche Checkliste" in merged["allowed_topics"]
     assert "Baby" in merged["site_categories"]
     assert len(merged["sample_page_titles"]) >= 2
+
+
+def test_build_deterministic_title_package_targets_seo_length():
+    title_package = _build_deterministic_title_package(
+        topic="Baby vorbereiten Checkliste",
+        primary_keyword="baby vorbereiten checkliste",
+        secondary_keywords=["kliniktasche checkliste"],
+        search_intent_type="informational",
+        structured_mode="list",
+        current_year=2026,
+    )
+
+    assert 45 <= len(title_package["meta_title"]) <= 68
+    assert title_package["slug"] == "baby-vorbereiten-checkliste"
+
+
+def test_structured_content_mode_detects_list_and_table_topics():
+    assert _structured_content_mode("Baby vorbereiten Checkliste", "baby vorbereiten checkliste", "informational") == "list"
+    assert _structured_content_mode("Geburtskosten Vergleich", "geburtskosten vergleich", "commercial") == "table"
+
+
+def test_validate_seo_metadata_requires_exact_h1_and_metadata_quality():
+    meta_description = _build_deterministic_meta_description(
+        topic="Baby vorbereiten Checkliste",
+        primary_keyword="baby vorbereiten checkliste",
+        secondary_keywords=["kliniktasche checkliste", "geburt vorbereiten tipps"],
+        structured_mode="list",
+    )
+    errors = _validate_seo_metadata(
+        article_html="""
+        <h1>Baby Vorbereiten Checkliste: Checkliste und Tipps fuer Betroffene und Familien</h1>
+        <p>Einleitung.</p>
+        <h2>Baby vorbereiten checkliste im ueberblick</h2>
+        <p>Text.</p>
+        <ul><li>Punkt</li></ul>
+        <h2>Fazit</h2>
+        <p>Fazit.</p>
+        <h2>FAQ</h2>
+        <h3>Was ist wichtig?</h3>
+        <p>Antwort mit ausreichend Woertern fuer die Validierung des FAQ Blocks und klare Hinweise fuer Familien.</p>
+        """,
+        primary_keyword="baby vorbereiten checkliste",
+        required_h1="Baby Vorbereiten Checkliste: Checkliste und Tipps fuer Betroffene und Familien",
+        meta_title="Baby Vorbereiten Checkliste: Checkliste und Tipps fuer Familien",
+        meta_description=meta_description,
+        slug="baby-vorbereiten-checkliste",
+        structured_mode="list",
+    )
+
+    assert errors == []
+
+
+def test_derive_trend_query_family_groups_question_variant():
+    assert _derive_trend_query_family("was ist baby vorbereiten checkliste") == "baby vorbereiten"
 
 
 def test_validate_keyword_coverage_missing_primary_locations():

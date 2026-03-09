@@ -214,9 +214,23 @@ Runtime env vars:
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)
 - `AUTOMATION_SHADOW_WEBHOOK_URL` (optional Make webhook URL for shadow mode)
 - `AUTOMATION_LOG_LEVEL` (default: `INFO`)
+- `SEO_CACHE_REFRESH_ENABLED` (default: `true`; runs warm refresh for high-frequency keyword trends and top publishing-site cache rows)
+- `SEO_CACHE_REFRESH_INTERVAL_SECONDS` (default: `86400`)
+- `SEO_CACHE_REFRESH_LOCK_KEY` (default: `391827465019283746`)
+- `SEO_KEYWORD_TREND_TTL_SECONDS` (default: `604800`)
+- `SEO_KEYWORD_TREND_REFRESH_WINDOW_SECONDS` (default: `43200`)
+- `SEO_KEYWORD_TREND_REFRESH_LIMIT` (default: `25`)
+- `SEO_PUBLISHING_SITE_CACHE_REFRESH_LIMIT` (default: `12`)
 
 Image upload behavior:
 - If WordPress returns HTTP `413` during media upload, the pipeline retries with progressively smaller generated image sizes (`768x432`, `640x360`, `512x288`) before failing.
+
+## SEO Cache Warming
+- The backend now warms two SEO caches on a scheduler:
+  - high-frequency German keyword trend rows in `keyword_trend_cache`
+  - top publishing-site `site_analysis_cache` rows rebuilt from indexed article/category inventory
+- Published-article responses now include an `seo_score` derived from Creator's `seo_evaluation`, which is also shown in the admin UI.
+- New migration required: `0028_extend_keyword_trend_cache_usage.py`
 
 Author selection precedence:
 - Webhook `author` field (if provided)

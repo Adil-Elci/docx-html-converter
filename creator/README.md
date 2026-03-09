@@ -44,3 +44,6 @@ pytest
 - When `portal_backend` provides an indexed internal-link inventory, Creator prefers those same-site article candidates over homepage link extraction.
 - Site analysis caching now uses a multi-page site snapshot and reuses older cached summaries/categories/titles as warm context when the live snapshot changes or is temporarily unavailable.
 - Keyword trend discovery now checks Postgres first, refreshes stale entries older than 7 days with a live Google Suggest lookup, and falls back to stale cached data only if refresh fails.
+- Titles, slugs, and meta descriptions are now built deterministically from the selected keyword/topic package so H1/meta SEO stays consistent across retries.
+- Creator enforces stronger on-page SEO validation for exact H1 usage, title/meta-description length, slug quality, internal-link anchor diversity, and required structured content patterns when the topic supports a list or table.
+- Creator returns `seo_evaluation` in the final payload/debug output so published-article quality can be compared downstream.

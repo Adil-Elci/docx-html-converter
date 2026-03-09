@@ -399,10 +399,13 @@ class KeywordTrendCache(Base):
     locale = Column(Text, nullable=False, default="de-DE")
     seed_query = Column(Text, nullable=False)
     normalized_seed_query = Column(Text, nullable=False)
+    query_family = Column(Text, nullable=False, default="")
     content_hash = Column(Text, nullable=False)
     payload = Column(JSONB, nullable=False, default=dict)
     fetched_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     expires_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    hit_count = Column(Integer, nullable=False, default=0)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

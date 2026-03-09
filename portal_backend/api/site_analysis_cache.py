@@ -12,7 +12,7 @@ from .portal_models import SiteAnalysisCache, utcnow
 
 PHASE1_TARGET_ANALYSIS_CACHE_KIND = "phase1_target_analysis"
 PHASE2_SITE_ANALYSIS_CACHE_KIND = "phase2_site_analysis"
-DEFAULT_CACHE_PROMPT_VERSION = "v2"
+DEFAULT_CACHE_PROMPT_VERSION = "v3"
 SITE_TYPE_PUBLISHING = "publishing_site"
 SITE_TYPE_TARGET = "target_site"
 

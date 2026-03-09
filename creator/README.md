@@ -22,6 +22,7 @@ uvicorn api.server:app --reload --port 8100
 - `CREATOR_PHASE2_PROMPT_CHARS` (default: 2500)
 - `CREATOR_PHASE2_MAX_TOKENS` (default: 400)
 - `CREATOR_PHASE4_MAX_ATTEMPTS` (ignored in code during testing flow; single attempt, no fallback)
+- `CREATOR_PHASE4_MAX_TOKENS` (default: 1200)
 - `CREATOR_PHASE5_MAX_ATTEMPTS` (ignored in code during testing flow; single attempt, no retry)
 - `CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1` (default: 3000)
 - `CREATOR_PHASE5_MAX_TOKENS_RETRY` (ignored in code during testing flow; retry disabled)

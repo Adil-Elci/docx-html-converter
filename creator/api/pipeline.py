@@ -2993,6 +2993,7 @@ def run_creator_pipeline(
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
     phase4_max_attempts = 1
+    phase4_max_tokens = _read_int_env("CREATOR_PHASE4_MAX_TOKENS", 1200)
     phase5_max_attempts = 1
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 3000)
     phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
@@ -3375,7 +3376,7 @@ def run_creator_pipeline(
                 base_url=llm_base_url,
                 model=planning_model,
                 timeout_seconds=http_timeout,
-                max_tokens=500,
+                max_tokens=phase4_max_tokens,
                 temperature=0.1,
                 request_label="phase4",
                 usage_collector=_collect_llm_usage,

@@ -1,11 +1,13 @@
 from creator.api.pipeline import (
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
+    _build_site_snapshot,
     _build_keyword_query_variants,
     _discover_keyword_candidates,
     _ensure_faq_candidates,
     _fetch_google_de_suggestions,
     _inject_faq_section,
+    _merge_phase2_analysis,
     _select_keywords,
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
@@ -156,6 +158,67 @@ def test_fetch_google_de_suggestions_uses_cache(monkeypatch):
 
     assert first == second
     assert calls["count"] == 1
+
+
+def test_build_site_snapshot_aggregates_multiple_pages(monkeypatch):
+    def fake_fetch_url(url, *, purpose, warnings, debug, timeout_seconds, retries):
+        if url.endswith("/ratgeber"):
+            return "<html><head><title>Ratgeber</title></head><body><p>Ausfuehrlicher Ratgeber zur Vorbereitung auf die Geburt.</p></body></html>"
+        if url.endswith("/checkliste"):
+            return "<html><head><title>Checkliste</title></head><body><p>Praktische Checkliste fuer Kliniktasche und erste Tage.</p></body></html>"
+        return ""
+
+    monkeypatch.setattr("creator.api.pipeline.fetch_url", fake_fetch_url)
+
+    snapshot = _build_site_snapshot(
+        site_url="https://publisher.example.com",
+        homepage_html="<html><head><title>Startseite</title></head><body><p>Familienmagazin mit Ratgebern und alltagsnahen Tipps.</p></body></html>",
+        candidate_urls=[
+            "https://publisher.example.com/ratgeber",
+            "https://publisher.example.com/checkliste",
+        ],
+        purpose_prefix="publishing_snapshot",
+        warnings=[],
+        debug={},
+        timeout_seconds=2,
+        retries=1,
+        max_pages=3,
+    )
+
+    assert snapshot["content_hash"]
+    assert len(snapshot["pages"]) == 3
+    assert "Startseite" in snapshot["combined_text"]
+    assert "Ratgeber" in snapshot["combined_text"]
+    assert snapshot["sample_urls"][0] == "https://publisher.example.com"
+
+
+def test_merge_phase2_analysis_keeps_cached_context_and_inventory_categories():
+    merged = _merge_phase2_analysis(
+        {
+            "allowed_topics": ["Geburt vorbereiten"],
+            "content_style_constraints": ["Sachlich und klar"],
+            "internal_linking_opportunities": ["Geburtsvorbereitung -> Kliniktasche"],
+            "site_summary": "Magazin fuer junge Familien",
+            "site_categories": ["Familie"],
+            "sample_page_titles": ["Geburt vorbereiten leicht gemacht"],
+            "sample_urls": ["https://publisher.example.com/geburt-vorbereiten"],
+        },
+        {
+            "allowed_topics": ["Kliniktasche Checkliste"],
+            "content_style_constraints": ["Alltagsnah schreiben"],
+            "internal_linking_opportunities": ["Kliniktasche -> Baby Erstausstattung"],
+            "site_summary": "Cached summary",
+            "site_categories": ["Schwangerschaft"],
+            "sample_page_titles": ["Baby Erstausstattung"],
+            "sample_urls": ["https://publisher.example.com/baby-erstausstattung"],
+        },
+        inventory_categories=["Baby"],
+    )
+
+    assert "Geburt vorbereiten" in merged["allowed_topics"]
+    assert "Kliniktasche Checkliste" in merged["allowed_topics"]
+    assert "Baby" in merged["site_categories"]
+    assert len(merged["sample_page_titles"]) >= 2
 
 
 def test_validate_keyword_coverage_missing_primary_locations():

@@ -41,8 +41,10 @@ DEFAULT_IMAGE_WIDTH = 1024
 DEFAULT_IMAGE_HEIGHT = 576
 DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
-PHASE1_CACHE_PROMPT_VERSION = "v1"
-PHASE2_CACHE_PROMPT_VERSION = "v1"
+PHASE1_CACHE_PROMPT_VERSION = "v2"
+PHASE2_CACHE_PROMPT_VERSION = "v2"
+DEFAULT_SITE_ANALYSIS_MAX_PAGES = 4
+DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS = 1400
 
 NEGATIVE_PROMPT = "text, watermark, logo, letters, UI, low quality, blurry, deformed"
 
@@ -151,6 +153,185 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()
 
 
+def _limit_text(value: str, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if max_chars <= 0 or len(cleaned) <= max_chars:
+        return cleaned
+    clipped = cleaned[:max_chars].rsplit(" ", 1)[0].strip()
+    return clipped or cleaned[:max_chars].strip()
+
+
+def _merge_string_lists(*value_lists: List[str], max_items: int) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for values in value_lists:
+        for value in values:
+            cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(cleaned)
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+def _extract_inventory_categories(items: List[Dict[str, Any]], *, max_items: int = 10) -> List[str]:
+    categories: List[str] = []
+    for item in items:
+        raw = item.get("categories")
+        if not isinstance(raw, list):
+            continue
+        categories.extend(str(category).strip() for category in raw if str(category).strip())
+    return _merge_string_lists(categories, max_items=max_items)
+
+
+def _serialize_site_snapshot_pages(pages: List[Dict[str, str]]) -> str:
+    lines: List[str] = []
+    for page in pages:
+        title = str(page.get("title") or "").strip()
+        text = _limit_text(str(page.get("text") or "").strip(), DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS)
+        if not text:
+            continue
+        lines.append(f"URL: {str(page.get('url') or '').strip()}")
+        if title:
+            lines.append(f"Titel: {title}")
+        lines.append(f"Inhalt: {text}")
+    return "\n".join(lines).strip()
+
+
+def _build_site_snapshot(
+    *,
+    site_url: str,
+    homepage_html: str,
+    candidate_urls: List[str],
+    purpose_prefix: str,
+    warnings: List[str],
+    debug: Dict[str, Any],
+    timeout_seconds: int,
+    retries: int,
+    max_pages: int,
+) -> Dict[str, Any]:
+    pages: List[Dict[str, str]] = []
+    normalized_site_url = _normalize_url(site_url)
+    homepage_text = sanitize_html(homepage_html)
+    if homepage_text:
+        pages.append(
+            {
+                "url": normalized_site_url,
+                "title": extract_page_title(homepage_html),
+                "text": _limit_text(homepage_text, DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS),
+            }
+        )
+
+    normalized_candidates = _normalize_internal_link_candidates(
+        candidate_urls,
+        publishing_site_url=site_url,
+        backlink_url="",
+        max_items=max(0, max_pages - len(pages)),
+    )
+    for index, candidate_url in enumerate(normalized_candidates, start=1):
+        if len(pages) >= max_pages:
+            break
+        if _normalize_url(candidate_url) == normalized_site_url:
+            continue
+        candidate_html = fetch_url(
+            candidate_url,
+            purpose=f"{purpose_prefix}_{index}",
+            warnings=warnings,
+            debug=debug,
+            timeout_seconds=timeout_seconds,
+            retries=retries,
+        )
+        candidate_text = sanitize_html(candidate_html)
+        if not candidate_text:
+            continue
+        pages.append(
+            {
+                "url": _normalize_url(candidate_url),
+                "title": extract_page_title(candidate_html),
+                "text": _limit_text(candidate_text, DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS),
+            }
+        )
+
+    serialized = _serialize_site_snapshot_pages(pages)
+    page_titles = [str(page.get("title") or "").strip() for page in pages if str(page.get("title") or "").strip()]
+    sample_urls = [str(page.get("url") or "").strip() for page in pages if str(page.get("url") or "").strip()]
+    summary = " | ".join(page_titles[:4])
+    return {
+        "pages": pages,
+        "content_hash": _hash_text(serialized),
+        "combined_text": serialized,
+        "site_summary": summary,
+        "sample_page_titles": page_titles[:8],
+        "sample_urls": sample_urls[:8],
+    }
+
+
+def _merge_phase2_analysis(
+    current: Dict[str, Any],
+    cached: Optional[Dict[str, Any]],
+    *,
+    inventory_categories: List[str],
+) -> Dict[str, Any]:
+    if not cached:
+        current["allowed_topics"] = _merge_string_lists(current.get("allowed_topics") or [], max_items=12)
+        current["content_style_constraints"] = _merge_string_lists(
+            current.get("content_style_constraints") or [],
+            max_items=6,
+        )
+        current["internal_linking_opportunities"] = _merge_string_lists(
+            current.get("internal_linking_opportunities") or [],
+            max_items=10,
+        )
+        current["site_categories"] = _merge_string_lists(
+            current.get("site_categories") or [],
+            inventory_categories,
+            max_items=10,
+        )
+        current["sample_page_titles"] = _merge_string_lists(current.get("sample_page_titles") or [], max_items=8)
+        current["sample_urls"] = _merge_string_lists(current.get("sample_urls") or [], max_items=8)
+        current["site_summary"] = str(current.get("site_summary") or "").strip()
+        return current
+
+    current["allowed_topics"] = _merge_string_lists(
+        current.get("allowed_topics") or [],
+        cached.get("allowed_topics") or [],
+        max_items=12,
+    )
+    current["content_style_constraints"] = _merge_string_lists(
+        current.get("content_style_constraints") or [],
+        cached.get("content_style_constraints") or [],
+        max_items=6,
+    )
+    current["internal_linking_opportunities"] = _merge_string_lists(
+        current.get("internal_linking_opportunities") or [],
+        cached.get("internal_linking_opportunities") or [],
+        max_items=10,
+    )
+    current["site_categories"] = _merge_string_lists(
+        current.get("site_categories") or [],
+        cached.get("site_categories") or [],
+        inventory_categories,
+        max_items=10,
+    )
+    current["sample_page_titles"] = _merge_string_lists(
+        current.get("sample_page_titles") or [],
+        cached.get("sample_page_titles") or [],
+        max_items=8,
+    )
+    current["sample_urls"] = _merge_string_lists(
+        current.get("sample_urls") or [],
+        cached.get("sample_urls") or [],
+        max_items=8,
+    )
+    current["site_summary"] = str(current.get("site_summary") or "").strip() or str(cached.get("site_summary") or "").strip()
+    return current
+
+
 def _model_prefers_anthropic(*models: str) -> bool:
     return any((model or "").strip().lower().startswith("claude") for model in models)
 
@@ -169,6 +350,10 @@ def _coerce_phase2_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "internal_linking_opportunities": [
             str(item).strip() for item in (internal_linking_opportunities or []) if str(item).strip()
         ],
+        "site_summary": str(value.get("site_summary") or "").strip(),
+        "site_categories": [str(item).strip() for item in (value.get("site_categories") or []) if str(item).strip()],
+        "sample_page_titles": [str(item).strip() for item in (value.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (value.get("sample_urls") or []) if str(item).strip()],
     }
 
 
@@ -188,6 +373,9 @@ def _coerce_phase1_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "backlink_url": backlink_url,
         "anchor_type": anchor_type,
         "keyword_cluster": [str(item).strip() for item in keyword_cluster if str(item).strip()],
+        "site_summary": str(value.get("site_summary") or "").strip(),
+        "sample_page_titles": [str(item).strip() for item in (value.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (value.get("sample_urls") or []) if str(item).strip()],
     }
 
 
@@ -1728,6 +1916,7 @@ def run_creator_pipeline(
 
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
+    site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
     phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
@@ -1803,8 +1992,20 @@ def run_creator_pipeline(
         timeout_seconds=http_timeout,
         retries=http_retries,
     )
-    target_text = sanitize_html(target_html)
-    target_content_hash = _hash_text(target_text)
+    target_seed_links = extract_internal_links(target_html, target_site_url, limit=max(4, site_analysis_max_pages * 2))
+    target_snapshot = _build_site_snapshot(
+        site_url=target_site_url,
+        homepage_html=target_html,
+        candidate_urls=target_seed_links,
+        purpose_prefix="target_snapshot",
+        warnings=warnings,
+        debug=debug,
+        timeout_seconds=http_timeout,
+        retries=http_retries,
+        max_pages=site_analysis_max_pages,
+    )
+    target_text = target_snapshot["combined_text"]
+    target_content_hash = target_snapshot["content_hash"]
     normalized_target_url = _normalize_url(target_site_url)
     brand_name = _guess_brand_name(target_site_url, target_html)
     keyword_cluster = _extract_keywords(target_text, max_terms=10)
@@ -1819,8 +2020,12 @@ def run_creator_pipeline(
         "backlink_url": backlink_url,
         "anchor_type": anchor_type,
         "keyword_cluster": keyword_cluster,
+        "site_summary": str(target_snapshot.get("site_summary") or "").strip(),
+        "sample_page_titles": list(target_snapshot.get("sample_page_titles") or []),
+        "sample_urls": list(target_snapshot.get("sample_urls") or []),
     }
     phase1_cache_hit = False
+    phase1_cache_warm = False
     phase1_cache_meta = {
         "normalized_url": normalized_target_url,
         "content_hash": target_content_hash,
@@ -1829,12 +2034,35 @@ def run_creator_pipeline(
         "model_name": "",
         "cache_hit": False,
         "cacheable": bool(target_text),
+        "snapshot_page_count": len(target_snapshot.get("pages") or []),
+        "sample_urls": list(target_snapshot.get("sample_urls") or []),
     }
     cached_phase1 = _coerce_phase1_payload(phase1_cache_payload)
     if target_text and cached_phase1 and (phase1_cache_content_hash or "").strip() == target_content_hash:
         phase1 = cached_phase1
         phase1_cache_hit = True
         phase1_cache_meta["cache_hit"] = True
+    elif cached_phase1 and not target_text:
+        phase1 = cached_phase1
+        phase1_cache_warm = True
+        warnings.append("phase1_cache_fallback_used")
+    elif cached_phase1:
+        phase1["keyword_cluster"] = _merge_string_lists(
+            phase1.get("keyword_cluster") or [],
+            cached_phase1.get("keyword_cluster") or [],
+            max_items=10,
+        )
+        phase1["sample_page_titles"] = _merge_string_lists(
+            phase1.get("sample_page_titles") or [],
+            cached_phase1.get("sample_page_titles") or [],
+            max_items=8,
+        )
+        phase1["sample_urls"] = _merge_string_lists(
+            phase1.get("sample_urls") or [],
+            cached_phase1.get("sample_urls") or [],
+            max_items=8,
+        )
+        phase1["site_summary"] = str(phase1.get("site_summary") or "").strip() or str(cached_phase1.get("site_summary") or "").strip()
 
     brand_name = str(phase1.get("brand_name") or "").strip()
     backlink_url = str(phase1.get("backlink_url") or "").strip() or (target_site_url or "")
@@ -1847,9 +2075,17 @@ def run_creator_pipeline(
         "backlink_url": backlink_url,
         "anchor_type": anchor_type,
         "keyword_cluster": keyword_cluster,
+        "site_summary": str(phase1.get("site_summary") or "").strip(),
+        "sample_page_titles": [str(item).strip() for item in (phase1.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (phase1.get("sample_urls") or []) if str(item).strip()],
     }
 
     debug["phase1_cache_hit"] = phase1_cache_hit
+    debug["phase1_snapshot"] = {
+        "page_count": len(target_snapshot.get("pages") or []),
+        "sample_urls": phase1.get("sample_urls") or [],
+        "cache_fallback_used": phase1_cache_warm,
+    }
     debug["timings_ms"]["phase1"] = int((time.time() - phase_start) * 1000)
     progress(1, PHASE_LABELS[1], 14)
 
@@ -1864,10 +2100,26 @@ def run_creator_pipeline(
         timeout_seconds=http_timeout,
         retries=http_retries,
     )
-    publishing_text = sanitize_html(publishing_html)
-    publishing_content_hash = _hash_text(publishing_text)
     normalized_publishing_url = _normalize_url(publishing_site_url)
-    raw_internal_links = extract_internal_links(publishing_html, publishing_site_url, limit=internal_link_candidates_max)
+    raw_internal_links = extract_internal_links(
+        publishing_html,
+        publishing_site_url,
+        limit=max(internal_link_candidates_max, site_analysis_max_pages * 2),
+    )
+    inventory_seed_urls = [str(item.get("url") or "").strip() for item in provided_internal_link_inventory[: max(0, site_analysis_max_pages - 1)]]
+    publishing_snapshot = _build_site_snapshot(
+        site_url=publishing_site_url,
+        homepage_html=publishing_html,
+        candidate_urls=inventory_seed_urls + raw_internal_links,
+        purpose_prefix="publishing_snapshot",
+        warnings=warnings,
+        debug=debug,
+        timeout_seconds=http_timeout,
+        retries=http_retries,
+        max_pages=site_analysis_max_pages,
+    )
+    publishing_text = publishing_snapshot["combined_text"]
+    publishing_content_hash = publishing_snapshot["content_hash"]
     homepage_internal_link_candidates = _normalize_internal_link_candidates(
         raw_internal_links,
         publishing_site_url=publishing_site_url,
@@ -1883,8 +2135,13 @@ def run_creator_pipeline(
         "allowed_topics": [],
         "content_style_constraints": [],
         "internal_linking_opportunities": [],
+        "site_summary": str(publishing_snapshot.get("site_summary") or "").strip(),
+        "site_categories": _extract_inventory_categories(provided_internal_link_inventory),
+        "sample_page_titles": list(publishing_snapshot.get("sample_page_titles") or []),
+        "sample_urls": list(publishing_snapshot.get("sample_urls") or []),
     }
     phase2_cache_hit = False
+    phase2_cache_warm = False
     phase2_cache_meta = {
         "normalized_url": normalized_publishing_url,
         "content_hash": publishing_content_hash,
@@ -1893,6 +2150,8 @@ def run_creator_pipeline(
         "model_name": planning_model,
         "cache_hit": False,
         "cacheable": True,
+        "snapshot_page_count": len(publishing_snapshot.get("pages") or []),
+        "sample_urls": list(publishing_snapshot.get("sample_urls") or []),
     }
     if publishing_text:
         cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
@@ -1902,16 +2161,29 @@ def run_creator_pipeline(
             phase2_cache_meta["cache_hit"] = True
             phase2_cache_meta["cacheable"] = True
         else:
+            cached_context = ""
+            if cached_phase2:
+                phase2_cache_warm = True
+                cached_context = (
+                    f"Vorherige gecachte Zusammenfassung: {cached_phase2.get('site_summary') or ''}\n"
+                    f"Vorherige gecachte Themen: {cached_phase2.get('allowed_topics') or []}\n"
+                    f"Vorherige gecachte Kategorien: {cached_phase2.get('site_categories') or []}\n"
+                    f"Vorherige gecachte Seitentitel: {cached_phase2.get('sample_page_titles') or []}\n"
+                )
             system_prompt = (
                 "You analyze publishing site content for safe submitted article topics. "
                 "Use only the provided site text. Return JSON with allowed_topics (5-10), "
-                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only). "
+                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only), "
+                "site_summary (1 short sentence in German), site_categories (up to 8), sample_page_titles (up to 6). "
                 "All returned natural-language text must be in German (de-DE)."
             )
             user_prompt = (
-                "Publishing site text:\n"
+                "Publishing site snapshot text:\n"
                 f"{publishing_text[:phase2_prompt_chars]}\n\n"
-                "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...]}."
+                f"Bekannte Kategorien aus dem internen Inventar: {phase2.get('site_categories') or []}\n"
+                f"{cached_context}"
+                "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...],"
+                "\"site_summary\":\"...\",\"site_categories\":[...],\"sample_page_titles\":[...]}."
             )
             try:
                 llm_out = call_llm_json(
@@ -1928,19 +2200,52 @@ def run_creator_pipeline(
                 phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
                 phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
                 phase2["internal_linking_opportunities"] = llm_out.get("internal_linking_opportunities") or []
+                phase2["site_summary"] = str(llm_out.get("site_summary") or phase2.get("site_summary") or "").strip()
+                phase2["site_categories"] = [
+                    str(item).strip() for item in (llm_out.get("site_categories") or []) if str(item).strip()
+                ]
+                phase2["sample_page_titles"] = [
+                    str(item).strip() for item in (llm_out.get("sample_page_titles") or []) if str(item).strip()
+                ]
             except LLMError as exc:
                 warnings.append(f"phase2_llm_failed:{exc}")
                 phase2["allowed_topics"] = _extract_keywords(publishing_text, max_terms=8)
                 phase2["content_style_constraints"] = ["Neutraler, fachlich-serioeser Ton", "Werbliche Sprache vermeiden"]
                 phase2_cache_meta["generator_mode"] = "deterministic"
                 phase2_cache_meta["model_name"] = ""
+            phase2 = _merge_phase2_analysis(
+                phase2,
+                cached_phase2,
+                inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+            )
     else:
-        phase2["allowed_topics"] = []
-        phase2["content_style_constraints"] = []
-        phase2_cache_meta["generator_mode"] = "deterministic"
-        phase2_cache_meta["model_name"] = ""
+        cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
+        if cached_phase2:
+            phase2 = _merge_phase2_analysis(
+                cached_phase2,
+                None,
+                inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+            )
+            phase2_cache_warm = True
+            warnings.append("phase2_cache_fallback_used")
+        else:
+            phase2["allowed_topics"] = []
+            phase2["content_style_constraints"] = []
+            phase2_cache_meta["generator_mode"] = "deterministic"
+            phase2_cache_meta["model_name"] = ""
 
+    phase2 = _merge_phase2_analysis(
+        phase2,
+        None,
+        inventory_categories=_extract_inventory_categories(provided_internal_link_inventory),
+    )
     debug["phase2_cache_hit"] = phase2_cache_hit
+    debug["phase2_snapshot"] = {
+        "page_count": len(publishing_snapshot.get("pages") or []),
+        "sample_urls": phase2.get("sample_urls") or [],
+        "inventory_category_count": len(phase2.get("site_categories") or []),
+        "cache_fallback_used": phase2_cache_warm,
+    }
     debug["timings_ms"]["phase2"] = int((time.time() - phase_start) * 1000)
     progress(2, PHASE_LABELS[2], 28)
 
@@ -1973,6 +2278,9 @@ def run_creator_pipeline(
         user_prompt = (
             f"{exclude_block}"
             f"Allowed topics: {phase2['allowed_topics']}\n"
+            f"Publishing site summary: {phase2.get('site_summary') or ''}\n"
+            f"Publishing site categories: {phase2.get('site_categories') or []}\n"
+            f"Existing publishing page titles: {(phase2.get('sample_page_titles') or [])[:6]}\n"
             f"Target keyword cluster: {keyword_cluster}\n"
             "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
             "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"

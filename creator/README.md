@@ -16,6 +16,7 @@ uvicorn api.server:app --reload --port 8100
 - `LEONARDO_BASE_URL` (default: https://cloud.leonardo.ai/api/rest/v1)
 - `CREATOR_HTTP_TIMEOUT_SECONDS` (default: 20)
 - `CREATOR_HTTP_RETRIES` (default: 2)
+- `CREATOR_SITE_ANALYSIS_MAX_PAGES` (default: 4; homepage + additional internal pages for richer site-analysis caching)
 - `CREATOR_PHASE2_PROMPT_CHARS` (default: 2500)
 - `CREATOR_PHASE2_MAX_TOKENS` (default: 400)
 - `CREATOR_PHASE5_MAX_ATTEMPTS` (default: 2, capped at 2)
@@ -39,3 +40,4 @@ pytest
 - Keyword enrichment uses German Google Suggest (`hl=de`, `gl=de`) and keeps a lightweight in-process cache for repeated queries.
 - Every article now includes a mandatory `FAQ` section as the final `H2`, with `Fazit` immediately before it.
 - When `portal_backend` provides an indexed internal-link inventory, Creator prefers those same-site article candidates over homepage link extraction.
+- Site analysis caching now uses a multi-page site snapshot and reuses older cached summaries/categories/titles as warm context when the live snapshot changes or is temporarily unavailable.

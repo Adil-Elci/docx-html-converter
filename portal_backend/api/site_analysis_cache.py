@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Optional
 from urllib.parse import urlparse
 from uuid import UUID
@@ -11,7 +12,7 @@ from .portal_models import SiteAnalysisCache, utcnow
 
 PHASE1_TARGET_ANALYSIS_CACHE_KIND = "phase1_target_analysis"
 PHASE2_SITE_ANALYSIS_CACHE_KIND = "phase2_site_analysis"
-DEFAULT_CACHE_PROMPT_VERSION = "v1"
+DEFAULT_CACHE_PROMPT_VERSION = "v2"
 SITE_TYPE_PUBLISHING = "publishing_site"
 SITE_TYPE_TARGET = "target_site"
 
@@ -29,8 +30,12 @@ def normalize_site_analysis_url(value: str) -> str:
     return f"{scheme}://{host}{path}".rstrip("/")
 
 
-def build_site_analysis_content_hash(content: str) -> str:
-    normalized = (content or "").strip().encode("utf-8")
+def build_site_analysis_content_hash(content: Any) -> str:
+    if isinstance(content, (dict, list)):
+        normalized_text = json.dumps(content, sort_keys=True, ensure_ascii=False)
+    else:
+        normalized_text = str(content or "").strip()
+    normalized = normalized_text.encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()
 
 

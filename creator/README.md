@@ -45,6 +45,7 @@ pytest
 - It fetches and analyzes live target/publishing sites; ensure outbound HTTP is allowed.
 - Keyword enrichment uses German Google Suggest (`hl=de`, `gl=de`) and keeps a lightweight in-process cache for repeated queries.
 - Every article now includes a mandatory `FAQ` section as the final `H2`, with `Fazit` immediately before it.
+- Accepted article word-count range is now `500-1200`.
 - When `portal_backend` provides an indexed internal-link inventory, Creator prefers those same-site article candidates over homepage link extraction.
 - Site analysis caching now uses a multi-page site snapshot and reuses older cached summaries/categories/titles as warm context when the live snapshot changes or is temporarily unavailable.
 - Keyword trend discovery now checks Postgres first, refreshes stale entries older than 7 days with a live Google Suggest lookup, and falls back to stale cached data only if refresh fails.

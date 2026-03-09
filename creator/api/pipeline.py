@@ -101,8 +101,8 @@ GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
 DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 FAQ_MIN_QUESTIONS = 3
 FAQ_MIN_WORDS = 80
-ARTICLE_MIN_WORDS = 650
-ARTICLE_MAX_WORDS = 800
+ARTICLE_MIN_WORDS = 500
+ARTICLE_MAX_WORDS = 1200
 
 GERMAN_KEYWORD_MODIFIERS = (
     "tipps",
@@ -1665,7 +1665,7 @@ def _collect_article_validation_errors(
 ) -> List[str]:
     errors: List[str] = []
     for check in (
-        validate_word_count(article_html, 600, 850),
+        validate_word_count(article_html, ARTICLE_MIN_WORDS, ARTICLE_MAX_WORDS),
         validate_backlink_placement(article_html, backlink_url, backlink_placement),
     ):
         if check:
@@ -3261,8 +3261,8 @@ def run_creator_pipeline(
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             system_prompt = (
-                "Write a German (de-DE) SEO blog post in clean HTML. CRITICAL: the article body MUST be 650-800 words "
-                "(aim for 750 words). Use neutral authoritative tone, "
+                f"Write a German (de-DE) SEO blog post in clean HTML. CRITICAL: the article body MUST be {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words "
+                "(aim for about 800 words). Use neutral authoritative tone, "
                 "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
                 "No external links beyond the backlink, no CTA spam, no 'visit our site' language. "
                 f"Include H1 and {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
@@ -3327,7 +3327,7 @@ def run_creator_pipeline(
                 f"Required meta_title: {phase3['title_package']['meta_title']}\n"
                 f"Required slug: {phase3['title_package']['slug']}\n"
                 f"Required outline: {phase4['outline']}\n"
-                f"Constraints: 650-800 words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
+                f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
@@ -3346,8 +3346,8 @@ def run_creator_pipeline(
             temperature = 0.2
         else:
             system_prompt = (
-                "Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be 650-800 words "
-                "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
+                f"Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words "
+                "(aim for about 800 words). Each H2 section needs 1-2 substantial paragraphs. "
                 "The penultimate H2 must be titled 'Fazit' and the final H2 must be titled 'FAQ'. "
                 "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
                 "No external links beyond the backlink. "
@@ -3373,7 +3373,7 @@ def run_creator_pipeline(
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                f"Constraints: 650-800 words (aim for 750), H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, "
+                f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words (aim for about 800), H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, "
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
@@ -3712,7 +3712,7 @@ def run_creator_pipeline(
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
         for repair_attempt in range(phase7_repair_attempts):
-            wc_ok = 600 <= current_wc <= 850
+            wc_ok = ARTICLE_MIN_WORDS <= current_wc <= ARTICLE_MAX_WORDS
             if wc_ok:
                 wc_instruction = (
                     f"The word count ({current_wc}) is fine - do NOT add or remove content. "
@@ -3721,7 +3721,7 @@ def run_creator_pipeline(
             else:
                 wc_instruction = (
                     f"The article currently has {current_wc} words. "
-                    "Adjust it to be between 650 and 800 words."
+                    f"Adjust it to be between {ARTICLE_MIN_WORDS} and {ARTICLE_MAX_WORDS} words."
                 )
             system_prompt = (
                 "Fix the HTML article to satisfy SEO checks. "
@@ -3776,7 +3776,7 @@ def run_creator_pipeline(
                 fixed_html = (llm_out.get("article_html") or "").strip()
                 fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
                 logger.info("creator.phase7.fix_result attempt=%s before=%s after=%s", repair_attempt + 1, current_wc, fixed_wc)
-                if fixed_html and 600 <= fixed_wc <= 850:
+                if fixed_html and ARTICLE_MIN_WORDS <= fixed_wc <= ARTICLE_MAX_WORDS:
                     phase5["article_html"] = fixed_html
                 elif fixed_html and fixed_wc > 0 and not wc_ok:
                     phase5["article_html"] = fixed_html

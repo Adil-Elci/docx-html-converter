@@ -7,9 +7,14 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from portal_backend.api.db import get_sessionmaker
-from portal_backend.api.internal_linking import mark_missing_publishing_site_articles, upsert_publishing_site_article
-from portal_backend.api.portal_models import Site, SiteCredential
+try:
+    from portal_backend.api.db import get_sessionmaker
+    from portal_backend.api.internal_linking import mark_missing_publishing_site_articles, upsert_publishing_site_article
+    from portal_backend.api.portal_models import Site, SiteCredential
+except ModuleNotFoundError:
+    from api.db import get_sessionmaker
+    from api.internal_linking import mark_missing_publishing_site_articles, upsert_publishing_site_article
+    from api.portal_models import Site, SiteCredential
 
 logger = logging.getLogger("portal_backend.scripts.internal_linking")
 

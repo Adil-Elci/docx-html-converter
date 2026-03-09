@@ -91,6 +91,7 @@ const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
 const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
+const TREND_RECENT_LIMIT = 6;
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -232,6 +233,8 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminSubmitting, setAdminSubmitting] = useState(false);
   const [adminSavingUserId, setAdminSavingUserId] = useState("");
+  const [keywordTrendDashboard, setKeywordTrendDashboard] = useState(null);
+  const [keywordTrendLoading, setKeywordTrendLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
@@ -746,6 +749,19 @@ export default function App() {
     }
   };
 
+  const loadKeywordTrendDashboard = async (forUser = currentUser) => {
+    if (forUser?.role !== "admin") return;
+    try {
+      setKeywordTrendLoading(true);
+      const data = await api.get("/admin/keyword-trends/dashboard");
+      setKeywordTrendDashboard(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setKeywordTrendLoading(false);
+    }
+  };
+
   const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
@@ -1174,8 +1190,8 @@ export default function App() {
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
     if (activeSection !== "admin") return;
-    if (adminUsers.length > 0) return;
-    loadAdminUsers(currentUser);
+    if (adminUsers.length === 0) loadAdminUsers(currentUser);
+    if (!keywordTrendDashboard) loadKeywordTrendDashboard(currentUser);
   }, [currentUser, activeSection]);
 
   useEffect(() => {
@@ -2006,6 +2022,19 @@ export default function App() {
   const activeCoveragePercent = clients.length
     ? Math.round((mappedClientUserCount / Math.max(clientUserCount, 1)) * 100)
     : 0;
+  const keywordTrendSummary = keywordTrendDashboard?.summary || {};
+  const keywordTrendRecent = Array.isArray(keywordTrendDashboard?.recent_queries)
+    ? keywordTrendDashboard.recent_queries.slice(0, TREND_RECENT_LIMIT)
+    : [];
+  const keywordTrendTotalQueries = Number(keywordTrendSummary.total_queries || 0);
+  const keywordTrendFreshQueries = Number(keywordTrendSummary.fresh_queries || 0);
+  const keywordTrendStaleQueries = Number(keywordTrendSummary.stale_queries || 0);
+  const keywordTrendFreshPercent = keywordTrendTotalQueries > 0
+    ? Math.round((keywordTrendFreshQueries / keywordTrendTotalQueries) * 100)
+    : 0;
+  const keywordTrendLatestRefresh = keywordTrendSummary.latest_refresh_at
+    ? formatPublishedAt(keywordTrendSummary.latest_refresh_at)
+    : t("notAvailable");
   const getFilteredSitesForQuery = (query) => {
     const normalizedQuery = (query || "").trim().toLowerCase();
     return sortByLabel(sites, (site) => `${site.site_url || ""} ${site.name || ""}`).filter((site) => {
@@ -2549,6 +2578,62 @@ export default function App() {
                     {inactiveUserCount === 0 ? t("adminHealthy") : t("adminNeedsAttention")}
                   </strong>
                 </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminTrendCacheTitle")}</h3>
+                  <p className="muted-text">{t("adminTrendCacheBody")}</p>
+                  <strong className="admin-summary-number">
+                    {keywordTrendTotalQueries > 0 ? `${keywordTrendFreshPercent}%` : "0%"}
+                  </strong>
+                  <span className="muted-text">
+                    {keywordTrendFreshQueries} / {keywordTrendTotalQueries} {t("adminTrendCacheFreshLabel")}
+                  </span>
+                </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminTrendCacheStaleTitle")}</h3>
+                  <p className="muted-text">{t("adminTrendCacheStaleBody")}</p>
+                  <strong className="admin-summary-number">{keywordTrendStaleQueries}</strong>
+                  <span className="muted-text">
+                    {t("adminTrendCacheLatestRefresh")}: {keywordTrendLatestRefresh}
+                  </span>
+                </div>
+              </div>
+
+              <div className="admin-trend-panel">
+                <div className="admin-trend-header">
+                  <div>
+                    <h3>{t("adminTrendCacheRecentTitle")}</h3>
+                    <p className="muted-text">{t("adminTrendCacheRecentBody")}</p>
+                  </div>
+                  <button
+                    className="btn secondary small"
+                    type="button"
+                    onClick={() => loadKeywordTrendDashboard()}
+                    disabled={keywordTrendLoading}
+                  >
+                    {keywordTrendLoading ? t("loading") : t("refresh")}
+                  </button>
+                </div>
+                {keywordTrendRecent.length === 0 && !keywordTrendLoading ? (
+                  <p className="muted-text">{t("adminTrendCacheNoData")}</p>
+                ) : (
+                  <div className="admin-trend-list">
+                    {keywordTrendRecent.map((item) => (
+                      <div key={`${item.normalized_query}-${item.updated_at || item.fetched_at || ""}`} className="admin-trend-item">
+                        <div className="admin-trend-query-row">
+                          <strong>{item.query || item.normalized_query}</strong>
+                          <span className={`admin-trend-status ${item.is_fresh ? "fresh" : "stale"}`}>
+                            {item.is_fresh ? t("adminTrendCacheStatusFresh") : t("adminTrendCacheStatusStale")}
+                          </span>
+                        </div>
+                        <div className="admin-trend-meta">
+                          <span>{item.locale}</span>
+                          <span>{t("adminTrendCacheSuggestionCount")}: {item.suggestion_count || 0}</span>
+                          <span>{t("adminTrendCacheLatestRefresh")}: {item.fetched_at ? formatPublishedAt(item.fetched_at) : t("notAvailable")}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {adminLoading ? (

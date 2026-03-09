@@ -1710,6 +1710,69 @@ def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str], top
     return trimmed_core + [fazit_section, faq_section]
 
 
+def _format_outline_heading(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return ""
+    return cleaned[:1].upper() + cleaned[1:]
+
+
+def _build_deterministic_outline(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    faq_candidates: List[str],
+    structured_mode: str,
+    anchor_text_final: str,
+) -> Dict[str, Any]:
+    topic_phrase = _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses Thema"
+    primary_heading = _format_outline_heading(primary_keyword or topic_phrase)
+    secondary_pool = [
+        _format_outline_heading(item)
+        for item in secondary_keywords
+        if _format_outline_heading(item)
+        and _keyword_similarity(_normalize_keyword_phrase(item), _normalize_keyword_phrase(primary_heading)) < 0.85
+    ]
+
+    if structured_mode == "list":
+        first_heading = f"{primary_heading}: Checkliste und wichtigste Schritte"
+    elif structured_mode == "table":
+        first_heading = f"{primary_heading}: Vergleich und Ueberblick"
+    else:
+        first_heading = f"{primary_heading}: Das Wichtigste im Ueberblick"
+
+    core_sections: List[Dict[str, Any]] = [{"h2": first_heading, "h3": []}]
+
+    fallback_headings = [
+        f"Ursachen und Hintergruende zu {topic_phrase}",
+        f"Auswirkungen und typische Herausforderungen bei {topic_phrase}",
+        f"Praktische Tipps und Unterstuetzung zu {topic_phrase}",
+        f"Haeufige Fehler und sinnvolle naechste Schritte bei {topic_phrase}",
+    ]
+    for heading in secondary_pool:
+        core_sections.append({"h2": heading, "h3": []})
+        if len(core_sections) >= ARTICLE_MAX_H2 - 2:
+            break
+    for heading in fallback_headings:
+        if len(core_sections) >= ARTICLE_MAX_H2 - 2:
+            break
+        normalized = _normalize_keyword_phrase(heading)
+        if any(_keyword_similarity(_normalize_keyword_phrase(item.get("h2") or ""), normalized) >= 0.8 for item in core_sections):
+            continue
+        core_sections.append({"h2": heading, "h3": []})
+
+    while len(core_sections) < ARTICLE_MIN_H2 - 2:
+        core_sections.append({"h2": f"Weitere wichtige Aspekte zu {topic_phrase}", "h3": []})
+
+    outline_items = _inject_faq_section(core_sections, faq_candidates, topic)
+    return {
+        "outline": outline_items,
+        "backlink_placement": "intro",
+        "anchor_text_final": anchor_text_final,
+    }
+
+
 def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str]:
     errors: List[str] = []
     plain_text = _strip_html_tags(article_html)
@@ -3067,7 +3130,28 @@ def run_creator_pipeline(
         break
 
     if not outline:
-        raise CreatorError(f"Outline validation failed: {outline_errors}")
+        fallback_anchor_text = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
+        fallback_outline = _build_deterministic_outline(
+            topic=phase3["final_article_topic"],
+            primary_keyword=phase3.get("primary_keyword", ""),
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            faq_candidates=faq_candidates,
+            structured_mode=phase3.get("structured_content_mode", "none"),
+            anchor_text_final=fallback_anchor_text,
+        )
+        outline = {
+            "h1": phase3["title_package"]["h1"],
+            "outline": fallback_outline["outline"],
+            "backlink_placement": fallback_outline["backlink_placement"],
+            "anchor_text_final": fallback_outline["anchor_text_final"],
+        }
+        warnings.append("phase4_outline_fallback_used")
+        debug["phase4_outline_errors"] = outline_errors[:]
+        debug["phase4_outline_fallback"] = {
+            "used": True,
+            "backlink_placement": outline["backlink_placement"],
+            "outline": outline["outline"],
+        }
 
     phase4 = outline
     debug["faq_generation"] = {

@@ -4,6 +4,7 @@ from creator.api.pipeline import (
     KEYWORD_MIN_SECONDARY,
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
+    _build_deterministic_outline,
     _build_site_snapshot,
     _build_keyword_query_variants,
     _discover_keyword_candidates,
@@ -141,6 +142,30 @@ def test_inject_faq_section_after_fazit():
     assert updated[-2]["h2"] == "Fazit"
     assert updated[-1]["h2"] == "FAQ"
     assert len(updated[-1]["h3"]) >= 2
+
+
+def test_build_deterministic_outline_produces_valid_structure():
+    outline = _build_deterministic_outline(
+        topic="Wie Eltern-Sucht die Schwangerschaft und Familienbeziehungen beeinflusst",
+        primary_keyword="eltern sucht schwangerschaft",
+        secondary_keywords=[
+            "auswirkungen auf familienbeziehungen",
+            "hilfe fuer betroffene familien",
+        ],
+        faq_candidates=[
+            "Was ist Eltern-Sucht in der Schwangerschaft?",
+            "Wie wirkt sich Eltern-Sucht auf Familien aus?",
+            "Wann ist professionelle Hilfe sinnvoll?",
+        ],
+        structured_mode="none",
+        anchor_text_final="Mehr erfahren",
+    )
+
+    assert outline["backlink_placement"] == "intro"
+    assert outline["outline"][-2]["h2"] == "Fazit"
+    assert outline["outline"][-1]["h2"] == "FAQ"
+    assert 4 <= len(outline["outline"]) <= 6
+    assert "eltern sucht schwangerschaft" in outline["outline"][0]["h2"].lower()
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

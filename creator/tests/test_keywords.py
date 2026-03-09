@@ -7,6 +7,7 @@ from creator.api.pipeline import (
     _build_deterministic_meta_description,
     _build_deterministic_outline,
     _build_site_snapshot,
+    _compact_pair_fit_profile,
     _build_keyword_query_variants,
     _ensure_primary_keyword_in_intro,
     _trim_article_to_word_limit,
@@ -568,6 +569,33 @@ def test_pair_fit_reasoning_requires_scored_candidate_set(monkeypatch):
     assert len(result["topic_candidates"]) == 5
     assert result["topic_candidates"][0]["topic"] == "Kandidat 1"
     assert result["final_article_topic"] == "Kandidat 1"
+
+
+def test_compact_pair_fit_profile_limits_prompt_fields() -> None:
+    compact = _compact_pair_fit_profile(
+        {
+            "normalized_url": "https://target.example.com/path",
+            "page_title": "Sehr lange Zielseite",
+            "meta_description": "Meta",
+            "domain_level_topic": "Optik",
+            "primary_context": "family_life",
+            "topics": [f"topic {idx}" for idx in range(12)],
+            "contexts": [f"context {idx}" for idx in range(10)],
+            "visible_headings": [f"heading {idx}" for idx in range(10)],
+            "repeated_keywords": [f"keyword {idx}" for idx in range(12)],
+            "services_or_products": [f"service {idx}" for idx in range(12)],
+            "business_type": "shop",
+            "business_intent": "commercial",
+            "site_root_url": "https://target.example.com",
+        },
+        site_kind="target",
+    )
+
+    assert len(compact["topics"]) == 8
+    assert len(compact["contexts"]) == 6
+    assert len(compact["visible_headings"]) == 6
+    assert len(compact["repeated_keywords"]) == 8
+    assert len(compact["services_or_products"]) == 8
 
 
 def test_pair_fit_reasoning_rejects_invalid_candidate_count(monkeypatch):

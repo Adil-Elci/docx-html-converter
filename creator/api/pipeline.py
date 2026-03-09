@@ -627,6 +627,33 @@ def _pair_fit_candidate_topics(candidates: List[Dict[str, Any]]) -> List[str]:
     return [str(item.get("topic") or "").strip() for item in candidates if str(item.get("topic") or "").strip()]
 
 
+def _compact_pair_fit_profile(profile: Dict[str, Any], *, site_kind: str) -> Dict[str, Any]:
+    compact = {
+        "normalized_url": str(profile.get("normalized_url") or "").strip(),
+        "page_title": str(profile.get("page_title") or "").strip(),
+        "meta_description": str(profile.get("meta_description") or "").strip(),
+        "domain_level_topic": str(profile.get("domain_level_topic") or "").strip(),
+        "primary_context": str(profile.get("primary_context") or "").strip(),
+        "topics": [str(item).strip() for item in (profile.get("topics") or []) if str(item).strip()][:8],
+        "contexts": [str(item).strip() for item in (profile.get("contexts") or []) if str(item).strip()][:6],
+        "visible_headings": [str(item).strip() for item in (profile.get("visible_headings") or []) if str(item).strip()][:6],
+        "repeated_keywords": [str(item).strip() for item in (profile.get("repeated_keywords") or []) if str(item).strip()][:8],
+    }
+    if site_kind == "publishing":
+        compact["content_style"] = [str(item).strip() for item in (profile.get("content_style") or []) if str(item).strip()][:5]
+        compact["site_categories"] = [str(item).strip() for item in (profile.get("site_categories") or []) if str(item).strip()][:6]
+        compact["topic_clusters"] = [str(item).strip() for item in (profile.get("topic_clusters") or []) if str(item).strip()][:6]
+        compact["prominent_titles"] = [str(item).strip() for item in (profile.get("prominent_titles") or []) if str(item).strip()][:5]
+    else:
+        compact["business_type"] = str(profile.get("business_type") or "").strip()
+        compact["services_or_products"] = [
+            str(item).strip() for item in (profile.get("services_or_products") or []) if str(item).strip()
+        ][:8]
+        compact["business_intent"] = str(profile.get("business_intent") or "").strip()
+        compact["site_root_url"] = str(profile.get("site_root_url") or "").strip()
+    return compact
+
+
 def _phase1_from_target_profile(profile: Dict[str, Any], *, target_site_url: str) -> Dict[str, Any]:
     brand_name = str(profile.get("page_title") or "").strip()
     if not brand_name:
@@ -746,24 +773,20 @@ def _run_pair_fit_reasoning(
     timeout_seconds: int,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]],
 ) -> Dict[str, Any]:
+    compact_publishing_profile = _compact_pair_fit_profile(publishing_profile, site_kind="publishing")
+    compact_target_profile = _compact_pair_fit_profile(target_profile, site_kind="target")
     system_prompt = (
-        "You select a German guest-post topic from structured site profiles only. "
+        "You select a German guest-post topic from compact structured site profiles only. "
         "Do not infer from raw HTML, and do not invent unsupported site meanings. "
-        "Follow this sequence exactly: "
-        "1) summarize the publishing-site topics, primary context, and style; "
-        "2) summarize the target-site topics, primary context, business type, services/products, and business intent; "
-        "3) expand both into broader semantic contexts; "
-        "4) find only natural intersection contexts where the publishing site remains the main world and the target site is only a supporting resource; "
-        "5) generate exactly 5 candidate guest-post topics only if the overlap is natural; "
-        "6) score each candidate on publishing_site_relevance, backlink_naturalness, informational_value, seo_plausibility, and non_spamminess using integers 0-10, plus total_score 0-50; "
-        "7) verify that exactly one natural contextual backlink can fit and that the article still works without it. "
+        "Publishing site must stay the main world; target site may appear only as one supporting resource. "
+        "Expand semantics beyond literal keywords into contexts like health, family_life, education, daily_routine, finance, home, lifestyle, safety, productivity, wellbeing. "
         "If the fit is weak or forced, reject the pair. Never force a commercial target into an unrelated publishing site. "
-        "Return JSON only. Natural-language fields must be in German (de-DE). "
-        "Required keys: publishing_site_topics, target_site_topics, publishing_site_contexts, target_site_contexts, "
-        "intersection_contexts, best_overlap_reason, topic_candidates, final_article_topic, why_this_topic_was_chosen, "
-        "backlink_fit_ok, fit_score, decision, rejection_reason. "
-        "topic_candidates must be an array of 5 objects with keys: topic, publishing_site_relevance, backlink_naturalness, informational_value, seo_plausibility, non_spamminess, total_score, backlink_angle. "
-        "fit_score is 0-100. decision is accepted or rejected."
+        "Return JSON only. Keep all free-text fields short and specific. Natural-language fields must be in German (de-DE). "
+        "Required keys: publishing_site_topics, target_site_topics, publishing_site_contexts, target_site_contexts, intersection_contexts, "
+        "best_overlap_reason, topic_candidates, final_article_topic, why_this_topic_was_chosen, backlink_fit_ok, fit_score, decision, rejection_reason. "
+        "topic_candidates must be an array of exactly 5 objects with keys: topic, publishing_site_relevance, backlink_naturalness, informational_value, seo_plausibility, non_spamminess, total_score, backlink_angle. "
+        "Use integer scores only. fit_score is 0-100. decision is accepted or rejected. "
+        "Do not add any markdown, commentary, or extra keys."
     )
     exclude_block = ""
     if exclude_topics:
@@ -776,13 +799,14 @@ def _run_pair_fit_reasoning(
         f"{requested_block}"
         f"{exclude_block}"
         f"Publishing site URL: {publishing_site_url}\n"
-        f"Publishing profile: {json.dumps(publishing_profile, ensure_ascii=False)}\n\n"
+        f"Publishing profile: {json.dumps(compact_publishing_profile, ensure_ascii=False)}\n\n"
         f"Target site URL: {target_site_url}\n"
-        f"Target profile: {json.dumps(target_profile, ensure_ascii=False)}\n\n"
-        "The publishing site must remain the main context. "
-        "The final article topic must primarily serve the publishing site. "
-        "The target site may only appear as one contextual supporting resource. "
-        "Generate exactly 5 candidates only if the overlap is natural; otherwise reject. "
+        f"Target profile: {json.dumps(compact_target_profile, ensure_ascii=False)}\n\n"
+        "Output schema example:\n"
+        '{"publishing_site_topics":["..."],"target_site_topics":["..."],"publishing_site_contexts":["..."],"target_site_contexts":["..."],'
+        '"intersection_contexts":["..."],"best_overlap_reason":"...","topic_candidates":[{"topic":"...","publishing_site_relevance":8,"backlink_naturalness":8,"informational_value":8,"seo_plausibility":8,"non_spamminess":9,"total_score":41,"backlink_angle":"..."}],'
+        '"final_article_topic":"...","why_this_topic_was_chosen":"...","backlink_fit_ok":true,"fit_score":72,"decision":"accepted","rejection_reason":""}\n\n'
+        "Generate exactly 5 candidates if the overlap is natural; otherwise reject. "
         "Avoid promotional phrasing and exact-match commercial wording. "
         "The backlink must fit contextually and the article must still make sense without the backlink."
     )
@@ -793,8 +817,8 @@ def _run_pair_fit_reasoning(
         base_url=llm_base_url,
         model=planning_model,
         timeout_seconds=timeout_seconds,
-        max_tokens=950,
-        temperature=0.2,
+        max_tokens=1200,
+        temperature=0.1,
         request_label="phase3_pair_fit",
         usage_collector=usage_collector,
     )

@@ -1,3 +1,5 @@
+import json
+
 from creator.api.pipeline import (
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
@@ -507,37 +509,117 @@ def test_validate_language_and_conclusion_rejects_thin_faq():
 
 
 def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():
-    result = _run_pair_fit_reasoning(
-        requested_topic="",
-        exclude_topics=[],
-        target_site_url="https://target.example.com",
-        publishing_site_url="https://publisher.example.com",
-        target_profile={
-            "normalized_url": "https://target.example.com",
-            "topics": ["Sonnenbrillen", "Augenschutz fuer Kinder", "UV Schutz unterwegs"],
-            "contexts": ["shopping", "safety"],
-            "business_type": "E-Commerce",
-            "services_or_products": ["Sonnenbrillen", "Kinderbrillen"],
-            "repeated_keywords": ["sonnenbrillen", "uv", "schutz", "kinder"],
-            "visible_headings": ["Kinderaugen vor UV Strahlung schuetzen"],
-            "business_intent": "commercial",
-        },
-        publishing_profile={
-            "normalized_url": "https://publisher.example.com",
-            "topics": ["Familie", "Elternratgeber", "Gesunder Familienalltag"],
-            "contexts": ["family_life", "health"],
-            "site_categories": ["Familie", "Kinder", "Gesundheit"],
-            "repeated_keywords": ["kinder", "familie", "schutz", "alltag"],
-            "content_style": ["hilfreich", "sachlich"],
-        },
-        llm_api_key="test-key",
-        llm_base_url="https://api.openai.com/v1",
-        planning_model="gpt-4.1-mini",
-        timeout_seconds=2,
-        usage_collector=None,
-    )
+    captured: dict[str, object] = {}
 
-    assert result["final_match_decision"] in {"accepted", "weak_fit"}
+    def fake_call_llm_json(**kwargs):
+        captured["request_label"] = kwargs.get("request_label")
+        prompt = str(kwargs.get("user_prompt") or "")
+        input_json = prompt.split("Input:\n", 1)[1]
+        captured["input_payload"] = json.loads(input_json)
+        return {
+            "topic_candidates": [
+                {
+                    "topic": "Kinder Sonnenbrillen: worauf Eltern achten sollten",
+                    "publishing_site_relevance": 8,
+                    "target_site_relevance": 8,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 40,
+                    "backlink_angle": "Die Zielseite wird als nachrangige Ressource fuer konkrete Auswahlkriterien verlinkt.",
+                },
+                {
+                    "topic": "UV Schutz fuer Kinder unterwegs: praktische Orientierung",
+                    "publishing_site_relevance": 8,
+                    "target_site_relevance": 7,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 39,
+                    "backlink_angle": "Der Link vertieft geeignete Produkte als Zusatzressource.",
+                },
+                {
+                    "topic": "Familienalltag im Sommer: Augenschutz fuer Kinder",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 7,
+                    "informational_value": 8,
+                    "backlink_naturalness": 6,
+                    "spam_risk": 2,
+                    "total_score": 37,
+                    "backlink_angle": "Die Zielseite ergaenzt den Ratgeber mit weiterfuehrender Produktauswahl.",
+                },
+                {
+                    "topic": "Kinderaugen draussen schuetzen: sinnvolle Kriterien",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 7,
+                    "informational_value": 7,
+                    "backlink_naturalness": 6,
+                    "spam_risk": 3,
+                    "total_score": 34,
+                    "backlink_angle": "Die Zielseite dient als Beispiel fuer passende Loesungen.",
+                },
+                {
+                    "topic": "Outdoor mit Kindern: Sonnenbrillen ohne Werbedruck einordnen",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 6,
+                    "informational_value": 7,
+                    "backlink_naturalness": 5,
+                    "spam_risk": 3,
+                    "total_score": 31,
+                    "backlink_angle": "Die Zielseite wird rein kontextuell als Zusatzhinweis genannt.",
+                },
+            ],
+            "final_article_topic": "Kinder Sonnenbrillen: worauf Eltern achten sollten",
+            "final_match_decision": "accepted",
+            "why_this_topic_was_chosen": "Das Thema passt klar zu Elternratgebern und bindet die Zielseite nur als Zusatzressource ein.",
+            "best_overlap_reason": "Familie, Gesundheit und Schutz ergeben einen natuerlichen Kontext fuer einen Ratgeber.",
+            "reject_reason": "",
+            "fit_score": 82,
+        }
+
+    from creator.api import pipeline as pipeline_module
+
+    original = pipeline_module.call_llm_json
+    pipeline_module.call_llm_json = fake_call_llm_json
+    try:
+        result = _run_pair_fit_reasoning(
+            requested_topic="",
+            exclude_topics=[],
+            target_site_url="https://target.example.com",
+            publishing_site_url="https://publisher.example.com",
+            target_profile={
+                "normalized_url": "https://target.example.com",
+                "topics": ["Sonnenbrillen", "Augenschutz fuer Kinder", "UV Schutz unterwegs"],
+                "contexts": ["shopping", "safety"],
+                "business_type": "E-Commerce",
+                "services_or_products": ["Sonnenbrillen", "Kinderbrillen"],
+                "repeated_keywords": ["sonnenbrillen", "uv", "schutz", "kinder"],
+                "visible_headings": ["Kinderaugen vor UV Strahlung schuetzen"],
+                "business_intent": "commercial",
+            },
+            publishing_profile={
+                "normalized_url": "https://publisher.example.com",
+                "topics": ["Familie", "Elternratgeber", "Gesunder Familienalltag"],
+                "contexts": ["family_life", "health"],
+                "site_categories": ["Familie", "Kinder", "Gesundheit"],
+                "repeated_keywords": ["kinder", "familie", "schutz", "alltag"],
+                "content_style": ["hilfreich", "sachlich"],
+            },
+            llm_api_key="test-key",
+            llm_base_url="https://api.openai.com/v1",
+            planning_model="gpt-4.1-mini",
+            timeout_seconds=2,
+            usage_collector=None,
+        )
+    finally:
+        pipeline_module.call_llm_json = original
+
+    assert captured["request_label"] == "phase3_pair_fit"
+    input_payload = captured["input_payload"]
+    assert input_payload["derived_signals"]["publishing_contexts"]
+    assert input_payload["derived_signals"]["seed_bridge_topics"]
+    assert input_payload["target_profile"]["services_or_products"]
+    assert result["final_match_decision"] == "accepted"
     assert len(result["topic_candidates"]) == 5
     assert result["generated_bridge_topics"]
     assert result["final_article_topic"]
@@ -573,30 +655,99 @@ def test_compact_pair_fit_profile_limits_prompt_fields() -> None:
 
 
 def test_pair_fit_reasoning_distinguishes_hard_reject():
-    result = _run_pair_fit_reasoning(
-        requested_topic="",
-        exclude_topics=[],
-        target_site_url="https://target.example.com",
-        publishing_site_url="https://publisher.example.com",
-        target_profile={
-            "normalized_url": "https://target.example.com",
-            "topics": ["Industrie Ersatzteile", "B2B Beschaffung"],
-            "contexts": ["shopping", "productivity"],
-            "services_or_products": ["Ersatzteile", "Grossbestellungen"],
-            "business_intent": "commercial",
-        },
-        publishing_profile={
-            "normalized_url": "https://publisher.example.com",
-            "topics": ["Meditation", "Achtsamkeit", "Wellbeing"],
-            "contexts": ["wellbeing"],
-            "site_categories": ["Entspannung"],
-        },
-        llm_api_key="test-key",
-        llm_base_url="https://api.openai.com/v1",
-        planning_model="gpt-4.1-mini",
-        timeout_seconds=2,
-        usage_collector=None,
-    )
+    def fake_call_llm_json(**_kwargs):
+        return {
+            "topic_candidates": [
+                {
+                    "topic": "Beschaffung im Alltag: lose Einordnung",
+                    "publishing_site_relevance": 2,
+                    "target_site_relevance": 4,
+                    "informational_value": 5,
+                    "backlink_naturalness": 2,
+                    "spam_risk": 8,
+                    "total_score": 14,
+                    "backlink_angle": "Der Verweis waere nur schwer natuerlich einzubetten.",
+                },
+                {
+                    "topic": "Ersatzteile ohne Werbedruck erklaert",
+                    "publishing_site_relevance": 2,
+                    "target_site_relevance": 4,
+                    "informational_value": 5,
+                    "backlink_naturalness": 2,
+                    "spam_risk": 8,
+                    "total_score": 13,
+                    "backlink_angle": "Der Link waere redaktionell fremd.",
+                },
+                {
+                    "topic": "B2B Beschaffung vorsichtig eingeordnet",
+                    "publishing_site_relevance": 1,
+                    "target_site_relevance": 4,
+                    "informational_value": 4,
+                    "backlink_naturalness": 1,
+                    "spam_risk": 9,
+                    "total_score": 11,
+                    "backlink_angle": "Der Link wuerde den Artikel inhaltlich kippen.",
+                },
+                {
+                    "topic": "Grossbestellungen sachlich erklaert",
+                    "publishing_site_relevance": 1,
+                    "target_site_relevance": 4,
+                    "informational_value": 4,
+                    "backlink_naturalness": 1,
+                    "spam_risk": 9,
+                    "total_score": 10,
+                    "backlink_angle": "Die Zielseite passt nicht zur Leserintention.",
+                },
+                {
+                    "topic": "Industrie Ersatzteile knapp eingeordnet",
+                    "publishing_site_relevance": 1,
+                    "target_site_relevance": 3,
+                    "informational_value": 4,
+                    "backlink_naturalness": 1,
+                    "spam_risk": 9,
+                    "total_score": 9,
+                    "backlink_angle": "Der Verweis bleibt fachfremd.",
+                },
+            ],
+            "final_article_topic": "Beschaffung im Alltag: lose Einordnung",
+            "final_match_decision": "hard_reject",
+            "why_this_topic_was_chosen": "Kein Thema erreicht eine glaubwuerdige redaktionelle Passung.",
+            "best_overlap_reason": "Die Kontexte liegen zu weit auseinander.",
+            "reject_reason": "Zwischen Achtsamkeit und industrieller Beschaffung entsteht kein natuerlicher Informationsartikel.",
+            "fit_score": 24,
+        }
+
+    from creator.api import pipeline as pipeline_module
+
+    original = pipeline_module.call_llm_json
+    pipeline_module.call_llm_json = fake_call_llm_json
+    try:
+        result = _run_pair_fit_reasoning(
+            requested_topic="",
+            exclude_topics=[],
+            target_site_url="https://target.example.com",
+            publishing_site_url="https://publisher.example.com",
+            target_profile={
+                "normalized_url": "https://target.example.com",
+                "topics": ["Industrie Ersatzteile", "B2B Beschaffung"],
+                "contexts": ["shopping", "productivity"],
+                "services_or_products": ["Ersatzteile", "Grossbestellungen"],
+                "business_intent": "commercial",
+            },
+            publishing_profile={
+                "normalized_url": "https://publisher.example.com",
+                "topics": ["Meditation", "Achtsamkeit", "Wellbeing"],
+                "contexts": ["wellbeing"],
+                "site_categories": ["Entspannung"],
+            },
+            llm_api_key="test-key",
+            llm_base_url="https://api.openai.com/v1",
+            planning_model="gpt-4.1-mini",
+            timeout_seconds=2,
+            usage_collector=None,
+        )
+    finally:
+        pipeline_module.call_llm_json = original
 
     assert result["final_match_decision"] == "hard_reject"
     assert result["decision"] == "rejected"

@@ -54,7 +54,7 @@ from ..portal_schemas import (
     AutomationStatusEventOut,
     AutomationStatusOut,
 )
-from ..site_profiles import top_ranked_publishing_sites_for_target
+from ..site_profiles import derive_site_root_url, normalize_site_profile_url, top_ranked_publishing_sites_for_target
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
@@ -277,6 +277,11 @@ def _resolve_or_auto_select_publishing_site(
         if client_target_site is not None
         else (payload.target_site_url or "").strip()
     )
+    target_root_url = (
+        (client_target_site.target_site_root_url or "").strip()
+        if client_target_site is not None
+        else derive_site_root_url(target_url)
+    )
     if not target_url:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -285,9 +290,10 @@ def _resolve_or_auto_select_publishing_site(
     priority_weights = _parse_auto_site_priority_weights()
     if explicit_site:
         site = _resolve_publishing_site(db, explicit_site)
-        target_profile, target_profile_record, candidate_rankings = top_ranked_publishing_sites_for_target(
+        target_profile, target_profile_content_hash, candidate_rankings = top_ranked_publishing_sites_for_target(
             db,
             target_site_url=target_url,
+            target_site_root_url=target_root_url or None,
             candidate_sites=[site],
             client_target_site_id=client_target_site.id if client_target_site is not None else None,
             timeout_seconds=10,
@@ -296,8 +302,7 @@ def _resolve_or_auto_select_publishing_site(
             limit=1,
             business_priority_weights=priority_weights,
         )
-        target_profile_payload = dict((target_profile_record.payload or {}) if target_profile_record is not None else {})
-        target_profile_content_hash = str((target_profile_record.content_hash or "") if target_profile_record is not None else "").strip()
+        target_profile_payload = dict(target_profile or {})
         selected_pair, evaluated = _select_best_accepted_pair(
             creator_endpoint=creator_endpoint,
             target_site_url=target_url,
@@ -330,9 +335,10 @@ def _resolve_or_auto_select_publishing_site(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No eligible publishing sites are available for auto-selection.",
         )
-    target_profile, target_profile_record, ranked = top_ranked_publishing_sites_for_target(
+    target_profile, target_profile_content_hash, ranked = top_ranked_publishing_sites_for_target(
         db,
         target_site_url=target_url,
+        target_site_root_url=target_root_url or None,
         candidate_sites=candidate_sites,
         client_target_site_id=client_target_site.id if client_target_site is not None else None,
         timeout_seconds=10,
@@ -353,8 +359,7 @@ def _resolve_or_auto_select_publishing_site(
                 "details": top_reason,
             },
         )
-    target_profile_payload = dict((target_profile_record.payload or {}) if target_profile_record is not None else {})
-    target_profile_content_hash = str((target_profile_record.content_hash or "") if target_profile_record is not None else "").strip()
+    target_profile_payload = dict(target_profile or {})
     selected_pair, evaluated = _select_best_accepted_pair(
         creator_endpoint=creator_endpoint,
         target_site_url=target_url,
@@ -547,15 +552,24 @@ def _resolve_client_target_site(
     if payload.target_site_id is not None:
         for row in rows:
             if row.id == payload.target_site_id:
-                if payload.target_site_url and (row.target_site_url or "").strip() != payload.target_site_url:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_url does not match target_site_id.")
+                if payload.target_site_url:
+                    requested_url = normalize_site_profile_url(payload.target_site_url)
+                    expected_urls = {
+                        normalize_site_profile_url(row.target_site_url or ""),
+                        normalize_site_profile_url(row.target_site_root_url or ""),
+                    }
+                    if requested_url not in {value for value in expected_urls if value}:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_url does not match target_site_id.")
                 return row
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_site_id is not assigned to this client.")
 
     if payload.target_site_url:
-        requested_url = payload.target_site_url.strip()
+        requested_url = normalize_site_profile_url(payload.target_site_url)
         for row in rows:
-            if (row.target_site_url or "").strip() == requested_url:
+            if requested_url in {
+                normalize_site_profile_url(row.target_site_url or ""),
+                normalize_site_profile_url(row.target_site_root_url or ""),
+            }:
                 return row
         return None
 
@@ -625,6 +639,8 @@ def _compose_submission_notes(
             parts.append(f"client_target_site_domain={_safe_note_value(client_target_site.target_site_domain)}")
         if client_target_site.target_site_url:
             parts.append(f"client_target_site_url={_safe_note_value(client_target_site.target_site_url)}")
+        if client_target_site.target_site_root_url:
+            parts.append(f"client_target_site_root_url={_safe_note_value(client_target_site.target_site_root_url)}")
     elif custom_target_site_url:
         parts.append(f"client_target_site_url={_safe_note_value(custom_target_site_url)}")
     if anchor:

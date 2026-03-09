@@ -84,6 +84,7 @@ SAFE_EXPORT_COLUMNS: dict[str, list[str]] = {
         "client_id",
         "target_site_domain",
         "target_site_url",
+        "target_site_root_url",
         "is_primary",
         "created_at",
         "updated_at",

@@ -72,6 +72,31 @@ def normalize_site_profile_url(value: str) -> str:
     return f"{scheme}://{host}{path}".rstrip("/")
 
 
+def derive_site_root_url(value: str) -> str:
+    normalized = normalize_site_profile_url(value)
+    if not normalized:
+        return ""
+    parsed = urlparse(normalized)
+    host = (parsed.netloc or "").strip().lower().rstrip("/")
+    if not host:
+        return ""
+    return f"{(parsed.scheme or 'https').lower()}://{host}"
+
+
+def normalize_site_domain(value: str) -> str:
+    normalized = normalize_site_profile_url(value)
+    if normalized:
+        parsed = urlparse(normalized)
+        host = (parsed.netloc or "").strip().lower().rstrip(".")
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    raw = (value or "").strip().lower().rstrip(".")
+    if raw.startswith("www."):
+        raw = raw[4:]
+    return raw
+
+
 def build_site_profile_content_hash(payload: Dict[str, Any]) -> str:
     normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()
@@ -300,6 +325,147 @@ def ensure_target_site_profile(
     return record
 
 
+def build_combined_target_profile(
+    *,
+    target_site_url: str,
+    target_site_root_url: Optional[str],
+    exact_profile: Dict[str, Any],
+    root_profile: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    root_payload = dict(root_profile or {})
+    exact_payload = dict(exact_profile or {})
+    normalized_target_url = normalize_site_profile_url(target_site_url)
+    normalized_root_url = normalize_site_profile_url(target_site_root_url or "") or derive_site_root_url(target_site_url)
+
+    def _merge_strings(*values: Any) -> str:
+        for value in values:
+            cleaned = str(value or "").strip()
+            if cleaned:
+                return cleaned
+        return ""
+
+    merged_topics = _dedupe_preserve_order(
+        _coerce_string_list(root_payload.get("topics")) + _coerce_string_list(exact_payload.get("topics"))
+    )
+    merged_contexts = _dedupe_preserve_order(
+        _coerce_string_list(root_payload.get("contexts")) + _coerce_string_list(exact_payload.get("contexts"))
+    )
+    merged_keywords = _dedupe_preserve_order(
+        _coerce_string_list(exact_payload.get("repeated_keywords")) + _coerce_string_list(root_payload.get("repeated_keywords"))
+    )
+    merged_headings = _dedupe_preserve_order(
+        _coerce_string_list(exact_payload.get("visible_headings")) + _coerce_string_list(root_payload.get("visible_headings"))
+    )
+    merged_titles = _dedupe_preserve_order(
+        _coerce_string_list(exact_payload.get("sample_page_titles")) + _coerce_string_list(root_payload.get("sample_page_titles"))
+    )
+    merged_urls = _dedupe_preserve_order(
+        [normalized_target_url]
+        + _coerce_string_list(exact_payload.get("sample_urls"))
+        + ([normalized_root_url] if normalized_root_url and normalized_root_url != normalized_target_url else [])
+        + _coerce_string_list(root_payload.get("sample_urls"))
+    )
+    merged_services = _dedupe_preserve_order(
+        _coerce_string_list(root_payload.get("services_or_products")) + _coerce_string_list(exact_payload.get("services_or_products"))
+    )
+    merged_clusters = _dedupe_preserve_order(
+        _coerce_string_list(root_payload.get("topic_clusters")) + _coerce_string_list(exact_payload.get("topic_clusters"))
+    )
+
+    return {
+        "normalized_url": normalized_target_url,
+        "source_url": normalized_target_url,
+        "site_root_url": normalized_root_url,
+        "page_title": _merge_strings(exact_payload.get("page_title"), root_payload.get("page_title")),
+        "meta_description": _merge_strings(exact_payload.get("meta_description"), root_payload.get("meta_description")),
+        "visible_headings": merged_headings[:18],
+        "repeated_keywords": merged_keywords[:18],
+        "sample_page_titles": merged_titles[:8],
+        "sample_urls": merged_urls[:8],
+        "domain_level_topic": _merge_strings(root_payload.get("domain_level_topic"), exact_payload.get("domain_level_topic")),
+        "primary_context": _merge_strings(root_payload.get("primary_context"), exact_payload.get("primary_context")),
+        "topics": merged_topics[:18],
+        "contexts": merged_contexts[:12],
+        "content_tone": _merge_strings(exact_payload.get("content_tone"), root_payload.get("content_tone")),
+        "content_style": _merge_strings(root_payload.get("content_style"), exact_payload.get("content_style")),
+        "site_categories": _dedupe_preserve_order(
+            _coerce_string_list(root_payload.get("site_categories")) + _coerce_string_list(exact_payload.get("site_categories"))
+        )[:12],
+        "topic_clusters": merged_clusters[:12],
+        "prominent_titles": _dedupe_preserve_order(
+            _coerce_string_list(root_payload.get("prominent_titles")) + _coerce_string_list(exact_payload.get("prominent_titles"))
+        )[:8],
+        "business_type": _merge_strings(root_payload.get("business_type"), exact_payload.get("business_type")),
+        "services_or_products": merged_services[:18],
+        "business_intent": _merge_strings(root_payload.get("business_intent"), exact_payload.get("business_intent"), "informational"),
+        "commerciality": max(
+            float(root_payload.get("commerciality") or 0),
+            float(exact_payload.get("commerciality") or 0),
+        ),
+        "page_count": int(exact_payload.get("page_count") or 0) + int(root_payload.get("page_count") or 0),
+        "profile_generated_at": _merge_strings(
+            exact_payload.get("profile_generated_at"),
+            root_payload.get("profile_generated_at"),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+        "profile_components": {
+            "exact_url": normalized_target_url,
+            "root_url": normalized_root_url,
+            "used_root_profile": bool(root_payload),
+        },
+    }
+
+
+def get_combined_target_profile(
+    db: Session,
+    *,
+    target_site_url: str,
+    target_site_root_url: Optional[str] = None,
+    client_target_site_id: Optional[UUID] = None,
+    timeout_seconds: int = 10,
+    max_pages: int = 3,
+    force_refresh: bool = False,
+) -> Tuple[Dict[str, Any], str, SiteProfileCache, Optional[SiteProfileCache]]:
+    exact_record = ensure_target_site_profile(
+        db,
+        target_site_url=target_site_url,
+        client_target_site_id=client_target_site_id,
+        timeout_seconds=timeout_seconds,
+        max_pages=max_pages,
+        force_refresh=force_refresh,
+    )
+    normalized_root_url = normalize_site_profile_url(target_site_root_url or "") or derive_site_root_url(target_site_url)
+    exact_normalized_url = normalize_site_profile_url(target_site_url)
+    root_record: Optional[SiteProfileCache] = None
+    if normalized_root_url and normalized_root_url != exact_normalized_url:
+        root_record = ensure_target_site_profile(
+            db,
+            target_site_url=normalized_root_url,
+            client_target_site_id=client_target_site_id,
+            timeout_seconds=timeout_seconds,
+            max_pages=max_pages,
+            force_refresh=force_refresh,
+        )
+    combined_payload = build_combined_target_profile(
+        target_site_url=target_site_url,
+        target_site_root_url=normalized_root_url,
+        exact_profile=dict(exact_record.payload or {}),
+        root_profile=dict(root_record.payload or {}) if root_record and isinstance(root_record.payload, dict) else None,
+    )
+    component_hashes = [
+        str(exact_record.content_hash or "").strip(),
+        str(root_record.content_hash or "").strip() if root_record is not None else "",
+    ]
+    combined_hash = build_site_profile_content_hash(
+        {
+            "exact_url": exact_normalized_url,
+            "root_url": normalized_root_url,
+            "component_hashes": component_hashes,
+        }
+    )
+    return combined_payload, combined_hash, exact_record, root_record
+
+
 def score_publishing_site_fit(
     publishing_profile: Dict[str, Any],
     target_profile: Dict[str, Any],
@@ -385,6 +551,7 @@ def top_ranked_publishing_sites_for_target(
     db: Session,
     *,
     target_site_url: str,
+    target_site_root_url: Optional[str] = None,
     candidate_sites: Sequence[Site],
     client_target_site_id: Optional[UUID] = None,
     timeout_seconds: int = 10,
@@ -392,15 +559,15 @@ def top_ranked_publishing_sites_for_target(
     min_score: int = 18,
     limit: int = 5,
     business_priority_weights: Optional[Dict[str, int]] = None,
-) -> Tuple[Dict[str, Any], Optional[SiteProfileCache], List[Dict[str, Any]]]:
-    target_profile_record = ensure_target_site_profile(
+) -> Tuple[Dict[str, Any], str, List[Dict[str, Any]]]:
+    target_profile, target_profile_content_hash, _, _ = get_combined_target_profile(
         db,
         target_site_url=target_site_url,
+        target_site_root_url=target_site_root_url,
         client_target_site_id=client_target_site_id,
         timeout_seconds=timeout_seconds,
         max_pages=max_pages,
     )
-    target_profile = dict(target_profile_record.payload or {})
     ranked: List[Dict[str, Any]] = []
     weights = business_priority_weights or {}
     for site in candidate_sites:
@@ -437,27 +604,28 @@ def top_ranked_publishing_sites_for_target(
             }
         )
     ranked.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
-    return target_profile, target_profile_record, ranked[: max(1, limit)]
+    return target_profile, target_profile_content_hash, ranked[: max(1, limit)]
 
 
 def select_best_publishing_site_for_target(
     db: Session,
     *,
     target_site_url: str,
+    target_site_root_url: Optional[str] = None,
     candidate_sites: Sequence[Site],
     client_target_site_id: Optional[UUID] = None,
     timeout_seconds: int = 10,
     max_pages: int = 3,
     min_score: int = 18,
-) -> Tuple[Optional[Site], Dict[str, Any], Optional[SiteProfileCache], List[Dict[str, Any]]]:
-    target_profile_record = ensure_target_site_profile(
+) -> Tuple[Optional[Site], Dict[str, Any], str, List[Dict[str, Any]]]:
+    target_profile, target_profile_content_hash, _, _ = get_combined_target_profile(
         db,
         target_site_url=target_site_url,
+        target_site_root_url=target_site_root_url,
         client_target_site_id=client_target_site_id,
         timeout_seconds=timeout_seconds,
         max_pages=max_pages,
     )
-    target_profile = dict(target_profile_record.payload or {})
     ranked: List[Dict[str, Any]] = []
     for site in candidate_sites:
         try:
@@ -485,9 +653,9 @@ def select_best_publishing_site_for_target(
     ranked.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
     best = ranked[0] if ranked else None
     if best is None or int(best.get("score") or 0) < min_score:
-        return None, target_profile, target_profile_record, ranked[:8]
+        return None, target_profile, target_profile_content_hash, ranked[:8]
     selected = next((site for site in candidate_sites if str(site.id) == str(best.get("site_id"))), None)
-    return selected, target_profile, target_profile_record, ranked[:8]
+    return selected, target_profile, target_profile_content_hash, ranked[:8]
 
 
 def _build_snapshot_pages(site_url: str, *, timeout_seconds: int, max_pages: int) -> List[Dict[str, Any]]:

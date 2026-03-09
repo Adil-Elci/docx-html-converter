@@ -10,7 +10,7 @@ python -m scripts.site_profiling.sync_site_profiles --target-only --force-refres
 
 The script profiles:
 - active publishing sites from `publishing_sites`
-- target URLs from `client_target_sites` when `target_site_url` is set
+- target page URLs and derived root URLs from `client_target_sites`
 
 It writes to:
 - `site_profile_cache`

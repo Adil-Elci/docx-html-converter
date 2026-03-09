@@ -50,6 +50,7 @@ class ClientTargetSite(Base):
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     target_site_domain = Column(Text, nullable=True)
     target_site_url = Column(Text, nullable=True)
+    target_site_root_url = Column(Text, nullable=True)
     is_primary = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

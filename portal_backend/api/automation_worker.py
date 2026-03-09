@@ -22,6 +22,7 @@ from .automation_service import (
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .portal_models import (
     Asset,
+    ClientTargetSite,
     CreatorOutput,
     Job,
     JobEvent,
@@ -33,7 +34,7 @@ from .portal_models import (
 )
 from .site_profiles import (
     ensure_publishing_site_profile,
-    ensure_target_site_profile,
+    get_combined_target_profile,
     get_latest_site_profile,
     normalize_site_profile_url,
 )
@@ -675,6 +676,11 @@ class AutomationJobWorker:
             publishing_profile_content_hash = ""
             if creator_mode:
                 if target_site_url:
+                    target_root_url = ""
+                    if target_site_id:
+                        target_row = session.query(ClientTargetSite).filter(ClientTargetSite.id == target_site_id).first()
+                        if target_row is not None:
+                            target_root_url = str(target_row.target_site_root_url or "").strip()
                     normalized_target_url = normalize_site_analysis_url(target_site_url)
                     latest_phase1_cache = get_latest_site_analysis_cache(
                         session,
@@ -688,25 +694,19 @@ class AutomationJobWorker:
                         phase1_cache_payload = latest_phase1_cache.payload
                         phase1_cache_content_hash = str(latest_phase1_cache.content_hash or "").strip()
                     try:
-                        ensure_target_site_profile(
+                        target_profile_payload, target_profile_content_hash, _, _ = get_combined_target_profile(
                             session,
                             target_site_url=target_site_url,
+                            target_site_root_url=target_root_url or None,
                             client_target_site_id=target_site_id,
                             timeout_seconds=10,
                             max_pages=3,
                         )
                     except Exception:
                         logger.warning("automation.worker.target_profile_ensure_failed job_id=%s", job_id, exc_info=True)
-                    latest_target_profile = get_latest_site_profile(
-                        session,
-                        profile_kind="target_site",
-                        normalized_url=normalize_site_profile_url(target_site_url),
-                        client_target_site_id=target_site_id,
-                    )
-                if latest_target_profile and isinstance(latest_target_profile.payload, dict):
-                    target_profile_payload = latest_target_profile.payload
-                    target_profile_content_hash = str(latest_target_profile.content_hash or "").strip()
                 elif creator_mode:
+                    raise RuntimeError("Target site profile is required before running Creator.")
+                if not target_profile_payload:
                     raise RuntimeError("Target site profile is required before running Creator.")
 
                 normalized_site_url = normalize_site_analysis_url(site.site_url)

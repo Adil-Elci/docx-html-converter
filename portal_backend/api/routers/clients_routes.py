@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
 from typing import Dict, List, Optional
 from uuid import UUID
 
@@ -13,6 +14,68 @@ from ..portal_models import Client, ClientTargetSite, User
 from ..portal_schemas import ClientCreate, ClientOut, ClientTargetSiteIn, ClientTargetSiteOut, ClientUpdate
 
 router = APIRouter(prefix="/clients", tags=["clients"])
+
+
+def _normalize_target_domain(value: Optional[str]) -> Optional[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = (parsed.netloc or parsed.path or "").strip().lower().rstrip("/")
+    host = host.split("/")[0].strip().lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def _normalize_target_url(value: Optional[str]) -> Optional[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = (parsed.netloc or "").strip().lower().rstrip("/")
+    if not host:
+        return None
+    path = parsed.path or ""
+    return f"{(parsed.scheme or 'https').lower()}://{host}{path}".rstrip("/") or None
+
+
+def _derive_target_root_url(*, target_site_url: Optional[str], target_site_domain: Optional[str]) -> Optional[str]:
+    normalized_url = _normalize_target_url(target_site_url)
+    if normalized_url:
+        parsed = urlparse(normalized_url)
+        host = (parsed.netloc or "").strip().lower().rstrip("/")
+        if host:
+            return f"{(parsed.scheme or 'https').lower()}://{host}"
+    normalized_domain = _normalize_target_domain(target_site_domain)
+    if normalized_domain:
+        return f"https://{normalized_domain}"
+    return None
+
+
+def _normalize_target_site_row(
+    *,
+    target_site_domain: Optional[str],
+    target_site_url: Optional[str],
+    target_site_root_url: Optional[str],
+    is_primary: bool,
+) -> Dict[str, object]:
+    normalized_url = _normalize_target_url(target_site_url)
+    normalized_domain = _normalize_target_domain(target_site_domain or normalized_url)
+    normalized_root_url = _normalize_target_url(target_site_root_url) or _derive_target_root_url(
+        target_site_url=normalized_url,
+        target_site_domain=normalized_domain,
+    )
+    if not normalized_url and normalized_root_url:
+        normalized_url = normalized_root_url
+    if not normalized_domain and normalized_root_url:
+        normalized_domain = _normalize_target_domain(normalized_root_url)
+    return {
+        "target_site_domain": normalized_domain,
+        "target_site_url": normalized_url,
+        "target_site_root_url": normalized_root_url,
+        "is_primary": is_primary,
+    }
 
 
 def _normalize_target_site_payloads(
@@ -34,21 +97,23 @@ def _normalize_target_site_payloads(
             else:
                 is_primary = index == 0
             rows.append(
-                {
-                    "target_site_domain": item.target_site_domain,
-                    "target_site_url": item.target_site_url,
-                    "is_primary": is_primary,
-                }
+                _normalize_target_site_row(
+                    target_site_domain=item.target_site_domain,
+                    target_site_url=item.target_site_url,
+                    target_site_root_url=item.target_site_root_url,
+                    is_primary=is_primary,
+                )
             )
     else:
         has_legacy = bool((legacy_primary_domain or "").strip()) or bool((legacy_backlink_url or "").strip())
         if has_legacy:
             rows.append(
-                {
-                    "target_site_domain": (legacy_primary_domain or "").strip() or None,
-                    "target_site_url": (legacy_backlink_url or "").strip() or None,
-                    "is_primary": True,
-                }
+                _normalize_target_site_row(
+                    target_site_domain=(legacy_primary_domain or "").strip() or None,
+                    target_site_url=(legacy_backlink_url or "").strip() or None,
+                    target_site_root_url=None,
+                    is_primary=True,
+                )
             )
 
     # De-duplicate exact domain/url pairs while preserving order.
@@ -84,6 +149,7 @@ def _replace_client_target_sites(db: Session, client: Client, rows: List[Dict[st
                 client_id=client.id,
                 target_site_domain=row.get("target_site_domain"),
                 target_site_url=row.get("target_site_url"),
+                target_site_root_url=row.get("target_site_root_url"),
                 is_primary=bool(row.get("is_primary")),
             )
         )
@@ -121,6 +187,7 @@ def _client_to_out(client: Client, target_sites: Optional[List[ClientTargetSite]
                 client_id=row.client_id,
                 target_site_domain=row.target_site_domain,
                 target_site_url=row.target_site_url,
+                target_site_root_url=row.target_site_root_url,
                 is_primary=bool(row.is_primary),
                 created_at=row.created_at,
                 updated_at=row.updated_at,

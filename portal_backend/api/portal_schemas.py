@@ -177,9 +177,10 @@ class AdminUserOut(UserOut):
 class ClientTargetSiteIn(BaseModel):
     target_site_domain: Optional[str] = None
     target_site_url: Optional[str] = None
+    target_site_root_url: Optional[str] = None
     is_primary: bool = False
 
-    @validator("target_site_domain", "target_site_url")
+    @validator("target_site_domain", "target_site_url", "target_site_root_url")
     def optional_trimmed_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
@@ -198,6 +199,7 @@ class ClientTargetSiteOut(BaseModel):
     client_id: UUID
     target_site_domain: Optional[str]
     target_site_url: Optional[str]
+    target_site_root_url: Optional[str]
     is_primary: bool
     created_at: datetime
     updated_at: datetime

@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from .portal_models import ClientTargetSite, Site
-from .site_profiles import ensure_publishing_site_profile, ensure_target_site_profile
+from .site_profiles import ensure_publishing_site_profile, ensure_target_site_profile, normalize_site_profile_url
 
 logger = logging.getLogger("portal_backend.site_profile_sync")
 
@@ -42,21 +42,25 @@ def _select_publishing_sites(session) -> List[Site]:
 def _select_target_site_rows(session) -> List[Tuple[ClientTargetSite, str]]:
     rows = (
         session.query(ClientTargetSite)
-        .filter(ClientTargetSite.target_site_url.isnot(None))
+        .filter(
+            (ClientTargetSite.target_site_url.isnot(None))
+            | (ClientTargetSite.target_site_root_url.isnot(None))
+        )
         .order_by(ClientTargetSite.created_at.asc())
         .all()
     )
     selected: List[Tuple[ClientTargetSite, str]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
-        url = (row.target_site_url or "").strip()
-        if not url:
-            continue
-        key = (str(row.client_id), url)
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append((row, url))
+        for raw_url in ((row.target_site_url or "").strip(), (row.target_site_root_url or "").strip()):
+            url = normalize_site_profile_url(raw_url)
+            if not url:
+                continue
+            key = (str(row.client_id), url)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append((row, url))
     return selected
 
 

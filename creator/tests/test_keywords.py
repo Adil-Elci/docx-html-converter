@@ -4,6 +4,7 @@ from creator.api.pipeline import (
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
+    _align_primary_keyword_to_topic,
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
@@ -178,6 +179,21 @@ def test_select_keywords_keeps_topic_focused_primary_keyword():
     assert result["primary_keyword"] != "eltern sucht ratgeber erziehung familie kinder liebe"
     assert "kinder" in result["primary_keyword"]
     assert "sonnen" in result["primary_keyword"]
+
+
+def test_align_primary_keyword_to_topic_prefers_topic_head():
+    aligned = _align_primary_keyword_to_topic(
+        topic="Kinder Sonnenbrillen: Worauf Eltern beim UV Schutz achten sollten",
+        current_primary="uv schutz fuer kinderaugen",
+        trend_candidates=[
+            "kinder sonnenbrillen",
+            "kindersonnenbrillen uv schutz",
+            "uv schutz fuer kinderaugen",
+        ],
+        keyword_cluster=["kinder", "sonnenbrillen", "uv schutz", "kinderaugen"],
+    )
+
+    assert aligned == "kinder sonnenbrillen"
 
 
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):

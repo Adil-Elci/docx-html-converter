@@ -2189,6 +2189,63 @@ def _keyword_candidate_has_relevance(
     return bool(candidate_tokens & (topic_tokens | cluster_tokens | trend_tokens))
 
 
+def _topic_head_keyword(topic: str) -> str:
+    cleaned = re.split(r"[:|\\-]", str(topic or ""), maxsplit=1)[0]
+    normalized = _normalize_keyword_phrase(cleaned)
+    words = normalized.split()
+    if len(words) > 4:
+        normalized = " ".join(words[:4])
+    return normalized if _is_valid_keyword_phrase(normalized) else ""
+
+
+def _align_primary_keyword_to_topic(
+    *,
+    topic: str,
+    current_primary: str,
+    trend_candidates: List[str],
+    keyword_cluster: List[str],
+) -> str:
+    normalized_topic = _normalize_keyword_phrase(topic)
+    if not normalized_topic:
+        return current_primary
+
+    topic_head = _topic_head_keyword(topic)
+    if current_primary and _keyword_present_relaxed(normalized_topic, current_primary):
+        current_tokens = _keyword_token_set(current_primary)
+        head_tokens = _keyword_token_set(topic_head)
+        if not head_tokens or len(current_tokens & head_tokens) >= max(1, len(head_tokens) - 1):
+            return current_primary
+
+    topic_tokens = _keyword_token_set(normalized_topic)
+    head_tokens = _keyword_token_set(topic_head)
+    cluster_candidates = _dedupe_keyword_phrases(
+        [
+            " ".join(keyword_cluster[:2]),
+            " ".join(keyword_cluster[:3]),
+            " ".join(keyword_cluster[:4]),
+        ]
+    )
+    candidate_pool = _dedupe_keyword_phrases(
+        [topic_head, current_primary] + trend_candidates + cluster_candidates + [normalized_topic]
+    )
+    if not candidate_pool:
+        return current_primary or topic_head or normalized_topic
+    if topic_head and topic_head in candidate_pool:
+        return topic_head
+
+    def _score(item: str) -> tuple[float, int]:
+        item_tokens = _keyword_token_set(item)
+        return (
+            6.0 * len(item_tokens & head_tokens)
+            + 2.0 * len(item_tokens & topic_tokens)
+            - 1.5 * max(0, len(item_tokens) - 3),
+            -len(item_tokens),
+        )
+
+    best = max(candidate_pool, key=_score)
+    return best or current_primary or topic_head or normalized_topic
+
+
 def _select_keywords(
     *,
     topic: str,
@@ -4076,7 +4133,12 @@ def run_creator_pipeline(
         trend_candidates=keyword_discovery.get("trend_candidates") or [],
         faq_candidates=keyword_discovery.get("faq_candidates") or [],
     )
-    phase3["primary_keyword"] = keyword_selection["primary_keyword"]
+    phase3["primary_keyword"] = _align_primary_keyword_to_topic(
+        topic=phase3.get("final_article_topic", ""),
+        current_primary=keyword_selection["primary_keyword"],
+        trend_candidates=keyword_selection.get("trend_candidates") or [],
+        keyword_cluster=keyword_cluster,
+    )
     phase3["secondary_keywords"] = keyword_selection["secondary_keywords"]
     phase3["faq_candidates"] = _ensure_faq_candidates(
         phase3.get("final_article_topic", ""),

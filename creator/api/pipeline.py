@@ -14,7 +14,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from .llm import LLMError, call_llm_json, call_llm_text
-from .site_fit_cache import get_site_fit_cache_entry, upsert_site_fit_cache_entry
 from .trend_cache import (
     get_keyword_trend_cache_entry,
     get_keyword_trend_cache_family_entries,
@@ -914,29 +913,6 @@ def run_pair_fit_pipeline(
     publishing_profile_hash = (publishing_profile_content_hash or "").strip() or _hash_text(
         json.dumps(publishing_profile, sort_keys=True, ensure_ascii=False)
     )
-    cached = None
-    if publishing_site_id:
-        cached = get_site_fit_cache_entry(
-            publishing_site_id=publishing_site_id,
-            target_normalized_url=_normalize_url(target_site_url),
-            publishing_profile_hash=publishing_profile_hash,
-            target_profile_hash=target_profile_hash,
-            prompt_version=PAIR_FIT_PROMPT_VERSION,
-        )
-    if cached and isinstance(cached.get("payload"), dict) and _pair_fit_cache_payload_is_usable(cached["payload"]):
-        pair_fit = dict(cached["payload"])
-        pair_fit["fit_score"] = int(cached.get("fit_score") or pair_fit.get("fit_score") or 0)
-        pair_fit["decision"] = str(cached.get("decision") or pair_fit.get("decision") or "accepted")
-        return {
-            "ok": True,
-            "cached": True,
-            "pair_fit": pair_fit,
-            "publishing_profile_hash": publishing_profile_hash,
-            "target_profile_hash": target_profile_hash,
-            "prompt_version": PAIR_FIT_PROMPT_VERSION,
-            "model_name": str(cached.get("model_name") or ""),
-        }
-
     pair_fit = _run_pair_fit_reasoning(
         requested_topic=(requested_topic or "").strip(),
         exclude_topics=list(exclude_topics or []),
@@ -950,19 +926,6 @@ def run_pair_fit_pipeline(
         timeout_seconds=max(1, _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)),
         usage_collector=None,
     )
-    if publishing_site_id:
-        upsert_site_fit_cache_entry(
-            publishing_site_id=publishing_site_id,
-            client_target_site_id=client_target_site_id or "",
-            target_normalized_url=_normalize_url(target_site_url),
-            publishing_profile_hash=publishing_profile_hash,
-            target_profile_hash=target_profile_hash,
-            prompt_version=PAIR_FIT_PROMPT_VERSION,
-            model_name=planning_model,
-            fit_score=int(pair_fit.get("fit_score") or 0),
-            decision=str(pair_fit.get("decision") or "accepted"),
-            payload=pair_fit,
-        )
     return {
         "ok": True,
         "cached": False,
@@ -3029,12 +2992,12 @@ def run_creator_pipeline(
     site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
-    phase4_max_attempts = max(1, _read_int_env("CREATOR_PHASE4_MAX_ATTEMPTS", 1))
-    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
+    phase4_max_attempts = 1
+    phase5_max_attempts = 1
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 3000)
-    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1800)
-    phase5_fallback_expand_passes = _read_non_negative_int_env("CREATOR_PHASE5_FALLBACK_EXPAND_PASSES", 0)
-    phase7_repair_attempts = _read_non_negative_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 0)
+    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    phase5_fallback_expand_passes = 0
+    phase7_repair_attempts = 0
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
     internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
     internal_link_candidates_max = max(internal_link_max, _read_int_env("CREATOR_INTERNAL_LINK_CANDIDATES_MAX", 10))
@@ -3207,14 +3170,9 @@ def run_creator_pipeline(
     }
     phase2 = _merge_phase2_analysis(
         phase2,
-        _coerce_phase2_payload(phase2_cache_payload),
+        None,
         inventory_categories=inventory_topic_insights.get("site_categories") or [],
     )
-    if phase2_cache_payload and (phase2_cache_content_hash or "").strip() == publishing_content_hash:
-        phase2_cache_hit = True
-        phase2_cache_meta["cache_hit"] = True
-    elif phase2_cache_payload:
-        phase2_cache_warm = True
     debug["phase2_cache_hit"] = phase2_cache_hit
     debug["phase2_snapshot"] = {
         "page_count": len(publishing_snapshot.get("pages") or []),
@@ -3239,49 +3197,22 @@ def run_creator_pipeline(
         json.dumps(publishing_profile_for_fit, sort_keys=True, ensure_ascii=False)
     )
     pair_fit = None
-    cached_pair_fit = None
-    if publishing_site_id:
-        cached_pair_fit = get_site_fit_cache_entry(
-            publishing_site_id=publishing_site_id,
-            target_normalized_url=normalized_target_url,
-            publishing_profile_hash=publishing_profile_hash,
-            target_profile_hash=target_profile_hash,
-            prompt_version=PAIR_FIT_PROMPT_VERSION,
+    try:
+        pair_fit = _run_pair_fit_reasoning(
+            requested_topic=requested_topic,
+            exclude_topics=safe_exclude,
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            target_profile=target_profile_for_fit,
+            publishing_profile=publishing_profile_for_fit,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            planning_model=planning_model,
+            timeout_seconds=http_timeout,
+            usage_collector=_collect_llm_usage,
         )
-    if cached_pair_fit and isinstance(cached_pair_fit.get("payload"), dict) and _pair_fit_cache_payload_is_usable(cached_pair_fit["payload"]):
-        pair_fit = dict(cached_pair_fit["payload"])
-        pair_fit["fit_score"] = int(cached_pair_fit.get("fit_score") or pair_fit.get("fit_score") or 0)
-        pair_fit["decision"] = str(cached_pair_fit.get("decision") or pair_fit.get("decision") or "accepted")
-    else:
-        try:
-            pair_fit = _run_pair_fit_reasoning(
-                requested_topic=requested_topic,
-                exclude_topics=safe_exclude,
-                target_site_url=target_site_url,
-                publishing_site_url=publishing_site_url,
-                target_profile=target_profile_for_fit,
-                publishing_profile=publishing_profile_for_fit,
-                llm_api_key=llm_api_key,
-                llm_base_url=llm_base_url,
-                planning_model=planning_model,
-                timeout_seconds=http_timeout,
-                usage_collector=_collect_llm_usage,
-            )
-        except LLMError as exc:
-            raise CreatorError(f"Pair fit reasoning failed: {exc}") from exc
-        if publishing_site_id:
-            upsert_site_fit_cache_entry(
-                publishing_site_id=publishing_site_id,
-                client_target_site_id=client_target_site_id or "",
-                target_normalized_url=normalized_target_url,
-                publishing_profile_hash=publishing_profile_hash,
-                target_profile_hash=target_profile_hash,
-                prompt_version=PAIR_FIT_PROMPT_VERSION,
-                model_name=planning_model,
-                fit_score=int(pair_fit.get("fit_score") or 0),
-                decision=str(pair_fit.get("decision") or "accepted"),
-                payload=pair_fit,
-            )
+    except LLMError as exc:
+        raise CreatorError(f"Pair fit reasoning failed: {exc}") from exc
     if str(pair_fit.get("decision") or "").strip().lower() == "rejected" or not bool(pair_fit.get("backlink_fit_ok")):
         rejection_reason = str(pair_fit.get("rejection_reason") or pair_fit.get("best_overlap_reason") or "no_natural_semantic_fit").strip()
         raise CreatorError(f"Pair fit rejected: {rejection_reason}")
@@ -3495,28 +3426,7 @@ def run_creator_pipeline(
         break
 
     if not outline:
-        fallback_anchor_text = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
-        fallback_outline = _build_deterministic_outline(
-            topic=phase3["final_article_topic"],
-            primary_keyword=phase3.get("primary_keyword", ""),
-            secondary_keywords=phase3.get("secondary_keywords") or [],
-            faq_candidates=faq_candidates,
-            structured_mode=phase3.get("structured_content_mode", "none"),
-            anchor_text_final=fallback_anchor_text,
-        )
-        outline = {
-            "h1": phase3["title_package"]["h1"],
-            "outline": fallback_outline["outline"],
-            "backlink_placement": fallback_outline["backlink_placement"],
-            "anchor_text_final": fallback_outline["anchor_text_final"],
-        }
-        warnings.append("phase4_outline_fallback_used")
-        debug["phase4_outline_errors"] = outline_errors[:]
-        debug["phase4_outline_fallback"] = {
-            "used": True,
-            "backlink_placement": outline["backlink_placement"],
-            "outline": outline["outline"],
-        }
+        raise CreatorError(f"Phase 4 outline generation failed: {outline_errors}")
 
     phase4 = outline
     debug["faq_generation"] = {
@@ -3723,53 +3633,6 @@ def run_creator_pipeline(
         )
 
         if validation_errors:
-            if all(_is_link_only_error(err) for err in validation_errors):
-                repaired_html = _repair_link_constraints(
-                    article_html=article_html,
-                    backlink_url=backlink_url,
-                    publishing_site_url=publishing_site_url,
-                    internal_links=internal_link_candidates,
-                    internal_link_anchor_map=internal_link_anchor_map,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                    backlink_placement=phase4["backlink_placement"],
-                    anchor_text=phase4["anchor_text_final"],
-                    required_h1=phase4["h1"],
-                )
-                repaired_errors = _collect_article_validation_errors(
-                    article_html=repaired_html,
-                    meta_title=phase3["title_package"]["meta_title"],
-                    meta_description=_build_deterministic_meta_description(
-                        topic=phase3["final_article_topic"],
-                        primary_keyword=phase3["primary_keyword"],
-                        secondary_keywords=phase3.get("secondary_keywords") or [],
-                        structured_mode=phase3.get("structured_content_mode", "none"),
-                    ),
-                    slug=phase3["title_package"]["slug"],
-                    topic=phase3["final_article_topic"],
-                    primary_keyword=phase3.get("primary_keyword", ""),
-                    secondary_keywords=phase3.get("secondary_keywords") or [],
-                    required_h1=phase4["h1"],
-                    structured_mode=phase3.get("structured_content_mode", "none"),
-                    backlink_url=backlink_url,
-                    backlink_placement=phase4["backlink_placement"],
-                    publishing_site_url=publishing_site_url,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                )
-                if not repaired_errors:
-                    warnings.append("phase5_link_constraints_repaired_deterministically")
-                    article_payload = {
-                        "meta_title": llm_out.get("meta_title") or phase4["h1"],
-                        "meta_description": llm_out.get("meta_description") or "",
-                        "slug": llm_out.get("slug") or "",
-                        "excerpt": llm_out.get("excerpt") or "",
-                        "article_html": repaired_html,
-                    }
-                    break
-                validation_errors = repaired_errors
-                article_html = repaired_html
-
             errors.extend(validation_errors)
             last_article_html = article_html
             last_validation_errors = validation_errors
@@ -3785,73 +3648,11 @@ def run_creator_pipeline(
         break
 
     if not article_payload:
-        fallback_payload = _generate_article_by_sections(
-            phase4=phase4,
-            phase3=phase3,
-            backlink_url=backlink_url,
-            publishing_site_url=publishing_site_url,
-            internal_link_candidates=internal_link_candidates,
-            internal_link_anchor_map=internal_link_anchor_map,
-            min_internal_links=effective_internal_min,
-            max_internal_links=effective_internal_max,
-            faq_candidates=faq_prompt_text,
-            structured_mode=phase3.get("structured_content_mode", "none"),
-            llm_api_key=llm_api_key,
-            llm_base_url=llm_base_url,
-            llm_model=writing_model,
-            http_timeout=http_timeout,
-            expand_passes=phase5_fallback_expand_passes,
-            usage_collector=_collect_llm_usage,
-        )
-        if fallback_payload:
-            article_html = (fallback_payload.get("article_html") or "").strip()
-            validation_errors = _collect_article_validation_errors(
-                article_html=article_html,
-                meta_title=phase3["title_package"]["meta_title"],
-                meta_description=_build_deterministic_meta_description(
-                    topic=phase3["final_article_topic"],
-                    primary_keyword=phase3["primary_keyword"],
-                    secondary_keywords=phase3.get("secondary_keywords") or [],
-                    structured_mode=phase3.get("structured_content_mode", "none"),
-                ),
-                slug=phase3["title_package"]["slug"],
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3.get("primary_keyword", ""),
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                required_h1=phase4["h1"],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-                backlink_url=backlink_url,
-                backlink_placement=phase4["backlink_placement"],
-                publishing_site_url=publishing_site_url,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-            )
-            if not validation_errors:
-                article_payload = fallback_payload
-            else:
-                errors.extend(validation_errors)
-
-    if not article_payload:
         raise CreatorError(f"Article generation failed: {errors}")
 
-    # ── post-generation repairs ──────────────────────────────────────
     art_html = (article_payload.get("article_html") or "").strip()
-    art_html = _repair_link_constraints(
-        article_html=art_html,
-        backlink_url=backlink_url,
-        publishing_site_url=publishing_site_url,
-        internal_links=internal_link_candidates,
-        internal_link_anchor_map=internal_link_anchor_map,
-        min_internal_links=effective_internal_min,
-        max_internal_links=effective_internal_max,
-        backlink_placement=phase4["backlink_placement"],
-        anchor_text=phase4.get("anchor_text_final") or "this resource",
-        required_h1=phase4["h1"],
-    )
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
-    art_html = _ensure_required_h1(art_html, phase4["h1"])
-    art_html = _ensure_primary_keyword_in_intro(art_html, phase3.get("primary_keyword", ""))
     article_payload["article_html"] = art_html
     article_payload["meta_title"] = phase3["title_package"]["meta_title"]
     article_payload["slug"] = phase3["title_package"]["slug"]

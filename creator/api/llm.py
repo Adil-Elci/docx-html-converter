@@ -381,8 +381,8 @@ def call_llm_json(
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = _read_env_int("CREATOR_LLM_RETRIES", 0)
-    backoff_seconds = _read_env_float("CREATOR_LLM_RETRY_BACKOFF_SECONDS", 2.0)
+    retries = 0
+    backoff_seconds = 0.0
 
     last_error: Optional[LLMError] = None
     for attempt in range(retries + 1):
@@ -456,8 +456,8 @@ def call_llm_text(
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = _read_env_int("CREATOR_LLM_RETRIES", 0)
-    backoff_seconds = _read_env_float("CREATOR_LLM_RETRY_BACKOFF_SECONDS", 2.0)
+    retries = 0
+    backoff_seconds = 0.0
 
     last_error: Optional[LLMError] = None
     for attempt in range(retries + 1):

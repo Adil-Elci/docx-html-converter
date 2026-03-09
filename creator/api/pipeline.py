@@ -151,8 +151,8 @@ PAIR_FIT_AUDIENCE_TOKENS = {
     "baby", "babys", "eltern", "familie", "familien", "kinder", "kundinnen", "kunden", "leser",
     "leserinnen", "menschen", "nutzer", "patienten", "schueler", "schwangere", "teams",
 }
-PAIR_FIT_ACCEPT_SCORE = 34
-PAIR_FIT_WEAK_SCORE = 26
+PAIR_FIT_ACCEPT_SCORE = 15
+PAIR_FIT_WEAK_SCORE = 14
 PAIR_FIT_CANDIDATE_COUNT = 5
 
 GENERIC_CONCLUSION_PHRASES = (

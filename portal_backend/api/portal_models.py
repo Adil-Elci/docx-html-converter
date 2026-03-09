@@ -387,6 +387,60 @@ class SiteAnalysisCache(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class PublishingSiteArticle(Base):
+    __tablename__ = "publishing_site_articles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('publish','draft','pending','future','private','trash','unavailable','unknown')",
+            name="publishing_site_articles_status_check",
+        ),
+        CheckConstraint(
+            "source IN ('wp_rest','job')",
+            name="publishing_site_articles_source_check",
+        ),
+        UniqueConstraint("publishing_site_id", "wp_post_id", name="publishing_site_articles_site_post_unique"),
+        UniqueConstraint("publishing_site_id", "url", name="publishing_site_articles_site_url_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
+    wp_post_id = Column(BigInteger, nullable=False)
+    url = Column(Text, nullable=False)
+    slug = Column(Text, nullable=True)
+    title = Column(Text, nullable=True)
+    excerpt = Column(Text, nullable=True)
+    status = Column(Text, nullable=False, default="unknown")
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    modified_at = Column(DateTime(timezone=True), nullable=True)
+    source = Column(Text, nullable=False, default="wp_rest")
+    last_synced_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PublishingSiteArticleCategory(Base):
+    __tablename__ = "publishing_site_article_categories"
+    __table_args__ = (
+        UniqueConstraint(
+            "publishing_site_article_id",
+            "wp_category_id",
+            name="publishing_site_article_categories_article_category_unique",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id = Column(
+        "publishing_site_article_id",
+        UUID(as_uuid=True),
+        ForeignKey("publishing_site_articles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    wp_category_id = Column(BigInteger, nullable=False)
+    category_name = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class Asset(Base):
     __tablename__ = "assets"
     __table_args__ = (

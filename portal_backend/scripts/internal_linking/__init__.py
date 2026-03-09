@@ -1,0 +1,1 @@
+"""Internal-link inventory scripts."""

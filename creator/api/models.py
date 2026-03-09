@@ -18,12 +18,32 @@ class Phase2CacheEnvelope(BaseModel):
         return value if isinstance(value, dict) else {}
 
 
+class InternalLinkInventoryItem(BaseModel):
+    url: HttpUrl
+    title: str = ""
+    excerpt: str = ""
+    slug: str = ""
+    categories: List[str] = Field(default_factory=list)
+    published_at: str = ""
+
+    @validator("title", "excerpt", "slug", "published_at", pre=True, always=True)
+    def _trim_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @validator("categories", pre=True, always=True)
+    def _clean_categories(cls, value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+
 class CreatorRequest(BaseModel):
     target_site_url: HttpUrl
     publishing_site_url: HttpUrl = Field(..., description="Publishing site URL (required for analysis)")
     anchor: Optional[str] = None
     topic: Optional[str] = None
     exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
+    internal_link_inventory: List[InternalLinkInventoryItem] = Field(default_factory=list)
     phase1_cache: Optional[Phase2CacheEnvelope] = None
     phase2_cache: Optional[Phase2CacheEnvelope] = None
     dry_run: bool = False

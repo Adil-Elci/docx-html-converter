@@ -25,6 +25,7 @@ from ..automation_service import (
     wp_update_post_featured_media,
 )
 from ..db import get_db
+from ..internal_linking import upsert_publishing_site_article
 from ..portal_models import Asset, Client, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
     AssetCreate,
@@ -547,6 +548,15 @@ def publish_pending_job(
     wp_post_url = post_payload.get("link")
     if isinstance(wp_post_url, str) and wp_post_url.strip():
         job.wp_post_url = wp_post_url.strip()
+    article = upsert_publishing_site_article(
+        db,
+        site_id=site.id,
+        post_payload=post_payload,
+        source="job",
+        synced_at=now,
+    )
+    if article is not None:
+        db.add(article)
     submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
     if submission:
         submission.post_status = "publish"

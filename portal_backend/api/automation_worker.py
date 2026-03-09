@@ -19,6 +19,7 @@ from .automation_service import (
     run_submit_article_pipeline,
     run_create_article_pipeline,
 )
+from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .portal_models import (
     Asset,
     CreatorOutput,
@@ -387,6 +388,7 @@ class AutomationJobWorker:
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
+                    internal_link_inventory=payload.get("internal_link_inventory") or [],
                     phase1_cache_payload=payload.get("phase1_cache_payload"),
                     phase1_cache_content_hash=payload.get("phase1_cache_content_hash"),
                     phase2_cache_payload=payload.get("phase2_cache_payload"),
@@ -682,6 +684,10 @@ class AutomationJobWorker:
                     phase2_cache_payload = latest_phase2_cache.payload
                     phase2_cache_content_hash = str(latest_phase2_cache.content_hash or "").strip()
 
+            internal_link_inventory: List[Dict[str, Any]] = []
+            if creator_mode:
+                internal_link_inventory = build_creator_internal_link_inventory(session, site_id=site.id, limit=60)
+
             return {
                 "source_url": source_url,
                 "converter_publishing_site": converter_publishing_site,
@@ -700,6 +706,7 @@ class AutomationJobWorker:
                 "anchor": anchor,
                 "topic": topic,
                 "exclude_topics": exclude_topics,
+                "internal_link_inventory": internal_link_inventory,
                 "target_site_id": str(target_site_id) if target_site_id else "",
                 "phase1_cache_payload": phase1_cache_payload,
                 "phase1_cache_content_hash": phase1_cache_content_hash,
@@ -736,6 +743,15 @@ class AutomationJobWorker:
                 job.wp_post_id = int(wp_post_id)
             if isinstance(wp_post_url, str) and wp_post_url.strip():
                 job.wp_post_url = wp_post_url.strip()
+
+            article = upsert_publishing_site_article(
+                session,
+                site_id=job.site_id,
+                post_payload=post_payload,
+                source="job",
+            )
+            if article is not None:
+                session.add(article)
 
             job.job_status = "pending_approval" if bool(job.requires_admin_approval) else "succeeded"
             job.last_error = None
@@ -816,6 +832,15 @@ class AutomationJobWorker:
                 job.wp_post_id = int(wp_post_id)
             if isinstance(wp_post_url, str) and wp_post_url.strip():
                 job.wp_post_url = wp_post_url.strip()
+
+            article = upsert_publishing_site_article(
+                session,
+                site_id=job.site_id,
+                post_payload=post_payload,
+                source="job",
+            )
+            if article is not None:
+                session.add(article)
 
             job.job_status = "pending_approval" if bool(job.requires_admin_approval) else "succeeded"
             job.last_error = None

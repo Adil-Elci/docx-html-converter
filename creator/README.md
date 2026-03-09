@@ -38,3 +38,4 @@ pytest
 - It fetches and analyzes live target/publishing sites; ensure outbound HTTP is allowed.
 - Keyword enrichment uses German Google Suggest (`hl=de`, `gl=de`) and keeps a lightweight in-process cache for repeated queries.
 - Every article now includes a mandatory `FAQ` section as the final `H2`, with `Fazit` immediately before it.
+- When `portal_backend` provides an indexed internal-link inventory, Creator prefers those same-site article candidates over homepage link extraction.

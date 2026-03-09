@@ -761,6 +761,90 @@ def _select_keywords(
     }
 
 
+def _coerce_internal_link_inventory(items: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        categories = item.get("categories")
+        out.append(
+            {
+                "url": url,
+                "title": str(item.get("title") or "").strip(),
+                "excerpt": str(item.get("excerpt") or "").strip(),
+                "slug": str(item.get("slug") or "").strip(),
+                "categories": [str(value).strip() for value in categories if str(value).strip()] if isinstance(categories, list) else [],
+                "published_at": str(item.get("published_at") or "").strip(),
+            }
+        )
+    return out
+
+
+def _score_internal_link_inventory_item(
+    item: Dict[str, Any],
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+) -> float:
+    topic_tokens = _keyword_token_set(topic)
+    primary_tokens = _keyword_token_set(primary_keyword)
+    secondary_tokens = _keyword_token_set(" ".join(secondary_keywords))
+    title_tokens = _keyword_token_set(str(item.get("title") or ""))
+    excerpt_tokens = _keyword_token_set(str(item.get("excerpt") or ""))
+    category_tokens = _keyword_token_set(" ".join(item.get("categories") or []))
+    combined = title_tokens | excerpt_tokens | category_tokens
+    if not combined:
+        return 0.0
+    score = 0.0
+    score += 4.0 * len(combined & topic_tokens)
+    score += 3.0 * len(combined & primary_tokens)
+    score += 1.5 * len(combined & secondary_tokens)
+    score += min(1.0, len(title_tokens) * 0.2)
+    if str(item.get("published_at") or "").strip():
+        score += 0.3
+    return score
+
+
+def _rank_internal_link_inventory(
+    items: List[Dict[str, Any]],
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    publishing_site_url: str,
+    backlink_url: str,
+    max_items: int,
+) -> List[Dict[str, Any]]:
+    normalized_items = _coerce_internal_link_inventory(items)
+    filtered: List[Dict[str, Any]] = []
+    for item in normalized_items:
+        url = str(item.get("url") or "").strip()
+        if not _is_internal_href(url, publishing_site_url):
+            continue
+        if _normalize_url(url) == _normalize_url(backlink_url):
+            continue
+        filtered.append(item)
+    ranked = sorted(
+        filtered,
+        key=lambda item: _score_internal_link_inventory_item(
+            item,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            secondary_keywords=secondary_keywords,
+        ),
+        reverse=True,
+    )
+    return ranked[:max_items]
+
+
 def _normalize_text_for_keyword_search(value: str) -> str:
     normalized = _normalize_keyword_phrase(value)
     return f" {normalized} " if normalized else " "
@@ -1579,6 +1663,7 @@ def run_creator_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
@@ -1642,6 +1727,8 @@ def run_creator_pipeline(
         llm_api_key = explicit_llm_key or openai_key or anthropic_key
 
     debug["keyword_trends_enabled"] = keyword_trends_enabled
+    provided_internal_link_inventory = _coerce_internal_link_inventory(internal_link_inventory)
+    debug["internal_link_inventory_count"] = len(provided_internal_link_inventory)
 
     def _collect_llm_usage(record: Dict[str, Any]) -> None:
         label = str(record.get("label") or "unspecified")
@@ -1740,24 +1827,15 @@ def run_creator_pipeline(
     publishing_content_hash = _hash_text(publishing_text)
     normalized_publishing_url = _normalize_url(publishing_site_url)
     raw_internal_links = extract_internal_links(publishing_html, publishing_site_url, limit=internal_link_candidates_max)
-    internal_link_candidates = _normalize_internal_link_candidates(
+    homepage_internal_link_candidates = _normalize_internal_link_candidates(
         raw_internal_links,
         publishing_site_url=publishing_site_url,
         backlink_url=backlink_url,
         max_items=internal_link_candidates_max,
     )
-    effective_internal_min = min(internal_link_min, len(internal_link_candidates))
-    effective_internal_max = min(internal_link_max, len(internal_link_candidates))
-    if effective_internal_max < effective_internal_min:
-        effective_internal_max = effective_internal_min
-    debug["internal_linking"] = {
-        "configured_min": internal_link_min,
-        "configured_max": internal_link_max,
-        "effective_min": effective_internal_min,
-        "effective_max": effective_internal_max,
-        "candidate_count": len(internal_link_candidates),
-        "candidates": internal_link_candidates[:8],
-    }
+    internal_link_candidates: List[str] = []
+    effective_internal_min = 0
+    effective_internal_max = 0
     if not publishing_text:
         warnings.append("publishing_site_fetch_empty")
     phase2 = {
@@ -1915,12 +1993,52 @@ def run_creator_pipeline(
         phase3.get("final_article_topic", ""),
         keyword_selection.get("faq_candidates") or [],
     )
+    ranked_internal_link_inventory = _rank_internal_link_inventory(
+        provided_internal_link_inventory,
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        publishing_site_url=publishing_site_url,
+        backlink_url=backlink_url,
+        max_items=internal_link_candidates_max,
+    )
+    if ranked_internal_link_inventory:
+        internal_link_candidates = _normalize_internal_link_candidates(
+            [str(item.get("url") or "").strip() for item in ranked_internal_link_inventory],
+            publishing_site_url=publishing_site_url,
+            backlink_url=backlink_url,
+            max_items=internal_link_candidates_max,
+        )
+        internal_link_source = "inventory"
+        internal_links_prompt_entries = [
+            f"{(str(item.get('title') or '').strip() or _internal_anchor_text(str(item.get('url') or '')))} -> {str(item.get('url') or '').strip()}"
+            for item in ranked_internal_link_inventory
+            if str(item.get("url") or "").strip()
+        ]
+    else:
+        internal_link_candidates = homepage_internal_link_candidates
+        internal_link_source = "homepage"
+        internal_links_prompt_entries = list(internal_link_candidates)
+    effective_internal_min = min(internal_link_min, len(internal_link_candidates))
+    effective_internal_max = min(internal_link_max, len(internal_link_candidates))
+    if effective_internal_max < effective_internal_min:
+        effective_internal_max = effective_internal_min
     debug["keyword_selection"] = {
         "primary_keyword": phase3["primary_keyword"],
         "secondary_keywords": phase3["secondary_keywords"],
         "trend_candidates": keyword_selection.get("trend_candidates") or [],
         "faq_candidates": keyword_selection.get("faq_candidates") or [],
         "query_variants": keyword_discovery.get("query_variants") or [],
+    }
+    debug["internal_linking"] = {
+        "configured_min": internal_link_min,
+        "configured_max": internal_link_max,
+        "effective_min": effective_internal_min,
+        "effective_max": effective_internal_max,
+        "candidate_count": len(internal_link_candidates),
+        "candidate_source": internal_link_source,
+        "candidates": internal_link_candidates[:8],
+        "inventory_matches": ranked_internal_link_inventory[:5],
     }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
     progress(3, PHASE_LABELS[3], 42)
@@ -2034,7 +2152,7 @@ def run_creator_pipeline(
     backlink_url = phase1["backlink_url"]
     last_article_html = ""
     last_validation_errors: List[str] = []
-    internal_links_prompt_text = internal_link_candidates[:effective_internal_max]
+    internal_links_prompt_text = internal_links_prompt_entries[:effective_internal_max]
     faq_prompt_text = phase3.get("faq_candidates") or []
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:

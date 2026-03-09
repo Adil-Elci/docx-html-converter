@@ -1,4 +1,4 @@
-from creator.api.pipeline import _repair_link_constraints, _validate_link_strategy
+from creator.api.pipeline import _rank_internal_link_inventory, _repair_link_constraints, _validate_link_strategy
 
 
 def test_validate_link_strategy_ok():
@@ -74,3 +74,38 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
         max_internal_links=4,
     )
     assert errors == []
+
+
+def test_rank_internal_link_inventory_prefers_relevant_same_site_articles():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/baby-schlaf-tipps",
+                "title": "Baby Schlaf Tipps fuer die ersten Monate",
+                "excerpt": "Hilfen fuer Eltern bei Schlafproblemen im Alltag",
+                "categories": ["Baby", "Familie"],
+            },
+            {
+                "url": "https://publisher.example.com/immobilien-finanzierung",
+                "title": "Immobilien Finanzierung einfach erklaert",
+                "excerpt": "Ein Leitfaden fuer Kaeufer",
+                "categories": ["Immobilien"],
+            },
+            {
+                "url": "https://other.example.com/baby-tipps",
+                "title": "Externes Baby Thema",
+                "excerpt": "Sollte ignoriert werden",
+                "categories": ["Baby"],
+            },
+        ],
+        topic="Baby Schlafprobleme in den ersten Monaten",
+        primary_keyword="baby schlaf tipps",
+        secondary_keywords=["schlafprobleme baby", "hilfe fuer eltern"],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=3,
+    )
+
+    assert ranked
+    assert ranked[0]["url"] == "https://publisher.example.com/baby-schlaf-tipps"
+    assert all(item["url"].startswith("https://publisher.example.com") for item in ranked)

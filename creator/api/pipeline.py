@@ -3999,7 +3999,7 @@ def run_creator_pipeline(
                 "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
-                "Return JSON only."
+                "Return only the final article HTML. Do not return JSON. Do not return markdown fences."
             )
             user_prompt = (
                 f"H1: {phase4['h1']}\n"
@@ -4019,8 +4019,7 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+                "Return only the final article HTML."
             )
             model_for_attempt = writing_model
             max_tokens = phase5_max_tokens_attempt1
@@ -4039,7 +4038,7 @@ def run_creator_pipeline(
                 "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "Enforce link contract: exactly one backlink to Backlink URL, "
                 f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
-                "Return JSON only."
+                "Return only the fixed article HTML. Do not return JSON. Do not return markdown fences."
             )
             user_prompt = (
                 f"Current article_html:\n{last_article_html}\n\n"
@@ -4059,8 +4058,7 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+                "Return only the fixed article HTML."
             )
             model_for_attempt = writing_model
             max_tokens = phase5_max_tokens_retry
@@ -4082,7 +4080,7 @@ def run_creator_pipeline(
                 "If structured content mode is 'table', include at least one meaningful HTML table. "
                 "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
-                "Do not return markdown fences. Return JSON only."
+                "Return only the final article HTML. Do not return JSON. Do not return markdown fences."
             )
             user_prompt = (
                 f"H1: {phase4['h1']}\n"
@@ -4103,14 +4101,13 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+                "Return only the final article HTML."
             )
             model_for_attempt = writing_model
             max_tokens = phase5_max_tokens_retry
             temperature = 0.2
         try:
-            llm_out = call_llm_json(
+            article_html = call_llm_text(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 api_key=llm_api_key,
@@ -4119,7 +4116,6 @@ def run_creator_pipeline(
                 timeout_seconds=http_timeout,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                allow_html_fallback=False,
                 request_label=f"phase5_attempt_{attempt}",
                 usage_collector=_collect_llm_usage,
             )
@@ -4127,20 +4123,16 @@ def run_creator_pipeline(
             errors.append(str(exc))
             continue
 
-        html_fallback = bool(llm_out.pop("_html_fallback", False))
-        article_html = (llm_out.get("article_html") or "").strip()
+        article_html = (article_html or "").strip()
         if not article_html:
             errors.append("missing_article_html")
             continue
 
         wc = word_count_from_html(article_html)
         logger.info(
-            "creator.phase5.attempt attempt=%s word_count=%s html_fallback=%s",
-            attempt, wc, html_fallback,
+            "creator.phase5.attempt attempt=%s word_count=%s",
+            attempt, wc,
         )
-
-        if html_fallback:
-            warnings.append("llm_html_fallback")
 
         validation_errors = _collect_article_validation_errors(
             article_html=article_html,
@@ -4171,10 +4163,10 @@ def run_creator_pipeline(
             continue
 
         article_payload = {
-            "meta_title": llm_out.get("meta_title") or phase4["h1"],
-            "meta_description": llm_out.get("meta_description") or "",
-            "slug": llm_out.get("slug") or "",
-            "excerpt": llm_out.get("excerpt") or "",
+            "meta_title": phase4["h1"],
+            "meta_description": "",
+            "slug": "",
+            "excerpt": "",
             "article_html": article_html,
         }
         break

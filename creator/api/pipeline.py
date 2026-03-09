@@ -3259,7 +3259,7 @@ def _generate_article_by_sections(
             timeout_seconds=http_timeout,
             max_tokens=3000,
             temperature=0.2,
-            request_label="phase5_fallback_intro",
+            request_label="phase5_section_intro",
             usage_collector=usage_collector,
         )
     except LLMError:
@@ -3323,7 +3323,7 @@ def _generate_article_by_sections(
                 timeout_seconds=http_timeout,
                 max_tokens=3000,
                 temperature=0.2,
-                request_label=f"phase5_fallback_section_{index}",
+                request_label=f"phase5_section_{index}",
                 usage_collector=usage_collector,
             )
         except LLMError:
@@ -3372,7 +3372,7 @@ def _generate_article_by_sections(
                 timeout_seconds=http_timeout,
                 max_tokens=3000,
                 temperature=0.2,
-                request_label="phase5_fallback_expand",
+                request_label="phase5_section_expand",
                 usage_collector=usage_collector,
             )
             article_html += _wrap_paragraphs(extra)
@@ -3933,12 +3933,26 @@ def run_creator_pipeline(
             _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
             for item in outline_items
         )
-        if primary_keyword_phase3 and not (
-            _keyword_present(h1_lower, primary_keyword_phase3)
-            or _keyword_present(outline_h2_combined, primary_keyword_phase3)
-        ):
-            outline_errors.append("primary_keyword_missing_in_outline")
-            continue
+        if primary_keyword_phase3 and not _keyword_present(outline_h2_combined, primary_keyword_phase3):
+            for idx, outline_item in enumerate(outline_items):
+                if not isinstance(outline_item, dict):
+                    continue
+                current_h2 = str(outline_item.get("h2") or "").strip()
+                normalized_h2 = _normalize_keyword_phrase(current_h2)
+                if normalized_h2 in {"fazit", "faq"}:
+                    continue
+                outline_items[idx] = {
+                    **outline_item,
+                    "h2": f"{_format_title_case(phase3['primary_keyword'])}: {current_h2}",
+                }
+                break
+            outline_h2_combined = " ".join(
+                _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
+                for item in outline_items
+            )
+            if not _keyword_present(outline_h2_combined, primary_keyword_phase3):
+                outline_errors.append("primary_keyword_missing_in_outline")
+                continue
         if _normalize_keyword_phrase(str(outline_items[-1].get("h2") or "") if isinstance(outline_items[-1], dict) else str(outline_items[-1])) != "faq":
             outline_errors.append("final_h2_not_faq")
             continue
@@ -3981,49 +3995,71 @@ def run_creator_pipeline(
     faq_prompt_text = phase3.get("faq_candidates") or []
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
-            system_prompt = (
-                f"Write a German (de-DE) SEO blog post in clean HTML. CRITICAL: the article body MUST be {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words "
-                "(aim for about 800 words). Use neutral authoritative tone, "
-                "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
-                "No external links beyond the backlink, no CTA spam, no 'visit our site' language. "
-                f"Include H1 and {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
-                "The penultimate H2 must be titled 'Fazit' and the final H2 must be titled 'FAQ'. "
-                "Each section should have 1-2 substantial paragraphs. "
-                "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
-                "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
-                "Follow the required meta title and slug exactly unless they violate a hard validation rule. "
-                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "In body content, historical years or specific dates only when necessary for factual accuracy. "
-                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If structured content mode is 'list', include at least one meaningful HTML list. "
-                "If structured content mode is 'table', include at least one meaningful HTML table. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
-                "The final 'Fazit' must summarize the specific article topic (not generic text). "
-                "Return only the final article HTML. Do not return JSON. Do not return markdown fences."
+            article_payload = _generate_article_by_sections(
+                phase4=phase4,
+                phase3=phase3,
+                backlink_url=backlink_url,
+                publishing_site_url=publishing_site_url,
+                internal_link_candidates=internal_link_candidates,
+                internal_link_anchor_map=internal_link_anchor_map,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
+                faq_candidates=faq_candidates,
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                llm_api_key=llm_api_key,
+                llm_base_url=llm_base_url,
+                llm_model=writing_model,
+                http_timeout=http_timeout,
+                expand_passes=max(0, phase5_max_attempts - 1),
+                usage_collector=_collect_llm_usage,
             )
-            user_prompt = (
-                f"H1: {phase4['h1']}\n"
-                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
-                f"Required slug: {phase3['title_package']['slug']}\n"
-                f"Target meta_description: {_build_deterministic_meta_description(topic=phase3['final_article_topic'], primary_keyword=phase3['primary_keyword'], secondary_keywords=phase3['secondary_keywords'], structured_mode=phase3.get('structured_content_mode','none'))}\n"
-                f"Outline: {phase4['outline']}\n"
-                f"Backlink placement: {phase4['backlink_placement']}\n"
-                f"Backlink URL: {backlink_url}\n"
-                f"Anchor text: {phase4['anchor_text_final']}\n"
-                f"Primary keyword: {phase3['primary_keyword']}\n"
-                f"Secondary keywords: {phase3['secondary_keywords']}\n"
-                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-                f"FAQ candidates: {faq_prompt_text[:3]}\n"
-                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
-                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
-                "Language: German (de-DE).\n"
-                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Return only the final article HTML."
+            if not article_payload:
+                errors.append("section_generation_failed")
+                continue
+            article_html = (article_payload.get("article_html") or "").strip()
+            if not article_html:
+                errors.append("missing_article_html")
+                continue
+
+            wc = word_count_from_html(article_html)
+            logger.info("creator.phase5.attempt attempt=%s mode=sectioned word_count=%s", attempt, wc)
+
+            validation_errors = _collect_article_validation_errors(
+                article_html=article_html,
+                meta_title=phase3["title_package"]["meta_title"],
+                meta_description=_build_deterministic_meta_description(
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3["primary_keyword"],
+                    secondary_keywords=phase3.get("secondary_keywords") or [],
+                    structured_mode=phase3.get("structured_content_mode", "none"),
+                ),
+                slug=phase3["title_package"]["slug"],
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3.get("primary_keyword", ""),
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                required_h1=phase4["h1"],
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                backlink_url=backlink_url,
+                backlink_placement=phase4["backlink_placement"],
+                publishing_site_url=publishing_site_url,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
             )
-            model_for_attempt = writing_model
-            max_tokens = phase5_max_tokens_attempt1
-            temperature = 0.3
+
+            if validation_errors:
+                errors.extend(validation_errors)
+                last_article_html = article_html
+                last_validation_errors = validation_errors
+                continue
+
+            article_payload = {
+                "meta_title": phase4["h1"],
+                "meta_description": "",
+                "slug": "",
+                "excerpt": article_payload.get("excerpt") or "",
+                "article_html": article_html,
+            }
+            break
         elif last_article_html:
             system_prompt = (
                 "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "

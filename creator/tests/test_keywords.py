@@ -1,8 +1,28 @@
 from creator.api.pipeline import (
+    GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
+    _build_keyword_query_variants,
+    _discover_keyword_candidates,
+    _fetch_google_de_suggestions,
+    _inject_faq_section,
     _select_keywords,
     _validate_keyword_coverage,
 )
+
+
+def test_build_keyword_query_variants_contract():
+    queries = _build_keyword_query_variants(
+        topic="Baby vorbereiten Checkliste",
+        primary_hint="Kliniktasche Checkliste",
+        allowed_topics=["Geburt vorbereiten und Organisation"],
+        max_queries=8,
+    )
+
+    assert queries
+    assert len(queries) <= 8
+    assert queries[0] == "baby vorbereiten checkliste"
+    assert "baby vorbereiten checkliste tipps" in queries
+    assert any(item.startswith("was ist ") for item in queries)
 
 
 def test_select_keywords_contract():
@@ -25,11 +45,92 @@ def test_select_keywords_contract():
             "auswirkungen eltern sucht kinder",
             "beratung bei suchterkrankung in der familie",
         ],
+        faq_candidates=[
+            "was ist eltern sucht in der schwangerschaft",
+            "wie wirkt sich eltern sucht auf kinder aus",
+            "wann brauchen familien professionelle hilfe",
+        ],
     )
 
     assert isinstance(result["primary_keyword"], str) and result["primary_keyword"].strip()
     assert KEYWORD_MIN_SECONDARY <= len(result["secondary_keywords"]) <= 6
     assert len(set(result["secondary_keywords"])) == len(result["secondary_keywords"])
+    assert 1 <= len(result["faq_candidates"]) <= 5
+    assert all(isinstance(item, str) and item.strip() for item in result["faq_candidates"])
+
+
+def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
+    def fake_suggest(query, *, timeout_seconds):
+        if query.startswith("was ist"):
+            return [
+                "was ist eltern sucht in der schwangerschaft",
+                "was hilft bei sucht in der familie",
+            ]
+        return [
+            "eltern sucht schwangerschaft",
+            "hilfe fuer suchtbelastete familien",
+            "auswirkungen eltern sucht kinder",
+        ]
+
+    monkeypatch.setattr("creator.api.pipeline._fetch_google_de_suggestions", fake_suggest)
+
+    result = _discover_keyword_candidates(
+        topic="Eltern-Sucht in der Schwangerschaft",
+        primary_hint="Eltern Sucht Schwangerschaft",
+        keyword_cluster=["eltern", "schwangerschaft", "familie", "sucht"],
+        allowed_topics=["Hilfsangebote fuer Familien in Krisensituationen"],
+        timeout_seconds=2,
+        max_terms=10,
+    )
+
+    assert result["query_variants"]
+    assert "eltern sucht schwangerschaft" in result["trend_candidates"]
+    assert any(item.startswith("was ist ") for item in result["faq_candidates"])
+
+
+def test_inject_faq_section_before_fazit():
+    outline = [
+        {"h2": "Ursachen", "h3": []},
+        {"h2": "Hilfen im Alltag", "h3": []},
+        {"h2": "Fazit", "h3": []},
+    ]
+    updated = _inject_faq_section(
+        outline,
+        [
+            "was ist eltern sucht in der schwangerschaft",
+            "wie wirkt sich eltern sucht auf kinder aus",
+            "wann brauchen familien professionelle hilfe",
+        ],
+    )
+
+    assert len(updated) == 4
+    assert updated[-2]["h2"] == "FAQ"
+    assert updated[-1]["h2"] == "Fazit"
+    assert len(updated[-2]["h3"]) >= 2
+
+
+def test_fetch_google_de_suggestions_uses_cache(monkeypatch):
+    GOOGLE_SUGGEST_CACHE.clear()
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return ["query", ["baby vorbereiten checkliste", "kliniktasche checkliste"]]
+
+    def fake_get(url, params, headers, timeout):
+        calls["count"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr("creator.api.pipeline.requests.get", fake_get)
+
+    first = _fetch_google_de_suggestions("baby vorbereiten checkliste", timeout_seconds=2)
+    second = _fetch_google_de_suggestions("baby vorbereiten checkliste", timeout_seconds=2)
+
+    assert first == second
+    assert calls["count"] == 1
 
 
 def test_validate_keyword_coverage_missing_primary_locations():

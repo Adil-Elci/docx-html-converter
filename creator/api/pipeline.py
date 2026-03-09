@@ -78,6 +78,35 @@ KEYWORD_MIN_WORDS = 2
 KEYWORD_MAX_WORDS = 8
 DEFAULT_INTERNAL_LINK_MIN = 2
 DEFAULT_INTERNAL_LINK_MAX = 4
+KEYWORD_MAX_FAQ = 5
+GOOGLE_SUGGEST_CACHE_TTL_SECONDS = 6 * 60 * 60
+GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
+
+GERMAN_KEYWORD_MODIFIERS = (
+    "tipps",
+    "ratgeber",
+    "checkliste",
+    "hilfe",
+    "erfahrungen",
+    "ursachen",
+    "auswirkungen",
+)
+
+GERMAN_QUESTION_PREFIXES = (
+    "was ist",
+    "wie",
+    "wann",
+    "warum",
+    "welche",
+    "welcher",
+    "welches",
+    "wo",
+    "woran",
+    "kann",
+    "darf",
+)
+
+GOOGLE_SUGGEST_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 class CreatorError(RuntimeError):
@@ -397,15 +426,102 @@ def _extract_candidate_phrases_from_topics(topics: List[str], *, max_phrases: in
     return out[:max_phrases]
 
 
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        normalized = _normalize_keyword_phrase(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _build_keyword_query_variants(
+    *,
+    topic: str,
+    primary_hint: str,
+    allowed_topics: List[str],
+    max_queries: int = 8,
+) -> List[str]:
+    base_phrases = _dedupe_preserve_order(
+        [topic, primary_hint] + _extract_candidate_phrases_from_topics(allowed_topics, max_phrases=2)
+    )
+    if not base_phrases:
+        return []
+
+    queries: List[str] = []
+    primary_base = base_phrases[0]
+    queries.append(primary_base)
+    for modifier in GERMAN_KEYWORD_MODIFIERS[:2]:
+        queries.append(f"{primary_base} {modifier}")
+    queries.extend(
+        [
+            f"was ist {primary_base}",
+            f"wie {primary_base}",
+            f"wann {primary_base}",
+            f"warum {primary_base}",
+        ]
+    )
+    for base in base_phrases[1:2]:
+        queries.append(base)
+        for modifier in GERMAN_KEYWORD_MODIFIERS[:2]:
+            queries.append(f"{base} {modifier}")
+    for modifier in GERMAN_KEYWORD_MODIFIERS[2:4]:
+        queries.append(f"{primary_base} {modifier}")
+
+    deduped = _dedupe_preserve_order(queries)
+    return deduped[:max_queries]
+
+
+def _get_cached_google_suggestions(query: str) -> Optional[List[str]]:
+    normalized_query = _normalize_keyword_phrase(query)
+    if not normalized_query:
+        return None
+    cached = GOOGLE_SUGGEST_CACHE.get(normalized_query)
+    if not cached:
+        return None
+    expires_at = float(cached.get("expires_at") or 0)
+    if expires_at <= time.time():
+        GOOGLE_SUGGEST_CACHE.pop(normalized_query, None)
+        return None
+    results = cached.get("results")
+    if not isinstance(results, list):
+        return None
+    return [str(item).strip() for item in results if str(item).strip()]
+
+
+def _set_cached_google_suggestions(query: str, results: List[str]) -> None:
+    normalized_query = _normalize_keyword_phrase(query)
+    if not normalized_query:
+        return
+    if len(GOOGLE_SUGGEST_CACHE) >= GOOGLE_SUGGEST_CACHE_MAX_ENTRIES:
+        oldest_key = min(
+            GOOGLE_SUGGEST_CACHE,
+            key=lambda key: float(GOOGLE_SUGGEST_CACHE[key].get("stored_at") or 0),
+        )
+        GOOGLE_SUGGEST_CACHE.pop(oldest_key, None)
+    GOOGLE_SUGGEST_CACHE[normalized_query] = {
+        "results": [str(item).strip() for item in results if str(item).strip()],
+        "stored_at": time.time(),
+        "expires_at": time.time() + GOOGLE_SUGGEST_CACHE_TTL_SECONDS,
+    }
+
+
 def _fetch_google_de_suggestions(query: str, *, timeout_seconds: int) -> List[str]:
     cleaned = _normalize_keyword_phrase(query)
     if not cleaned:
         return []
+    cached = _get_cached_google_suggestions(cleaned)
+    if cached is not None:
+        return cached
     url = "https://suggestqueries.google.com/complete/search"
     try:
         response = requests.get(
             url,
             params={"client": "firefox", "hl": "de", "gl": "de", "q": cleaned},
+            headers={"User-Agent": "creator-service/1.0"},
             timeout=timeout_seconds,
         )
         response.raise_for_status()
@@ -422,26 +538,110 @@ def _fetch_google_de_suggestions(query: str, *, timeout_seconds: int) -> List[st
     for item in suggestions_raw:
         if isinstance(item, str) and item.strip():
             out.append(_normalize_keyword_phrase(item))
+    _set_cached_google_suggestions(cleaned, out)
     return out
+
+
+def _looks_like_question_phrase(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return False
+    return any(normalized.startswith(f"{prefix} ") for prefix in GERMAN_QUESTION_PREFIXES)
+
+
+def _rank_keyword_candidates(
+    candidates: List[str],
+    *,
+    topic_tokens: set[str],
+    cluster_tokens: set[str],
+    allowed_tokens: set[str],
+    trend_tokens: set[str],
+    max_items: int,
+) -> List[str]:
+    ranked = sorted(
+        _dedupe_keyword_phrases(candidates),
+        key=lambda item: _score_keyword_candidate(
+            item,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            allowed_tokens=allowed_tokens,
+            trend_tokens=trend_tokens,
+        ),
+        reverse=True,
+    )
+    return ranked[:max_items]
+
+
+def _discover_keyword_candidates(
+    *,
+    topic: str,
+    primary_hint: str,
+    keyword_cluster: List[str],
+    allowed_topics: List[str],
+    timeout_seconds: int,
+    max_terms: int,
+) -> Dict[str, Any]:
+    query_variants = _build_keyword_query_variants(
+        topic=topic,
+        primary_hint=primary_hint,
+        allowed_topics=allowed_topics,
+    )
+    raw_suggestions: List[str] = []
+    for query in query_variants:
+        raw_suggestions.extend(_fetch_google_de_suggestions(query, timeout_seconds=timeout_seconds))
+
+    suggestion_pool = _dedupe_preserve_order(raw_suggestions)
+    keyword_candidates = [item for item in suggestion_pool if not _looks_like_question_phrase(item)]
+    faq_candidates = [item for item in suggestion_pool if _looks_like_question_phrase(item)]
+    if len(faq_candidates) < 3:
+        faq_candidates.extend(item for item in query_variants if _looks_like_question_phrase(item))
+
+    topic_tokens = _keyword_token_set(topic)
+    cluster_tokens = {_normalize_keyword_phrase(item) for item in keyword_cluster if _normalize_keyword_phrase(item)}
+    allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
+    trend_tokens = _keyword_token_set(" ".join(keyword_candidates))
+
+    ranked_keywords = _rank_keyword_candidates(
+        keyword_candidates or query_variants,
+        topic_tokens=topic_tokens,
+        cluster_tokens=cluster_tokens,
+        allowed_tokens=allowed_tokens,
+        trend_tokens=trend_tokens,
+        max_items=max_terms,
+    )
+    ranked_faqs = _rank_keyword_candidates(
+        faq_candidates,
+        topic_tokens=topic_tokens,
+        cluster_tokens=cluster_tokens,
+        allowed_tokens=allowed_tokens,
+        trend_tokens=trend_tokens,
+        max_items=KEYWORD_MAX_FAQ,
+    )
+    return {
+        "query_variants": query_variants,
+        "trend_candidates": ranked_keywords,
+        "faq_candidates": ranked_faqs,
+    }
 
 
 def _fetch_keyword_trend_candidates(
     *,
     topic: str,
     primary_hint: str,
+    keyword_cluster: List[str],
+    allowed_topics: List[str],
     timeout_seconds: int,
     max_terms: int,
 ) -> List[str]:
-    seeds = [_build_topic_phrase(topic)]
-    if primary_hint:
-        seeds.append(_normalize_keyword_phrase(primary_hint))
-    candidates: List[str] = []
-    for seed in seeds:
-        if not seed:
-            continue
-        candidates.extend(_fetch_google_de_suggestions(seed, timeout_seconds=timeout_seconds))
-    deduped = _dedupe_keyword_phrases(candidates)
-    return deduped[:max_terms]
+    discovery = _discover_keyword_candidates(
+        topic=topic,
+        primary_hint=primary_hint,
+        keyword_cluster=keyword_cluster,
+        allowed_topics=allowed_topics,
+        timeout_seconds=timeout_seconds,
+        max_terms=max_terms,
+    )
+    return discovery["trend_candidates"]
 
 
 def _score_keyword_candidate(
@@ -472,10 +672,11 @@ def _select_keywords(
     keyword_cluster: List[str],
     allowed_topics: List[str],
     trend_candidates: List[str],
+    faq_candidates: List[str],
 ) -> Dict[str, Any]:
     topic_phrase = _build_topic_phrase(topic)
     topic_tokens = _keyword_token_set(topic_phrase)
-    cluster_tokens = set(keyword_cluster)
+    cluster_tokens = _keyword_token_set(" ".join(keyword_cluster))
     allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
     trend_tokens = _keyword_token_set(" ".join(trend_candidates))
 
@@ -539,6 +740,14 @@ def _select_keywords(
         "primary_keyword": primary_keyword,
         "secondary_keywords": secondary_keywords[:KEYWORD_MAX_SECONDARY],
         "trend_candidates": trend_candidates,
+        "faq_candidates": _rank_keyword_candidates(
+            faq_candidates,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            allowed_tokens=allowed_tokens,
+            trend_tokens=trend_tokens,
+            max_items=KEYWORD_MAX_FAQ,
+        ),
     }
 
 
@@ -639,6 +848,52 @@ def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondar
 def _contains_generic_conclusion(text: str) -> bool:
     lowered = (text or "").lower()
     return any(phrase in lowered for phrase in GENERIC_CONCLUSION_PHRASES)
+
+
+def _format_faq_question(question: str) -> str:
+    normalized = _normalize_keyword_phrase(question)
+    if not normalized:
+        return ""
+    formatted = normalized[:1].upper() + normalized[1:]
+    if _looks_like_question_phrase(normalized) and not formatted.endswith("?"):
+        formatted += "?"
+    return formatted
+
+
+def _should_include_faq_section(faq_candidates: List[str]) -> bool:
+    usable = [item for item in faq_candidates if _normalize_keyword_phrase(item)]
+    return len(usable) >= 2
+
+
+def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str]) -> List[Any]:
+    if not _should_include_faq_section(faq_candidates):
+        return outline_items
+    if not isinstance(outline_items, list):
+        return outline_items
+
+    normalized_faqs = []
+    for item in faq_candidates:
+        formatted = _format_faq_question(item)
+        if formatted and formatted not in normalized_faqs:
+            normalized_faqs.append(formatted)
+        if len(normalized_faqs) >= 3:
+            break
+    if len(normalized_faqs) < 2:
+        return outline_items
+
+    existing_h2 = [
+        str(item.get("h2") or "").strip().lower() if isinstance(item, dict) else str(item).strip().lower()
+        for item in outline_items
+    ]
+    if any("faq" in heading or "haeufige fragen" in heading for heading in existing_h2):
+        return outline_items
+    if len(outline_items) >= 5:
+        return outline_items
+
+    faq_section = {"h2": "FAQ", "h3": normalized_faqs}
+    if outline_items:
+        return list(outline_items[:-1]) + [faq_section, outline_items[-1]]
+    return [faq_section]
 
 
 def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str]:
@@ -1037,6 +1292,7 @@ def _generate_article_by_sections(
     internal_link_candidates: List[str],
     min_internal_links: int,
     max_internal_links: int,
+    faq_candidates: List[str],
     llm_api_key: str,
     llm_base_url: str,
     llm_model: str,
@@ -1110,6 +1366,11 @@ def _generate_article_by_sections(
             "Write in a neutral authoritative tone in German (de-DE). Do not use bullet lists unless necessary."
             "\nDo not include links unless explicitly requested."
         )
+        if "faq" in h2.lower():
+            section_user += (
+                f"\nThis is the FAQ section. Answer these questions clearly and directly: {faq_candidates[:3]}. "
+                "Use the H3 questions as subheadings and give concise practical answers in German."
+            )
         if "fazit" in h2.lower():
             section_user += (
                 f"\nThis is the final 'Fazit' section. Summarize concrete takeaways for topic: "
@@ -1593,11 +1854,13 @@ def run_creator_pipeline(
                 "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
             }
 
-    trend_candidates: List[str] = []
+    keyword_discovery: Dict[str, Any] = {"query_variants": [], "trend_candidates": [], "faq_candidates": []}
     if keyword_trends_enabled and phase3.get("final_article_topic"):
-        trend_candidates = _fetch_keyword_trend_candidates(
+        keyword_discovery = _discover_keyword_candidates(
             topic=phase3.get("final_article_topic", ""),
             primary_hint=phase3.get("primary_keyword", ""),
+            keyword_cluster=keyword_cluster,
+            allowed_topics=phase2.get("allowed_topics") or [],
             timeout_seconds=keyword_trends_timeout,
             max_terms=keyword_trends_max_terms,
         )
@@ -1607,14 +1870,18 @@ def run_creator_pipeline(
         llm_secondary=phase3.get("secondary_keywords") or [],
         keyword_cluster=keyword_cluster,
         allowed_topics=phase2.get("allowed_topics") or [],
-        trend_candidates=trend_candidates,
+        trend_candidates=keyword_discovery.get("trend_candidates") or [],
+        faq_candidates=keyword_discovery.get("faq_candidates") or [],
     )
     phase3["primary_keyword"] = keyword_selection["primary_keyword"]
     phase3["secondary_keywords"] = keyword_selection["secondary_keywords"]
+    phase3["faq_candidates"] = keyword_selection.get("faq_candidates") or []
     debug["keyword_selection"] = {
         "primary_keyword": phase3["primary_keyword"],
         "secondary_keywords": phase3["secondary_keywords"],
         "trend_candidates": keyword_selection.get("trend_candidates") or [],
+        "faq_candidates": keyword_selection.get("faq_candidates") or [],
+        "query_variants": keyword_discovery.get("query_variants") or [],
     }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
     progress(3, PHASE_LABELS[3], 42)
@@ -1626,10 +1893,13 @@ def run_creator_pipeline(
     outline = None
     phase4 = {}
     outline_errors: List[str] = []
+    faq_candidates = phase3.get("faq_candidates") or []
+    faq_enabled = _should_include_faq_section(faq_candidates)
     for attempt in range(1, 3):
         system_prompt = (
             "Create a German (de-DE) SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
             "Include a concise final H2 titled 'Fazit' (counts toward the 3-5). "
+            "If FAQ candidates are provided and they fit naturally, include one H2 section titled 'FAQ' before 'Fazit'. "
             "Ensure keyword intent mapping: include the primary keyword in H1 and in at least one H2; "
             "cover secondary keywords naturally across remaining H2/H3 headings. "
             f"If H1 includes a year, it must be {current_year} (no other years in titles). "
@@ -1642,6 +1912,7 @@ def run_creator_pipeline(
             f"Allowed topics: {phase2['allowed_topics']}\n"
             f"Primary keyword: {phase3['primary_keyword']}\n"
             f"Secondary keywords: {phase3['secondary_keywords']}\n"
+            f"FAQ candidates: {faq_candidates[:3]}\n"
             f"Anchor provided: {anchor or ''}\n"
             f"Anchor safe: {anchor_safe}\n"
             "Language: German (de-DE).\n"
@@ -1676,6 +1947,7 @@ def run_creator_pipeline(
             continue
         primary_keyword_phase3 = _normalize_keyword_phrase(phase3.get("primary_keyword", ""))
         h1_lower = _normalize_keyword_phrase(h1)
+        outline_items = _inject_faq_section(outline_items, faq_candidates)
         outline_h2_combined = " ".join(
             _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
             for item in outline_items
@@ -1709,6 +1981,16 @@ def run_creator_pipeline(
         raise CreatorError(f"Outline validation failed: {outline_errors}")
 
     phase4 = outline
+    debug["faq_generation"] = {
+        "faq_enabled": faq_enabled,
+        "faq_candidates": faq_candidates[:3],
+        "faq_in_outline": any(
+            "faq" in str(item.get("h2") or "").strip().lower()
+            if isinstance(item, dict)
+            else "faq" in str(item).strip().lower()
+            for item in (phase4.get("outline") or [])
+        ),
+    }
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
     progress(4, PHASE_LABELS[4], 56)
 
@@ -1721,6 +2003,7 @@ def run_creator_pipeline(
     last_article_html = ""
     last_validation_errors: List[str] = []
     internal_links_prompt_text = internal_link_candidates[:effective_internal_max]
+    faq_prompt_text = phase3.get("faq_candidates") or []
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             system_prompt = (
@@ -1735,6 +2018,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Return JSON only."
             )
@@ -1746,6 +2030,7 @@ def run_creator_pipeline(
                 f"Anchor text: {phase4['anchor_text_final']}\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
@@ -1763,6 +2048,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "Include a concise final H2 titled 'Fazit'. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
                 "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
                 "Enforce link contract: exactly one backlink to Backlink URL, "
@@ -1778,6 +2064,7 @@ def run_creator_pipeline(
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
+                f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
@@ -1801,6 +2088,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Do not return markdown fences. Return JSON only."
             )
@@ -1816,6 +2104,7 @@ def run_creator_pipeline(
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"FAQ candidates: {faq_prompt_text[:3]}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
@@ -1959,6 +2248,7 @@ def run_creator_pipeline(
             internal_link_candidates=internal_link_candidates,
             min_internal_links=effective_internal_min,
             max_internal_links=effective_internal_max,
+            faq_candidates=faq_prompt_text,
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
             llm_model=planning_model,
@@ -2161,6 +2451,7 @@ def run_creator_pipeline(
             f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+            "If the outline includes an FAQ section, answer the FAQ H3 headings directly and concretely. "
             "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
             "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
             "Return JSON only."
@@ -2172,6 +2463,7 @@ def run_creator_pipeline(
             f"Backlink URL: {backlink_url}\n"
             f"Placement: {phase4['backlink_placement']}\n"
             f"Anchor text: {phase4['anchor_text_final']}\n"
+            f"FAQ candidates: {(phase3.get('faq_candidates') or [])[:3]}\n"
             f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
             f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
             f"Primary keyword: {phase3['primary_keyword']}\n"

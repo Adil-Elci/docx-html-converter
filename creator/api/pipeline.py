@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import requests
 
 from .llm import LLMError, call_llm_json, call_llm_text
+from .trend_cache import get_keyword_trend_cache_entry, upsert_keyword_trend_cache_entry
 from .validators import (
     count_h2,
     validate_backlink_placement,
@@ -85,6 +86,7 @@ ARTICLE_MIN_H2 = 4
 ARTICLE_MAX_H2 = 6
 GOOGLE_SUGGEST_CACHE_TTL_SECONDS = 6 * 60 * 60
 GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
+DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 FAQ_MIN_QUESTIONS = 3
 FAQ_MIN_WORDS = 80
 
@@ -713,13 +715,33 @@ def _set_cached_google_suggestions(query: str, results: List[str]) -> None:
     }
 
 
-def _fetch_google_de_suggestions(query: str, *, timeout_seconds: int) -> List[str]:
+def _trend_entry_is_fresh(entry: Dict[str, Any]) -> bool:
+    fetched_at_raw = str(entry.get("fetched_at") or "").strip()
+    expires_at_raw = str(entry.get("expires_at") or "").strip()
+    if expires_at_raw:
+        try:
+            expires_at = datetime.datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+            return expires_at > datetime.datetime.now(datetime.timezone.utc)
+        except ValueError:
+            return False
+    if fetched_at_raw:
+        try:
+            fetched_at = datetime.datetime.fromisoformat(fetched_at_raw.replace("Z", "+00:00"))
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=datetime.timezone.utc)
+            age = datetime.datetime.now(datetime.timezone.utc) - fetched_at
+            return age.total_seconds() <= DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS
+        except ValueError:
+            return False
+    return False
+
+
+def _fetch_google_de_suggestions_live(query: str, *, timeout_seconds: int) -> List[str]:
     cleaned = _normalize_keyword_phrase(query)
     if not cleaned:
         return []
-    cached = _get_cached_google_suggestions(cleaned)
-    if cached is not None:
-        return cached
     url = "https://suggestqueries.google.com/complete/search"
     try:
         response = requests.get(
@@ -742,8 +764,81 @@ def _fetch_google_de_suggestions(query: str, *, timeout_seconds: int) -> List[st
     for item in suggestions_raw:
         if isinstance(item, str) and item.strip():
             out.append(_normalize_keyword_phrase(item))
-    _set_cached_google_suggestions(cleaned, out)
     return out
+
+
+def _fetch_google_de_suggestions(
+    query: str,
+    *,
+    timeout_seconds: int,
+    trend_cache_ttl_seconds: int,
+    cache_metadata_collector: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
+    cleaned = _normalize_keyword_phrase(query)
+    if not cleaned:
+        return []
+    cached = _get_cached_google_suggestions(cleaned)
+    if cached is not None:
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append({"query": cleaned, "source": "memory", "status": "fresh"})
+        return cached
+
+    db_entry = get_keyword_trend_cache_entry(cleaned)
+    db_payload = db_entry.get("payload") if isinstance(db_entry, dict) else None
+    db_results = []
+    if isinstance(db_payload, dict):
+        raw = db_payload.get("suggestions")
+        if isinstance(raw, list):
+            db_results = [str(item).strip() for item in raw if str(item).strip()]
+    db_is_fresh = isinstance(db_entry, dict) and _trend_entry_is_fresh(db_entry)
+    if db_results and db_is_fresh:
+        _set_cached_google_suggestions(cleaned, db_results)
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append(
+                {
+                    "query": cleaned,
+                    "source": "db",
+                    "status": "fresh",
+                    "fetched_at": str(db_entry.get("fetched_at") or ""),
+                }
+            )
+        return db_results
+
+    live_results = _fetch_google_de_suggestions_live(cleaned, timeout_seconds=timeout_seconds)
+    if live_results:
+        _set_cached_google_suggestions(cleaned, live_results)
+        upsert_keyword_trend_cache_entry(
+            seed_query=query,
+            normalized_seed_query=cleaned,
+            payload={"suggestions": live_results},
+            ttl_seconds=trend_cache_ttl_seconds,
+        )
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append(
+                {
+                    "query": cleaned,
+                    "source": "live",
+                    "status": "refreshed" if db_results else "miss_refreshed",
+                }
+            )
+        return live_results
+
+    if db_results:
+        _set_cached_google_suggestions(cleaned, db_results)
+        if cache_metadata_collector is not None:
+            cache_metadata_collector.append(
+                {
+                    "query": cleaned,
+                    "source": "db",
+                    "status": "stale_fallback",
+                    "fetched_at": str(db_entry.get("fetched_at") or ""),
+                }
+            )
+        return db_results
+
+    if cache_metadata_collector is not None:
+        cache_metadata_collector.append({"query": cleaned, "source": "none", "status": "empty"})
+    return []
 
 
 def _looks_like_question_phrase(value: str) -> bool:
@@ -784,6 +879,7 @@ def _discover_keyword_candidates(
     allowed_topics: List[str],
     timeout_seconds: int,
     max_terms: int,
+    trend_cache_ttl_seconds: int = DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
 ) -> Dict[str, Any]:
     query_variants = _build_keyword_query_variants(
         topic=topic,
@@ -791,8 +887,16 @@ def _discover_keyword_candidates(
         allowed_topics=allowed_topics,
     )
     raw_suggestions: List[str] = []
+    trend_cache_events: List[Dict[str, Any]] = []
     for query in query_variants:
-        raw_suggestions.extend(_fetch_google_de_suggestions(query, timeout_seconds=timeout_seconds))
+        raw_suggestions.extend(
+            _fetch_google_de_suggestions(
+                query,
+                timeout_seconds=timeout_seconds,
+                trend_cache_ttl_seconds=trend_cache_ttl_seconds,
+                cache_metadata_collector=trend_cache_events,
+            )
+        )
 
     suggestion_pool = _dedupe_preserve_order(raw_suggestions)
     keyword_candidates = [item for item in suggestion_pool if not _looks_like_question_phrase(item)]
@@ -825,6 +929,7 @@ def _discover_keyword_candidates(
         "query_variants": query_variants,
         "trend_candidates": ranked_keywords,
         "faq_candidates": ranked_faqs,
+        "trend_cache_events": trend_cache_events,
     }
 
 
@@ -1928,6 +2033,10 @@ def run_creator_pipeline(
     keyword_trends_enabled = _read_bool_env("CREATOR_KEYWORD_TRENDS_ENABLED", True)
     keyword_trends_timeout = max(1, _read_int_env("CREATOR_KEYWORD_TRENDS_TIMEOUT_SECONDS", 4))
     keyword_trends_max_terms = max(4, min(20, _read_int_env("CREATOR_KEYWORD_TRENDS_MAX_TERMS", 10)))
+    keyword_trend_cache_ttl_seconds = max(
+        3600,
+        _read_int_env("CREATOR_KEYWORD_TREND_CACHE_TTL_SECONDS", DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS),
+    )
     explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -1957,6 +2066,7 @@ def run_creator_pipeline(
         llm_api_key = explicit_llm_key or openai_key or anthropic_key
 
     debug["keyword_trends_enabled"] = keyword_trends_enabled
+    debug["keyword_trend_cache_ttl_seconds"] = keyword_trend_cache_ttl_seconds
     provided_internal_link_inventory = _coerce_internal_link_inventory(internal_link_inventory)
     debug["internal_link_inventory_count"] = len(provided_internal_link_inventory)
 
@@ -2326,6 +2436,7 @@ def run_creator_pipeline(
             allowed_topics=phase2.get("allowed_topics") or [],
             timeout_seconds=keyword_trends_timeout,
             max_terms=keyword_trends_max_terms,
+            trend_cache_ttl_seconds=keyword_trend_cache_ttl_seconds,
         )
     keyword_selection = _select_keywords(
         topic=phase3.get("final_article_topic", ""),
@@ -2388,6 +2499,7 @@ def run_creator_pipeline(
         "trend_candidates": keyword_selection.get("trend_candidates") or [],
         "faq_candidates": keyword_selection.get("faq_candidates") or [],
         "query_variants": keyword_discovery.get("query_variants") or [],
+        "trend_cache_events": keyword_discovery.get("trend_cache_events") or [],
     }
     debug["internal_linking"] = {
         "configured_min": internal_link_min,

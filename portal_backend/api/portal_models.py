@@ -387,6 +387,26 @@ class SiteAnalysisCache(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class KeywordTrendCache(Base):
+    __tablename__ = "keyword_trend_cache"
+    __table_args__ = (
+        CheckConstraint("source IN ('google_suggest')", name="keyword_trend_cache_source_check"),
+        UniqueConstraint("source", "locale", "normalized_seed_query", name="keyword_trend_cache_lookup_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source = Column(Text, nullable=False, default="google_suggest")
+    locale = Column(Text, nullable=False, default="de-DE")
+    seed_query = Column(Text, nullable=False)
+    normalized_seed_query = Column(Text, nullable=False)
+    content_hash = Column(Text, nullable=False)
+    payload = Column(JSONB, nullable=False, default=dict)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class PublishingSiteArticle(Base):
     __tablename__ = "publishing_site_articles"
     __table_args__ = (

@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
+
+from sqlalchemy import Column, DateTime, MetaData, Table, Text, create_engine, select
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.engine import Engine
+
+logger = logging.getLogger("creator.trend_cache")
+
+DEFAULT_TREND_SOURCE = "google_suggest"
+DEFAULT_TREND_LOCALE = "de-DE"
+
+_ENGINE: Optional[Engine] = None
+_METADATA = MetaData()
+KEYWORD_TREND_CACHE = Table(
+    "keyword_trend_cache",
+    _METADATA,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("source", Text, nullable=False),
+    Column("locale", Text, nullable=False),
+    Column("seed_query", Text, nullable=False),
+    Column("normalized_seed_query", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+def _get_database_url() -> str:
+    return (os.getenv("CREATOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+
+
+def _get_engine() -> Optional[Engine]:
+    global _ENGINE
+    database_url = _get_database_url()
+    if not database_url:
+        return None
+    if _ENGINE is None:
+        _ENGINE = create_engine(database_url, pool_pre_ping=True)
+    return _ENGINE
+
+
+def _hash_payload(payload: Dict[str, Any]) -> str:
+    normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def get_keyword_trend_cache_entry(
+    normalized_seed_query: str,
+    *,
+    source: str = DEFAULT_TREND_SOURCE,
+    locale: str = DEFAULT_TREND_LOCALE,
+) -> Optional[Dict[str, Any]]:
+    engine = _get_engine()
+    if engine is None or not normalized_seed_query:
+        return None
+    try:
+        with engine.begin() as connection:
+            row = connection.execute(
+                select(KEYWORD_TREND_CACHE).where(
+                    KEYWORD_TREND_CACHE.c.source == source,
+                    KEYWORD_TREND_CACHE.c.locale == locale,
+                    KEYWORD_TREND_CACHE.c.normalized_seed_query == normalized_seed_query,
+                )
+            ).mappings().first()
+    except Exception:
+        logger.warning("creator.trend_cache.lookup_failed query=%s", normalized_seed_query, exc_info=True)
+        return None
+    return dict(row) if row else None
+
+
+def upsert_keyword_trend_cache_entry(
+    *,
+    seed_query: str,
+    normalized_seed_query: str,
+    payload: Dict[str, Any],
+    ttl_seconds: int,
+    source: str = DEFAULT_TREND_SOURCE,
+    locale: str = DEFAULT_TREND_LOCALE,
+) -> None:
+    engine = _get_engine()
+    if engine is None or not normalized_seed_query:
+        return
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=max(1, ttl_seconds))
+    content_hash = _hash_payload(payload)
+    try:
+        with engine.begin() as connection:
+            existing = connection.execute(
+                select(KEYWORD_TREND_CACHE.c.id).where(
+                    KEYWORD_TREND_CACHE.c.source == source,
+                    KEYWORD_TREND_CACHE.c.locale == locale,
+                    KEYWORD_TREND_CACHE.c.normalized_seed_query == normalized_seed_query,
+                )
+            ).scalar_one_or_none()
+            values = {
+                "source": source,
+                "locale": locale,
+                "seed_query": seed_query,
+                "normalized_seed_query": normalized_seed_query,
+                "content_hash": content_hash,
+                "payload": payload,
+                "fetched_at": now,
+                "expires_at": expires_at,
+                "updated_at": now,
+            }
+            if existing is None:
+                values["id"] = uuid.uuid4()
+                values["created_at"] = now
+                connection.execute(KEYWORD_TREND_CACHE.insert().values(**values))
+            else:
+                connection.execute(
+                    KEYWORD_TREND_CACHE.update()
+                    .where(KEYWORD_TREND_CACHE.c.id == existing)
+                    .values(**values)
+                )
+    except Exception:
+        logger.warning("creator.trend_cache.upsert_failed query=%s", normalized_seed_query, exc_info=True)

@@ -1,4 +1,5 @@
 from creator.api.pipeline import (
+    DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
     _build_site_snapshot,
@@ -9,6 +10,7 @@ from creator.api.pipeline import (
     _inject_faq_section,
     _merge_phase2_analysis,
     _select_keywords,
+    _trend_entry_is_fresh,
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
 )
@@ -64,7 +66,7 @@ def test_select_keywords_contract():
 
 
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
-    def fake_suggest(query, *, timeout_seconds):
+    def fake_suggest(query, *, timeout_seconds, trend_cache_ttl_seconds, cache_metadata_collector=None):
         if query.startswith("was ist"):
             return [
                 "was ist eltern sucht in der schwangerschaft",
@@ -153,11 +155,81 @@ def test_fetch_google_de_suggestions_uses_cache(monkeypatch):
 
     monkeypatch.setattr("creator.api.pipeline.requests.get", fake_get)
 
-    first = _fetch_google_de_suggestions("baby vorbereiten checkliste", timeout_seconds=2)
-    second = _fetch_google_de_suggestions("baby vorbereiten checkliste", timeout_seconds=2)
+    first = _fetch_google_de_suggestions(
+        "baby vorbereiten checkliste",
+        timeout_seconds=2,
+        trend_cache_ttl_seconds=DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+    )
+    second = _fetch_google_de_suggestions(
+        "baby vorbereiten checkliste",
+        timeout_seconds=2,
+        trend_cache_ttl_seconds=DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+    )
 
     assert first == second
     assert calls["count"] == 1
+
+
+def test_fetch_google_de_suggestions_uses_fresh_db_entry(monkeypatch):
+    GOOGLE_SUGGEST_CACHE.clear()
+    monkeypatch.setattr(
+        "creator.api.pipeline.get_keyword_trend_cache_entry",
+        lambda _query: {
+            "payload": {"suggestions": ["baby vorbereiten checkliste", "kliniktasche checkliste"]},
+            "fetched_at": "2026-03-08T10:00:00+00:00",
+            "expires_at": "2026-03-15T10:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr("creator.api.pipeline.requests.get", lambda *args, **kwargs: None)
+
+    result = _fetch_google_de_suggestions(
+        "baby vorbereiten checkliste",
+        timeout_seconds=2,
+        trend_cache_ttl_seconds=DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+    )
+
+    assert "baby vorbereiten checkliste" in result
+
+
+def test_fetch_google_de_suggestions_refreshes_stale_db_entry(monkeypatch):
+    GOOGLE_SUGGEST_CACHE.clear()
+    refreshed = {}
+
+    monkeypatch.setattr(
+        "creator.api.pipeline.get_keyword_trend_cache_entry",
+        lambda _query: {
+            "payload": {"suggestions": ["alte suchanfrage"]},
+            "fetched_at": "2026-02-01T10:00:00+00:00",
+            "expires_at": "2026-02-08T10:00:00+00:00",
+        },
+    )
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return ["query", ["neue suchanfrage", "weitere frage"]]
+
+    monkeypatch.setattr("creator.api.pipeline.requests.get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        "creator.api.pipeline.upsert_keyword_trend_cache_entry",
+        lambda **kwargs: refreshed.update(kwargs),
+    )
+
+    result = _fetch_google_de_suggestions(
+        "baby vorbereiten checkliste",
+        timeout_seconds=2,
+        trend_cache_ttl_seconds=DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+    )
+
+    assert result[0] == "neue suchanfrage"
+    assert refreshed["normalized_seed_query"] == "baby vorbereiten checkliste"
+
+
+def test_trend_entry_is_fresh_with_future_expiry():
+    assert _trend_entry_is_fresh({"expires_at": "2099-01-01T00:00:00+00:00"}) is True
+    assert _trend_entry_is_fresh({"expires_at": "2000-01-01T00:00:00+00:00"}) is False
 
 
 def test_build_site_snapshot_aggregates_multiple_pages(monkeypatch):

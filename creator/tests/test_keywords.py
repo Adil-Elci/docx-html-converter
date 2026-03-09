@@ -11,6 +11,8 @@ from creator.api.pipeline import (
     _compact_pair_fit_profile,
     _build_keyword_query_variants,
     _ensure_primary_keyword_in_intro,
+    _format_faq_question,
+    _insert_backlink,
     _trim_article_to_word_limit,
     _discover_keyword_candidates,
     _derive_trend_query_family,
@@ -114,6 +116,39 @@ def test_select_keywords_filters_low_signal_secondary_phrases():
     assert "wertvolle infos fuer eltern" not in result["secondary_keywords"]
 
 
+def test_select_keywords_filters_unrelated_secondary_topics():
+    result = _select_keywords(
+        topic="Kinder Sonnenbrillen im Sommer",
+        llm_primary="kinder sonnenbrillen",
+        llm_secondary=[
+            "die haarbalance nach der schwangerschaft wiederfinden",
+            "du hast fragen oder interesse an einer zusammenarbeit",
+            "uv schutz fuer kinderaugen",
+            "kindersonnenbrillen fuer den alltag",
+        ],
+        keyword_cluster=["kinder", "sonnenbrillen", "uv schutz", "sommer"],
+        allowed_topics=[
+            "Die Haarbalance nach der Schwangerschaft wiederfinden",
+            "Du hast Fragen oder Interesse an einer Zusammenarbeit",
+            "Kinderaugen vor UV Strahlung schuetzen",
+        ],
+        trend_candidates=[
+            "uv schutz fuer kinderaugen",
+            "kindersonnenbrillen fuer den alltag",
+            "kinder sonnenbrillen sommer",
+            "kinderaugen sonne schutz",
+        ],
+        faq_candidates=[
+            "was ist bei sonnenbrillen fuer kinder wichtig",
+            "wie schuetzt man kinderaugen im sommer",
+            "wann brauchen kinder uv schutz",
+        ],
+    )
+
+    assert "die haarbalance nach der schwangerschaft wiederfinden" not in result["secondary_keywords"]
+    assert "du hast fragen oder interesse an einer zusammenarbeit" not in result["secondary_keywords"]
+
+
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
     def fake_suggest(query, *, timeout_seconds, trend_cache_ttl_seconds, cache_metadata_collector=None):
         if query.startswith("was ist"):
@@ -163,6 +198,10 @@ def test_ensure_faq_candidates_dedupes_similar_questions():
 
     assert len(faqs) == 3
     assert len(set(faqs)) == 3
+
+
+def test_format_faq_question_preserves_explicit_question_mark():
+    assert _format_faq_question("Kindersonnenbrillen richtig waehlen?") == "Kindersonnenbrillen richtig waehlen?"
 
 
 def test_inject_faq_section_after_fazit():
@@ -313,6 +352,26 @@ def test_trim_article_to_word_limit_reduces_overflow():
 
     assert word_count_from_html(trimmed) <= 180
     assert "<h1>Titel</h1>" in trimmed
+
+
+def test_insert_backlink_maps_section_placement_correctly():
+    html = (
+        "<h1>Titel</h1><p>Intro.</p>"
+        "<h2>Erster Abschnitt</h2><p>Text eins.</p>"
+        "<h2>Zweiter Abschnitt</h2><p>Text zwei.</p>"
+    )
+
+    updated = _insert_backlink(
+        html,
+        backlink_url="https://target.example.com",
+        anchor_text="Quelle",
+        placement="section_2",
+    )
+
+    assert 'href="https://target.example.com"' in updated
+    first_section, second_section = updated.split("<h2>Zweiter Abschnitt</h2>")
+    assert 'href="https://target.example.com"' not in first_section
+    assert 'href="https://target.example.com"' in second_section
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

@@ -2125,6 +2125,19 @@ def _score_keyword_candidate(
     return score
 
 
+def _keyword_candidate_has_relevance(
+    candidate: str,
+    *,
+    topic_tokens: set[str],
+    cluster_tokens: set[str],
+    trend_tokens: set[str],
+) -> bool:
+    candidate_tokens = _keyword_token_set(candidate)
+    if not candidate_tokens:
+        return False
+    return bool(candidate_tokens & (topic_tokens | cluster_tokens | trend_tokens))
+
+
 def _select_keywords(
     *,
     topic: str,
@@ -2173,6 +2186,12 @@ def _select_keywords(
             candidate
             for candidate in secondary_pool
             if _keyword_similarity(candidate, primary_keyword) < 0.8
+            and _keyword_candidate_has_relevance(
+                candidate,
+                topic_tokens=topic_tokens,
+                cluster_tokens=cluster_tokens,
+                trend_tokens=trend_tokens,
+            )
         ],
         key=lambda item: _score_keyword_candidate(
             item,
@@ -2639,11 +2658,12 @@ def _contains_generic_conclusion(text: str) -> bool:
 
 
 def _format_faq_question(question: str) -> str:
-    normalized = _normalize_keyword_phrase(question)
+    raw = re.sub(r"\s+", " ", str(question or "").strip())
+    normalized = _normalize_keyword_phrase(raw)
     if not normalized:
         return ""
     formatted = normalized[:1].upper() + normalized[1:]
-    if _looks_like_question_phrase(normalized) and not formatted.endswith("?"):
+    if (raw.endswith("?") or _looks_like_question_phrase(normalized)) and not formatted.endswith("?"):
         formatted += "?"
     return formatted
 
@@ -3257,7 +3277,7 @@ def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: 
 
     index = 0
     try:
-        index = max(0, int(placement.split("_")[1]) - 2)
+        index = max(0, int(placement.split("_")[1]) - 1)
     except Exception:
         index = 0
 

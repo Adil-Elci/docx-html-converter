@@ -1426,6 +1426,29 @@ def _extract_first_paragraph_text(html: str) -> str:
     return _strip_html_tags(match.group(1)).strip() if match else ""
 
 
+def _ensure_primary_keyword_in_intro(html: str, primary_keyword: str) -> str:
+    keyword = _normalize_keyword_phrase(primary_keyword)
+    if not keyword:
+        return html or ""
+    article_html = html or ""
+    intro_text = _extract_first_paragraph_text(article_html)
+    if _keyword_present(intro_text, keyword):
+        return article_html
+
+    sentence = f"{_format_title_case(primary_keyword)} ist dabei ein zentraler Aspekt."
+
+    def _inject(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        stripped = _strip_html_tags(inner).strip()
+        if not stripped:
+            return f"<p>{sentence}</p>"
+        return f"<p>{sentence} {inner.strip()}</p>"
+
+    if re.search(r"<p[^>]*>.*?</p>", article_html, flags=re.IGNORECASE | re.DOTALL):
+        return re.sub(r"<p[^>]*>(.*?)</p>", _inject, article_html, count=1, flags=re.IGNORECASE | re.DOTALL)
+    return f"<p>{sentence}</p>{article_html}"
+
+
 def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondary_keywords: List[str]) -> List[str]:
     errors: List[str] = []
     primary = _normalize_keyword_phrase(primary_keyword)
@@ -2294,6 +2317,7 @@ def _generate_article_by_sections(
     except LLMError:
         intro_raw = ""
     intro_html = _wrap_paragraphs(intro_raw) or "<p></p>"
+    intro_html = _ensure_primary_keyword_in_intro(intro_html, phase3.get("primary_keyword", ""))
     intro_html = _ensure_required_h1(intro_html, phase4.get("h1", ""))
 
     sections_html: List[str] = []
@@ -3504,6 +3528,7 @@ def run_creator_pipeline(
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
     art_html = _ensure_required_h1(art_html, phase4["h1"])
+    art_html = _ensure_primary_keyword_in_intro(art_html, phase3.get("primary_keyword", ""))
     article_payload["article_html"] = art_html
     article_payload["meta_title"] = phase3["title_package"]["meta_title"]
     article_payload["slug"] = phase3["title_package"]["slug"]

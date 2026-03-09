@@ -7,6 +7,7 @@ from creator.api.pipeline import (
     _build_deterministic_outline,
     _build_site_snapshot,
     _build_keyword_query_variants,
+    _ensure_primary_keyword_in_intro,
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
@@ -166,6 +167,19 @@ def test_build_deterministic_outline_produces_valid_structure():
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
     assert "eltern sucht schwangerschaft" in outline["outline"][0]["h2"].lower()
+
+
+def test_ensure_primary_keyword_in_intro_injects_missing_keyword():
+    html = "<h1>Titel</h1><p>Ein sachlicher Einstieg ohne exakten Suchbegriff.</p><h2>Abschnitt</h2><p>Text.</p>"
+
+    updated = _ensure_primary_keyword_in_intro(html, "eltern sucht schwangerschaft")
+
+    assert "Eltern Sucht Schwangerschaft ist dabei ein zentraler Aspekt." in updated
+    assert "primary_keyword_missing_intro" not in _validate_keyword_coverage(
+        updated,
+        "eltern sucht schwangerschaft",
+        ["hilfe fuer familien", "schwangerschaft belastung", "unterstuetzung", "beratung"],
+    )
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

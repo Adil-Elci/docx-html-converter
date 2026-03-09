@@ -3030,9 +3030,9 @@ def run_creator_pipeline(
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
     phase4_max_attempts = max(1, _read_int_env("CREATOR_PHASE4_MAX_ATTEMPTS", 1))
-    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 1)))
-    phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 1800)
-    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
+    phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 3000)
+    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1800)
     phase5_fallback_expand_passes = _read_non_negative_int_env("CREATOR_PHASE5_FALLBACK_EXPAND_PASSES", 0)
     phase7_repair_attempts = _read_non_negative_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 0)
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
@@ -3580,7 +3580,7 @@ def run_creator_pipeline(
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-            model_for_attempt = planning_model
+            model_for_attempt = writing_model
             max_tokens = phase5_max_tokens_attempt1
             temperature = 0.3
         elif last_article_html:
@@ -3798,7 +3798,7 @@ def run_creator_pipeline(
             structured_mode=phase3.get("structured_content_mode", "none"),
             llm_api_key=llm_api_key,
             llm_base_url=llm_base_url,
-            llm_model=planning_model,
+            llm_model=writing_model,
             http_timeout=http_timeout,
             expand_passes=phase5_fallback_expand_passes,
             usage_collector=_collect_llm_usage,

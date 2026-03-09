@@ -124,6 +124,8 @@ def site_fit_dashboard(db: Session = Depends(get_db)) -> Dict[str, Any]:
         payload = creator_output_by_job.get(str(job.id)) or {}
         phase3 = payload.get("phase3") if isinstance(payload, dict) else {}
         pair_fit = phase3.get("pair_fit") if isinstance(phase3, dict) else {}
+        if not isinstance(pair_fit, dict):
+            pair_fit = {}
         recent_host_decisions.append(
             {
                 "job_id": str(job.id),

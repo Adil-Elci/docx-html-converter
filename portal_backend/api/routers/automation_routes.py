@@ -315,6 +315,12 @@ def _resolve_or_auto_select_publishing_site(
             timeout_seconds=90,
         )
         if selected_pair is None:
+            logger.warning(
+                "automation.creator_pair_rejected explicit_site=%s target_site_url=%s candidates=%s",
+                site.site_url,
+                target_url,
+                evaluated[:3],
+            )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -349,6 +355,11 @@ def _resolve_or_auto_select_publishing_site(
     )
     if not ranked:
         top_reason = {}
+        logger.warning(
+            "automation.auto_site_no_ranked_candidates target_site_url=%s target_primary_context=%s",
+            target_url,
+            str(target_profile.get("primary_context") or ""),
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -373,6 +384,11 @@ def _resolve_or_auto_select_publishing_site(
     )
     if selected_pair is None:
         top_reason = evaluated[0].get("details") if evaluated else {}
+        logger.warning(
+            "automation.auto_site_no_accepted_pair target_site_url=%s evaluated=%s",
+            target_url,
+            evaluated[:3],
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={

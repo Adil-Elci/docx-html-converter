@@ -9,3 +9,5 @@ portal_frontend/.env
 .venv/
 node_modules/
 portal_frontend/dist/
+Notes.docx
+portal_frontend/src/styles.css.bak

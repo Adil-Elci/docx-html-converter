@@ -46,42 +46,57 @@ def _wp_auth_header(username: str, app_password: str) -> str:
     return "Basic " + base64.b64encode(token).decode("ascii")
 
 
-def _fetch_posts_for_site(
+def _normalize_public_post_payload(item: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(item)
+    if not str(normalized.get("status") or "").strip():
+        normalized["status"] = "publish"
+    return normalized
+
+
+def _fetch_posts_with_mode(
     *,
     site_url: str,
     wp_rest_base: str,
-    wp_username: str,
-    wp_app_password: str,
     per_page: int,
     timeout_seconds: int,
+    mode: str,
+    wp_username: str = "",
+    wp_app_password: str = "",
 ) -> List[Dict[str, Any]]:
+    if mode not in {"authenticated", "public"}:
+        raise ValueError("Unsupported fetch mode.")
     url = f"{_wp_api_base(site_url, wp_rest_base)}/posts"
-    headers = {
-        "Authorization": _wp_auth_header(wp_username, wp_app_password),
-        "Content-Type": "application/json",
+    headers = {"Content-Type": "application/json"}
+    params = {
+        "status": "publish",
+        "per_page": max(1, min(100, per_page)),
+        "orderby": "date",
+        "order": "desc",
+        "_fields": "id,link,slug,date,date_gmt,modified,modified_gmt,status,title,excerpt,categories",
     }
+    if mode == "authenticated":
+        headers["Authorization"] = _wp_auth_header(wp_username, wp_app_password)
+        params["context"] = "edit"
+    else:
+        headers["User-Agent"] = "portal-backend/1.0"
+
     page = 1
     out: List[Dict[str, Any]] = []
     while True:
         response = requests.get(
             url,
             headers=headers,
-            params={
-                "status": "publish",
-                "per_page": max(1, min(100, per_page)),
-                "page": page,
-                "orderby": "date",
-                "order": "desc",
-                "context": "edit",
-                "_fields": "id,link,slug,date,date_gmt,modified,modified_gmt,status,title,excerpt,categories",
-            },
+            params={**params, "page": page},
             timeout=timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, list) or not payload:
             break
-        out.extend(item for item in payload if isinstance(item, dict))
+        if mode == "public":
+            out.extend(_normalize_public_post_payload(item) for item in payload if isinstance(item, dict))
+        else:
+            out.extend(item for item in payload if isinstance(item, dict))
         total_pages_header = response.headers.get("X-WP-TotalPages", "1")
         try:
             total_pages = int(total_pages_header)
@@ -91,6 +106,39 @@ def _fetch_posts_for_site(
             break
         page += 1
     return out
+
+
+def _fetch_posts_for_site(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    per_page: int,
+    timeout_seconds: int,
+) -> List[Dict[str, Any]]:
+    try:
+        return _fetch_posts_with_mode(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            per_page=per_page,
+            timeout_seconds=timeout_seconds,
+            mode="authenticated",
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+        )
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code not in {401, 403}:
+            raise
+        logger.warning("internal_linking.sync.auth_fallback site=%s status_code=%s", site_url, status_code)
+        return _fetch_posts_with_mode(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            per_page=per_page,
+            timeout_seconds=timeout_seconds,
+            mode="public",
+        )
 
 
 def _select_sites(session, site_url_filter: Optional[str]) -> List[tuple[Site, SiteCredential]]:

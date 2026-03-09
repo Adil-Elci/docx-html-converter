@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import logging
 import mimetypes
@@ -25,6 +26,7 @@ from ..auth import (
 )
 from ..automation_service import (
     AutomationError,
+    call_creator_pair_fit,
     check_creator_health,
     converter_publishing_site_from_site_url,
     get_runtime_config,
@@ -52,7 +54,7 @@ from ..portal_schemas import (
     AutomationStatusEventOut,
     AutomationStatusOut,
 )
-from ..site_profiles import select_best_publishing_site_for_target
+from ..site_profiles import top_ranked_publishing_sites_for_target
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
@@ -184,6 +186,82 @@ def _candidate_publishing_sites_for_client(db: Session, *, client_id: UUID, enfo
     return query.order_by(Site.name.asc(), Site.created_at.asc()).all()
 
 
+def _parse_auto_site_priority_weights() -> Dict[str, int]:
+    raw = (os.getenv("AUTOMATION_AUTO_SITE_PRIORITY_WEIGHTS") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        logger.warning("automation.auto_site_priority_weights_invalid")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, value in parsed.items():
+        try:
+            out[str(key).strip()] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _select_best_accepted_pair(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    target_profile_payload: Dict[str, object],
+    target_profile_content_hash: str,
+    client_target_site_id: Optional[UUID],
+    candidate_rankings: list[Dict[str, object]],
+    requested_topic: Optional[str],
+    exclude_topics: Optional[list[str]],
+    timeout_seconds: int,
+) -> Tuple[Optional[Dict[str, object]], list[Dict[str, object]]]:
+    evaluated: list[Dict[str, object]] = []
+    for candidate in candidate_rankings:
+        try:
+            pair_fit_result = call_creator_pair_fit(
+                creator_endpoint=creator_endpoint,
+                target_site_url=target_site_url,
+                publishing_site_url=str(candidate.get("site_url") or ""),
+                publishing_site_id=str(candidate.get("site_id") or ""),
+                client_target_site_id=str(client_target_site_id) if client_target_site_id else None,
+                requested_topic=requested_topic,
+                exclude_topics=exclude_topics or [],
+                target_profile_payload=target_profile_payload,
+                target_profile_content_hash=target_profile_content_hash,
+                publishing_profile_payload=dict(candidate.get("profile") or {}),
+                publishing_profile_content_hash=str(candidate.get("content_hash") or ""),
+                timeout_seconds=timeout_seconds,
+            )
+        except AutomationError as exc:
+            evaluated.append(
+                {
+                    **candidate,
+                    "pair_fit_error": str(exc),
+                    "accepted": False,
+                }
+            )
+            continue
+        pair_fit = dict(pair_fit_result.get("pair_fit") or {})
+        decision = str(pair_fit.get("decision") or "").strip().lower()
+        accepted = decision == "accepted" and bool(pair_fit.get("backlink_fit_ok"))
+        combined_score = int(candidate.get("score") or 0) + int(pair_fit.get("fit_score") or 0)
+        evaluated.append(
+            {
+                **candidate,
+                "pair_fit": pair_fit,
+                "pair_fit_cached": bool(pair_fit_result.get("cached")),
+                "accepted": accepted,
+                "combined_score": combined_score,
+            }
+        )
+    accepted_pairs = [item for item in evaluated if item.get("accepted")]
+    accepted_pairs.sort(key=lambda item: (-int(item.get("combined_score") or 0), -int(item.get("score") or 0)))
+    return (accepted_pairs[0] if accepted_pairs else None), evaluated
+
+
 def _resolve_or_auto_select_publishing_site(
     db: Session,
     *,
@@ -191,10 +269,9 @@ def _resolve_or_auto_select_publishing_site(
     client: Client,
     client_target_site: Optional[ClientTargetSite],
     enforce_client_site_access: bool,
+    creator_endpoint: str,
 ) -> Site:
     explicit_site = (payload.publishing_site or "").strip()
-    if explicit_site:
-        return _resolve_publishing_site(db, explicit_site)
     target_url = (
         (client_target_site.target_site_url or "").strip()
         if client_target_site is not None
@@ -203,8 +280,46 @@ def _resolve_or_auto_select_publishing_site(
     if not target_url:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="target_site_url is required when publishing_site is omitted.",
+            detail="target_site_url is required for creator article generation.",
         )
+    priority_weights = _parse_auto_site_priority_weights()
+    if explicit_site:
+        site = _resolve_publishing_site(db, explicit_site)
+        target_profile, target_profile_record, candidate_rankings = top_ranked_publishing_sites_for_target(
+            db,
+            target_site_url=target_url,
+            candidate_sites=[site],
+            client_target_site_id=client_target_site.id if client_target_site is not None else None,
+            timeout_seconds=10,
+            max_pages=3,
+            min_score=0,
+            limit=1,
+            business_priority_weights=priority_weights,
+        )
+        target_profile_payload = dict((target_profile_record.payload or {}) if target_profile_record is not None else {})
+        target_profile_content_hash = str((target_profile_record.content_hash or "") if target_profile_record is not None else "").strip()
+        selected_pair, evaluated = _select_best_accepted_pair(
+            creator_endpoint=creator_endpoint,
+            target_site_url=target_url,
+            target_profile_payload=target_profile_payload,
+            target_profile_content_hash=target_profile_content_hash,
+            client_target_site_id=client_target_site.id if client_target_site is not None else None,
+            candidate_rankings=candidate_rankings,
+            requested_topic=payload.topic,
+            exclude_topics=[],
+            timeout_seconds=90,
+        )
+        if selected_pair is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "no_natural_publishing_site_fit",
+                    "target_site_url": target_url,
+                    "target_primary_context": str(target_profile.get("primary_context") or ""),
+                    "candidates": evaluated[:3],
+                },
+            )
+        return site
     candidate_sites = _candidate_publishing_sites_for_client(
         db,
         client_id=client.id,
@@ -215,7 +330,7 @@ def _resolve_or_auto_select_publishing_site(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No eligible publishing sites are available for auto-selection.",
         )
-    best_site, target_profile, _target_profile_record, ranked = select_best_publishing_site_for_target(
+    target_profile, target_profile_record, ranked = top_ranked_publishing_sites_for_target(
         db,
         target_site_url=target_url,
         candidate_sites=candidate_sites,
@@ -223,25 +338,56 @@ def _resolve_or_auto_select_publishing_site(
         timeout_seconds=10,
         max_pages=3,
         min_score=max(10, int(os.getenv("AUTOMATION_AUTO_SITE_MIN_SCORE", "18"))),
+        limit=max(1, int(os.getenv("AUTOMATION_AUTO_SITE_TOP_K", "5"))),
+        business_priority_weights=priority_weights,
     )
-    if best_site is None:
-        top_reason = ranked[0]["details"] if ranked else {}
+    if not ranked:
+        top_reason = {}
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "error": "no_natural_publishing_site_fit",
                 "target_site_url": target_url,
                 "target_primary_context": str(target_profile.get("primary_context") or ""),
-                "candidates": ranked[:5],
+                "candidates": [],
                 "details": top_reason,
             },
         )
+    target_profile_payload = dict((target_profile_record.payload or {}) if target_profile_record is not None else {})
+    target_profile_content_hash = str((target_profile_record.content_hash or "") if target_profile_record is not None else "").strip()
+    selected_pair, evaluated = _select_best_accepted_pair(
+        creator_endpoint=creator_endpoint,
+        target_site_url=target_url,
+        target_profile_payload=target_profile_payload,
+        target_profile_content_hash=target_profile_content_hash,
+        client_target_site_id=client_target_site.id if client_target_site is not None else None,
+        candidate_rankings=ranked,
+        requested_topic=payload.topic,
+        exclude_topics=[],
+        timeout_seconds=90,
+    )
+    if selected_pair is None:
+        top_reason = evaluated[0].get("details") if evaluated else {}
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "no_accepted_publishing_site_pair",
+                "target_site_url": target_url,
+                "target_primary_context": str(target_profile.get("primary_context") or ""),
+                "candidates": evaluated[:5],
+                "details": top_reason,
+            },
+        )
+    best_site = next((site for site in candidate_sites if str(site.id) == str(selected_pair.get("site_id"))), None)
+    if best_site is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Auto-selected site could not be resolved.")
     logger.info(
-        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s target=%s",
+        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s target=%s combined_score=%s",
         client.id,
         best_site.id,
-        ranked[0]["score"] if ranked else 0,
+        selected_pair.get("score") or 0,
         target_url,
+        selected_pair.get("combined_score") or 0,
     )
     return best_site
 
@@ -821,6 +967,7 @@ async def process_submit_article_webhook(
             client=client,
             client_target_site=client_target_site,
             enforce_client_site_access=enforce_client_site_access,
+            creator_endpoint=get_runtime_config()["creator_endpoint"],
         )
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)

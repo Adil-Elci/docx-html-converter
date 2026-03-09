@@ -86,3 +86,27 @@ class ErrorResponse(BaseModel):
     error: str
     details: Optional[Dict[str, Any]] = None
     warnings: List[str] = Field(default_factory=list)
+
+
+class PairFitRequest(BaseModel):
+    target_site_url: HttpUrl
+    publishing_site_url: HttpUrl
+    publishing_site_id: Optional[str] = None
+    client_target_site_id: Optional[str] = None
+    requested_topic: Optional[str] = None
+    exclude_topics: List[str] = Field(default_factory=list)
+    target_profile: SiteProfileEnvelope
+    publishing_profile: SiteProfileEnvelope
+
+    @validator("publishing_site_id", "client_target_site_id", "requested_topic")
+    def _trim_pair_fit_optional(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @validator("exclude_topics", pre=True, always=True)
+    def _clean_pair_fit_exclude_topics(cls, value: Any) -> List[str]:
+        if value is None or not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]

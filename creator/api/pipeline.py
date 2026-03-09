@@ -629,6 +629,51 @@ def _phase2_from_publishing_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _deterministic_style_constraints_from_titles(values: List[str]) -> List[str]:
+    joined = " ".join(values).lower()
+    constraints = ["Sachlicher, hilfreicher Ton", "Natuerliche Sprache ohne werbliche Uebertreibung"]
+    if any(term in joined for term in {"tipps", "ratgeber", "checkliste"}):
+        constraints.append("Praxisnahe Tipps und klare Struktur")
+    if any(term in joined for term in {"vergleich", "vs", "oder"}):
+        constraints.append("Vergleichende Einordnung mit konkreten Kriterien")
+    if any(term in joined for term in {"faq", "fragen", "antworten"}):
+        constraints.append("Direkte Antworten auf typische Leserfragen")
+    return _merge_string_lists(constraints, max_items=6)
+
+
+def _derive_deterministic_phase2_analysis(
+    *,
+    publishing_snapshot: Dict[str, Any],
+    inventory_topic_insights: Dict[str, Any],
+) -> Dict[str, Any]:
+    sample_titles = [str(item).strip() for item in (publishing_snapshot.get("sample_page_titles") or []) if str(item).strip()]
+    sample_urls = [str(item).strip() for item in (publishing_snapshot.get("sample_urls") or []) if str(item).strip()]
+    combined_text = str(publishing_snapshot.get("combined_text") or "")
+    keyword_terms = _extract_keywords(combined_text, max_terms=10)
+    allowed_topics = _merge_string_lists(
+        sample_titles,
+        inventory_topic_insights.get("topic_clusters") or [],
+        inventory_topic_insights.get("site_categories") or [],
+        keyword_terms,
+        max_items=12,
+    )
+    return {
+        "allowed_topics": allowed_topics,
+        "content_style_constraints": _deterministic_style_constraints_from_titles(sample_titles + keyword_terms),
+        "internal_linking_opportunities": inventory_topic_insights.get("internal_linking_opportunities") or [],
+        "site_summary": str(publishing_snapshot.get("site_summary") or "").strip(),
+        "site_categories": inventory_topic_insights.get("site_categories") or [],
+        "topic_clusters": _merge_string_lists(
+            inventory_topic_insights.get("topic_clusters") or [],
+            keyword_terms,
+            max_items=10,
+        ),
+        "prominent_titles": inventory_topic_insights.get("prominent_titles") or [],
+        "sample_page_titles": sample_titles,
+        "sample_urls": sample_urls,
+    }
+
+
 def _pair_fit_cache_payload_is_usable(payload: Dict[str, Any]) -> bool:
     decision = str(payload.get("decision") or "").strip().lower()
     if decision == "rejected":
@@ -712,6 +757,118 @@ def _run_pair_fit_reasoning(
     if requested_topic and payload["decision"] == "accepted":
         payload["final_article_topic"] = requested_topic
     return payload
+
+
+def run_pair_fit_pipeline(
+    *,
+    target_site_url: str,
+    publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    client_target_site_id: Optional[str],
+    requested_topic: Optional[str],
+    exclude_topics: Optional[List[str]],
+    target_profile_payload: Optional[Dict[str, Any]],
+    target_profile_content_hash: Optional[str],
+    publishing_profile_payload: Optional[Dict[str, Any]],
+    publishing_profile_content_hash: Optional[str],
+) -> Dict[str, Any]:
+    target_profile = _coerce_site_profile_payload(target_profile_payload)
+    publishing_profile = _coerce_site_profile_payload(publishing_profile_payload)
+    if not target_profile or not publishing_profile:
+        raise CreatorError("Pair fit requires target_profile and publishing_profile.")
+
+    explicit_llm_key = os.getenv("CREATOR_LLM_API_KEY", "").strip()
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    explicit_shared_model = os.getenv("CREATOR_LLM_MODEL", "").strip()
+    explicit_planning_model = os.getenv("CREATOR_LLM_MODEL_PLANNING", "").strip()
+    explicit_writing_model = os.getenv("CREATOR_LLM_MODEL_WRITING", "").strip()
+    planning_model = explicit_planning_model or explicit_shared_model
+    writing_model = explicit_writing_model or explicit_shared_model
+    explicit_base_url = os.getenv("CREATOR_LLM_BASE_URL", "").strip()
+    if not planning_model:
+        planning_model = DEFAULT_ANTHROPIC_PLANNING_MODEL if anthropic_key else DEFAULT_OPENAI_LLM_MODEL
+    if not writing_model:
+        writing_model = DEFAULT_ANTHROPIC_WRITING_MODEL if anthropic_key else DEFAULT_OPENAI_LLM_MODEL
+    if explicit_base_url:
+        llm_base_url = explicit_base_url
+    elif anthropic_key and _model_prefers_anthropic(planning_model, writing_model):
+        llm_base_url = "https://api.anthropic.com/v1"
+    elif anthropic_key and not openai_key:
+        llm_base_url = "https://api.anthropic.com/v1"
+    else:
+        llm_base_url = DEFAULT_LLM_BASE_URL
+    if "anthropic" in llm_base_url.lower():
+        llm_api_key = explicit_llm_key or anthropic_key or openai_key
+    else:
+        llm_api_key = explicit_llm_key or openai_key or anthropic_key
+    if not llm_api_key:
+        raise CreatorError("No LLM API key configured for pair fit.")
+
+    target_profile_hash = (target_profile_content_hash or "").strip() or _hash_text(
+        json.dumps(target_profile, sort_keys=True, ensure_ascii=False)
+    )
+    publishing_profile_hash = (publishing_profile_content_hash or "").strip() or _hash_text(
+        json.dumps(publishing_profile, sort_keys=True, ensure_ascii=False)
+    )
+    cached = None
+    if publishing_site_id:
+        cached = get_site_fit_cache_entry(
+            publishing_site_id=publishing_site_id,
+            target_normalized_url=_normalize_url(target_site_url),
+            publishing_profile_hash=publishing_profile_hash,
+            target_profile_hash=target_profile_hash,
+            prompt_version=PAIR_FIT_PROMPT_VERSION,
+        )
+    if cached and isinstance(cached.get("payload"), dict) and _pair_fit_cache_payload_is_usable(cached["payload"]):
+        pair_fit = dict(cached["payload"])
+        pair_fit["fit_score"] = int(cached.get("fit_score") or pair_fit.get("fit_score") or 0)
+        pair_fit["decision"] = str(cached.get("decision") or pair_fit.get("decision") or "accepted")
+        return {
+            "ok": True,
+            "cached": True,
+            "pair_fit": pair_fit,
+            "publishing_profile_hash": publishing_profile_hash,
+            "target_profile_hash": target_profile_hash,
+            "prompt_version": PAIR_FIT_PROMPT_VERSION,
+            "model_name": str(cached.get("model_name") or ""),
+        }
+
+    pair_fit = _run_pair_fit_reasoning(
+        requested_topic=(requested_topic or "").strip(),
+        exclude_topics=list(exclude_topics or []),
+        target_site_url=target_site_url,
+        publishing_site_url=publishing_site_url,
+        target_profile=target_profile,
+        publishing_profile=publishing_profile,
+        llm_api_key=llm_api_key,
+        llm_base_url=llm_base_url,
+        planning_model=planning_model,
+        timeout_seconds=max(1, _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)),
+        usage_collector=None,
+    )
+    if publishing_site_id:
+        upsert_site_fit_cache_entry(
+            publishing_site_id=publishing_site_id,
+            client_target_site_id=client_target_site_id or "",
+            target_normalized_url=_normalize_url(target_site_url),
+            publishing_profile_hash=publishing_profile_hash,
+            target_profile_hash=target_profile_hash,
+            prompt_version=PAIR_FIT_PROMPT_VERSION,
+            model_name=planning_model,
+            fit_score=int(pair_fit.get("fit_score") or 0),
+            decision=str(pair_fit.get("decision") or "accepted"),
+            payload=pair_fit,
+        )
+    return {
+        "ok": True,
+        "cached": False,
+        "pair_fit": pair_fit,
+        "publishing_profile_hash": publishing_profile_hash,
+        "target_profile_hash": target_profile_hash,
+        "prompt_version": PAIR_FIT_PROMPT_VERSION,
+        "model_name": planning_model,
+    }
 
 
 def _infer_meta_description(html: str) -> str:
@@ -3064,74 +3221,21 @@ def run_creator_pipeline(
         )
     elif publishing_text:
         cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
+        deterministic_phase2 = _derive_deterministic_phase2_analysis(
+            publishing_snapshot=publishing_snapshot,
+            inventory_topic_insights=inventory_topic_insights,
+        )
+        phase2_cache_meta["generator_mode"] = "deterministic"
+        phase2_cache_meta["model_name"] = ""
         if cached_phase2 and (phase2_cache_content_hash or "").strip() == publishing_content_hash:
             phase2 = cached_phase2
             phase2_cache_hit = True
             phase2_cache_meta["cache_hit"] = True
             phase2_cache_meta["cacheable"] = True
         else:
-            cached_context = ""
             if cached_phase2:
                 phase2_cache_warm = True
-                cached_context = (
-                    f"Vorherige gecachte Zusammenfassung: {cached_phase2.get('site_summary') or ''}\n"
-                    f"Vorherige gecachte Themen: {cached_phase2.get('allowed_topics') or []}\n"
-                    f"Vorherige gecachte Kategorien: {cached_phase2.get('site_categories') or []}\n"
-                    f"Vorherige gecachte Themencluster: {cached_phase2.get('topic_clusters') or []}\n"
-                    f"Vorherige gecachte Seitentitel: {cached_phase2.get('sample_page_titles') or []}\n"
-                )
-            system_prompt = (
-                "You analyze publishing site content for safe submitted article topics. "
-                "Use only the provided site text. Return JSON with allowed_topics (5-10), "
-                "content_style_constraints (3-6), internal_linking_opportunities (optional, internal only), "
-                "site_summary (1 short sentence in German), site_categories (up to 8), topic_clusters (up to 8), "
-                "prominent_titles (up to 6), sample_page_titles (up to 6). "
-                "All returned natural-language text must be in German (de-DE)."
-            )
-            user_prompt = (
-                "Publishing site snapshot text:\n"
-                f"{publishing_text[:phase2_prompt_chars]}\n\n"
-                f"Bekannte Kategorien aus dem internen Inventar: {phase2.get('site_categories') or []}\n"
-                f"Bekannte Themencluster aus dem Inventar: {phase2.get('topic_clusters') or []}\n"
-                f"Bekannte prominente Titel aus dem Inventar: {phase2.get('prominent_titles') or []}\n"
-                f"{cached_context}"
-                "Return JSON: {\"allowed_topics\":[...],\"content_style_constraints\":[...],\"internal_linking_opportunities\":[...],"
-                "\"site_summary\":\"...\",\"site_categories\":[...],\"topic_clusters\":[...],\"prominent_titles\":[...],\"sample_page_titles\":[...]}."
-            )
-            try:
-                llm_out = call_llm_json(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    api_key=llm_api_key,
-                    base_url=llm_base_url,
-                    model=planning_model,
-                    timeout_seconds=http_timeout,
-                    max_tokens=phase2_max_tokens,
-                    request_label="phase2",
-                    usage_collector=_collect_llm_usage,
-                )
-                phase2["allowed_topics"] = llm_out.get("allowed_topics") or []
-                phase2["content_style_constraints"] = llm_out.get("content_style_constraints") or []
-                phase2["internal_linking_opportunities"] = llm_out.get("internal_linking_opportunities") or []
-                phase2["site_summary"] = str(llm_out.get("site_summary") or phase2.get("site_summary") or "").strip()
-                phase2["site_categories"] = [
-                    str(item).strip() for item in (llm_out.get("site_categories") or []) if str(item).strip()
-                ]
-                phase2["topic_clusters"] = [
-                    str(item).strip() for item in (llm_out.get("topic_clusters") or []) if str(item).strip()
-                ]
-                phase2["prominent_titles"] = [
-                    str(item).strip() for item in (llm_out.get("prominent_titles") or []) if str(item).strip()
-                ]
-                phase2["sample_page_titles"] = [
-                    str(item).strip() for item in (llm_out.get("sample_page_titles") or []) if str(item).strip()
-                ]
-            except LLMError as exc:
-                warnings.append(f"phase2_llm_failed:{exc}")
-                phase2["allowed_topics"] = _extract_keywords(publishing_text, max_terms=8)
-                phase2["content_style_constraints"] = ["Neutraler, fachlich-serioeser Ton", "Werbliche Sprache vermeiden"]
-                phase2_cache_meta["generator_mode"] = "deterministic"
-                phase2_cache_meta["model_name"] = ""
+            phase2 = deterministic_phase2
             phase2 = _merge_phase2_analysis(
                 phase2,
                 cached_phase2,

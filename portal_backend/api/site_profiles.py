@@ -343,6 +343,103 @@ def score_publishing_site_fit(
     return score, details
 
 
+def compute_site_selection_score(
+    *,
+    publishing_profile: Dict[str, Any],
+    target_profile: Dict[str, Any],
+    inventory_context: Optional[Dict[str, Any]] = None,
+    business_priority_weight: int = 0,
+) -> Tuple[int, Dict[str, Any]]:
+    semantic_score, semantic_details = score_publishing_site_fit(publishing_profile, target_profile)
+    inventory = inventory_context or {}
+    title_count = len(_coerce_string_list(inventory.get("prominent_titles")))
+    category_count = len(_coerce_string_list(inventory.get("site_categories")))
+    cluster_count = len(_coerce_string_list(inventory.get("topic_clusters")))
+    authority_score = min(20, category_count * 2 + min(10, title_count // 3))
+    target_terms = _text_set(
+        target_profile.get("topics"),
+        target_profile.get("services_or_products"),
+        target_profile.get("repeated_keywords"),
+    )
+    support_terms = _text_set(
+        inventory.get("prominent_titles"),
+        inventory.get("site_categories"),
+        inventory.get("topic_clusters"),
+    )
+    internal_link_support = min(15, len(target_terms & support_terms) * 3 + min(6, title_count // 5))
+    freshness_activity = min(10, min(6, title_count // 4) + min(4, cluster_count // 3))
+    final_score = min(100, semantic_score + authority_score + internal_link_support + freshness_activity + max(0, business_priority_weight))
+    details = {
+        "semantic_score": semantic_score,
+        "authority_score": authority_score,
+        "internal_link_support": internal_link_support,
+        "freshness_activity": freshness_activity,
+        "business_priority_weight": max(0, business_priority_weight),
+        "final_site_score": final_score,
+        **semantic_details,
+    }
+    return final_score, details
+
+
+def top_ranked_publishing_sites_for_target(
+    db: Session,
+    *,
+    target_site_url: str,
+    candidate_sites: Sequence[Site],
+    client_target_site_id: Optional[UUID] = None,
+    timeout_seconds: int = 10,
+    max_pages: int = 3,
+    min_score: int = 18,
+    limit: int = 5,
+    business_priority_weights: Optional[Dict[str, int]] = None,
+) -> Tuple[Dict[str, Any], Optional[SiteProfileCache], List[Dict[str, Any]]]:
+    target_profile_record = ensure_target_site_profile(
+        db,
+        target_site_url=target_site_url,
+        client_target_site_id=client_target_site_id,
+        timeout_seconds=timeout_seconds,
+        max_pages=max_pages,
+    )
+    target_profile = dict(target_profile_record.payload or {})
+    ranked: List[Dict[str, Any]] = []
+    weights = business_priority_weights or {}
+    for site in candidate_sites:
+        try:
+            publishing_profile_record = ensure_publishing_site_profile(
+                db,
+                site=site,
+                timeout_seconds=timeout_seconds,
+                max_pages=max_pages,
+            )
+        except Exception:
+            logger.warning("site_profiles.auto_select.profile_failed site_id=%s", site.id, exc_info=True)
+            continue
+        inventory_context = build_publishing_inventory_context(db, site_id=site.id)
+        publishing_profile = dict(publishing_profile_record.payload or {})
+        score, details = compute_site_selection_score(
+            publishing_profile=publishing_profile,
+            target_profile=target_profile,
+            inventory_context=inventory_context,
+            business_priority_weight=int(weights.get(str(site.id), 0)),
+        )
+        if score < min_score:
+            continue
+        ranked.append(
+            {
+                "site_id": str(site.id),
+                "site_url": site.site_url,
+                "site_name": site.name,
+                "score": score,
+                "details": details,
+                "profile": publishing_profile,
+                "content_hash": str(publishing_profile_record.content_hash or "").strip(),
+                "inventory_context": inventory_context,
+            }
+        )
+    ranked.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
+    return target_profile, target_profile_record, ranked[: max(1, limit)]
+
+
 def select_best_publishing_site_for_target(
     db: Session,
     *,

@@ -17,6 +17,9 @@ uvicorn api.server:app --reload --host 0.0.0.0 --port 8000
 - `site_profile_cache` stores deterministic publishing-site and target-site profiles.
 - `site_fit_cache` stores pair-level semantic fit decisions and chosen guest-post topics.
 - For Creator article-generation requests, `publishing_site` can now be omitted. The backend will auto-select the best active publishing site for the target URL before the submission/job is created.
+- Auto-selection now works in two stages:
+  - deterministic pre-ranking from site profiles, authority, internal-link support, freshness, and optional business weight
+  - Creator pair-fit evaluation on the top candidate sites, then the best accepted pair is selected before enqueue
 
 Manual profile sync:
 ```bash
@@ -221,6 +224,8 @@ Runtime env vars:
 - `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
 - `AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS` (default: `false`; set `true` to require `client_publishing_site_access` mapping)
 - `AUTOMATION_AUTO_SITE_MIN_SCORE` (default: `18`; minimum deterministic preselection score when `publishing_site` is omitted for Creator article generation)
+- `AUTOMATION_AUTO_SITE_TOP_K` (default: `5`; top ranked candidate hosts sent through Creator pair-fit before choosing the final host)
+- `AUTOMATION_AUTO_SITE_PRIORITY_WEIGHTS` (optional JSON object mapping `publishing_site_id -> integer weight`)
 - `AUTOMATION_WORKER_ENABLED` (default: `true`)
 - `AUTOMATION_WORKER_POLL_SECONDS` (default: `2`)
 - `AUTOMATION_JOB_MAX_ATTEMPTS` (default: `3`)

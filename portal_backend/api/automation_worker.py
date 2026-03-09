@@ -31,7 +31,12 @@ from .portal_models import (
     SiteDefaultCategory,
     Submission,
 )
-from .site_profiles import get_latest_site_profile, normalize_site_profile_url
+from .site_profiles import (
+    ensure_publishing_site_profile,
+    ensure_target_site_profile,
+    get_latest_site_profile,
+    normalize_site_profile_url,
+)
 from .site_analysis_cache import (
     PHASE1_TARGET_ANALYSIS_CACHE_KIND,
     get_latest_site_analysis_cache,
@@ -682,6 +687,16 @@ class AutomationJobWorker:
                     if latest_phase1_cache and isinstance(latest_phase1_cache.payload, dict):
                         phase1_cache_payload = latest_phase1_cache.payload
                         phase1_cache_content_hash = str(latest_phase1_cache.content_hash or "").strip()
+                    try:
+                        ensure_target_site_profile(
+                            session,
+                            target_site_url=target_site_url,
+                            client_target_site_id=target_site_id,
+                            timeout_seconds=10,
+                            max_pages=3,
+                        )
+                    except Exception:
+                        logger.warning("automation.worker.target_profile_ensure_failed job_id=%s", job_id, exc_info=True)
                     latest_target_profile = get_latest_site_profile(
                         session,
                         profile_kind="target_site",
@@ -703,6 +718,15 @@ class AutomationJobWorker:
                 if latest_phase2_cache and isinstance(latest_phase2_cache.payload, dict):
                     phase2_cache_payload = latest_phase2_cache.payload
                     phase2_cache_content_hash = str(latest_phase2_cache.content_hash or "").strip()
+                try:
+                    ensure_publishing_site_profile(
+                        session,
+                        site=site,
+                        timeout_seconds=10,
+                        max_pages=3,
+                    )
+                except Exception:
+                    logger.warning("automation.worker.publishing_profile_ensure_failed job_id=%s", job_id, exc_info=True)
                 latest_publishing_profile = get_latest_site_profile(
                     session,
                     profile_kind="publishing_site",

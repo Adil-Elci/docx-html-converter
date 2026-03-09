@@ -15,8 +15,8 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from .llm import LLMError
-from .models import CreatorRequest, ErrorResponse
-from .pipeline import CreatorError, run_creator_pipeline
+from .models import CreatorRequest, ErrorResponse, PairFitRequest
+from .pipeline import CreatorError, run_creator_pipeline, run_pair_fit_pipeline
 
 load_dotenv()
 
@@ -170,3 +170,31 @@ async def create_stream(request: Request) -> EventSourceResponse:
                 break
 
     return EventSourceResponse(event_generator())
+
+
+@app.post("/pair-fit")
+async def pair_fit(request: Request) -> JSONResponse:
+    try:
+        data = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+
+    payload = PairFitRequest(**data)
+    try:
+        result = run_pair_fit_pipeline(
+            target_site_url=str(payload.target_site_url),
+            publishing_site_url=str(payload.publishing_site_url),
+            publishing_site_id=payload.publishing_site_id,
+            client_target_site_id=payload.client_target_site_id,
+            requested_topic=payload.requested_topic,
+            exclude_topics=payload.exclude_topics,
+            target_profile_payload=payload.target_profile.payload,
+            target_profile_content_hash=payload.target_profile.content_hash,
+            publishing_profile_payload=payload.publishing_profile.payload,
+            publishing_profile_content_hash=payload.publishing_profile.content_hash,
+        )
+    except (CreatorError, LLMError) as exc:
+        logger.warning("creator.pair_fit_failed error=%s", str(exc))
+        response = ErrorResponse(error="pair_fit_failed", details={"message": str(exc)})
+        return JSONResponse(status_code=422, content=response.dict())
+    return JSONResponse(status_code=200, content=result)

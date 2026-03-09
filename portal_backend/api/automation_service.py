@@ -814,6 +814,53 @@ def call_creator_service(
     )
 
 
+def call_creator_pair_fit(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    client_target_site_id: Optional[str],
+    requested_topic: Optional[str],
+    exclude_topics: Optional[List[str]],
+    target_profile_payload: Dict[str, Any],
+    target_profile_content_hash: str,
+    publishing_profile_payload: Dict[str, Any],
+    publishing_profile_content_hash: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    body: Dict[str, Any] = {
+        "target_site_url": target_site_url,
+        "publishing_site_url": publishing_site_url,
+        "target_profile": {
+            "content_hash": target_profile_content_hash,
+            "payload": target_profile_payload,
+        },
+        "publishing_profile": {
+            "content_hash": publishing_profile_content_hash,
+            "payload": publishing_profile_payload,
+        },
+    }
+    if publishing_site_id:
+        body["publishing_site_id"] = publishing_site_id
+    if client_target_site_id:
+        body["client_target_site_id"] = client_target_site_id
+    if requested_topic:
+        body["requested_topic"] = requested_topic
+    if exclude_topics:
+        body["exclude_topics"] = exclude_topics
+    url = creator_endpoint.rstrip("/") + "/pair-fit"
+    return _request_json(
+        "POST",
+        url,
+        json_body=body,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
 def _call_creator_stream(
     creator_endpoint: str,
     body: Dict[str, Any],

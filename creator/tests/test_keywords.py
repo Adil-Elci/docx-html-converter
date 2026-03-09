@@ -22,6 +22,7 @@ from creator.api.pipeline import (
     _inject_faq_section,
     _merge_phase2_analysis,
     _normalize_section_html,
+    _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _run_pair_fit_reasoning,
     _select_keywords,
@@ -147,6 +148,36 @@ def test_select_keywords_filters_unrelated_secondary_topics():
 
     assert "die haarbalance nach der schwangerschaft wiederfinden" not in result["secondary_keywords"]
     assert "du hast fragen oder interesse an einer zusammenarbeit" not in result["secondary_keywords"]
+
+
+def test_select_keywords_keeps_topic_focused_primary_keyword():
+    result = _select_keywords(
+        topic="Kinder Sonnenbrillen und UV Schutz",
+        llm_primary="eltern sucht ratgeber erziehung familie kinder liebe",
+        llm_secondary=[
+            "uv schutz fuer kinderaugen",
+            "kindersonnenbrillen im sommer",
+        ],
+        keyword_cluster=["kinder", "sonnenbrillen", "uv schutz", "kinderaugen"],
+        allowed_topics=[
+            "Eltern Sucht Ratgeber Erziehung Familie Kinder Liebe",
+            "Magazin fuer Familie und Alltag",
+            "Kinderaugen vor UV Strahlung schuetzen",
+        ],
+        trend_candidates=[
+            "kinder sonnenbrillen uv schutz",
+            "uv schutz fuer kinderaugen",
+            "kindersonnenbrillen im sommer",
+        ],
+        faq_candidates=[
+            "was ist bei kindersonnenbrillen wichtig",
+            "wie schuetzt man kinderaugen im sommer",
+        ],
+    )
+
+    assert result["primary_keyword"] != "eltern sucht ratgeber erziehung familie kinder liebe"
+    assert "kinder" in result["primary_keyword"]
+    assert "sonnen" in result["primary_keyword"]
 
 
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
@@ -543,6 +574,20 @@ def test_build_deterministic_title_package_targets_seo_length():
     assert title_package["slug"] == "baby-vorbereiten-checkliste"
 
 
+def test_build_deterministic_title_package_uses_topic_over_site_identity_keyword():
+    title_package = _build_deterministic_title_package(
+        topic="Kinder Sonnenbrillen: Worauf Eltern beim UV Schutz achten sollten",
+        primary_keyword="eltern sucht ratgeber erziehung familie kinder liebe",
+        secondary_keywords=["uv schutz fuer kinderaugen"],
+        search_intent_type="informational",
+        structured_mode="none",
+        current_year=2026,
+    )
+
+    assert title_package["h1"].startswith("Kinder Sonnenbrillen")
+    assert "Eltern Sucht Ratgeber" not in title_package["h1"]
+
+
 def test_structured_content_mode_detects_list_and_table_topics():
     assert _structured_content_mode("Baby vorbereiten Checkliste", "baby vorbereiten checkliste", "informational") == "list"
     assert _structured_content_mode("Geburtskosten Vergleich", "geburtskosten vergleich", "commercial") == "table"
@@ -918,6 +963,78 @@ def test_pair_fit_reasoning_distinguishes_hard_reject():
     assert result["final_match_decision"] == "hard_reject"
     assert result["decision"] == "rejected"
     assert result["reject_reason"]
+
+
+def test_pair_fit_normalize_prefers_balanced_bridge_topic():
+    result = _pair_fit_normalize_llm_payload(
+        llm_payload={
+            "topic_candidates": [
+                {
+                    "topic": "Kinder Sonnenbrillen: worauf Eltern achten sollten",
+                    "publishing_site_relevance": 8,
+                    "target_site_relevance": 8,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 39,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "UV Schutz fuer Kinderaugen im Alltag",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 7,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 37,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Sonnenschutz fuer Familien im Sommer",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 3,
+                    "informational_value": 7,
+                    "backlink_naturalness": 4,
+                    "spam_risk": 4,
+                    "total_score": 24,
+                    "backlink_angle": "Nur schwach passend.",
+                },
+                {
+                    "topic": "Sommer Alltag mit Kindern",
+                    "publishing_site_relevance": 5,
+                    "target_site_relevance": 2,
+                    "informational_value": 6,
+                    "backlink_naturalness": 3,
+                    "spam_risk": 5,
+                    "total_score": 18,
+                    "backlink_angle": "Sehr lose Verbindung.",
+                },
+                {
+                    "topic": "Outdoor Orientierung fuer Eltern",
+                    "publishing_site_relevance": 5,
+                    "target_site_relevance": 2,
+                    "informational_value": 5,
+                    "backlink_naturalness": 3,
+                    "spam_risk": 5,
+                    "total_score": 17,
+                    "backlink_angle": "Sehr lose Verbindung.",
+                },
+            ],
+            "final_article_topic": "Sonnenschutz fuer Familien im Sommer",
+            "final_match_decision": "accepted",
+            "why_this_topic_was_chosen": "generic",
+            "best_overlap_reason": "shared",
+            "fit_score": 70,
+        },
+        publishing_terms=["familie", "kinder", "gesundheit", "elternratgeber"],
+        target_terms=["sonnenbrillen", "uv schutz", "kinderaugen"],
+        publishing_contexts=["family_life", "health", "parenting"],
+        target_contexts=["shopping", "health", "safety", "outdoor"],
+        overlap_terms=["kinder", "schutz"],
+        requested_topic="",
+    )
+
+    assert result["final_article_topic"] == "Kinder Sonnenbrillen: worauf Eltern achten sollten"
 
 
 def test_pair_fit_cache_payload_is_usable_requires_complete_accepted_payload():

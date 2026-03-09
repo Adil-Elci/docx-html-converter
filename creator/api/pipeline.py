@@ -375,8 +375,7 @@ def _build_deterministic_title_package(
     structured_mode: str,
     current_year: int,
 ) -> Dict[str, str]:
-    keyword_title = _format_title_case(primary_keyword or topic or "Ratgeber")
-    secondary_hint = _format_title_case(secondary_keywords[0]) if secondary_keywords else ""
+    topic_title = _format_title_case(topic or primary_keyword or "Ratgeber")
     normalized_topic = _normalize_keyword_phrase(topic)
     include_year = "checkliste" in normalized_topic or "trend" in normalized_topic
     if structured_mode == "table":
@@ -386,10 +385,10 @@ def _build_deterministic_title_package(
     elif (search_intent_type or "").strip().lower() == "commercial":
         suffix = "Vergleich, Kosten und Tipps"
     else:
-        suffix = "Einordnung und Hilfe"
-    if secondary_hint and _keyword_similarity(secondary_hint, keyword_title) < 0.55:
-        suffix = secondary_hint
-    h1 = _truncate_title(f"{keyword_title}: {suffix}")
+        suffix = "Wichtige Hinweise und Orientierung"
+    h1 = _truncate_title(topic_title)
+    if ":" not in h1 and len(h1) < SEO_TITLE_MIN_CHARS:
+        h1 = _truncate_title(f"{h1}: {suffix}")
     if len(h1) < SEO_TITLE_MIN_CHARS:
         h1 = _truncate_title(f"{h1} fuer Betroffene und Familien")
     if include_year and str(current_year) not in h1:
@@ -407,7 +406,7 @@ def _build_deterministic_meta_description(
     secondary_keywords: List[str],
     structured_mode: str,
 ) -> str:
-    opening = _format_title_case(primary_keyword or topic or "Ratgeber")
+    opening = _format_title_case(topic or primary_keyword or "Ratgeber")
     if structured_mode == "table":
         suffix = "mit Vergleich, Einordnung und klaren Unterschieden."
     elif structured_mode == "list":
@@ -1158,6 +1157,8 @@ def _pair_fit_llm_prompts(input_payload: Dict[str, Any]) -> tuple[str, str]:
         "- Das Hauptthema muss zuerst natuerlich zur Publishing-Seite passen.\n"
         "- Der Link zur Zielseite darf nur eine nachrangige, kontextuelle Ressource sein.\n"
         "- Match auf Kontext- und Zielgruppenebene, nicht nur ueber exakte Keywords.\n"
+        "- Vermeide zu breite Oberbegriffe, wenn die Zielseite ein konkretes Themenfeld erkennen laesst.\n"
+        "- Bevorzuge Themen, die Publishing-Kontext und konkretes Zielseiten-Feld gleichzeitig sichtbar machen.\n"
         "- Nutze die Seed-Topics als Startpunkt, darfst sie aber verbessern oder ersetzen.\n"
         "- Erzeuge genau 5 Kandidaten in deutscher Sprache.\n"
         "- Kandidaten bewerten auf einer Skala 0-10 fuer publishing_site_relevance, target_site_relevance, informational_value, backlink_naturalness, spam_risk.\n"
@@ -1246,10 +1247,49 @@ def _pair_fit_normalize_llm_payload(
         )
         if requested_candidate is not None and final_match_decision != "hard_reject":
             final_topic = str(requested_candidate.get("topic") or "").strip() or final_topic
-    best_candidate = next(
+    selected_candidate = next(
         (item for item in candidates if _keyword_similarity(_normalize_keyword_phrase(str(item.get("topic") or "")), _normalize_keyword_phrase(final_topic)) >= 0.88),
         candidates[0],
     )
+    best_candidate = max(
+        candidates,
+        key=lambda item: (
+            int(item.get("total_score") or 0),
+            int(item.get("publishing_site_relevance") or 0),
+            int(item.get("target_site_relevance") or 0),
+            int(item.get("backlink_naturalness") or 0),
+            -int(item.get("spam_risk") or 10),
+        ),
+    )
+    final_topic_score = _pair_fit_score_candidate(
+        final_topic,
+        publishing_terms=publishing_terms,
+        target_terms=target_terms,
+        publishing_contexts=publishing_contexts,
+        target_contexts=target_contexts,
+        overlap_terms=overlap_terms,
+        target_business_intent="informational",
+    )
+    if (
+        int(final_topic_score.get("publishing_site_relevance") or 0) < 5
+        or int(final_topic_score.get("target_site_relevance") or 0) < 5
+        or int(best_candidate.get("total_score") or 0) >= int(final_topic_score.get("total_score") or 0) + 3
+    ):
+        final_topic = str(best_candidate.get("topic") or "").strip() or final_topic
+        selected_candidate = next(
+            (
+                item
+                for item in candidates
+                if _keyword_similarity(
+                    _normalize_keyword_phrase(str(item.get("topic") or "")),
+                    _normalize_keyword_phrase(final_topic),
+                )
+                >= 0.88
+            ),
+            best_candidate,
+        )
+    else:
+        best_candidate = selected_candidate
     shared_contexts = _dedupe_preserve_order([context for context in publishing_contexts if context in set(target_contexts)])
     why_this_topic_was_chosen = str(llm_payload.get("why_this_topic_was_chosen") or "").strip()
     if not why_this_topic_was_chosen:
@@ -1748,8 +1788,19 @@ def _build_keyword_query_variants(
     allowed_topics: List[str],
     max_queries: int = 8,
 ) -> List[str]:
+    seed_tokens = _keyword_token_set(f"{topic} {primary_hint}")
+    relevant_allowed_topics = [
+        item
+        for item in allowed_topics
+        if _keyword_candidate_has_relevance(
+            item,
+            topic_tokens=seed_tokens,
+            cluster_tokens=seed_tokens,
+            trend_tokens=set(),
+        )
+    ]
     base_phrases = _dedupe_preserve_order(
-        [topic, primary_hint] + _extract_candidate_phrases_from_topics(allowed_topics, max_phrases=2)
+        [topic, primary_hint] + _extract_candidate_phrases_from_topics(relevant_allowed_topics, max_phrases=2)
     )
     if not base_phrases:
         return []
@@ -2153,10 +2204,30 @@ def _select_keywords(
     cluster_tokens = _keyword_token_set(" ".join(keyword_cluster))
     allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
     trend_tokens = _keyword_token_set(" ".join(trend_candidates))
+    relevant_allowed_topics = [
+        item
+        for item in allowed_topics
+        if _keyword_candidate_has_relevance(
+            item,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            trend_tokens=trend_tokens,
+        )
+    ]
 
     primary_pool = _dedupe_keyword_phrases(
-        [llm_primary, topic_phrase] + trend_candidates + _extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8)
+        [llm_primary, topic_phrase] + trend_candidates + _extract_candidate_phrases_from_topics(relevant_allowed_topics, max_phrases=4)
     )
+    primary_pool = [
+        candidate
+        for candidate in primary_pool
+        if _keyword_candidate_has_relevance(
+            candidate,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            trend_tokens=trend_tokens,
+        )
+    ]
     if not primary_pool and _is_valid_keyword_phrase(topic_phrase):
         primary_pool = [topic_phrase]
     if not primary_pool:
@@ -2178,7 +2249,7 @@ def _select_keywords(
     secondary_pool = _dedupe_keyword_phrases(
         llm_secondary
         + trend_candidates
-        + _extract_candidate_phrases_from_topics(allowed_topics)
+        + _extract_candidate_phrases_from_topics(relevant_allowed_topics)
         + [topic_phrase]
     )
     ranked_secondary = sorted(
@@ -2297,25 +2368,24 @@ def _rank_internal_link_inventory(
     max_items: int,
 ) -> List[Dict[str, Any]]:
     normalized_items = _coerce_internal_link_inventory(items)
-    filtered: List[Dict[str, Any]] = []
+    scored: List[tuple[float, Dict[str, Any]]] = []
     for item in normalized_items:
         url = str(item.get("url") or "").strip()
         if not _is_internal_href(url, publishing_site_url):
             continue
         if _normalize_url(url) == _normalize_url(backlink_url):
             continue
-        filtered.append(item)
-    ranked = sorted(
-        filtered,
-        key=lambda item: _score_internal_link_inventory_item(
+        score = _score_internal_link_inventory_item(
             item,
             topic=topic,
             primary_keyword=primary_keyword,
             secondary_keywords=secondary_keywords,
-        ),
-        reverse=True,
-    )
-    return ranked[:max_items]
+        )
+        if score < 2.5:
+            continue
+        scored.append((score, item))
+    ranked = sorted(scored, key=lambda item: item[0], reverse=True)
+    return [item for _score, item in ranked[:max_items]]
 
 
 def _normalize_text_for_keyword_search(value: str) -> str:
@@ -2452,11 +2522,11 @@ def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondar
     h2_text = " ".join(_extract_h2_headings(article_html))
     plain_text = _strip_html_tags(article_html)
 
-    if not _keyword_present(h1_text, primary):
+    if not _keyword_present_relaxed(h1_text, primary):
         errors.append("primary_keyword_missing_h1")
-    if not _keyword_present(intro_text, primary):
+    if not _keyword_present_relaxed(intro_text, primary):
         errors.append("primary_keyword_missing_intro")
-    if not _keyword_present(h2_text, primary):
+    if not _keyword_present_relaxed(h2_text, primary):
         errors.append("primary_keyword_missing_h2")
 
     required_secondaries = secondaries[:KEYWORD_MIN_SECONDARY]
@@ -4054,14 +4124,10 @@ def run_creator_pipeline(
             if str(item.get("url") or "").strip()
         ]
     else:
-        internal_link_candidates = homepage_internal_link_candidates
-        internal_link_source = "homepage"
-        internal_link_anchor_map = {
-            _normalize_url(url): _internal_anchor_text(url)
-            for url in internal_link_candidates
-            if url
-        }
-        internal_links_prompt_entries = list(internal_link_candidates)
+        internal_link_candidates = []
+        internal_link_source = "none"
+        internal_link_anchor_map = {}
+        internal_links_prompt_entries = []
     effective_internal_min = min(internal_link_min, len(internal_link_candidates))
     effective_internal_max = min(internal_link_max, len(internal_link_candidates))
     if effective_internal_max < effective_internal_min:
@@ -4154,12 +4220,15 @@ def run_creator_pipeline(
             outline_errors.append("invalid_backlink_placement")
             continue
         primary_keyword_phase3 = _normalize_keyword_phrase(phase3.get("primary_keyword", ""))
-        h1_lower = _normalize_keyword_phrase(h1)
+        topic_phase3 = _normalize_keyword_phrase(phase3.get("final_article_topic", ""))
         outline_h2_combined = " ".join(
             _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
             for item in outline_items
         )
-        if primary_keyword_phase3 and not _keyword_present(outline_h2_combined, primary_keyword_phase3):
+        if primary_keyword_phase3 and not (
+            _keyword_present_relaxed(outline_h2_combined, primary_keyword_phase3)
+            or (topic_phase3 and _keyword_present_relaxed(outline_h2_combined, topic_phase3))
+        ):
             for idx, outline_item in enumerate(outline_items):
                 if not isinstance(outline_item, dict):
                     continue
@@ -4169,14 +4238,17 @@ def run_creator_pipeline(
                     continue
                 outline_items[idx] = {
                     **outline_item,
-                    "h2": f"{_format_title_case(phase3['primary_keyword'])}: {current_h2}",
+                    "h2": f"{_format_title_case(phase3['final_article_topic'])}: {current_h2}",
                 }
                 break
             outline_h2_combined = " ".join(
                 _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
                 for item in outline_items
             )
-            if not _keyword_present(outline_h2_combined, primary_keyword_phase3):
+            if not (
+                _keyword_present_relaxed(outline_h2_combined, primary_keyword_phase3)
+                or (topic_phase3 and _keyword_present_relaxed(outline_h2_combined, topic_phase3))
+            ):
                 outline_errors.append("primary_keyword_missing_in_outline")
                 continue
         if _normalize_keyword_phrase(str(outline_items[-1].get("h2") or "") if isinstance(outline_items[-1], dict) else str(outline_items[-1])) != "faq":

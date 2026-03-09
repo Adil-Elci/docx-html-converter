@@ -612,6 +612,7 @@ def _compose_submission_notes(
     topic: Optional[str] = None,
     manual_create_article: bool = False,
     creator_mode: bool = False,
+    auto_selected_site: bool = False,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -634,6 +635,8 @@ def _compose_submission_notes(
         parts.append("manual_create_article=true")
     if creator_mode:
         parts.append("creator_mode=true")
+    if auto_selected_site:
+        parts.append("auto_selected_site=true")
     return ";".join(parts)
 
 
@@ -725,6 +728,7 @@ def _enqueue_job(
     author_id: int,
     client_target_site: Optional[ClientTargetSite],
     creator_mode: bool,
+    auto_selected_site: bool = False,
 ) -> Tuple[Submission, Job, bool]:
     manual_create_article = request_kind == "create_article" and not (source_url or "").strip()
     creator_create_article = manual_create_article and creator_mode
@@ -760,6 +764,7 @@ def _enqueue_job(
         topic=payload.topic,
         manual_create_article=manual_create_article,
         creator_mode=creator_mode,
+        auto_selected_site=auto_selected_site,
     )
 
     existing_submission = _find_existing_submission(
@@ -994,6 +999,7 @@ async def process_submit_article_webhook(
             author_id=0,
             client_target_site=client_target_site,
             creator_mode=True,
+            auto_selected_site=not bool((payload.publishing_site or "").strip()),
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":

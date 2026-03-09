@@ -2434,6 +2434,15 @@ input:disabled {
   color: #d28b26;
 }
 
+.admin-trend-status.neutral {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-hover);
+}
+
+.admin-trend-detail {
+  margin: 0;
+}
+
 .admin-summary-number {
   font-size: 22px;
   line-height: 1;

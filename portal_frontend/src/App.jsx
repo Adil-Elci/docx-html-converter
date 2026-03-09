@@ -92,6 +92,7 @@ const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
 const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
 const TREND_RECENT_LIMIT = 6;
+const SITE_FIT_RECENT_LIMIT = 6;
 
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
@@ -235,6 +236,8 @@ export default function App() {
   const [adminSavingUserId, setAdminSavingUserId] = useState("");
   const [keywordTrendDashboard, setKeywordTrendDashboard] = useState(null);
   const [keywordTrendLoading, setKeywordTrendLoading] = useState(false);
+  const [siteFitDashboard, setSiteFitDashboard] = useState(null);
+  const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [publishingJobId, setPublishingJobId] = useState("");
@@ -762,6 +765,19 @@ export default function App() {
     }
   };
 
+  const loadSiteFitDashboard = async (forUser = currentUser) => {
+    if (forUser?.role !== "admin") return;
+    try {
+      setSiteFitLoading(true);
+      const data = await api.get("/admin/site-fit/dashboard");
+      setSiteFitDashboard(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSiteFitLoading(false);
+    }
+  };
+
   const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
@@ -972,6 +988,8 @@ export default function App() {
         await loadAll(user);
         if (user.role === "admin") {
           await loadAdminUsers(user);
+          await loadKeywordTrendDashboard(user);
+          await loadSiteFitDashboard(user);
           await loadPendingJobs(user);
         }
       } catch (err) {
@@ -1210,6 +1228,7 @@ export default function App() {
     if (activeSection !== "admin") return;
     if (adminUsers.length === 0) loadAdminUsers(currentUser);
     if (!keywordTrendDashboard) loadKeywordTrendDashboard(currentUser);
+    if (!siteFitDashboard) loadSiteFitDashboard(currentUser);
   }, [currentUser, activeSection]);
 
   useEffect(() => {
@@ -1256,6 +1275,8 @@ export default function App() {
           }
           if (activeSection === "admin") {
             await loadAdminUsers(currentUser);
+            await loadKeywordTrendDashboard(currentUser);
+            await loadSiteFitDashboard(currentUser);
           }
         }
       } finally {
@@ -1370,6 +1391,8 @@ export default function App() {
       await loadAll(user);
       if (user.role === "admin") {
         await loadAdminUsers(user);
+        await loadKeywordTrendDashboard(user);
+        await loadSiteFitDashboard(user);
         await loadPendingJobs(user);
       }
     } catch (err) {
@@ -2053,6 +2076,33 @@ export default function App() {
   const keywordTrendLatestRefresh = keywordTrendSummary.latest_refresh_at
     ? formatPublishedAt(keywordTrendSummary.latest_refresh_at)
     : t("notAvailable");
+  const siteProfileSummary = siteFitDashboard?.profiles?.summary || {};
+  const siteProfileRecent = Array.isArray(siteFitDashboard?.profiles?.recent_profiles)
+    ? siteFitDashboard.profiles.recent_profiles.slice(0, SITE_FIT_RECENT_LIMIT)
+    : [];
+  const siteFitSummary = siteFitDashboard?.pair_fits?.summary || {};
+  const siteFitRecent = Array.isArray(siteFitDashboard?.pair_fits?.recent_pair_fits)
+    ? siteFitDashboard.pair_fits.recent_pair_fits.slice(0, SITE_FIT_RECENT_LIMIT)
+    : [];
+  const recentHostDecisions = Array.isArray(siteFitDashboard?.recent_host_decisions)
+    ? siteFitDashboard.recent_host_decisions.slice(0, SITE_FIT_RECENT_LIMIT)
+    : [];
+  const siteProfileTotal = Number(siteProfileSummary.total_profiles || 0);
+  const publishingProfileCount = Number(siteProfileSummary.publishing_profiles || 0);
+  const targetProfileCount = Number(siteProfileSummary.target_profiles || 0);
+  const latestProfileRefresh = siteProfileSummary.latest_profile_update_at
+    ? formatPublishedAt(siteProfileSummary.latest_profile_update_at)
+    : t("notAvailable");
+  const totalPairFits = Number(siteFitSummary.total_pair_fits || 0);
+  const acceptedPairFits = Number(siteFitSummary.accepted_pair_fits || 0);
+  const rejectedPairFits = Number(siteFitSummary.rejected_pair_fits || 0);
+  const acceptedPairFitPercent = totalPairFits > 0
+    ? Math.round((acceptedPairFits / totalPairFits) * 100)
+    : 0;
+  const latestPairFitRefresh = siteFitSummary.latest_pair_fit_update_at
+    ? formatPublishedAt(siteFitSummary.latest_pair_fit_update_at)
+    : t("notAvailable");
+  const autoSelectedHostCount = recentHostDecisions.filter((item) => item.auto_selected).length;
   const getFilteredSitesForQuery = (query) => {
     const normalizedQuery = (query || "").trim().toLowerCase();
     return sortByLabel(sites, (site) => `${site.site_url || ""} ${site.name || ""}`).filter((site) => {
@@ -2614,6 +2664,40 @@ export default function App() {
                     {t("adminTrendCacheLatestRefresh")}: {keywordTrendLatestRefresh}
                   </span>
                 </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminSiteProfileTitle")}</h3>
+                  <p className="muted-text">{t("adminSiteProfileBody")}</p>
+                  <strong className="admin-summary-number">{siteProfileTotal}</strong>
+                  <span className="muted-text">
+                    {publishingProfileCount} / {targetProfileCount} {t("adminSiteProfileSplitLabel")}
+                  </span>
+                </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminPairFitTitle")}</h3>
+                  <p className="muted-text">{t("adminPairFitBody")}</p>
+                  <strong className="admin-summary-number">
+                    {totalPairFits > 0 ? `${acceptedPairFitPercent}%` : "0%"}
+                  </strong>
+                  <span className="muted-text">
+                    {acceptedPairFits} / {totalPairFits} {t("adminPairFitAcceptedLabel")}
+                  </span>
+                </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminPairFitRejectedTitle")}</h3>
+                  <p className="muted-text">{t("adminPairFitRejectedBody")}</p>
+                  <strong className="admin-summary-number">{rejectedPairFits}</strong>
+                  <span className="muted-text">
+                    {t("adminPairFitLatestRefresh")}: {latestPairFitRefresh}
+                  </span>
+                </div>
+                <div className="panel admin-summary-card">
+                  <h3>{t("adminAutoHostTitle")}</h3>
+                  <p className="muted-text">{t("adminAutoHostBody")}</p>
+                  <strong className="admin-summary-number">{autoSelectedHostCount}</strong>
+                  <span className="muted-text">
+                    {t("adminSiteProfileLatestRefresh")}: {latestProfileRefresh}
+                  </span>
+                </div>
               </div>
 
               <div className="admin-trend-panel">
@@ -2649,6 +2733,116 @@ export default function App() {
                           <span>{t("adminTrendCacheHitCount")}: {item.hit_count || 0}</span>
                           <span>{t("adminTrendCacheLatestRefresh")}: {item.fetched_at ? formatPublishedAt(item.fetched_at) : t("notAvailable")}</span>
                         </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="admin-trend-panel">
+                <div className="admin-trend-header">
+                  <div>
+                    <h3>{t("adminSiteProfileRecentTitle")}</h3>
+                    <p className="muted-text">{t("adminSiteProfileRecentBody")}</p>
+                  </div>
+                  <button
+                    className="btn secondary small"
+                    type="button"
+                    onClick={() => loadSiteFitDashboard()}
+                    disabled={siteFitLoading}
+                  >
+                    {siteFitLoading ? t("loading") : t("refresh")}
+                  </button>
+                </div>
+                {siteProfileRecent.length === 0 && !siteFitLoading ? (
+                  <p className="muted-text">{t("adminSiteProfileNoData")}</p>
+                ) : (
+                  <div className="admin-trend-list">
+                    {siteProfileRecent.map((item) => (
+                      <div key={`${item.normalized_url}-${item.updated_at || ""}`} className="admin-trend-item">
+                        <div className="admin-trend-query-row">
+                          <strong>{item.normalized_url}</strong>
+                          <span className="admin-trend-status neutral">
+                            {item.profile_kind === "publishing_site" ? t("adminSiteProfileKindPublishing") : t("adminSiteProfileKindTarget")}
+                          </span>
+                        </div>
+                        <div className="admin-trend-meta">
+                          <span>{item.primary_context || item.domain_level_topic || t("notAvailable")}</span>
+                          <span>{t("adminSiteProfileGeneratorLabel")}: {item.generator_mode || t("notAvailable")}</span>
+                          <span>{t("adminSiteProfileLatestRefresh")}: {item.updated_at ? formatPublishedAt(item.updated_at) : t("notAvailable")}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="admin-trend-panel">
+                <div className="admin-trend-header">
+                  <div>
+                    <h3>{t("adminPairFitRecentTitle")}</h3>
+                    <p className="muted-text">{t("adminPairFitRecentBody")}</p>
+                  </div>
+                </div>
+                {siteFitRecent.length === 0 && !siteFitLoading ? (
+                  <p className="muted-text">{t("adminPairFitNoData")}</p>
+                ) : (
+                  <div className="admin-trend-list">
+                    {siteFitRecent.map((item) => (
+                      <div key={`${item.publishing_site_url}-${item.target_url}-${item.updated_at || ""}`} className="admin-trend-item">
+                        <div className="admin-trend-query-row">
+                          <strong>{item.final_article_topic || `${item.publishing_site_name} -> ${item.target_url}`}</strong>
+                          <span className={`admin-trend-status ${item.decision === "accepted" ? "fresh" : "stale"}`}>
+                            {item.decision === "accepted" ? t("adminPairFitDecisionAccepted") : t("adminPairFitDecisionRejected")}
+                          </span>
+                        </div>
+                        <div className="admin-trend-meta">
+                          <span>{item.publishing_site_name || item.publishing_site_url}</span>
+                          <span>{t("adminPairFitScoreLabel")}: {item.fit_score || 0}</span>
+                          <span>{item.target_url}</span>
+                          <span>{t("adminPairFitLatestRefresh")}: {item.updated_at ? formatPublishedAt(item.updated_at) : t("notAvailable")}</span>
+                        </div>
+                        {item.best_overlap_reason ? (
+                          <p className="muted-text small-text admin-trend-detail">{item.best_overlap_reason}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="admin-trend-panel">
+                <div className="admin-trend-header">
+                  <div>
+                    <h3>{t("adminAutoHostRecentTitle")}</h3>
+                    <p className="muted-text">{t("adminAutoHostRecentBody")}</p>
+                  </div>
+                </div>
+                {recentHostDecisions.length === 0 && !siteFitLoading ? (
+                  <p className="muted-text">{t("adminAutoHostNoData")}</p>
+                ) : (
+                  <div className="admin-trend-list">
+                    {recentHostDecisions.map((item) => (
+                      <div key={item.job_id} className="admin-trend-item">
+                        <div className="admin-trend-query-row">
+                          <strong>{item.topic || item.target_url || item.publishing_site_name}</strong>
+                          <span className={`admin-trend-status ${item.auto_selected ? "fresh" : "neutral"}`}>
+                            {item.auto_selected ? t("adminAutoHostStatusAuto") : t("adminAutoHostStatusManual")}
+                          </span>
+                        </div>
+                        <div className="admin-trend-meta">
+                          <span>{item.client_name}</span>
+                          <span>{item.publishing_site_name || item.publishing_site_url}</span>
+                          <span>{t("adminPairFitScoreLabel")}: {item.fit_score || 0}</span>
+                          <span>{item.created_at ? formatPublishedAt(item.created_at) : t("notAvailable")}</span>
+                        </div>
+                        <div className="admin-trend-meta">
+                          <span>{item.target_url || t("notAvailable")}</span>
+                          <span>{formatPublishedStatus(item.job_status)}</span>
+                        </div>
+                        {item.overlap_reason ? (
+                          <p className="muted-text small-text admin-trend-detail">{item.overlap_reason}</p>
+                        ) : null}
                       </div>
                     ))}
                   </div>

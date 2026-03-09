@@ -6,6 +6,7 @@ from .db_updater_routes import router as db_updater_router
 from .jobs_routes import router as jobs_router
 from .keyword_trend_routes import router as keyword_trend_router
 from .automation_routes import router as automation_router
+from .site_fit_routes import router as site_fit_router
 from .site_credentials_routes import router as site_credentials_router
 from .sites_routes import router as sites_router
 from .submissions_routes import router as submissions_router
@@ -17,6 +18,7 @@ __all__ = [
     "clients_router",
     "db_updater_router",
     "keyword_trend_router",
+    "site_fit_router",
     "sites_router",
     "site_credentials_router",
     "client_site_access_router",

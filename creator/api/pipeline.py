@@ -2739,7 +2739,7 @@ def _generate_article_by_sections(
             base_url=llm_base_url,
             model=llm_model,
             timeout_seconds=http_timeout,
-            max_tokens=320,
+            max_tokens=3000,
             temperature=0.2,
             request_label="phase5_fallback_intro",
             usage_collector=usage_collector,
@@ -2803,7 +2803,7 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=750,
+                max_tokens=3000,
                 temperature=0.2,
                 request_label=f"phase5_fallback_section_{index}",
                 usage_collector=usage_collector,
@@ -2852,7 +2852,7 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=220,
+                max_tokens=3000,
                 temperature=0.2,
                 request_label="phase5_fallback_expand",
                 usage_collector=usage_collector,
@@ -2991,12 +2991,12 @@ def run_creator_pipeline(
     http_retries = _read_non_negative_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
     site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
-    phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
+    phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 3000)
     phase4_max_attempts = 1
-    phase4_max_tokens = _read_int_env("CREATOR_PHASE4_MAX_TOKENS", 1200)
+    phase4_max_tokens = _read_int_env("CREATOR_PHASE4_MAX_TOKENS", 3000)
     phase5_max_attempts = 1
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 3000)
-    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 3000)
     phase5_fallback_expand_passes = 0
     phase7_repair_attempts = 0
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
@@ -3849,7 +3849,7 @@ def run_creator_pipeline(
                     base_url=llm_base_url,
                     model=planning_model,
                     timeout_seconds=http_timeout,
-                    max_tokens=1600,
+                    max_tokens=3000,
                     allow_html_fallback=False,
                     request_label="phase7_repair",
                     usage_collector=_collect_llm_usage,

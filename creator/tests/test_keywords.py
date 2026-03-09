@@ -18,6 +18,7 @@ from creator.api.pipeline import (
     _fetch_google_de_suggestions,
     _inject_faq_section,
     _merge_phase2_analysis,
+    _normalize_section_html,
     _pair_fit_cache_payload_is_usable,
     _run_pair_fit_reasoning,
     _select_keywords,
@@ -77,6 +78,39 @@ def test_select_keywords_contract():
     assert len(set(result["secondary_keywords"])) == len(result["secondary_keywords"])
     assert 1 <= len(result["faq_candidates"]) <= 5
     assert all(isinstance(item, str) and item.strip() for item in result["faq_candidates"])
+
+
+def test_select_keywords_filters_low_signal_secondary_phrases():
+    result = _select_keywords(
+        topic="Kinder Sonnenbrillen im Sommer",
+        llm_primary="kinder sonnenbrillen",
+        llm_secondary=[
+            "spannende und aktuelle themen",
+            "wertvolle infos fuer eltern",
+            "uv schutz fuer kinderaugen",
+            "sonnenbrillen fuer familienausfluege",
+        ],
+        keyword_cluster=["kinder", "sonnenbrillen", "uv schutz", "sommer"],
+        allowed_topics=[
+            "Spannende und aktuelle Themen",
+            "Kinderaugen vor UV Strahlung schuetzen",
+            "Familienalltag im Sommer",
+        ],
+        trend_candidates=[
+            "kinder sonnenbrillen uv schutz",
+            "uv schutz fuer kinderaugen",
+            "sonnenbrillen fuer familienausfluege",
+            "kinderaugen sommer schutz",
+        ],
+        faq_candidates=[
+            "was ist bei sonnenbrillen fuer kinder wichtig",
+            "wie schuetzt man kinderaugen im sommer",
+            "wann brauchen kinder uv schutz",
+        ],
+    )
+
+    assert "spannende und aktuelle themen" not in result["secondary_keywords"]
+    assert "wertvolle infos fuer eltern" not in result["secondary_keywords"]
 
 
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
@@ -150,6 +184,21 @@ def test_inject_faq_section_after_fazit():
     assert updated[-2]["h2"] == "Fazit"
     assert updated[-1]["h2"] == "FAQ"
     assert len(updated[-1]["h3"]) >= 2
+
+
+def test_normalize_section_html_preserves_all_faq_questions():
+    html = _normalize_section_html(
+        "FAQ",
+        [
+            "Was ist wichtig?",
+            "Wie finden Eltern die passende Groesse?",
+            "Wann ist UV Schutz besonders wichtig?",
+        ],
+        "<p>Kinderaugen sind empfindlich und brauchen im Alltag guten Schutz. Eltern sollten auf Sitz, UV Filter und Einsatzbereich achten. Gerade im Sommer ist ein konsequenter Schutz wichtig.</p>",
+    )
+
+    assert html.count("<h3>") == 3
+    assert word_count_from_html(html) >= 12
 
 
 def test_build_deterministic_outline_produces_valid_structure():

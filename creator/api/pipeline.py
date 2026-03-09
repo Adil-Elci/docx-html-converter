@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -178,6 +179,11 @@ FAQ_MIN_QUESTIONS = 3
 FAQ_MIN_WORDS = 80
 ARTICLE_MIN_WORDS = 500
 ARTICLE_MAX_WORDS = 1200
+KEYWORD_LOW_SIGNAL_TOKENS = {
+    "aktuell", "aktuelle", "aktuellen", "allgemein", "beitrag", "beitraege", "beliebt", "beliebte",
+    "entdecken", "hilfe", "hilfreich", "infos", "magazin", "mehr", "ratgeber", "spannend", "spannende",
+    "thema", "themen", "tipps", "wissen", "wertvolle",
+}
 
 GERMAN_KEYWORD_MODIFIERS = (
     "tipps",
@@ -1659,6 +1665,21 @@ def _is_valid_keyword_phrase(value: str) -> bool:
     return len(_keyword_token_set(normalized)) >= 2
 
 
+def _is_low_signal_keyword_phrase(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return True
+    tokens = [token for token in _keyword_token_set(normalized) if token]
+    if not tokens:
+        return True
+    low_signal_hits = sum(1 for token in tokens if token in KEYWORD_LOW_SIGNAL_TOKENS)
+    if low_signal_hits >= len(tokens):
+        return True
+    if len(tokens) >= 3 and low_signal_hits >= len(tokens) - 1:
+        return True
+    return False
+
+
 def _keyword_similarity(a: str, b: str) -> float:
     ta = _keyword_token_set(a)
     tb = _keyword_token_set(b)
@@ -1676,6 +1697,8 @@ def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
     for item in values:
         normalized = _normalize_keyword_phrase(item)
         if not _is_valid_keyword_phrase(normalized):
+            continue
+        if _is_low_signal_keyword_phrase(normalized):
             continue
         if any(_keyword_similarity(normalized, existing) >= 0.75 for existing in out):
             continue
@@ -2808,12 +2831,51 @@ def _wrap_paragraphs(text: str) -> str:
 
 def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
     cleaned = _strip_code_fences(raw)
-    cleaned = re.sub(r"<h[1-3][^>]*>.*?</h[1-3]>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    existing_h3_blocks = list(
+        re.finditer(
+            r"<h3[^>]*>(.*?)</h3>(.*?)(?=<h3[^>]*>|$)",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+    cleaned = re.sub(r"<h[1-2][^>]*>.*?</h[1-2]>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     body = cleaned if re.search(r"<(?:p|ul|ol|table)\b", cleaned, flags=re.IGNORECASE) else _wrap_paragraphs(cleaned)
     html = f"<h2>{h2}</h2>"
     if h3s:
-        for h3 in h3s:
+        if existing_h3_blocks:
+            rendered = []
+            for block in existing_h3_blocks:
+                heading = _strip_html_tags(block.group(1)).strip()
+                content = (block.group(2) or "").strip()
+                if not heading:
+                    continue
+                if content and not re.search(r"<(?:p|ul|ol|table)\b", content, flags=re.IGNORECASE):
+                    content = _wrap_paragraphs(content)
+                rendered.append((heading, content))
+            for idx, h3 in enumerate(h3s):
+                html += f"<h3>{h3}</h3>"
+                matched = next((content for heading, content in rendered if _keyword_similarity(heading, h3) >= 0.75), "")
+                if not matched and idx < len(rendered):
+                    matched = rendered[idx][1]
+                html += matched or "<p></p>"
+            return html
+
+        plain_text = re.sub(r"\s+", " ", _strip_html_tags(body)).strip()
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", plain_text) if part.strip()]
+        chunks: List[str] = []
+        if sentences:
+            chunk_size = max(1, math.ceil(len(sentences) / max(1, len(h3s))))
+            for idx in range(len(h3s)):
+                chunk = " ".join(sentences[idx * chunk_size:(idx + 1) * chunk_size]).strip()
+                chunks.append(chunk)
+        while len(chunks) < len(h3s):
+            chunks.append("")
+        for idx, h3 in enumerate(h3s):
             html += f"<h3>{h3}</h3>"
+            answer = chunks[idx].strip()
+            html += _wrap_paragraphs(answer) or "<p></p>"
+        return html
+
     if body:
         html += body
     return html
@@ -3294,7 +3356,7 @@ def _generate_article_by_sections(
         if "faq" in h2.lower():
             section_user += (
                 f"\nThis is the FAQ section. Answer these questions clearly and directly: {faq_candidates[:3]}. "
-                "Use the H3 questions as subheadings, avoid duplicate questions, and write 25-45 words per answer in German."
+                "Use the H3 questions as subheadings, avoid duplicate questions, and write 35-55 words per answer in German."
             )
         elif structured_mode == "list" and index == 1:
             section_user += "\nInclude a meaningful HTML list (<ul> or <ol>) in this section."

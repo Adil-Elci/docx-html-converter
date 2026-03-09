@@ -817,7 +817,7 @@ def _run_pair_fit_reasoning(
         base_url=llm_base_url,
         model=planning_model,
         timeout_seconds=timeout_seconds,
-        max_tokens=1200,
+        max_tokens=3000,
         temperature=0.1,
         request_label="phase3_pair_fit",
         usage_collector=usage_collector,

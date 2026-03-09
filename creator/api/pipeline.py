@@ -40,7 +40,7 @@ DEFAULT_OPENAI_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_ANTHROPIC_PLANNING_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_ANTHROPIC_WRITING_MODEL = "claude-sonnet-4-6"
 DEFAULT_TIMEOUT_SECONDS = 20
-DEFAULT_HTTP_RETRIES = 2
+DEFAULT_HTTP_RETRIES = 0
 DEFAULT_LEONARDO_BASE_URL = "https://cloud.leonardo.ai/api/rest/v1"
 DEFAULT_LEONARDO_MODEL_ID = "1dd50843-d653-4516-a8e3-f0238ee453ff"
 DEFAULT_IMAGE_WIDTH = 1024
@@ -140,6 +140,10 @@ def _read_int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _read_non_negative_int_env(name: str, default: int) -> int:
+    return max(0, _read_int_env(name, default))
 
 
 def _read_float_env(name: str, default: float) -> float:
@@ -2244,6 +2248,7 @@ def _generate_article_by_sections(
     llm_base_url: str,
     llm_model: str,
     http_timeout: int,
+    expand_passes: int,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Optional[Dict[str, Any]]:
     outline_items = phase4.get("outline") or []
@@ -2372,7 +2377,7 @@ def _generate_article_by_sections(
     article_html = _ensure_required_h1(article_html, phase4.get("h1", ""))
 
     word_count = word_count_from_html(article_html)
-    for _expand_pass in range(3):
+    for _expand_pass in range(max(0, expand_passes)):
         if word_count >= 650:
             break
         expand_system = "Write an additional paragraph for a German (de-DE) blog post in HTML. Return only HTML."
@@ -2521,13 +2526,16 @@ def run_creator_pipeline(
     current_year = datetime.datetime.now().year
 
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
-    http_retries = _read_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
+    http_retries = _read_non_negative_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
     site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
     phase2_prompt_chars = _read_int_env("CREATOR_PHASE2_PROMPT_CHARS", 2500)
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 400)
-    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2)))
+    phase4_max_attempts = max(1, _read_int_env("CREATOR_PHASE4_MAX_ATTEMPTS", 1))
+    phase5_max_attempts = max(1, min(2, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 1)))
     phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 1800)
     phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1200)
+    phase5_fallback_expand_passes = _read_non_negative_int_env("CREATOR_PHASE5_FALLBACK_EXPAND_PASSES", 0)
+    phase7_repair_attempts = _read_non_negative_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 0)
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
     internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
     internal_link_candidates_max = max(internal_link_max, _read_int_env("CREATOR_INTERNAL_LINK_CANDIDATES_MAX", 10))
@@ -3054,7 +3062,7 @@ def run_creator_pipeline(
     phase4 = {}
     outline_errors: List[str] = []
     faq_candidates = _ensure_faq_candidates(phase3.get("final_article_topic", ""), phase3.get("faq_candidates") or [])
-    for attempt in range(1, 3):
+    for attempt in range(1, phase4_max_attempts + 1):
         system_prompt = (
             f"Create a German (de-DE) SEO article outline using the REQUIRED H1 exactly. Provide {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, optional H3. "
             "The penultimate H2 must be titled 'Fazit'. "
@@ -3445,6 +3453,7 @@ def run_creator_pipeline(
             llm_base_url=llm_base_url,
             llm_model=planning_model,
             http_timeout=http_timeout,
+            expand_passes=phase5_fallback_expand_passes,
             usage_collector=_collect_llm_usage,
         )
         if fallback_payload:
@@ -3626,123 +3635,124 @@ def run_creator_pipeline(
     )
 
     if phase7_errors:
-        # one fix pass
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
-        wc_ok = 600 <= current_wc <= 850
-        if wc_ok:
-            wc_instruction = (
-                f"The word count ({current_wc}) is fine - do NOT add or remove content. "
-                "Only fix the specific issues listed below."
+        for repair_attempt in range(phase7_repair_attempts):
+            wc_ok = 600 <= current_wc <= 850
+            if wc_ok:
+                wc_instruction = (
+                    f"The word count ({current_wc}) is fine - do NOT add or remove content. "
+                    "Only fix the specific issues listed below."
+                )
+            else:
+                wc_instruction = (
+                    f"The article currently has {current_wc} words. "
+                    "Adjust it to be between 650 and 800 words."
+                )
+            system_prompt = (
+                "Fix the HTML article to satisfy SEO checks. "
+                f"{wc_instruction} "
+                f"Keep {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
+                "The penultimate H2 must be 'Fazit' and the final H2 must be 'FAQ'. "
+                "Enforce link contract: exactly one backlink to Backlink URL, "
+                f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
+                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
+                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
+                "Keep the required meta title and slug aligned with the SEO contract. "
+                "If structured content mode is 'list', include at least one meaningful HTML list. "
+                "If structured content mode is 'table', include at least one meaningful HTML table. "
+                "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
+                "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
+                "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
+                "Return JSON only."
             )
-        else:
-            wc_instruction = (
-                f"The article currently has {current_wc} words. "
-                "Adjust it to be between 650 and 800 words."
+            user_prompt = (
+                f"Article_html: {phase5['article_html']}\n"
+                f"Issues to fix: {phase7_errors}\n"
+                f"Current word count: {current_wc}\n"
+                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
+                f"Required slug: {phase3['title_package']['slug']}\n"
+                f"Backlink URL: {backlink_url}\n"
+                f"Placement: {phase4['backlink_placement']}\n"
+                f"Anchor text: {phase4['anchor_text_final']}\n"
+                f"FAQ candidates: {(phase3.get('faq_candidates') or [])[:3]}\n"
+                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
+                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
+                f"Primary keyword: {phase3['primary_keyword']}\n"
+                f"Secondary keywords: {phase3['secondary_keywords']}\n"
+                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
+                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
+                "Language: German (de-DE).\n"
+                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
+                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
-        system_prompt = (
-            "Fix the HTML article to satisfy SEO checks. "
-            f"{wc_instruction} "
-            f"Keep {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
-            "The penultimate H2 must be 'Fazit' and the final H2 must be 'FAQ'. "
-            "Enforce link contract: exactly one backlink to Backlink URL, "
-            f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
-            f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-            "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-            "Keep the required meta title and slug aligned with the SEO contract. "
-            "If structured content mode is 'list', include at least one meaningful HTML list. "
-            "If structured content mode is 'table', include at least one meaningful HTML table. "
-            "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
-            "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
-            "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
-            "Return JSON only."
-        )
-        user_prompt = (
-            f"Article_html: {phase5['article_html']}\n"
-            f"Issues to fix: {phase7_errors}\n"
-            f"Current word count: {current_wc}\n"
-            f"Required meta_title: {phase3['title_package']['meta_title']}\n"
-            f"Required slug: {phase3['title_package']['slug']}\n"
-            f"Backlink URL: {backlink_url}\n"
-            f"Placement: {phase4['backlink_placement']}\n"
-            f"Anchor text: {phase4['anchor_text_final']}\n"
-            f"FAQ candidates: {(phase3.get('faq_candidates') or [])[:3]}\n"
-            f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
-            f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-            f"Primary keyword: {phase3['primary_keyword']}\n"
-            f"Secondary keywords: {phase3['secondary_keywords']}\n"
-            f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-            f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
-            "Language: German (de-DE).\n"
-            "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-            "\"excerpt\":\"...\",\"article_html\":\"...\"}"
-        )
-        try:
-            llm_out = call_llm_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                model=planning_model,
-                timeout_seconds=http_timeout,
-                max_tokens=1600,
-                allow_html_fallback=False,
-                request_label="phase7_repair",
-                usage_collector=_collect_llm_usage,
-            )
-            fixed_html = (llm_out.get("article_html") or "").strip()
-            fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
-            logger.info("creator.phase7.fix_result before=%s after=%s", current_wc, fixed_wc)
-            # Accept the fix only if it stays within bounds
-            if fixed_html and 600 <= fixed_wc <= 850:
-                phase5["article_html"] = fixed_html
-            elif fixed_html and fixed_wc > 0:
-                # Fix went out of bounds; keep original if it was in bounds
-                if not wc_ok:
+            try:
+                llm_out = call_llm_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    api_key=llm_api_key,
+                    base_url=llm_base_url,
+                    model=planning_model,
+                    timeout_seconds=http_timeout,
+                    max_tokens=1600,
+                    allow_html_fallback=False,
+                    request_label="phase7_repair",
+                    usage_collector=_collect_llm_usage,
+                )
+                fixed_html = (llm_out.get("article_html") or "").strip()
+                fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
+                logger.info("creator.phase7.fix_result attempt=%s before=%s after=%s", repair_attempt + 1, current_wc, fixed_wc)
+                if fixed_html and 600 <= fixed_wc <= 850:
                     phase5["article_html"] = fixed_html
-            phase5["article_html"] = _repair_link_constraints(
-                article_html=phase5["article_html"],
-                backlink_url=backlink_url,
-                publishing_site_url=publishing_site_url,
-                internal_links=internal_link_candidates,
-                internal_link_anchor_map=internal_link_anchor_map,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-                backlink_placement=phase4["backlink_placement"],
-                anchor_text=phase4["anchor_text_final"],
-                required_h1=phase4["h1"],
-            )
-            phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
-            phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
-            phase5["slug"] = llm_out.get("slug") or phase5["slug"]
-            phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
-            phase5["meta_title"] = phase3["title_package"]["meta_title"]
-            phase5["slug"] = phase3["title_package"]["slug"]
-            phase5["meta_description"] = _build_deterministic_meta_description(
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3["primary_keyword"],
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-            )
-            phase5 = _fill_article_metadata(phase5, phase4["h1"])
-            phase7_errors = _collect_article_validation_errors(
-                article_html=phase5["article_html"],
-                meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
-                meta_description=phase5.get("meta_description") or "",
-                slug=phase5.get("slug") or phase3["title_package"]["slug"],
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3.get("primary_keyword", ""),
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                required_h1=phase4["h1"],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-                backlink_url=backlink_url,
-                backlink_placement=phase4["backlink_placement"],
-                publishing_site_url=publishing_site_url,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-            )
-        except LLMError as exc:
-            phase7_errors.append(f"phase7_fix_failed:{exc}")
+                elif fixed_html and fixed_wc > 0 and not wc_ok:
+                    phase5["article_html"] = fixed_html
+                phase5["article_html"] = _repair_link_constraints(
+                    article_html=phase5["article_html"],
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    internal_links=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                    backlink_placement=phase4["backlink_placement"],
+                    anchor_text=phase4["anchor_text_final"],
+                    required_h1=phase4["h1"],
+                )
+                phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
+                phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
+                phase5["slug"] = llm_out.get("slug") or phase5["slug"]
+                phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
+                phase5["meta_title"] = phase3["title_package"]["meta_title"]
+                phase5["slug"] = phase3["title_package"]["slug"]
+                phase5["meta_description"] = _build_deterministic_meta_description(
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3["primary_keyword"],
+                    secondary_keywords=phase3.get("secondary_keywords") or [],
+                    structured_mode=phase3.get("structured_content_mode", "none"),
+                )
+                phase5 = _fill_article_metadata(phase5, phase4["h1"])
+                phase7_errors = _collect_article_validation_errors(
+                    article_html=phase5["article_html"],
+                    meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
+                    meta_description=phase5.get("meta_description") or "",
+                    slug=phase5.get("slug") or phase3["title_package"]["slug"],
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3.get("primary_keyword", ""),
+                    secondary_keywords=phase3.get("secondary_keywords") or [],
+                    required_h1=phase4["h1"],
+                    structured_mode=phase3.get("structured_content_mode", "none"),
+                    backlink_url=backlink_url,
+                    backlink_placement=phase4["backlink_placement"],
+                    publishing_site_url=publishing_site_url,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                )
+                current_wc = word_count_from_html(phase5["article_html"])
+                if not phase7_errors:
+                    break
+            except LLMError as exc:
+                phase7_errors.append(f"phase7_fix_failed:{exc}")
+                break
 
     if phase7_errors:
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")

@@ -744,6 +744,8 @@ def call_creator_service(
     creator_endpoint: str,
     target_site_url: str,
     publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    client_target_site_id: Optional[str],
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
@@ -752,6 +754,10 @@ def call_creator_service(
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
+    target_profile_payload: Optional[Dict[str, Any]] = None,
+    target_profile_content_hash: Optional[str] = None,
+    publishing_profile_payload: Optional[Dict[str, Any]] = None,
+    publishing_profile_content_hash: Optional[str] = None,
     timeout_seconds: int,
     on_phase: Optional[Callable[[int, str, int], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
@@ -762,6 +768,10 @@ def call_creator_service(
         "target_site_url": target_site_url,
         "publishing_site_url": publishing_site_url,
     }
+    if publishing_site_id:
+        body["publishing_site_id"] = publishing_site_id
+    if client_target_site_id:
+        body["client_target_site_id"] = client_target_site_id
     if anchor:
         body["anchor"] = anchor
     if topic:
@@ -779,6 +789,16 @@ def call_creator_service(
         body["phase2_cache"] = {
             "content_hash": phase2_cache_content_hash,
             "payload": phase2_cache_payload,
+        }
+    if target_profile_payload and target_profile_content_hash:
+        body["target_profile"] = {
+            "content_hash": target_profile_content_hash,
+            "payload": target_profile_payload,
+        }
+    if publishing_profile_payload and publishing_profile_content_hash:
+        body["publishing_profile"] = {
+            "content_hash": publishing_profile_content_hash,
+            "payload": publishing_profile_payload,
         }
 
     if on_phase is not None:
@@ -874,6 +894,8 @@ def run_create_article_pipeline(
     creator_endpoint: str,
     target_site_url: str,
     publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    client_target_site_id: Optional[str],
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
@@ -882,6 +904,10 @@ def run_create_article_pipeline(
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
+    target_profile_payload: Optional[Dict[str, Any]] = None,
+    target_profile_content_hash: Optional[str] = None,
+    publishing_profile_payload: Optional[Dict[str, Any]] = None,
+    publishing_profile_content_hash: Optional[str] = None,
     on_phase: Optional[Callable[[int, str, int], None]] = None,
     site_url: str,
     wp_rest_base: str,
@@ -913,6 +939,8 @@ def run_create_article_pipeline(
         creator_endpoint=creator_endpoint,
         target_site_url=target_site_url,
         publishing_site_url=publishing_site_url,
+        publishing_site_id=publishing_site_id,
+        client_target_site_id=client_target_site_id,
         anchor=anchor,
         topic=topic,
         exclude_topics=exclude_topics,
@@ -921,6 +949,10 @@ def run_create_article_pipeline(
         phase1_cache_content_hash=phase1_cache_content_hash,
         phase2_cache_payload=phase2_cache_payload,
         phase2_cache_content_hash=phase2_cache_content_hash,
+        target_profile_payload=target_profile_payload,
+        target_profile_content_hash=target_profile_content_hash,
+        publishing_profile_payload=publishing_profile_payload,
+        publishing_profile_content_hash=publishing_profile_content_hash,
         timeout_seconds=creator_timeout_seconds,
         on_phase=on_phase,
         should_cancel=should_cancel,

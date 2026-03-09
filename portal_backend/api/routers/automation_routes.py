@@ -52,6 +52,7 @@ from ..portal_schemas import (
     AutomationStatusEventOut,
     AutomationStatusOut,
 )
+from ..site_profiles import select_best_publishing_site_for_target
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
@@ -161,6 +162,88 @@ def _resolve_publishing_site(db: Session, publishing_site: str) -> Site:
             return site
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active site matches publishing_site.")
+
+
+def _candidate_publishing_sites_for_client(db: Session, *, client_id: UUID, enforce_client_site_access: bool) -> list[Site]:
+    query = db.query(Site).filter(Site.status == "active")
+    if enforce_client_site_access:
+        allowed_ids = [
+            row.site_id
+            for row in (
+                db.query(ClientSiteAccess.site_id)
+                .filter(
+                    ClientSiteAccess.client_id == client_id,
+                    ClientSiteAccess.enabled.is_(True),
+                )
+                .all()
+            )
+        ]
+        if not allowed_ids:
+            return []
+        query = query.filter(Site.id.in_(allowed_ids))
+    return query.order_by(Site.name.asc(), Site.created_at.asc()).all()
+
+
+def _resolve_or_auto_select_publishing_site(
+    db: Session,
+    *,
+    payload: AutomationSubmitArticleIn,
+    client: Client,
+    client_target_site: Optional[ClientTargetSite],
+    enforce_client_site_access: bool,
+) -> Site:
+    explicit_site = (payload.publishing_site or "").strip()
+    if explicit_site:
+        return _resolve_publishing_site(db, explicit_site)
+    target_url = (
+        (client_target_site.target_site_url or "").strip()
+        if client_target_site is not None
+        else (payload.target_site_url or "").strip()
+    )
+    if not target_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="target_site_url is required when publishing_site is omitted.",
+        )
+    candidate_sites = _candidate_publishing_sites_for_client(
+        db,
+        client_id=client.id,
+        enforce_client_site_access=enforce_client_site_access,
+    )
+    if not candidate_sites:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No eligible publishing sites are available for auto-selection.",
+        )
+    best_site, target_profile, _target_profile_record, ranked = select_best_publishing_site_for_target(
+        db,
+        target_site_url=target_url,
+        candidate_sites=candidate_sites,
+        client_target_site_id=client_target_site.id if client_target_site is not None else None,
+        timeout_seconds=10,
+        max_pages=3,
+        min_score=max(10, int(os.getenv("AUTOMATION_AUTO_SITE_MIN_SCORE", "18"))),
+    )
+    if best_site is None:
+        top_reason = ranked[0]["details"] if ranked else {}
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "no_natural_publishing_site_fit",
+                "target_site_url": target_url,
+                "target_primary_context": str(target_profile.get("primary_context") or ""),
+                "candidates": ranked[:5],
+                "details": top_reason,
+            },
+        )
+    logger.info(
+        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s target=%s",
+        client.id,
+        best_site.id,
+        ranked[0]["score"] if ranked else 0,
+        target_url,
+    )
+    return best_site
 
 
 def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:
@@ -716,7 +799,7 @@ async def process_submit_article_webhook(
             detail="Article-creation requests require async or shadow mode.",
         )
 
-    site = _resolve_publishing_site(db, payload.publishing_site)
+    site: Optional[Site] = None
 
     if creator_create_article and payload.execution_mode in {"async", "shadow"}:
         try:
@@ -732,6 +815,13 @@ async def process_submit_article_webhook(
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
+        site = _resolve_or_auto_select_publishing_site(
+            db,
+            payload=payload,
+            client=client,
+            client_target_site=client_target_site,
+            enforce_client_site_access=enforce_client_site_access,
+        )
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
             if enforce_client_site_access:
@@ -773,6 +863,7 @@ async def process_submit_article_webhook(
         )
 
     if manual_create_article and payload.execution_mode in {"async", "shadow"}:
+        site = _resolve_publishing_site(db, payload.publishing_site or "")
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
         enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
@@ -820,6 +911,9 @@ async def process_submit_article_webhook(
         config = get_runtime_config()
     except AutomationError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    if site is None:
+        site = _resolve_publishing_site(db, payload.publishing_site or "")
 
     if not config["leonardo_api_key"]:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="LEONARDO_API_KEY is not set.")

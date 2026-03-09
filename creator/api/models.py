@@ -18,6 +18,19 @@ class Phase2CacheEnvelope(BaseModel):
         return value if isinstance(value, dict) else {}
 
 
+class SiteProfileEnvelope(BaseModel):
+    content_hash: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+    @validator("content_hash")
+    def _trim_content_hash(cls, value: str) -> str:
+        return (value or "").strip()
+
+    @validator("payload", pre=True, always=True)
+    def _validate_payload(cls, value: Any) -> Dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+
 class InternalLinkInventoryItem(BaseModel):
     url: HttpUrl
     title: str = ""
@@ -39,16 +52,20 @@ class InternalLinkInventoryItem(BaseModel):
 
 class CreatorRequest(BaseModel):
     target_site_url: HttpUrl
-    publishing_site_url: HttpUrl = Field(..., description="Publishing site URL (required for analysis)")
+    publishing_site_url: Optional[HttpUrl] = Field(default=None, description="Publishing site URL")
+    publishing_site_id: Optional[str] = None
+    client_target_site_id: Optional[str] = None
     anchor: Optional[str] = None
     topic: Optional[str] = None
     exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
     internal_link_inventory: List[InternalLinkInventoryItem] = Field(default_factory=list)
     phase1_cache: Optional[Phase2CacheEnvelope] = None
     phase2_cache: Optional[Phase2CacheEnvelope] = None
+    target_profile: Optional[SiteProfileEnvelope] = None
+    publishing_profile: Optional[SiteProfileEnvelope] = None
     dry_run: bool = False
 
-    @validator("anchor", "topic")
+    @validator("anchor", "topic", "publishing_site_id", "client_target_site_id")
     def _trim_optional(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value

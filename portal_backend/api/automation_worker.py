@@ -31,6 +31,7 @@ from .portal_models import (
     SiteDefaultCategory,
     Submission,
 )
+from .site_profiles import get_latest_site_profile, normalize_site_profile_url
 from .site_analysis_cache import (
     PHASE1_TARGET_ANALYSIS_CACHE_KIND,
     get_latest_site_analysis_cache,
@@ -385,6 +386,8 @@ class AutomationJobWorker:
                     creator_endpoint=run_config["creator_endpoint"],
                     target_site_url=payload.get("target_site_url") or "",
                     publishing_site_url=payload.get("site_url") or "",
+                    publishing_site_id=payload.get("publishing_site_id"),
+                    client_target_site_id=payload.get("target_site_id"),
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
@@ -393,6 +396,10 @@ class AutomationJobWorker:
                     phase1_cache_content_hash=payload.get("phase1_cache_content_hash"),
                     phase2_cache_payload=payload.get("phase2_cache_payload"),
                     phase2_cache_content_hash=payload.get("phase2_cache_content_hash"),
+                    target_profile_payload=payload.get("target_profile_payload"),
+                    target_profile_content_hash=payload.get("target_profile_content_hash"),
+                    publishing_profile_payload=payload.get("publishing_profile_payload"),
+                    publishing_profile_content_hash=payload.get("publishing_profile_content_hash"),
                     on_phase=_on_phase,
                     site_url=payload["site_url"],
                     wp_rest_base=payload["wp_rest_base"],
@@ -657,6 +664,10 @@ class AutomationJobWorker:
             phase1_cache_content_hash = ""
             phase2_cache_payload: Optional[Dict[str, Any]] = None
             phase2_cache_content_hash = ""
+            target_profile_payload: Optional[Dict[str, Any]] = None
+            target_profile_content_hash = ""
+            publishing_profile_payload: Optional[Dict[str, Any]] = None
+            publishing_profile_content_hash = ""
             if creator_mode:
                 if target_site_url:
                     normalized_target_url = normalize_site_analysis_url(target_site_url)
@@ -671,6 +682,15 @@ class AutomationJobWorker:
                     if latest_phase1_cache and isinstance(latest_phase1_cache.payload, dict):
                         phase1_cache_payload = latest_phase1_cache.payload
                         phase1_cache_content_hash = str(latest_phase1_cache.content_hash or "").strip()
+                    latest_target_profile = get_latest_site_profile(
+                        session,
+                        profile_kind="target_site",
+                        normalized_url=normalize_site_profile_url(target_site_url),
+                        client_target_site_id=target_site_id,
+                    )
+                    if latest_target_profile and isinstance(latest_target_profile.payload, dict):
+                        target_profile_payload = latest_target_profile.payload
+                        target_profile_content_hash = str(latest_target_profile.content_hash or "").strip()
 
                 normalized_site_url = normalize_site_analysis_url(site.site_url)
                 latest_phase2_cache = get_latest_site_analysis_cache(
@@ -683,6 +703,15 @@ class AutomationJobWorker:
                 if latest_phase2_cache and isinstance(latest_phase2_cache.payload, dict):
                     phase2_cache_payload = latest_phase2_cache.payload
                     phase2_cache_content_hash = str(latest_phase2_cache.content_hash or "").strip()
+                latest_publishing_profile = get_latest_site_profile(
+                    session,
+                    profile_kind="publishing_site",
+                    normalized_url=normalize_site_profile_url(site.site_url),
+                    publishing_site_id=site.id,
+                )
+                if latest_publishing_profile and isinstance(latest_publishing_profile.payload, dict):
+                    publishing_profile_payload = latest_publishing_profile.payload
+                    publishing_profile_content_hash = str(latest_publishing_profile.content_hash or "").strip()
 
             internal_link_inventory: List[Dict[str, Any]] = []
             if creator_mode:
@@ -712,10 +741,15 @@ class AutomationJobWorker:
                 "exclude_topics": exclude_topics,
                 "internal_link_inventory": internal_link_inventory,
                 "target_site_id": str(target_site_id) if target_site_id else "",
+                "publishing_site_id": str(site.id),
                 "phase1_cache_payload": phase1_cache_payload,
                 "phase1_cache_content_hash": phase1_cache_content_hash,
                 "phase2_cache_payload": phase2_cache_payload,
                 "phase2_cache_content_hash": phase2_cache_content_hash,
+                "target_profile_payload": target_profile_payload,
+                "target_profile_content_hash": target_profile_content_hash,
+                "publishing_profile_payload": publishing_profile_payload,
+                "publishing_profile_content_hash": publishing_profile_content_hash,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:

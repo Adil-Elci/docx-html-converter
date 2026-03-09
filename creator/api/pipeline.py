@@ -13,6 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .llm import LLMError, call_llm_json, call_llm_text
+from .site_fit_cache import get_site_fit_cache_entry, upsert_site_fit_cache_entry
 from .trend_cache import (
     get_keyword_trend_cache_entry,
     get_keyword_trend_cache_family_entries,
@@ -50,6 +51,7 @@ DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
 PHASE1_CACHE_PROMPT_VERSION = "v3"
 PHASE2_CACHE_PROMPT_VERSION = "v3"
+PAIR_FIT_PROMPT_VERSION = "v1"
 DEFAULT_SITE_ANALYSIS_MAX_PAGES = 4
 DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS = 1400
 SEO_TITLE_MIN_CHARS = 45
@@ -547,6 +549,169 @@ def _coerce_phase1_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str
         "sample_page_titles": [str(item).strip() for item in (value.get("sample_page_titles") or []) if str(item).strip()],
         "sample_urls": [str(item).strip() for item in (value.get("sample_urls") or []) if str(item).strip()],
     }
+
+
+def _coerce_site_profile_payload(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    normalized_url = str(value.get("normalized_url") or "").strip()
+    topics = [str(item).strip() for item in (value.get("topics") or []) if str(item).strip()]
+    contexts = [str(item).strip() for item in (value.get("contexts") or []) if str(item).strip()]
+    if not normalized_url and not topics and not contexts:
+        return None
+    return {
+        "normalized_url": normalized_url,
+        "page_title": str(value.get("page_title") or "").strip(),
+        "meta_description": str(value.get("meta_description") or "").strip(),
+        "visible_headings": [str(item).strip() for item in (value.get("visible_headings") or []) if str(item).strip()],
+        "repeated_keywords": [str(item).strip() for item in (value.get("repeated_keywords") or []) if str(item).strip()],
+        "sample_page_titles": [str(item).strip() for item in (value.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (value.get("sample_urls") or []) if str(item).strip()],
+        "domain_level_topic": str(value.get("domain_level_topic") or "").strip(),
+        "primary_context": str(value.get("primary_context") or "").strip(),
+        "topics": topics,
+        "contexts": contexts,
+        "content_tone": str(value.get("content_tone") or "").strip(),
+        "content_style": [str(item).strip() for item in (value.get("content_style") or []) if str(item).strip()],
+        "site_categories": [str(item).strip() for item in (value.get("site_categories") or []) if str(item).strip()],
+        "topic_clusters": [str(item).strip() for item in (value.get("topic_clusters") or []) if str(item).strip()],
+        "prominent_titles": [str(item).strip() for item in (value.get("prominent_titles") or []) if str(item).strip()],
+        "business_type": str(value.get("business_type") or "").strip(),
+        "services_or_products": [str(item).strip() for item in (value.get("services_or_products") or []) if str(item).strip()],
+        "business_intent": str(value.get("business_intent") or "").strip(),
+        "commerciality": int(value.get("commerciality") or 0),
+    }
+
+
+def _phase1_from_target_profile(profile: Dict[str, Any], *, target_site_url: str) -> Dict[str, Any]:
+    brand_name = str(profile.get("page_title") or "").strip()
+    if not brand_name:
+        brand_name = _guess_brand_name(target_site_url, "")
+    keyword_cluster = _merge_string_lists(
+        profile.get("repeated_keywords") or [],
+        profile.get("topics") or [],
+        profile.get("services_or_products") or [],
+        max_items=10,
+    )
+    anchor_type = "brand" if brand_name else ("partial_match" if keyword_cluster else "contextual_generic")
+    return {
+        "brand_name": brand_name,
+        "backlink_url": target_site_url,
+        "anchor_type": anchor_type,
+        "keyword_cluster": keyword_cluster,
+        "site_summary": str(profile.get("meta_description") or profile.get("domain_level_topic") or "").strip(),
+        "sample_page_titles": [str(item).strip() for item in (profile.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (profile.get("sample_urls") or []) if str(item).strip()],
+    }
+
+
+def _phase2_from_publishing_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_topics = _merge_string_lists(
+        profile.get("topics") or [],
+        profile.get("topic_clusters") or [],
+        profile.get("site_categories") or [],
+        max_items=12,
+    )
+    return {
+        "allowed_topics": allowed_topics,
+        "content_style_constraints": _merge_string_lists(
+            profile.get("content_style") or [],
+            [str(profile.get("content_tone") or "").strip()],
+            max_items=6,
+        ),
+        "internal_linking_opportunities": [],
+        "site_summary": str(profile.get("meta_description") or profile.get("domain_level_topic") or "").strip(),
+        "site_categories": [str(item).strip() for item in (profile.get("site_categories") or []) if str(item).strip()],
+        "topic_clusters": [str(item).strip() for item in (profile.get("topic_clusters") or []) if str(item).strip()],
+        "prominent_titles": [str(item).strip() for item in (profile.get("prominent_titles") or []) if str(item).strip()],
+        "sample_page_titles": [str(item).strip() for item in (profile.get("sample_page_titles") or []) if str(item).strip()],
+        "sample_urls": [str(item).strip() for item in (profile.get("sample_urls") or []) if str(item).strip()],
+    }
+
+
+def _pair_fit_cache_payload_is_usable(payload: Dict[str, Any]) -> bool:
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision == "rejected":
+        return True
+    return bool(
+        str(payload.get("final_article_topic") or "").strip()
+        and isinstance(payload.get("topic_candidates"), list)
+        and isinstance(payload.get("intersection_contexts"), list)
+    )
+
+
+def _run_pair_fit_reasoning(
+    *,
+    requested_topic: str,
+    exclude_topics: List[str],
+    target_site_url: str,
+    publishing_site_url: str,
+    target_profile: Dict[str, Any],
+    publishing_profile: Dict[str, Any],
+    llm_api_key: str,
+    llm_base_url: str,
+    planning_model: str,
+    timeout_seconds: int,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]],
+) -> Dict[str, Any]:
+    system_prompt = (
+        "You select a German guest-post topic by reasoning over structured site profiles. "
+        "The publishing site must remain the main context. The target site may only appear as one contextual resource. "
+        "If there is no natural semantic overlap, reject the pair. "
+        "Return JSON only with these keys: "
+        "publishing_site_topics, target_site_topics, publishing_site_contexts, target_site_contexts, "
+        "intersection_contexts, best_overlap_reason, topic_candidates, final_article_topic, "
+        "why_this_topic_was_chosen, backlink_fit_ok, fit_score, decision, rejection_reason. "
+        "All natural-language output must be in German (de-DE). fit_score is 0-100. decision is accepted or rejected."
+    )
+    exclude_block = ""
+    if exclude_topics:
+        exclude_block = "Bereits verwendete Themen (nicht erneut verwenden oder eng paraphrasieren):\n" + "\n".join(
+            f"- {topic}" for topic in exclude_topics[:20]
+        )
+        exclude_block += "\n\n"
+    requested_block = f"Gewuenschtes Thema: {requested_topic}\n\n" if requested_topic else ""
+    user_prompt = (
+        f"{requested_block}"
+        f"{exclude_block}"
+        f"Publishing site URL: {publishing_site_url}\n"
+        f"Publishing profile: {json.dumps(publishing_profile, ensure_ascii=False)}\n\n"
+        f"Target site URL: {target_site_url}\n"
+        f"Target profile: {json.dumps(target_profile, ensure_ascii=False)}\n\n"
+        "Generate 5 topic candidates only if the overlap is natural. "
+        "The final article topic must primarily serve the publishing site. "
+        "The backlink must fit contextually and the article must still make sense without the backlink."
+    )
+    llm_out = call_llm_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        model=planning_model,
+        timeout_seconds=timeout_seconds,
+        max_tokens=650,
+        temperature=0.2,
+        request_label="phase3_pair_fit",
+        usage_collector=usage_collector,
+    )
+    payload = {
+        "publishing_site_topics": [str(item).strip() for item in (llm_out.get("publishing_site_topics") or []) if str(item).strip()],
+        "target_site_topics": [str(item).strip() for item in (llm_out.get("target_site_topics") or []) if str(item).strip()],
+        "publishing_site_contexts": [str(item).strip() for item in (llm_out.get("publishing_site_contexts") or []) if str(item).strip()],
+        "target_site_contexts": [str(item).strip() for item in (llm_out.get("target_site_contexts") or []) if str(item).strip()],
+        "intersection_contexts": [str(item).strip() for item in (llm_out.get("intersection_contexts") or []) if str(item).strip()],
+        "best_overlap_reason": str(llm_out.get("best_overlap_reason") or "").strip(),
+        "topic_candidates": [str(item).strip() for item in (llm_out.get("topic_candidates") or []) if str(item).strip()],
+        "final_article_topic": str(llm_out.get("final_article_topic") or requested_topic or "").strip(),
+        "why_this_topic_was_chosen": str(llm_out.get("why_this_topic_was_chosen") or "").strip(),
+        "backlink_fit_ok": bool(llm_out.get("backlink_fit_ok")),
+        "fit_score": max(0, min(100, int(llm_out.get("fit_score") or 0))),
+        "decision": "rejected" if str(llm_out.get("decision") or "").strip().lower() == "rejected" else "accepted",
+        "rejection_reason": str(llm_out.get("rejection_reason") or "").strip(),
+    }
+    if requested_topic and payload["decision"] == "accepted":
+        payload["final_article_topic"] = requested_topic
+    return payload
 
 
 def _infer_meta_description(html: str) -> str:
@@ -2568,6 +2733,8 @@ def run_creator_pipeline(
     *,
     target_site_url: str,
     publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    client_target_site_id: Optional[str],
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
@@ -2576,6 +2743,10 @@ def run_creator_pipeline(
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
     phase2_cache_content_hash: Optional[str] = None,
+    target_profile_payload: Optional[Dict[str, Any]] = None,
+    target_profile_content_hash: Optional[str] = None,
+    publishing_profile_payload: Optional[Dict[str, Any]] = None,
+    publishing_profile_content_hash: Optional[str] = None,
     dry_run: bool,
     on_progress: Optional[Callable[[int, str, int], None]] = None,
 ) -> Dict[str, Any]:
@@ -2645,6 +2816,8 @@ def run_creator_pipeline(
     debug["keyword_trends_enabled"] = keyword_trends_enabled
     debug["keyword_trend_cache_ttl_seconds"] = keyword_trend_cache_ttl_seconds
     provided_internal_link_inventory = _coerce_internal_link_inventory(internal_link_inventory)
+    target_profile = _coerce_site_profile_payload(target_profile_payload)
+    publishing_profile = _coerce_site_profile_payload(publishing_profile_payload)
     debug["internal_link_inventory_count"] = len(provided_internal_link_inventory)
 
     def _collect_llm_usage(record: Dict[str, Any]) -> None:
@@ -2671,69 +2844,88 @@ def run_creator_pipeline(
     progress(1, PHASE_LABELS[1], 0)
     phase_start = time.time()
     logger.info("creator.phase1.start target=%s", target_site_url)
-    target_html = fetch_url(
-        target_site_url,
-        purpose="target_home",
-        warnings=warnings,
-        debug=debug,
-        timeout_seconds=http_timeout,
-        retries=http_retries,
-    )
-    target_seed_links = extract_internal_links(target_html, target_site_url, limit=max(4, site_analysis_max_pages * 2))
-    target_snapshot = _build_site_snapshot(
-        site_url=target_site_url,
-        homepage_html=target_html,
-        candidate_urls=target_seed_links,
-        purpose_prefix="target_snapshot",
-        warnings=warnings,
-        debug=debug,
-        timeout_seconds=http_timeout,
-        retries=http_retries,
-        max_pages=site_analysis_max_pages,
-    )
-    target_text = target_snapshot["combined_text"]
-    target_content_hash = target_snapshot["content_hash"]
+    target_snapshot = {"pages": [], "sample_urls": [], "sample_page_titles": [], "combined_text": "", "content_hash": ""}
     normalized_target_url = _normalize_url(target_site_url)
-    brand_name = _guess_brand_name(target_site_url, target_html)
-    keyword_cluster = _extract_keywords(target_text, max_terms=10)
-    backlink_url = _pick_backlink_url(target_site_url, target_html) or target_site_url
-    anchor_type = "brand" if brand_name else "contextual_generic"
-    if not brand_name and keyword_cluster:
-        anchor_type = "partial_match"
-    if not keyword_cluster:
-        warnings.append("target_keywords_missing")
-    phase1 = {
-        "brand_name": brand_name,
-        "backlink_url": backlink_url,
-        "anchor_type": anchor_type,
-        "keyword_cluster": keyword_cluster,
-        "site_summary": str(target_snapshot.get("site_summary") or "").strip(),
-        "sample_page_titles": list(target_snapshot.get("sample_page_titles") or []),
-        "sample_urls": list(target_snapshot.get("sample_urls") or []),
-    }
+    if target_profile:
+        target_content_hash = (target_profile_content_hash or "").strip() or _hash_text(json.dumps(target_profile, sort_keys=True, ensure_ascii=False))
+        target_snapshot = {
+            "pages": [],
+            "sample_urls": list(target_profile.get("sample_urls") or []),
+            "sample_page_titles": list(target_profile.get("sample_page_titles") or []),
+            "combined_text": " ".join(
+                _merge_string_lists(
+                    target_profile.get("topics") or [],
+                    target_profile.get("repeated_keywords") or [],
+                    target_profile.get("visible_headings") or [],
+                )
+            ),
+            "content_hash": target_content_hash,
+        }
+        phase1 = _phase1_from_target_profile(target_profile, target_site_url=target_site_url)
+    else:
+        target_html = fetch_url(
+            target_site_url,
+            purpose="target_home",
+            warnings=warnings,
+            debug=debug,
+            timeout_seconds=http_timeout,
+            retries=http_retries,
+        )
+        target_seed_links = extract_internal_links(target_html, target_site_url, limit=max(4, site_analysis_max_pages * 2))
+        target_snapshot = _build_site_snapshot(
+            site_url=target_site_url,
+            homepage_html=target_html,
+            candidate_urls=target_seed_links,
+            purpose_prefix="target_snapshot",
+            warnings=warnings,
+            debug=debug,
+            timeout_seconds=http_timeout,
+            retries=http_retries,
+            max_pages=site_analysis_max_pages,
+        )
+        target_text = target_snapshot["combined_text"]
+        target_content_hash = target_snapshot["content_hash"]
+        brand_name = _guess_brand_name(target_site_url, target_html)
+        keyword_cluster = _extract_keywords(target_text, max_terms=10)
+        backlink_url = _pick_backlink_url(target_site_url, target_html) or target_site_url
+        anchor_type = "brand" if brand_name else "contextual_generic"
+        if not brand_name and keyword_cluster:
+            anchor_type = "partial_match"
+        if not keyword_cluster:
+            warnings.append("target_keywords_missing")
+        phase1 = {
+            "brand_name": brand_name,
+            "backlink_url": backlink_url,
+            "anchor_type": anchor_type,
+            "keyword_cluster": keyword_cluster,
+            "site_summary": str(target_snapshot.get("site_summary") or "").strip(),
+            "sample_page_titles": list(target_snapshot.get("sample_page_titles") or []),
+            "sample_urls": list(target_snapshot.get("sample_urls") or []),
+        }
     phase1_cache_hit = False
     phase1_cache_warm = False
     phase1_cache_meta = {
         "normalized_url": normalized_target_url,
         "content_hash": target_content_hash,
         "prompt_version": PHASE1_CACHE_PROMPT_VERSION,
-        "generator_mode": "deterministic",
+        "generator_mode": "profile_cache" if target_profile else "deterministic",
         "model_name": "",
         "cache_hit": False,
-        "cacheable": bool(target_text),
+        "cacheable": bool(target_profile or target_snapshot.get("combined_text")),
         "snapshot_page_count": len(target_snapshot.get("pages") or []),
         "sample_urls": list(target_snapshot.get("sample_urls") or []),
     }
+    target_text = str(target_snapshot.get("combined_text") or "")
     cached_phase1 = _coerce_phase1_payload(phase1_cache_payload)
-    if target_text and cached_phase1 and (phase1_cache_content_hash or "").strip() == target_content_hash:
+    if not target_profile and target_text and cached_phase1 and (phase1_cache_content_hash or "").strip() == target_content_hash:
         phase1 = cached_phase1
         phase1_cache_hit = True
         phase1_cache_meta["cache_hit"] = True
-    elif cached_phase1 and not target_text:
+    elif not target_profile and cached_phase1 and not target_text:
         phase1 = cached_phase1
         phase1_cache_warm = True
         warnings.append("phase1_cache_fallback_used")
-    elif cached_phase1:
+    elif not target_profile and cached_phase1:
         phase1["keyword_cluster"] = _merge_string_lists(
             phase1.get("keyword_cluster") or [],
             cached_phase1.get("keyword_cluster") or [],
@@ -2779,47 +2971,68 @@ def run_creator_pipeline(
     progress(2, PHASE_LABELS[2], 14)
     phase_start = time.time()
     logger.info("creator.phase2.start publishing=%s", publishing_site_url)
-    publishing_html = fetch_url(
-        publishing_site_url,
-        purpose="host_home",
-        warnings=warnings,
-        debug=debug,
-        timeout_seconds=http_timeout,
-        retries=http_retries,
-    )
     normalized_publishing_url = _normalize_url(publishing_site_url)
     inventory_topic_insights = _build_inventory_topic_insights(provided_internal_link_inventory)
-    raw_internal_links = extract_internal_links(
-        publishing_html,
-        publishing_site_url,
-        limit=max(internal_link_candidates_max, site_analysis_max_pages * 2),
-    )
-    inventory_seed_urls = [str(item.get("url") or "").strip() for item in provided_internal_link_inventory[: max(0, site_analysis_max_pages - 1)]]
-    publishing_snapshot = _build_site_snapshot(
-        site_url=publishing_site_url,
-        homepage_html=publishing_html,
-        candidate_urls=inventory_seed_urls + raw_internal_links,
-        purpose_prefix="publishing_snapshot",
-        warnings=warnings,
-        debug=debug,
-        timeout_seconds=http_timeout,
-        retries=http_retries,
-        max_pages=site_analysis_max_pages,
-    )
+    publishing_snapshot = {"pages": [], "sample_urls": [], "sample_page_titles": [], "combined_text": "", "content_hash": ""}
+    raw_internal_links: List[str] = []
+    if publishing_profile:
+        publishing_content_hash = (publishing_profile_content_hash or "").strip() or _hash_text(
+            json.dumps(publishing_profile, sort_keys=True, ensure_ascii=False)
+        )
+        publishing_snapshot = {
+            "pages": [],
+            "sample_urls": list(publishing_profile.get("sample_urls") or []),
+            "sample_page_titles": list(publishing_profile.get("sample_page_titles") or []),
+            "combined_text": " ".join(
+                _merge_string_lists(
+                    publishing_profile.get("topics") or [],
+                    publishing_profile.get("topic_clusters") or [],
+                    publishing_profile.get("visible_headings") or [],
+                )
+            ),
+            "content_hash": publishing_content_hash,
+        }
+        homepage_internal_link_candidates = []
+    else:
+        publishing_html = fetch_url(
+            publishing_site_url,
+            purpose="host_home",
+            warnings=warnings,
+            debug=debug,
+            timeout_seconds=http_timeout,
+            retries=http_retries,
+        )
+        raw_internal_links = extract_internal_links(
+            publishing_html,
+            publishing_site_url,
+            limit=max(internal_link_candidates_max, site_analysis_max_pages * 2),
+        )
+        inventory_seed_urls = [str(item.get("url") or "").strip() for item in provided_internal_link_inventory[: max(0, site_analysis_max_pages - 1)]]
+        publishing_snapshot = _build_site_snapshot(
+            site_url=publishing_site_url,
+            homepage_html=publishing_html,
+            candidate_urls=inventory_seed_urls + raw_internal_links,
+            purpose_prefix="publishing_snapshot",
+            warnings=warnings,
+            debug=debug,
+            timeout_seconds=http_timeout,
+            retries=http_retries,
+            max_pages=site_analysis_max_pages,
+        )
+        publishing_content_hash = publishing_snapshot["content_hash"]
+        homepage_internal_link_candidates = _normalize_internal_link_candidates(
+            raw_internal_links,
+            publishing_site_url=publishing_site_url,
+            backlink_url=backlink_url,
+            max_items=internal_link_candidates_max,
+        )
     publishing_text = publishing_snapshot["combined_text"]
-    publishing_content_hash = publishing_snapshot["content_hash"]
-    homepage_internal_link_candidates = _normalize_internal_link_candidates(
-        raw_internal_links,
-        publishing_site_url=publishing_site_url,
-        backlink_url=backlink_url,
-        max_items=internal_link_candidates_max,
-    )
     internal_link_candidates: List[str] = []
     effective_internal_min = 0
     effective_internal_max = 0
-    if not publishing_text:
+    if not publishing_profile and not publishing_text:
         warnings.append("publishing_site_fetch_empty")
-    phase2 = {
+    phase2 = _phase2_from_publishing_profile(publishing_profile) if publishing_profile else {
         "allowed_topics": [],
         "content_style_constraints": [],
         "internal_linking_opportunities": [],
@@ -2836,14 +3049,20 @@ def run_creator_pipeline(
         "normalized_url": normalized_publishing_url,
         "content_hash": publishing_content_hash,
         "prompt_version": PHASE2_CACHE_PROMPT_VERSION,
-        "generator_mode": "llm",
-        "model_name": planning_model,
+        "generator_mode": "profile_cache" if publishing_profile else "llm",
+        "model_name": "" if publishing_profile else planning_model,
         "cache_hit": False,
         "cacheable": True,
         "snapshot_page_count": len(publishing_snapshot.get("pages") or []),
         "sample_urls": list(publishing_snapshot.get("sample_urls") or []),
     }
-    if publishing_text:
+    if publishing_profile:
+        phase2 = _merge_phase2_analysis(
+            phase2,
+            _coerce_phase2_payload(phase2_cache_payload),
+            inventory_categories=inventory_topic_insights.get("site_categories") or [],
+        )
+    elif publishing_text:
         cached_phase2 = _coerce_phase2_payload(phase2_cache_payload)
         if cached_phase2 and (phase2_cache_content_hash or "").strip() == publishing_content_hash:
             phase2 = cached_phase2
@@ -2954,70 +3173,107 @@ def run_creator_pipeline(
     logger.info("creator.phase3.start")
     safe_exclude = list(exclude_topics or [])
     requested_topic = (topic or "").strip()
-    if requested_topic:
-        phase3 = {
-            "final_article_topic": requested_topic,
-            "search_intent_type": "informational",
-            "primary_keyword": requested_topic,
-            "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
-        }
+    target_profile_for_fit = target_profile or {
+        "normalized_url": normalized_target_url,
+        "topics": keyword_cluster,
+        "contexts": [],
+        "visible_headings": phase1.get("sample_page_titles") or [],
+        "repeated_keywords": keyword_cluster,
+        "site_categories": [],
+        "topic_clusters": keyword_cluster,
+        "prominent_titles": phase1.get("sample_page_titles") or [],
+        "business_intent": "commercial" if anchor_type == "partial_match" else "informational",
+    }
+    publishing_profile_for_fit = publishing_profile or {
+        "normalized_url": normalized_publishing_url,
+        "topics": phase2.get("allowed_topics") or [],
+        "contexts": phase2.get("site_categories") or [],
+        "visible_headings": phase2.get("sample_page_titles") or [],
+        "repeated_keywords": phase2.get("topic_clusters") or [],
+        "site_categories": phase2.get("site_categories") or [],
+        "topic_clusters": phase2.get("topic_clusters") or [],
+        "prominent_titles": phase2.get("prominent_titles") or [],
+    }
+    target_profile_hash = (target_profile_content_hash or "").strip() or _hash_text(
+        json.dumps(target_profile_for_fit, sort_keys=True, ensure_ascii=False)
+    )
+    publishing_profile_hash = (publishing_profile_content_hash or "").strip() or _hash_text(
+        json.dumps(publishing_profile_for_fit, sort_keys=True, ensure_ascii=False)
+    )
+    pair_fit = None
+    cached_pair_fit = None
+    if publishing_site_id:
+        cached_pair_fit = get_site_fit_cache_entry(
+            publishing_site_id=publishing_site_id,
+            target_normalized_url=normalized_target_url,
+            publishing_profile_hash=publishing_profile_hash,
+            target_profile_hash=target_profile_hash,
+            prompt_version=PAIR_FIT_PROMPT_VERSION,
+        )
+    if cached_pair_fit and isinstance(cached_pair_fit.get("payload"), dict) and _pair_fit_cache_payload_is_usable(cached_pair_fit["payload"]):
+        pair_fit = dict(cached_pair_fit["payload"])
+        pair_fit["fit_score"] = int(cached_pair_fit.get("fit_score") or pair_fit.get("fit_score") or 0)
+        pair_fit["decision"] = str(cached_pair_fit.get("decision") or pair_fit.get("decision") or "accepted")
     else:
-        system_prompt = (
-            "You select a submitted article topic that fits publishing site authority and allows a natural backlink. "
-            "Avoid promotional topics and exact match money keywords. "
-            "You MUST choose a unique topic that is clearly different from any previously used topics listed below. "
-            "All returned natural-language fields must be in German (de-DE). Return JSON only."
-        )
-        exclude_block = ""
-        if safe_exclude:
-            exclude_block = (
-                "Previously used topics (DO NOT reuse or closely paraphrase these):\n"
-                + "\n".join(f"- {t}" for t in safe_exclude)
-                + "\n\n"
-            )
-        user_prompt = (
-            f"{exclude_block}"
-            f"Allowed topics: {phase2['allowed_topics']}\n"
-            f"Publishing site summary: {phase2.get('site_summary') or ''}\n"
-            f"Publishing site categories: {phase2.get('site_categories') or []}\n"
-            f"Publishing site topic clusters: {phase2.get('topic_clusters') or []}\n"
-            f"Publishing site prominent titles: {(phase2.get('prominent_titles') or [])[:6]}\n"
-            f"Existing publishing page titles: {(phase2.get('sample_page_titles') or [])[:6]}\n"
-            f"Target keyword cluster: {keyword_cluster}\n"
-            "Return JSON: {\"final_article_topic\":\"...\",\"search_intent_type\":\"informational|commercial|navigational\","
-            "\"primary_keyword\":\"...\",\"secondary_keywords\":[\"...\",\"...\"]}"
-        )
-        phase3_temperature = 0.7 if safe_exclude else 0.3
         try:
-            llm_out = call_llm_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                model=planning_model,
+            pair_fit = _run_pair_fit_reasoning(
+                requested_topic=requested_topic,
+                exclude_topics=safe_exclude,
+                target_site_url=target_site_url,
+                publishing_site_url=publishing_site_url,
+                target_profile=target_profile_for_fit,
+                publishing_profile=publishing_profile_for_fit,
+                llm_api_key=llm_api_key,
+                llm_base_url=llm_base_url,
+                planning_model=planning_model,
                 timeout_seconds=http_timeout,
-                max_tokens=300,
-                temperature=phase3_temperature,
-                request_label="phase3",
                 usage_collector=_collect_llm_usage,
             )
-            resolved_topic = llm_out.get("final_article_topic") or ""
-            resolved_primary = llm_out.get("primary_keyword") or (keyword_cluster[0] if keyword_cluster else "")
-            phase3 = {
-                "final_article_topic": resolved_topic,
-                "search_intent_type": llm_out.get("search_intent_type") or "informational",
-                "primary_keyword": resolved_primary,
-                "secondary_keywords": llm_out.get("secondary_keywords") or [],
-            }
         except LLMError as exc:
-            warnings.append(f"phase3_llm_failed:{exc}")
-            fallback_topic = phase2["allowed_topics"][0] if phase2["allowed_topics"] else "Industry insights"
-            phase3 = {
+            warnings.append(f"phase3_pair_fit_failed:{exc}")
+            fallback_topic = requested_topic or (phase2["allowed_topics"][0] if phase2["allowed_topics"] else (keyword_cluster[0] if keyword_cluster else "Ratgeber"))
+            pair_fit = {
+                "publishing_site_topics": phase2.get("allowed_topics") or [],
+                "target_site_topics": keyword_cluster,
+                "publishing_site_contexts": phase2.get("site_categories") or [],
+                "target_site_contexts": [],
+                "intersection_contexts": [],
+                "best_overlap_reason": "",
+                "topic_candidates": [fallback_topic],
                 "final_article_topic": fallback_topic,
-                "search_intent_type": "informational",
-                "primary_keyword": keyword_cluster[0] if keyword_cluster else fallback_topic,
-                "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
+                "why_this_topic_was_chosen": "Deterministische Rueckfallauswahl.",
+                "backlink_fit_ok": True,
+                "fit_score": 25,
+                "decision": "accepted",
+                "rejection_reason": "",
             }
+        if publishing_site_id:
+            upsert_site_fit_cache_entry(
+                publishing_site_id=publishing_site_id,
+                client_target_site_id=client_target_site_id or "",
+                target_normalized_url=normalized_target_url,
+                publishing_profile_hash=publishing_profile_hash,
+                target_profile_hash=target_profile_hash,
+                prompt_version=PAIR_FIT_PROMPT_VERSION,
+                model_name=planning_model,
+                fit_score=int(pair_fit.get("fit_score") or 0),
+                decision=str(pair_fit.get("decision") or "accepted"),
+                payload=pair_fit,
+            )
+    if str(pair_fit.get("decision") or "").strip().lower() == "rejected" or not bool(pair_fit.get("backlink_fit_ok")):
+        rejection_reason = str(pair_fit.get("rejection_reason") or pair_fit.get("best_overlap_reason") or "no_natural_semantic_fit").strip()
+        raise CreatorError(f"Pair fit rejected: {rejection_reason}")
+
+    resolved_topic = str(pair_fit.get("final_article_topic") or requested_topic or "").strip()
+    if not resolved_topic:
+        resolved_topic = phase2["allowed_topics"][0] if phase2["allowed_topics"] else (keyword_cluster[0] if keyword_cluster else "Ratgeber")
+    phase3 = {
+        "final_article_topic": resolved_topic,
+        "search_intent_type": "informational",
+        "primary_keyword": requested_topic or resolved_topic,
+        "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
+        "pair_fit": pair_fit,
+    }
 
     keyword_discovery: Dict[str, Any] = {"query_variants": [], "trend_candidates": [], "faq_candidates": []}
     if keyword_trends_enabled and phase3.get("final_article_topic"):
@@ -3108,6 +3364,7 @@ def run_creator_pipeline(
         "trend_cache_events": keyword_discovery.get("trend_cache_events") or [],
         "structured_content_mode": phase3.get("structured_content_mode", "none"),
         "title_package": title_package,
+        "pair_fit": pair_fit,
     }
     debug["internal_linking"] = {
         "configured_min": internal_link_min,

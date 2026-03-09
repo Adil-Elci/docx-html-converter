@@ -762,7 +762,7 @@ class AssetOut(BaseModel):
 
 class AutomationSubmitArticleIn(BaseModel):
     source_type: str
-    publishing_site: str
+    publishing_site: Optional[str] = None
     request_kind: str = "submit_article"
     doc_url: Optional[str] = None
     docx_file: Optional[str] = None
@@ -794,10 +794,12 @@ class AutomationSubmitArticleIn(BaseModel):
         return cleaned
 
     @validator("publishing_site")
-    def validate_publishing_site(cls, value: str) -> str:
+    def validate_publishing_site(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("publishing_site must not be empty.")
+            return None
         return cleaned
 
     @validator("doc_url", "docx_file", "client_name", "target_site_url", "anchor", "topic")
@@ -858,6 +860,9 @@ class AutomationSubmitArticleIn(BaseModel):
         anchor = values.get("anchor")
         topic = values.get("topic")
         creator_mode = bool(values.get("creator_mode"))
+        publishing_site = values.get("publishing_site")
+        if not publishing_site and not (request_kind == "create_article" and creator_mode and not doc_url and not docx_file):
+            raise ValueError("publishing_site is required unless creator_mode auto-selection is being used.")
         if request_kind == "create_article" and not doc_url and not docx_file:
             if not anchor and not topic and not creator_mode:
                 raise ValueError("anchor or topic is required for request_kind=create_article when no document is provided.")

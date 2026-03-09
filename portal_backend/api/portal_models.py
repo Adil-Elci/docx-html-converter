@@ -387,6 +387,73 @@ class SiteAnalysisCache(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class SiteProfileCache(Base):
+    __tablename__ = "site_profile_cache"
+    __table_args__ = (
+        CheckConstraint("profile_kind IN ('publishing_site','target_site')", name="site_profile_cache_kind_check"),
+        CheckConstraint("generator_mode IN ('deterministic','hybrid')", name="site_profile_cache_mode_check"),
+        CheckConstraint(
+            "(CASE WHEN publishing_site_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN client_target_site_id IS NULL THEN 0 ELSE 1 END) <= 1",
+            name="site_profile_cache_ref_count_check",
+        ),
+        CheckConstraint(
+            "((profile_kind = 'publishing_site' AND client_target_site_id IS NULL) "
+            "OR (profile_kind = 'target_site' AND publishing_site_id IS NULL))",
+            name="site_profile_cache_ref_kind_check",
+        ),
+        UniqueConstraint(
+            "profile_kind",
+            "normalized_url",
+            "content_hash",
+            "profile_version",
+            name="site_profile_cache_lookup_unique",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_kind = Column(Text, nullable=False)
+    publishing_site_id = Column(UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=True)
+    client_target_site_id = Column(UUID(as_uuid=True), ForeignKey("client_target_sites.id", ondelete="CASCADE"), nullable=True)
+    normalized_url = Column(Text, nullable=False)
+    content_hash = Column(Text, nullable=False)
+    generator_mode = Column(Text, nullable=False, default="deterministic")
+    profile_version = Column(Text, nullable=False, default="v1")
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SiteFitCache(Base):
+    __tablename__ = "site_fit_cache"
+    __table_args__ = (
+        CheckConstraint("decision IN ('accepted','rejected')", name="site_fit_cache_decision_check"),
+        CheckConstraint("fit_score >= 0 AND fit_score <= 100", name="site_fit_cache_score_check"),
+        UniqueConstraint(
+            "publishing_site_id",
+            "target_normalized_url",
+            "publishing_profile_hash",
+            "target_profile_hash",
+            "prompt_version",
+            name="site_fit_cache_lookup_unique",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    publishing_site_id = Column(UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
+    client_target_site_id = Column(UUID(as_uuid=True), ForeignKey("client_target_sites.id", ondelete="CASCADE"), nullable=True)
+    target_normalized_url = Column(Text, nullable=False)
+    publishing_profile_hash = Column(Text, nullable=False)
+    target_profile_hash = Column(Text, nullable=False)
+    model_name = Column(Text, nullable=False, default="")
+    prompt_version = Column(Text, nullable=False, default="v1")
+    fit_score = Column(Integer, nullable=False, default=0)
+    decision = Column(Text, nullable=False, default="accepted")
+    payload = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class KeywordTrendCache(Base):
     __tablename__ = "keyword_trend_cache"
     __table_args__ = (

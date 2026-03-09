@@ -2678,6 +2678,150 @@ def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
     return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
 
+def _build_article_faq_queries(
+    *,
+    topic: str,
+    primary_keyword: str,
+    article_html: str,
+    max_queries: int = 6,
+) -> List[str]:
+    h2_headings = [
+        heading for heading in _extract_h2_headings(article_html)
+        if _normalize_keyword_phrase(heading) not in {"fazit", "faq"}
+    ]
+    return _build_keyword_query_variants(
+        topic=topic,
+        primary_hint=primary_keyword,
+        allowed_topics=h2_headings[:2],
+        max_queries=max_queries,
+    )
+
+
+def _coerce_generated_faqs(value: Any) -> List[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        answer_html = str(item.get("answer_html") or "").strip()
+        search_reason = str(item.get("search_reason") or "").strip()
+        if not question or not answer_html:
+            continue
+        if not question.endswith("?"):
+            question = f"{question.rstrip('.!?')}?"
+        answer_html = _strip_code_fences(answer_html)
+        answer_html = re.sub(r"<h[1-6][^>]*>.*?</h[1-6]>", "", answer_html, flags=re.IGNORECASE | re.DOTALL)
+        answer_html = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", answer_html, flags=re.IGNORECASE | re.DOTALL)
+        if not re.search(r"<(?:p|ul|ol|table)\b", answer_html, flags=re.IGNORECASE):
+            answer_html = _wrap_paragraphs(answer_html)
+        if not answer_html.strip():
+            continue
+        out.append(
+            {
+                "question": question,
+                "answer_html": answer_html.strip(),
+                "search_reason": search_reason,
+            }
+        )
+    return out[:KEYWORD_MAX_FAQ]
+
+
+def _render_faq_section_html(faqs: List[Dict[str, str]]) -> str:
+    normalized_questions = _dedupe_faq_questions([item.get("question") or "" for item in faqs], max_items=len(faqs))
+    rendered: List[str] = []
+    for question in normalized_questions:
+        item = next((faq for faq in faqs if _keyword_similarity(faq.get("question", ""), question) >= 0.8), None)
+        if item is None:
+            continue
+        rendered.append(f"<h3>{question}</h3>{item['answer_html']}")
+    return "".join(rendered)
+
+
+def _replace_faq_section(article_html: str, faq_html: str) -> str:
+    html = article_html or ""
+    match = re.search(r"(<h2[^>]*>\s*FAQ\s*</h2>)(.*)$", html, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return html[:match.start()] + match.group(1) + faq_html
+    return f"{html}<h2>FAQ</h2>{faq_html}"
+
+
+def _generate_search_informed_faqs(
+    *,
+    article_html: str,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    current_faq_candidates: List[str],
+    llm_api_key: str,
+    llm_base_url: str,
+    llm_model: str,
+    timeout_seconds: int,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    queries = _build_article_faq_queries(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        article_html=article_html,
+    )
+    search_questions: List[str] = []
+    for query in queries:
+        suggestions = _fetch_google_de_suggestions(
+            query,
+            timeout_seconds=timeout_seconds,
+            trend_cache_ttl_seconds=DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+        )
+        search_questions.extend(item for item in suggestions if _looks_like_question_phrase(item))
+    normalized_search_questions = _ensure_faq_candidates(
+        topic,
+        _dedupe_faq_questions(search_questions + current_faq_candidates, max_items=KEYWORD_MAX_FAQ),
+    )
+    system_prompt = (
+        "Create a German FAQ section for a finished SEO article. "
+        "Use the article, the primary/secondary keywords, and Germany-focused search questions. "
+        "Questions must be natural, specific, and useful for readers. "
+        "Answers must be concise HTML, 35-60 words each, with no links and no markdown. "
+        "Return JSON only."
+    )
+    article_text = _strip_html_tags(article_html)
+    article_text = re.sub(r"\s+", " ", article_text).strip()[:6000]
+    user_prompt = (
+        f"Topic: {topic}\n"
+        f"Primary keyword: {primary_keyword}\n"
+        f"Secondary keywords: {secondary_keywords}\n"
+        f"Germany search questions: {normalized_search_questions[:KEYWORD_MAX_FAQ]}\n"
+        f"Existing FAQ candidates: {current_faq_candidates[:KEYWORD_MAX_FAQ]}\n"
+        f"Article text: {article_text}\n"
+        "Return JSON: "
+        "{\"faqs\":[{\"question\":\"...?\",\"answer_html\":\"<p>...</p>\",\"search_reason\":\"...\"}]}"
+    )
+    llm_out = call_llm_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        model=llm_model,
+        timeout_seconds=timeout_seconds,
+        max_tokens=1800,
+        temperature=0.2,
+        request_label="phase5_faq_enrichment",
+        usage_collector=usage_collector,
+    )
+    faqs = _coerce_generated_faqs(llm_out.get("faqs"))
+    if len(faqs) < FAQ_MIN_QUESTIONS:
+        raise CreatorError(f"FAQ enrichment returned too few items:{len(faqs)}")
+    faq_html = _render_faq_section_html(faqs)
+    if not faq_html.strip():
+        raise CreatorError("FAQ enrichment returned empty FAQ html.")
+    return {
+        "faqs": faqs[:KEYWORD_MAX_FAQ],
+        "faq_html": faq_html,
+        "search_questions": normalized_search_questions[:KEYWORD_MAX_FAQ],
+        "queries": queries,
+    }
+
+
 def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str], topic: str) -> List[Any]:
     if not isinstance(outline_items, list):
         return outline_items
@@ -4285,8 +4429,37 @@ def run_creator_pipeline(
         structured_mode=phase3.get("structured_content_mode", "none"),
     )
     article_payload = _fill_article_metadata(article_payload, phase4["h1"])
+    faq_enrichment_debug: Dict[str, Any] = {"enabled": True, "applied": False, "queries": [], "search_questions": [], "items": []}
+    try:
+        faq_enrichment = _generate_search_informed_faqs(
+            article_html=article_payload["article_html"],
+            topic=phase3["final_article_topic"],
+            primary_keyword=phase3["primary_keyword"],
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            current_faq_candidates=phase3.get("faq_candidates") or [],
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model=writing_model,
+            timeout_seconds=http_timeout,
+            usage_collector=_collect_llm_usage,
+        )
+        article_payload["article_html"] = _replace_faq_section(
+            article_payload["article_html"],
+            faq_enrichment["faq_html"],
+        )
+        faq_enrichment_debug = {
+            "enabled": True,
+            "applied": True,
+            "queries": faq_enrichment["queries"],
+            "search_questions": faq_enrichment["search_questions"],
+            "items": faq_enrichment["faqs"],
+        }
+    except (CreatorError, LLMError) as exc:
+        warnings.append(f"phase5_faq_enrichment_failed:{exc}")
+        faq_enrichment_debug["error"] = str(exc)
 
     phase5 = article_payload
+    debug["faq_enrichment"] = faq_enrichment_debug
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
     progress(5, PHASE_LABELS[5], 70)
 

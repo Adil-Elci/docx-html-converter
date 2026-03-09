@@ -16,6 +16,7 @@ from creator.api.pipeline import (
     _derive_trend_query_family,
     _ensure_faq_candidates,
     _fetch_google_de_suggestions,
+    _generate_search_informed_faqs,
     _inject_faq_section,
     _merge_phase2_analysis,
     _normalize_section_html,
@@ -199,6 +200,63 @@ def test_normalize_section_html_preserves_all_faq_questions():
 
     assert html.count("<h3>") == 3
     assert word_count_from_html(html) >= 12
+
+
+def test_generate_search_informed_faqs_uses_search_questions(monkeypatch):
+    def fake_suggestions(query, *, timeout_seconds, trend_cache_ttl_seconds, cache_metadata_collector=None):
+        return [
+            "was ist kindersonnenbrillen wichtig",
+            "wie schuetzt man kinderaugen im sommer",
+            "wann brauchen kinder uv schutz",
+        ]
+
+    def fake_call_llm_json(**kwargs):
+        prompt = str(kwargs.get("user_prompt") or "")
+        assert "Germany search questions" in prompt
+        assert "Article text" in prompt
+        return {
+            "faqs": [
+                {
+                    "question": "Was ist bei Kindersonnenbrillen wichtig?",
+                    "answer_html": "<p>Wichtig sind UV Schutz, passender Sitz und bruchsichere Materialien, damit Kinderaugen im Alltag und bei Ausfluegen verlaesslich geschuetzt bleiben.</p>",
+                    "search_reason": "haeufige Grundlagenfrage",
+                },
+                {
+                    "question": "Wie schuetzt man Kinderaugen im Sommer?",
+                    "answer_html": "<p>Eltern sollten direkte Mittagssonne meiden, Kappen nutzen und Sonnenbrillen mit hohem UV Schutz waehlen, damit die Belastung fuer empfindliche Augen sinkt.</p>",
+                    "search_reason": "starker saisonaler Suchbezug",
+                },
+                {
+                    "question": "Wann brauchen Kinder UV Schutz?",
+                    "answer_html": "<p>Besonders wichtig ist UV Schutz bei intensiver Sonne, auf dem Spielplatz, im Urlaub und bei reflektierenden Flaechen wie Wasser oder hellem Boden.</p>",
+                    "search_reason": "handlungsorientierte Suchintention",
+                },
+            ]
+        }
+
+    monkeypatch.setattr("creator.api.pipeline._fetch_google_de_suggestions", fake_suggestions)
+    monkeypatch.setattr("creator.api.pipeline.call_llm_json", fake_call_llm_json)
+
+    result = _generate_search_informed_faqs(
+        article_html=(
+            "<h1>Kinder Sonnenbrillen</h1><p>Kinder brauchen guten UV Schutz im Alltag.</p>"
+            "<h2>Kinder Sonnenbrillen: Das Wichtigste im Ueberblick</h2><p>Text.</p>"
+            "<h2>Fazit</h2><p>Text.</p><h2>FAQ</h2><p>Alt.</p>"
+        ),
+        topic="Kinder Sonnenbrillen im Sommer",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=["uv schutz fuer kinderaugen", "sommer mit kindern"],
+        current_faq_candidates=["was ist kindersonnenbrillen wichtig"],
+        llm_api_key="test-key",
+        llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-4.1-mini",
+        timeout_seconds=2,
+        usage_collector=None,
+    )
+
+    assert len(result["faqs"]) == 3
+    assert len(result["search_questions"]) >= 3
+    assert result["faq_html"].count("<h3>") == 3
 
 
 def test_build_deterministic_outline_produces_valid_structure():

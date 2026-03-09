@@ -703,9 +703,11 @@ class AutomationJobWorker:
                         normalized_url=normalize_site_profile_url(target_site_url),
                         client_target_site_id=target_site_id,
                     )
-                    if latest_target_profile and isinstance(latest_target_profile.payload, dict):
-                        target_profile_payload = latest_target_profile.payload
-                        target_profile_content_hash = str(latest_target_profile.content_hash or "").strip()
+                if latest_target_profile and isinstance(latest_target_profile.payload, dict):
+                    target_profile_payload = latest_target_profile.payload
+                    target_profile_content_hash = str(latest_target_profile.content_hash or "").strip()
+                elif creator_mode:
+                    raise RuntimeError("Target site profile is required before running Creator.")
 
                 normalized_site_url = normalize_site_analysis_url(site.site_url)
                 latest_phase2_cache = get_latest_site_analysis_cache(
@@ -736,6 +738,8 @@ class AutomationJobWorker:
                 if latest_publishing_profile and isinstance(latest_publishing_profile.payload, dict):
                     publishing_profile_payload = latest_publishing_profile.payload
                     publishing_profile_content_hash = str(latest_publishing_profile.content_hash or "").strip()
+                elif creator_mode:
+                    raise RuntimeError("Publishing site profile is required before running Creator.")
 
             internal_link_inventory: List[Dict[str, Any]] = []
             if creator_mode:

@@ -1,4 +1,5 @@
 from creator.api.pipeline import (
+    CreatorError,
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
@@ -15,6 +16,8 @@ from creator.api.pipeline import (
     _fetch_google_de_suggestions,
     _inject_faq_section,
     _merge_phase2_analysis,
+    _pair_fit_cache_payload_is_usable,
+    _run_pair_fit_reasoning,
     _select_keywords,
     _structured_content_mode,
     _trend_entry_is_fresh,
@@ -501,3 +504,128 @@ def test_validate_language_and_conclusion_rejects_thin_faq():
     """
     errors = _validate_language_and_conclusion(html, "Eltern-Sucht in der Schwangerschaft")
     assert any(error.startswith("faq_question_count_too_low") or error.startswith("faq_answers_too_thin") for error in errors)
+
+
+def test_pair_fit_reasoning_requires_scored_candidate_set(monkeypatch):
+    def fake_call_llm_json(**kwargs):
+        return {
+            "publishing_site_topics": ["Familie", "Elternratgeber"],
+            "target_site_topics": ["Schwimmbrille", "Sehhilfe fuer Kinder"],
+            "publishing_site_contexts": ["family_life", "wellbeing"],
+            "target_site_contexts": ["family_life", "health"],
+            "intersection_contexts": ["family_life", "health"],
+            "best_overlap_reason": "Familienalltag und kindgerechte Sehhilfen schneiden sich natuerlich im Gesundheitskontext.",
+            "topic_candidates": [
+                {
+                    "topic": f"Kandidat {idx}",
+                    "publishing_site_relevance": 8,
+                    "backlink_naturalness": 7,
+                    "informational_value": 8,
+                    "seo_plausibility": 7,
+                    "non_spamminess": 9,
+                    "total_score": 39,
+                    "backlink_angle": "kindgerechte Produkthilfe als Zusatzressource",
+                }
+                for idx in range(1, 6)
+            ],
+            "final_article_topic": "Kandidat 1",
+            "why_this_topic_was_chosen": "Das Thema bleibt im Familienkontext und bindet die Zielseite nur als Zusatzressource ein.",
+            "backlink_fit_ok": True,
+            "fit_score": 72,
+            "decision": "accepted",
+            "rejection_reason": "",
+        }
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_json", fake_call_llm_json)
+
+    result = _run_pair_fit_reasoning(
+        requested_topic="",
+        exclude_topics=[],
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        target_profile={
+            "normalized_url": "https://target.example.com",
+            "topics": ["Schwimmbrille", "Sehhilfe fuer Kinder"],
+            "contexts": ["family_life", "health"],
+            "business_type": "E-Commerce",
+            "services_or_products": ["Schwimmbrillen"],
+            "business_intent": "commercial",
+        },
+        publishing_profile={
+            "normalized_url": "https://publisher.example.com",
+            "topics": ["Familie", "Elternratgeber"],
+            "contexts": ["family_life", "wellbeing"],
+            "content_style": ["hilfreich", "sachlich"],
+        },
+        llm_api_key="test-key",
+        llm_base_url="https://api.openai.com/v1",
+        planning_model="gpt-4.1-mini",
+        timeout_seconds=2,
+        usage_collector=None,
+    )
+
+    assert result["decision"] == "accepted"
+    assert len(result["topic_candidates"]) == 5
+    assert result["topic_candidates"][0]["topic"] == "Kandidat 1"
+    assert result["final_article_topic"] == "Kandidat 1"
+
+
+def test_pair_fit_reasoning_rejects_invalid_candidate_count(monkeypatch):
+    monkeypatch.setattr(
+        "creator.api.pipeline.call_llm_json",
+        lambda **kwargs: {
+            "publishing_site_topics": ["Familie"],
+            "target_site_topics": ["Schwimmbrille"],
+            "publishing_site_contexts": ["family_life"],
+            "target_site_contexts": ["health"],
+            "intersection_contexts": ["health"],
+            "best_overlap_reason": "Schwacher Uebergang.",
+            "topic_candidates": [{"topic": "Nur ein Kandidat"}],
+            "final_article_topic": "Nur ein Kandidat",
+            "why_this_topic_was_chosen": "Zu wenig Kandidaten.",
+            "backlink_fit_ok": True,
+            "fit_score": 44,
+            "decision": "accepted",
+            "rejection_reason": "",
+        },
+    )
+
+    try:
+        _run_pair_fit_reasoning(
+            requested_topic="",
+            exclude_topics=[],
+            target_site_url="https://target.example.com",
+            publishing_site_url="https://publisher.example.com",
+            target_profile={"normalized_url": "https://target.example.com", "topics": ["a"], "contexts": ["health"]},
+            publishing_profile={"normalized_url": "https://publisher.example.com", "topics": ["b"], "contexts": ["family_life"]},
+            llm_api_key="test-key",
+            llm_base_url="https://api.openai.com/v1",
+            planning_model="gpt-4.1-mini",
+            timeout_seconds=2,
+            usage_collector=None,
+        )
+        assert False, "expected CreatorError"
+    except CreatorError as exc:
+        assert "invalid candidate count" in str(exc)
+
+
+def test_pair_fit_cache_payload_is_usable_requires_complete_accepted_payload():
+    accepted_payload = {
+        "final_article_topic": "Kandidat 1",
+        "topic_candidates": [
+            {"topic": f"Kandidat {idx}", "total_score": 30}
+            for idx in range(1, 6)
+        ],
+        "intersection_contexts": ["family_life"],
+        "why_this_topic_was_chosen": "Passt zum Hauptkontext.",
+        "backlink_fit_ok": True,
+        "decision": "accepted",
+    }
+    rejected_payload = {
+        "decision": "rejected",
+        "rejection_reason": "Kein natuerlicher Fit.",
+    }
+
+    assert _pair_fit_cache_payload_is_usable(accepted_payload) is True
+    assert _pair_fit_cache_payload_is_usable(rejected_payload) is True
+    assert _pair_fit_cache_payload_is_usable({**accepted_payload, "topic_candidates": [{"topic": "Nur einer"}]}) is False

@@ -97,6 +97,21 @@ def test_ensure_faq_candidates_falls_back_to_topic_questions():
     assert faqs[0].startswith("Was ist ")
 
 
+def test_ensure_faq_candidates_dedupes_similar_questions():
+    faqs = _ensure_faq_candidates(
+        "Baby vorbereiten Checkliste",
+        [
+            "was ist baby vorbereiten checkliste",
+            "was ist baby vorbereiten checkliste",
+            "welche ursachen hat baby vorbereiten checkliste",
+            "wann ist hilfe bei baby vorbereiten checkliste sinnvoll",
+        ],
+    )
+
+    assert len(faqs) == 3
+    assert len(set(faqs)) == 3
+
+
 def test_inject_faq_section_after_fazit():
     outline = [
         {"h2": "Ursachen", "h3": []},
@@ -203,8 +218,32 @@ def test_validate_language_and_conclusion_requires_fazit_then_faq():
     <p>Bei eltern sucht in der schwangerschaft sind fruehe hilfen, klare absprachen und stabile bezugspersonen besonders wichtig.</p>
     <h2>FAQ</h2>
     <h3>Was ist eltern sucht in der schwangerschaft?</h3>
-    <p>Eine belastende familiensituation mit konkretem hilfebedarf.</p>
-    </p>
+    <p>Damit ist gemeint, dass eine suchtbelastung der eltern die gesundheit, den alltag und die beziehungen in der familie waehrend der schwangerschaft deutlich beeinflusst und deshalb fruehe unterstuetzung wichtig wird.</p>
+    <h3>Welche hilfen sind frueh sinnvoll?</h3>
+    <p>Sinnvoll sind fruehe gespraeche mit hebamme, suchtberatung, frauenarztpraxis und vertrauten bezugspersonen, damit belastungen sichtbar werden und familien schnell zu stabilen hilfen vor ort finden koennen.</p>
+    <h3>Warum ist schnelle unterstuetzung wichtig?</h3>
+    <p>Schnelle unterstuetzung hilft, konflikte zu reduzieren, alltagsstrukturen zu sichern und mutter, kind und weitere familienmitglieder besser zu entlasten, bevor sich gesundheitliche und soziale probleme weiter verstaerken.</p>
     """
     errors = _validate_language_and_conclusion(html, "Eltern-Sucht in der Schwangerschaft")
     assert not errors
+
+
+def test_validate_language_and_conclusion_rejects_thin_faq():
+    html = """
+    <h1>Eltern Sucht Schwangerschaft: Auswirkungen und Hilfe</h1>
+    <p>Eltern sucht schwangerschaft betrifft viele Familien und erfordert fruehe Hilfe.</p>
+    <h2>Alltag</h2>
+    <p>Auswirkungen auf familienbeziehungen sind deutlich sichtbar.</p>
+    <h2>Unterstuetzung</h2>
+    <p>Unterstuetzung fuer betroffene familien ist zentral und sollte frueh beginnen.</p>
+    <h2>Fazit</h2>
+    <p>Bei eltern sucht in der schwangerschaft sind fruehe hilfen, klare absprachen und stabile bezugspersonen besonders wichtig.</p>
+    <h2>FAQ</h2>
+    <h3>Was ist eltern sucht in der schwangerschaft?</h3>
+    <p>Kurz.</p>
+    <h3>Wann ist hilfe sinnvoll?</h3>
+    <p>Sehr frueh.</p>
+    </p>
+    """
+    errors = _validate_language_and_conclusion(html, "Eltern-Sucht in der Schwangerschaft")
+    assert any(error.startswith("faq_question_count_too_low") or error.startswith("faq_answers_too_thin") for error in errors)

@@ -147,7 +147,7 @@ def build_creator_internal_link_inventory(
     db: Session,
     *,
     site_id: UUID,
-    limit: int = 60,
+    limit: int = 250,
 ) -> List[Dict[str, Any]]:
     articles = (
         db.query(PublishingSiteArticle)

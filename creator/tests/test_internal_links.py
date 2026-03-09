@@ -51,6 +51,9 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
     <p>Mehr Text.</p>
     <h2>Fazit</h2>
     <p>Ende.</p>
+    <h2>FAQ</h2>
+    <h3>Was ist wichtig?</h3>
+    <p>Antwort mit genug Woertern fuer die FAQ Bewertung und klare Hinweise fuer Leserinnen und Leser.</p>
     """
     repaired = _repair_link_constraints(
         article_html=html,
@@ -61,6 +64,11 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
             "https://publisher.example.com/b",
             "https://publisher.example.com/c",
         ],
+        internal_link_anchor_map={
+            "https://publisher.example.com/a": "Relevanter Artikel A",
+            "https://publisher.example.com/b": "Relevanter Artikel B",
+            "https://publisher.example.com/c": "Relevanter Artikel C",
+        },
         min_internal_links=2,
         max_internal_links=4,
         backlink_placement="intro",
@@ -74,6 +82,9 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
         max_internal_links=4,
     )
     assert errors == []
+    assert repaired.count('href="https://publisher.example.com/') == 3
+    assert "Relevanter Artikel A" in repaired
+    assert "Mehr dazu" not in repaired
 
 
 def test_rank_internal_link_inventory_prefers_relevant_same_site_articles():

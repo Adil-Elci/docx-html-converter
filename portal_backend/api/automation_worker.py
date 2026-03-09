@@ -686,7 +686,11 @@ class AutomationJobWorker:
 
             internal_link_inventory: List[Dict[str, Any]] = []
             if creator_mode:
-                internal_link_inventory = build_creator_internal_link_inventory(session, site_id=site.id, limit=60)
+                internal_link_inventory = build_creator_internal_link_inventory(
+                    session,
+                    site_id=site.id,
+                    limit=max(50, _read_int_env("INTERNAL_LINK_INVENTORY_LIMIT", 250)),
+                )
 
             return {
                 "source_url": source_url,

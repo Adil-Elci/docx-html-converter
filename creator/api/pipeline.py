@@ -83,6 +83,8 @@ ARTICLE_MIN_H2 = 4
 ARTICLE_MAX_H2 = 6
 GOOGLE_SUGGEST_CACHE_TTL_SECONDS = 6 * 60 * 60
 GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
+FAQ_MIN_QUESTIONS = 3
+FAQ_MIN_WORDS = 80
 
 GERMAN_KEYWORD_MODIFIERS = (
     "tipps",
@@ -323,7 +325,7 @@ def _extract_h2_headings(html: str) -> List[str]:
     return headings
 
 
-def _extract_h2_section_text(html: str, heading_name: str) -> str:
+def _extract_h2_section_html(html: str, heading_name: str) -> str:
     matches = list(re.finditer(r"<h2[^>]*>(.*?)</h2>", html or "", flags=re.IGNORECASE | re.DOTALL))
     if not matches:
         return ""
@@ -335,8 +337,12 @@ def _extract_h2_section_text(html: str, heading_name: str) -> str:
             continue
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(document)
-        return _strip_html_tags(document[start:end]).strip()
+        return document[start:end].strip()
     return ""
+
+
+def _extract_h2_section_text(html: str, heading_name: str) -> str:
+    return _strip_html_tags(_extract_h2_section_html(html, heading_name)).strip()
 
 
 def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
@@ -954,14 +960,25 @@ def _format_faq_question(question: str) -> str:
     return formatted
 
 
-def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
-    normalized_faqs: List[str] = []
-    for item in faq_candidates:
+def _dedupe_faq_questions(values: List[str], *, max_items: int = FAQ_MIN_QUESTIONS) -> List[str]:
+    out: List[str] = []
+    for item in values:
         formatted = _format_faq_question(item)
-        if formatted and formatted not in normalized_faqs:
-            normalized_faqs.append(formatted)
-        if len(normalized_faqs) >= 3:
-            return normalized_faqs[:3]
+        if not formatted:
+            continue
+        normalized = _normalize_keyword_phrase(formatted)
+        if any(_keyword_similarity(normalized, _normalize_keyword_phrase(existing)) >= 0.7 for existing in out):
+            continue
+        out.append(formatted)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
+    normalized_faqs = _dedupe_faq_questions(faq_candidates, max_items=FAQ_MIN_QUESTIONS)
+    if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
+        return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
     topic_phrase = _build_topic_phrase(topic) or "dieses thema"
     fallback_questions = [
@@ -969,13 +986,8 @@ def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
         f"Welche Ursachen hat {topic_phrase}?",
         f"Wann ist Hilfe bei {topic_phrase} sinnvoll?",
     ]
-    for item in fallback_questions:
-        formatted = _format_faq_question(item)
-        if formatted and formatted not in normalized_faqs:
-            normalized_faqs.append(formatted)
-        if len(normalized_faqs) >= 3:
-            break
-    return normalized_faqs[:3]
+    normalized_faqs = _dedupe_faq_questions(normalized_faqs + fallback_questions, max_items=FAQ_MIN_QUESTIONS)
+    return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
 
 def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str], topic: str) -> List[Any]:
@@ -1033,9 +1045,25 @@ def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str
             if not any(term in lowered for term in topic_terms):
                 errors.append("conclusion_not_topic_specific")
 
-    faq_text = _extract_h2_section_text(article_html, "FAQ")
+    faq_html = _extract_h2_section_html(article_html, "FAQ")
+    faq_text = _strip_html_tags(faq_html).strip()
     if not faq_text:
         errors.append("faq_missing")
+    else:
+        faq_questions = [
+            _strip_html_tags(match.group(1)).strip()
+            for match in re.finditer(r"<h3[^>]*>(.*?)</h3>", faq_html, flags=re.IGNORECASE | re.DOTALL)
+            if _strip_html_tags(match.group(1)).strip()
+        ]
+        if len(faq_questions) < FAQ_MIN_QUESTIONS:
+            errors.append(f"faq_question_count_too_low:{len(faq_questions)}")
+        unique_questions = _dedupe_faq_questions(faq_questions, max_items=max(FAQ_MIN_QUESTIONS, len(faq_questions)))
+        if len(unique_questions) < len(faq_questions):
+            errors.append("faq_questions_not_unique")
+        if any(not question.endswith("?") for question in faq_questions):
+            errors.append("faq_question_format_invalid")
+        if word_count_from_html(faq_html) < FAQ_MIN_WORDS:
+            errors.append(f"faq_answers_too_thin:{word_count_from_html(faq_html)}")
 
     return errors
 
@@ -1169,7 +1197,13 @@ def _normalize_internal_link_candidates(
     return out
 
 
-def _internal_anchor_text(url: str) -> str:
+def _internal_anchor_text(url: str, anchor_map: Optional[Dict[str, str]] = None) -> str:
+    normalized_url = _normalize_url(url)
+    if anchor_map and normalized_url in anchor_map:
+        preferred = re.sub(r"\s+", " ", str(anchor_map[normalized_url] or "").strip())
+        if preferred:
+            words = preferred.split()
+            return " ".join(words[:8])
     parsed = urlparse((url or "").strip())
     tail = (parsed.path or "").strip("/").split("/")[-1] if parsed.path else ""
     cleaned = re.sub(r"[-_]+", " ", tail).strip()
@@ -1282,6 +1316,7 @@ def _insert_internal_links(
     *,
     internal_links: List[str],
     target_internal_count: int,
+    anchor_map: Optional[Dict[str, str]] = None,
 ) -> str:
     if target_internal_count <= 0 or not internal_links:
         return html
@@ -1298,9 +1333,10 @@ def _insert_internal_links(
 
     for idx in range(min(target_internal_count, len(internal_links))):
         href = internal_links[idx]
-        anchor_text = _internal_anchor_text(href)
+        anchor_text = _internal_anchor_text(href, anchor_map=anchor_map)
         link_html = f'<a href="{href}">{anchor_text}</a>'
         section_idx = usable_section_indexes[idx % len(usable_section_indexes)]
+        lead = ["Siehe auch", "Passend dazu", "Vertiefend", "Hilfreich ist auch"][idx % 4]
 
         section_starts = list(re.finditer(r"<h2[^>]*>", working, flags=re.IGNORECASE))
         if section_starts:
@@ -1309,14 +1345,14 @@ def _insert_internal_links(
             p_match = re.search(r"</p>", tail, flags=re.IGNORECASE)
             if p_match:
                 insert_at = section_start + p_match.start()
-                working = working[:insert_at] + f" Mehr dazu: {link_html}" + working[insert_at:]
+                working = working[:insert_at] + f" {lead}: {link_html}." + working[insert_at:]
                 continue
 
         match = re.search(r"</p>", working, flags=re.IGNORECASE)
         if match:
-            working = working[:match.start()] + f" Mehr dazu: {link_html}" + working[match.start():]
+            working = working[:match.start()] + f" {lead}: {link_html}." + working[match.start():]
         else:
-            working += f"<p>Mehr dazu: {link_html}</p>"
+            working += f"<p>{lead}: {link_html}.</p>"
 
     return working
 
@@ -1374,6 +1410,7 @@ def _repair_link_constraints(
     backlink_url: str,
     publishing_site_url: str,
     internal_links: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]] = None,
     min_internal_links: int,
     max_internal_links: int,
     backlink_placement: str,
@@ -1389,12 +1426,14 @@ def _repair_link_constraints(
         backlink_url=backlink_url,
         max_items=max_internal_links,
     )
-    target_internal_count = min(max_internal_links, max(min_internal_links, 0))
-    target_internal_count = min(target_internal_count, len(normalized_internal))
+    target_internal_count = min(max_internal_links, len(normalized_internal))
+    if target_internal_count < min_internal_links:
+        target_internal_count = len(normalized_internal)
     repaired = _insert_internal_links(
         repaired,
         internal_links=normalized_internal,
         target_internal_count=target_internal_count,
+        anchor_map=internal_link_anchor_map,
     )
     repaired = _strip_disallowed_links(repaired, backlink_url=backlink_url, publishing_site_url=publishing_site_url)
     repaired = _strip_h1_tags(repaired)
@@ -1410,6 +1449,7 @@ def _generate_article_by_sections(
     backlink_url: str,
     publishing_site_url: str,
     internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
     min_internal_links: int,
     max_internal_links: int,
     faq_candidates: List[str],
@@ -1489,7 +1529,7 @@ def _generate_article_by_sections(
         if "faq" in h2.lower():
             section_user += (
                 f"\nThis is the FAQ section. Answer these questions clearly and directly: {faq_candidates[:3]}. "
-                "Use the H3 questions as subheadings and give concise practical answers in German."
+                "Use the H3 questions as subheadings, avoid duplicate questions, and write 35-60 words per answer in German."
             )
         if "fazit" in h2.lower():
             section_user += (
@@ -1528,6 +1568,7 @@ def _generate_article_by_sections(
         backlink_url=backlink_url,
         publishing_site_url=publishing_site_url,
         internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
         min_internal_links=min_internal_links,
         max_internal_links=max_internal_links,
         backlink_placement=backlink_placement,
@@ -2010,6 +2051,11 @@ def run_creator_pipeline(
             max_items=internal_link_candidates_max,
         )
         internal_link_source = "inventory"
+        internal_link_anchor_map = {
+            _normalize_url(str(item.get("url") or "").strip()): str(item.get("title") or "").strip()
+            for item in ranked_internal_link_inventory
+            if str(item.get("url") or "").strip()
+        }
         internal_links_prompt_entries = [
             f"{(str(item.get('title') or '').strip() or _internal_anchor_text(str(item.get('url') or '')))} -> {str(item.get('url') or '').strip()}"
             for item in ranked_internal_link_inventory
@@ -2018,6 +2064,11 @@ def run_creator_pipeline(
     else:
         internal_link_candidates = homepage_internal_link_candidates
         internal_link_source = "homepage"
+        internal_link_anchor_map = {
+            _normalize_url(url): _internal_anchor_text(url)
+            for url in internal_link_candidates
+            if url
+        }
         internal_links_prompt_entries = list(internal_link_candidates)
     effective_internal_min = min(internal_link_min, len(internal_link_candidates))
     effective_internal_max = min(internal_link_max, len(internal_link_candidates))
@@ -2169,7 +2220,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Return JSON only."
             )
@@ -2199,7 +2250,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "Keep the penultimate H2 titled 'Fazit' and the final H2 titled 'FAQ'. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
                 "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
                 "Enforce link contract: exactly one backlink to Backlink URL, "
@@ -2239,7 +2290,7 @@ def run_creator_pipeline(
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
                 "In body content, historical years or specific dates only when necessary for factual accuracy. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
+                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "The final 'Fazit' must summarize the specific article topic (not generic text). "
                 "Do not return markdown fences. Return JSON only."
             )
@@ -2332,6 +2383,7 @@ def run_creator_pipeline(
                     backlink_url=backlink_url,
                     publishing_site_url=publishing_site_url,
                     internal_links=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
                     min_internal_links=effective_internal_min,
                     max_internal_links=effective_internal_max,
                     backlink_placement=phase4["backlink_placement"],
@@ -2397,6 +2449,7 @@ def run_creator_pipeline(
             backlink_url=backlink_url,
             publishing_site_url=publishing_site_url,
             internal_link_candidates=internal_link_candidates,
+            internal_link_anchor_map=internal_link_anchor_map,
             min_internal_links=effective_internal_min,
             max_internal_links=effective_internal_max,
             faq_candidates=faq_prompt_text,
@@ -2449,6 +2502,7 @@ def run_creator_pipeline(
         backlink_url=backlink_url,
         publishing_site_url=publishing_site_url,
         internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
         min_internal_links=effective_internal_min,
         max_internal_links=effective_internal_max,
         backlink_placement=phase4["backlink_placement"],
@@ -2603,7 +2657,7 @@ def run_creator_pipeline(
             f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
             "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-            "If the outline includes an FAQ section, answer the FAQ H3 headings directly and concretely. "
+            "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
             "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
             "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
             "Return JSON only."
@@ -2653,6 +2707,7 @@ def run_creator_pipeline(
                 backlink_url=backlink_url,
                 publishing_site_url=publishing_site_url,
                 internal_links=internal_link_candidates,
+                internal_link_anchor_map=internal_link_anchor_map,
                 min_internal_links=effective_internal_min,
                 max_internal_links=effective_internal_max,
                 backlink_placement=phase4["backlink_placement"],

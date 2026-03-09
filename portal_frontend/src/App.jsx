@@ -902,6 +902,24 @@ export default function App() {
     return normalized.replace(/_/g, " ");
   };
 
+  const summarizeSeoEvaluation = (evaluation) => {
+    if (!evaluation || typeof evaluation !== "object") {
+      return { score: null, issueCount: 0, passedCount: 0, failingChecks: [], topIssues: [] };
+    }
+    const score = typeof evaluation.score === "number" ? Math.round(evaluation.score) : null;
+    const checks = evaluation.checks && typeof evaluation.checks === "object" ? evaluation.checks : {};
+    const failingChecks = Object.entries(checks)
+      .filter(([, issues]) => Array.isArray(issues) && issues.length > 0)
+      .map(([name, issues]) => ({
+        name,
+        issues: issues.filter((item) => typeof item === "string" && item.trim()).slice(0, 3),
+      }));
+    const issueCount = failingChecks.reduce((sum, item) => sum + item.issues.length, 0);
+    const passedCount = Math.max(0, Object.keys(checks).length - failingChecks.length);
+    const topIssues = failingChecks.flatMap((item) => item.issues).slice(0, 4);
+    return { score, issueCount, passedCount, failingChecks, topIssues };
+  };
+
   const applyPublishedSearch = () => {
     setPublishedOffset(0);
     loadPublishedArticles(currentUser, { query: publishedQuery.trim(), offset: 0 });
@@ -2802,6 +2820,7 @@ export default function App() {
                   <span>{t("publishedSiteLabel")}</span>
                   <span>{t("publishedStatusLabel")}</span>
                   <span>{t("seoScoreLabel")}</span>
+                  <span>{t("seoEvaluationLabel")}</span>
                   <span>{t("publishedByLabel")}</span>
                   <span>{t("publishedAtLabel")}</span>
                 </div>
@@ -2811,6 +2830,7 @@ export default function App() {
                   const clientName = (item?.client_name || "").trim() || item?.client_id || t("notAvailable");
                   const siteLabel = (item?.site_url || "").trim() || (item?.site_name || "").trim() || item?.site_id || t("notAvailable");
                   const statusLabel = formatPublishedStatus(item?.status);
+                  const seoSummary = summarizeSeoEvaluation(item?.seo_evaluation);
                   return (
                     <div key={item.job_id} className="published-item-row" style={{"--i": index}}>
                       {url ? (
@@ -2824,6 +2844,33 @@ export default function App() {
                       <span data-label={t("publishedSiteLabel")}>{siteLabel}</span>
                       <span data-label={t("publishedStatusLabel")}>{statusLabel}</span>
                       <span data-label={t("seoScoreLabel")}>{item?.seo_score ?? t("notAvailable")}</span>
+                      <div className="seo-evaluation-cell" data-label={t("seoEvaluationLabel")}>
+                        <details className="seo-evaluation-details">
+                          <summary>
+                            <span className="seo-evaluation-summary-title">{t("seoEvaluationView")}</span>
+                            <span className="seo-evaluation-summary-meta">
+                              {seoSummary.issueCount > 0
+                                ? `${seoSummary.failingChecks.length} ${t("seoEvaluationFailing")} • ${seoSummary.issueCount} ${t("seoEvaluationIssues")}`
+                                : t("seoEvaluationNoIssues")}
+                            </span>
+                          </summary>
+                          <div className="seo-evaluation-content">
+                            <div className="seo-evaluation-stats">
+                              <span>{t("seoScoreLabel")}: {seoSummary.score ?? t("notAvailable")}</span>
+                              <span>{seoSummary.passedCount} {t("seoEvaluationPassing")}</span>
+                            </div>
+                            {seoSummary.topIssues.length > 0 ? (
+                              <ul className="seo-evaluation-issues">
+                                {seoSummary.topIssues.map((issue, issueIndex) => (
+                                  <li key={`${item.job_id}-seo-issue-${issueIndex}`}>{issue}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="seo-evaluation-empty">{t("seoEvaluationNoIssues")}</p>
+                            )}
+                          </div>
+                        </details>
+                      </div>
                       <span data-label={t("publishedByLabel")}>{publishedBy}</span>
                       <span data-label={t("publishedAtLabel")}>{formatPublishedAt(item?.published_at)}</span>
                     </div>

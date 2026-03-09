@@ -691,6 +691,7 @@ class PublishedArticleOut(BaseModel):
     published_by: Optional[str]
     published_at: Optional[datetime]
     seo_score: Optional[int] = None
+    seo_evaluation: Optional[Dict[str, Any]] = None
     status: str
     client_id: UUID
     client_name: str

@@ -321,11 +321,15 @@ def list_published_articles(
         .all()
     )
     seo_score_by_job: dict[UUID, int] = {}
+    seo_evaluation_by_job: dict[UUID, dict] = {}
     for creator_job_id, payload in creator_output_rows:
-        if creator_job_id in seo_score_by_job or not isinstance(payload, dict):
+        if creator_job_id in seo_evaluation_by_job or not isinstance(payload, dict):
             continue
         seo_evaluation = payload.get("seo_evaluation") or (payload.get("debug") or {}).get("seo_evaluation") or {}
-        score = seo_evaluation.get("score") if isinstance(seo_evaluation, dict) else None
+        if not isinstance(seo_evaluation, dict):
+            continue
+        seo_evaluation_by_job[creator_job_id] = seo_evaluation
+        score = seo_evaluation.get("score")
         if isinstance(score, (int, float)):
             seo_score_by_job[creator_job_id] = int(score)
 
@@ -359,6 +363,7 @@ def list_published_articles(
                 published_by=published_by,
                 published_at=published_at,
                 seo_score=seo_score_by_job.get(job.id),
+                seo_evaluation=seo_evaluation_by_job.get(job.id),
                 status=job.job_status,
                 client_id=client.id,
                 client_name=(client.name or "").strip(),

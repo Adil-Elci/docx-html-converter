@@ -151,8 +151,6 @@ PAIR_FIT_AUDIENCE_TOKENS = {
     "baby", "babys", "eltern", "familie", "familien", "kinder", "kundinnen", "kunden", "leser",
     "leserinnen", "menschen", "nutzer", "patienten", "schueler", "schwangere", "teams",
 }
-PAIR_FIT_ACCEPT_SCORE = 15
-PAIR_FIT_WEAK_SCORE = 14
 PAIR_FIT_CANDIDATE_COUNT = 5
 
 GENERIC_CONCLUSION_PHRASES = (
@@ -1075,47 +1073,6 @@ def _pair_fit_score_candidate(
     }
 
 
-def _pair_fit_final_match_decision(candidate: Dict[str, Any]) -> str:
-    total_score = int(candidate.get("total_score") or 0)
-    publishing_site_relevance = int(candidate.get("publishing_site_relevance") or 0)
-    target_site_relevance = int(candidate.get("target_site_relevance") or 0)
-    informational_value = int(candidate.get("informational_value") or 0)
-    backlink_naturalness = int(candidate.get("backlink_naturalness") or 0)
-    spam_risk = int(candidate.get("spam_risk") or 10)
-    score_breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
-    publishing_overlap = int(score_breakdown.get("publishing_overlap") or 0)
-    target_overlap = int(score_breakdown.get("target_overlap") or 0)
-    shared_context_count = int(score_breakdown.get("shared_context_count") or 0)
-    overlap_term_matches = int(score_breakdown.get("overlap_term_matches") or 0)
-    bridge_evidence_score = int(score_breakdown.get("bridge_evidence_score") or 0)
-    if (
-        total_score >= PAIR_FIT_ACCEPT_SCORE
-        and publishing_site_relevance >= 6
-        and target_site_relevance >= 5
-        and informational_value >= 6
-        and backlink_naturalness >= 5
-        and spam_risk <= 5
-        and bridge_evidence_score >= 4
-        and (shared_context_count >= 1 or overlap_term_matches >= 1)
-    ):
-        return "accepted"
-    if (
-        total_score >= PAIR_FIT_WEAK_SCORE
-        and publishing_site_relevance >= 4
-        and target_site_relevance >= 4
-        and informational_value >= 5
-        and backlink_naturalness >= 4
-        and spam_risk <= 7
-        and (
-            shared_context_count >= 1
-            or overlap_term_matches >= 1
-            or (publishing_overlap >= 2 and target_overlap >= 2)
-        )
-    ):
-        return "weak_fit"
-    return "hard_reject"
-
-
 def _pair_fit_reject_reason(final_match_decision: str, best_candidate: Dict[str, Any], overlap_terms: List[str]) -> str:
     if final_match_decision == "accepted":
         return ""
@@ -1316,8 +1273,6 @@ def _pair_fit_normalize_llm_payload(
         "generated_bridge_topics": [dict(item) for item in candidates],
         "score_breakdown": {
             "best_candidate": dict(best_candidate),
-            "accept_threshold": PAIR_FIT_ACCEPT_SCORE,
-            "weak_threshold": PAIR_FIT_WEAK_SCORE,
             "shared_context_count": len(shared_contexts),
             "overlap_term_count": len(overlap_terms),
             "match_engine": "llm_hybrid",

@@ -169,6 +169,7 @@ def _coerce_html_payload(raw: str) -> Optional[Dict[str, Any]]:
     if not html:
         return None
     return {
+        "_html_fallback": True,
         "meta_title": _infer_meta_title(html),
         "meta_description": "",
         "slug": "",

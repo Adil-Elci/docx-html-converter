@@ -1,4 +1,9 @@
-from creator.api.pipeline import _rank_internal_link_inventory, _repair_link_constraints, _validate_link_strategy
+from creator.api.pipeline import (
+    _normalize_section_html,
+    _rank_internal_link_inventory,
+    _repair_link_constraints,
+    _validate_link_strategy,
+)
 
 
 def test_validate_link_strategy_ok():
@@ -73,6 +78,7 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
         max_internal_links=4,
         backlink_placement="intro",
         anchor_text="Backlink",
+        required_h1="Titel",
     )
     errors = _validate_link_strategy(
         repaired,
@@ -85,6 +91,20 @@ def test_repair_link_constraints_inserts_backlink_and_internal_links():
     assert repaired.count('href="https://publisher.example.com/') == 3
     assert "Relevanter Artikel A" in repaired
     assert "Mehr dazu" not in repaired
+    assert repaired.startswith("<h1>Titel</h1>")
+
+
+def test_normalize_section_html_preserves_required_heading_structure():
+    html = _normalize_section_html(
+        "FAQ",
+        ["Was ist wichtig?", "Wann ist Hilfe sinnvoll?"],
+        "<h2>Falsche Ueberschrift</h2><p>Antwort eins.</p><h3>Andere Frage</h3><p>Antwort zwei.</p>",
+    )
+
+    assert html.startswith("<h2>FAQ</h2>")
+    assert "<h3>Was ist wichtig?</h3>" in html
+    assert "<h3>Wann ist Hilfe sinnvoll?</h3>" in html
+    assert "Falsche Ueberschrift" not in html
 
 
 def test_rank_internal_link_inventory_prefers_relevant_same_site_articles():

@@ -1833,10 +1833,8 @@ def _wrap_paragraphs(text: str) -> str:
 
 def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
     cleaned = _strip_code_fences(raw)
-    cleaned = re.sub(r"<h1[^>]*>.*?</h1>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    if "<h2" in cleaned:
-        return cleaned
-    body = _wrap_paragraphs(cleaned)
+    cleaned = re.sub(r"<h[1-3][^>]*>.*?</h[1-3]>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    body = cleaned if re.search(r"<(?:p|ul|ol|table)\b", cleaned, flags=re.IGNORECASE) else _wrap_paragraphs(cleaned)
     html = f"<h2>{h2}</h2>"
     if h3s:
         for h3 in h3s:
@@ -1848,6 +1846,14 @@ def _normalize_section_html(h2: str, h3s: List[str], raw: str) -> str:
 
 def _strip_h1_tags(html: str) -> str:
     return re.sub(r"<h1[^>]*>.*?</h1>", "", html, flags=re.IGNORECASE | re.DOTALL)
+
+
+def _ensure_required_h1(html: str, required_h1: str) -> str:
+    body = _strip_h1_tags(html or "").strip()
+    heading = _strip_html_tags(required_h1 or "").strip()
+    if not heading:
+        return body
+    return f"<h1>{heading}</h1>{body}"
 
 
 def _strip_empty_blocks(html: str) -> str:
@@ -2194,6 +2200,7 @@ def _repair_link_constraints(
     max_internal_links: int,
     backlink_placement: str,
     anchor_text: str,
+    required_h1: str = "",
 ) -> str:
     # Remove all hyperlinks and then insert the required backlink + internal links.
     repaired = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", article_html or "", flags=re.IGNORECASE | re.DOTALL)
@@ -2215,9 +2222,9 @@ def _repair_link_constraints(
         anchor_map=internal_link_anchor_map,
     )
     repaired = _strip_disallowed_links(repaired, backlink_url=backlink_url, publishing_site_url=publishing_site_url)
-    repaired = _strip_h1_tags(repaired)
     repaired = _strip_empty_blocks(repaired)
     repaired = _strip_leading_empty_blocks(repaired)
+    repaired = _ensure_required_h1(repaired, required_h1)
     return repaired
 
 
@@ -2282,6 +2289,7 @@ def _generate_article_by_sections(
     except LLMError:
         intro_raw = ""
     intro_html = _wrap_paragraphs(intro_raw) or "<p></p>"
+    intro_html = _ensure_required_h1(intro_html, phase4.get("h1", ""))
 
     sections_html: List[str] = []
     for index, item in enumerate(outline_items, start=1):
@@ -2357,10 +2365,11 @@ def _generate_article_by_sections(
         max_internal_links=max_internal_links,
         backlink_placement=backlink_placement,
         anchor_text=anchor_text,
+        required_h1=phase4.get("h1", ""),
     )
-    article_html = _strip_h1_tags(article_html)
     article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)
+    article_html = _ensure_required_h1(article_html, phase4.get("h1", ""))
 
     word_count = word_count_from_html(article_html)
     for _expand_pass in range(3):
@@ -2392,6 +2401,7 @@ def _generate_article_by_sections(
             word_count = word_count_from_html(article_html)
         except LLMError:
             break
+    article_html = _ensure_required_h1(article_html, phase4.get("h1", ""))
 
     meta_title = phase4.get("h1") or ""
     excerpt = ""
@@ -3312,7 +3322,7 @@ def run_creator_pipeline(
                 timeout_seconds=http_timeout,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                allow_html_fallback=True,
+                allow_html_fallback=False,
                 request_label=f"phase5_attempt_{attempt}",
                 usage_collector=_collect_llm_usage,
             )
@@ -3369,6 +3379,7 @@ def run_creator_pipeline(
                     max_internal_links=effective_internal_max,
                     backlink_placement=phase4["backlink_placement"],
                     anchor_text=phase4["anchor_text_final"],
+                    required_h1=phase4["h1"],
                 )
                 repaired_errors = _collect_article_validation_errors(
                     article_html=repaired_html,
@@ -3479,10 +3490,11 @@ def run_creator_pipeline(
         max_internal_links=effective_internal_max,
         backlink_placement=phase4["backlink_placement"],
         anchor_text=phase4.get("anchor_text_final") or "this resource",
+        required_h1=phase4["h1"],
     )
-    art_html = _strip_h1_tags(art_html)
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
+    art_html = _ensure_required_h1(art_html, phase4["h1"])
     article_payload["article_html"] = art_html
     article_payload["meta_title"] = phase3["title_package"]["meta_title"]
     article_payload["slug"] = phase3["title_package"]["slug"]
@@ -3674,7 +3686,7 @@ def run_creator_pipeline(
                 model=planning_model,
                 timeout_seconds=http_timeout,
                 max_tokens=1600,
-                allow_html_fallback=True,
+                allow_html_fallback=False,
                 request_label="phase7_repair",
                 usage_collector=_collect_llm_usage,
             )
@@ -3698,6 +3710,7 @@ def run_creator_pipeline(
                 max_internal_links=effective_internal_max,
                 backlink_placement=phase4["backlink_placement"],
                 anchor_text=phase4["anchor_text_final"],
+                required_h1=phase4["h1"],
             )
             phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
             phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]

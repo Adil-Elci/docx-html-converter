@@ -79,6 +79,8 @@ KEYWORD_MAX_WORDS = 8
 DEFAULT_INTERNAL_LINK_MIN = 2
 DEFAULT_INTERNAL_LINK_MAX = 4
 KEYWORD_MAX_FAQ = 5
+ARTICLE_MIN_H2 = 4
+ARTICLE_MAX_H2 = 6
 GOOGLE_SUGGEST_CACHE_TTL_SECONDS = 6 * 60 * 60
 GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
 
@@ -321,12 +323,20 @@ def _extract_h2_headings(html: str) -> List[str]:
     return headings
 
 
-def _extract_last_h2_section_text(html: str) -> str:
-    matches = list(re.finditer(r"<h2[^>]*>.*?</h2>", html or "", flags=re.IGNORECASE | re.DOTALL))
+def _extract_h2_section_text(html: str, heading_name: str) -> str:
+    matches = list(re.finditer(r"<h2[^>]*>(.*?)</h2>", html or "", flags=re.IGNORECASE | re.DOTALL))
     if not matches:
         return ""
-    start = matches[-1].end()
-    return _strip_html_tags((html or "")[start:]).strip()
+    normalized_heading = _normalize_keyword_phrase(heading_name)
+    document = html or ""
+    for index, match in enumerate(matches):
+        heading = _normalize_keyword_phrase(_strip_html_tags(match.group(1)))
+        if heading != normalized_heading:
+            continue
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(document)
+        return _strip_html_tags(document[start:end]).strip()
+    return ""
 
 
 def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
@@ -860,40 +870,58 @@ def _format_faq_question(question: str) -> str:
     return formatted
 
 
-def _should_include_faq_section(faq_candidates: List[str]) -> bool:
-    usable = [item for item in faq_candidates if _normalize_keyword_phrase(item)]
-    return len(usable) >= 2
-
-
-def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str]) -> List[Any]:
-    if not _should_include_faq_section(faq_candidates):
-        return outline_items
-    if not isinstance(outline_items, list):
-        return outline_items
-
-    normalized_faqs = []
+def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
+    normalized_faqs: List[str] = []
     for item in faq_candidates:
         formatted = _format_faq_question(item)
         if formatted and formatted not in normalized_faqs:
             normalized_faqs.append(formatted)
         if len(normalized_faqs) >= 3:
-            break
-    if len(normalized_faqs) < 2:
-        return outline_items
+            return normalized_faqs[:3]
 
-    existing_h2 = [
-        str(item.get("h2") or "").strip().lower() if isinstance(item, dict) else str(item).strip().lower()
-        for item in outline_items
+    topic_phrase = _build_topic_phrase(topic) or "dieses thema"
+    fallback_questions = [
+        f"Was ist {topic_phrase}?",
+        f"Welche Ursachen hat {topic_phrase}?",
+        f"Wann ist Hilfe bei {topic_phrase} sinnvoll?",
     ]
-    if any("faq" in heading or "haeufige fragen" in heading for heading in existing_h2):
-        return outline_items
-    if len(outline_items) >= 5:
+    for item in fallback_questions:
+        formatted = _format_faq_question(item)
+        if formatted and formatted not in normalized_faqs:
+            normalized_faqs.append(formatted)
+        if len(normalized_faqs) >= 3:
+            break
+    return normalized_faqs[:3]
+
+
+def _inject_faq_section(outline_items: List[Any], faq_candidates: List[str], topic: str) -> List[Any]:
+    if not isinstance(outline_items, list):
         return outline_items
 
-    faq_section = {"h2": "FAQ", "h3": normalized_faqs}
-    if outline_items:
-        return list(outline_items[:-1]) + [faq_section, outline_items[-1]]
-    return [faq_section]
+    faq_section: Optional[Dict[str, Any]] = None
+    fazit_section: Optional[Dict[str, Any]] = None
+    core_sections: List[Dict[str, Any]] = []
+    normalized_faqs = _ensure_faq_candidates(topic, faq_candidates)
+
+    for item in outline_items:
+        section = item if isinstance(item, dict) else {"h2": str(item), "h3": []}
+        h2_value = str(section.get("h2") or "").strip()
+        heading_normalized = _normalize_keyword_phrase(h2_value)
+        if heading_normalized == "faq":
+            faq_section = {"h2": "FAQ", "h3": normalized_faqs}
+            continue
+        if heading_normalized == "fazit":
+            fazit_section = {"h2": "Fazit", "h3": []}
+            continue
+        core_sections.append({"h2": h2_value, "h3": section.get("h3") or []})
+
+    if fazit_section is None:
+        fazit_section = {"h2": "Fazit", "h3": []}
+    if faq_section is None:
+        faq_section = {"h2": "FAQ", "h3": normalized_faqs}
+
+    trimmed_core = core_sections[: max(0, ARTICLE_MAX_H2 - 2)]
+    return trimmed_core + [fazit_section, faq_section]
 
 
 def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str]:
@@ -903,12 +931,15 @@ def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str
         errors.append("language_not_german")
 
     headings = _extract_h2_headings(article_html)
-    if headings:
-        last_h2 = headings[-1].strip().lower()
-        if "fazit" not in last_h2:
-            errors.append("final_h2_not_fazit")
+    normalized_headings = [_normalize_keyword_phrase(item) for item in headings]
+    if len(normalized_headings) < ARTICLE_MIN_H2 or len(normalized_headings) > ARTICLE_MAX_H2:
+        errors.append("h2_count_invalid")
+    if not normalized_headings or normalized_headings[-1] != "faq":
+        errors.append("final_h2_not_faq")
+    if len(normalized_headings) < 2 or normalized_headings[-2] != "fazit":
+        errors.append("penultimate_h2_not_fazit")
 
-    conclusion_text = _extract_last_h2_section_text(article_html)
+    conclusion_text = _extract_h2_section_text(article_html, "Fazit")
     if conclusion_text:
         if _contains_generic_conclusion(conclusion_text):
             errors.append("conclusion_generic")
@@ -917,6 +948,10 @@ def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str
             lowered = conclusion_text.lower()
             if not any(term in lowered for term in topic_terms):
                 errors.append("conclusion_not_topic_specific")
+
+    faq_text = _extract_h2_section_text(article_html, "FAQ")
+    if not faq_text:
+        errors.append("faq_missing")
 
     return errors
 
@@ -1168,11 +1203,12 @@ def _insert_internal_links(
         return html
     working = html or ""
     h2_matches = list(re.finditer(r"<h2[^>]*>(.*?)</h2>", working, flags=re.IGNORECASE | re.DOTALL))
-    usable_section_indexes = list(range(len(h2_matches)))
-    if h2_matches:
-        last_h2_text = _strip_html_tags(h2_matches[-1].group(1)).strip().lower()
-        if "fazit" in last_h2_text and len(usable_section_indexes) > 1:
-            usable_section_indexes = usable_section_indexes[:-1]
+    usable_section_indexes = []
+    for idx, match in enumerate(h2_matches):
+        heading_text = _strip_html_tags(match.group(1)).strip().lower()
+        if "fazit" in heading_text or "faq" in heading_text:
+            continue
+        usable_section_indexes.append(idx)
     if not usable_section_indexes:
         usable_section_indexes = [0]
 
@@ -1875,7 +1911,10 @@ def run_creator_pipeline(
     )
     phase3["primary_keyword"] = keyword_selection["primary_keyword"]
     phase3["secondary_keywords"] = keyword_selection["secondary_keywords"]
-    phase3["faq_candidates"] = keyword_selection.get("faq_candidates") or []
+    phase3["faq_candidates"] = _ensure_faq_candidates(
+        phase3.get("final_article_topic", ""),
+        keyword_selection.get("faq_candidates") or [],
+    )
     debug["keyword_selection"] = {
         "primary_keyword": phase3["primary_keyword"],
         "secondary_keywords": phase3["secondary_keywords"],
@@ -1893,13 +1932,12 @@ def run_creator_pipeline(
     outline = None
     phase4 = {}
     outline_errors: List[str] = []
-    faq_candidates = phase3.get("faq_candidates") or []
-    faq_enabled = _should_include_faq_section(faq_candidates)
+    faq_candidates = _ensure_faq_candidates(phase3.get("final_article_topic", ""), phase3.get("faq_candidates") or [])
     for attempt in range(1, 3):
         system_prompt = (
-            "Create a German (de-DE) SEO article outline. Provide H1 and 3-5 H2 sections, optional H3. "
-            "Include a concise final H2 titled 'Fazit' (counts toward the 3-5). "
-            "If FAQ candidates are provided and they fit naturally, include one H2 section titled 'FAQ' before 'Fazit'. "
+            f"Create a German (de-DE) SEO article outline. Provide H1 and {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, optional H3. "
+            "The penultimate H2 must be titled 'Fazit'. "
+            "The final H2 must be titled 'FAQ'. "
             "Ensure keyword intent mapping: include the primary keyword in H1 and in at least one H2; "
             "cover secondary keywords naturally across remaining H2/H3 headings. "
             f"If H1 includes a year, it must be {current_year} (no other years in titles). "
@@ -1939,7 +1977,8 @@ def run_creator_pipeline(
         outline_items = llm_out.get("outline") or []
         backlink_placement = (llm_out.get("backlink_placement") or "").strip()
         anchor_text_final = (llm_out.get("anchor_text_final") or "").strip()
-        if not h1 or not isinstance(outline_items, list) or not (3 <= len(outline_items) <= 5):
+        outline_items = _inject_faq_section(outline_items, faq_candidates, phase3.get("final_article_topic", ""))
+        if not h1 or not isinstance(outline_items, list) or not (ARTICLE_MIN_H2 <= len(outline_items) <= ARTICLE_MAX_H2):
             outline_errors.append("invalid_outline_structure")
             continue
         if backlink_placement not in {"intro", "section_2", "section_3", "section_4", "section_5"}:
@@ -1947,7 +1986,6 @@ def run_creator_pipeline(
             continue
         primary_keyword_phase3 = _normalize_keyword_phrase(phase3.get("primary_keyword", ""))
         h1_lower = _normalize_keyword_phrase(h1)
-        outline_items = _inject_faq_section(outline_items, faq_candidates)
         outline_h2_combined = " ".join(
             _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
             for item in outline_items
@@ -1958,14 +1996,13 @@ def run_creator_pipeline(
         ):
             outline_errors.append("primary_keyword_missing_in_outline")
             continue
-        last_item = outline_items[-1] if outline_items else {}
-        last_h2 = ""
-        if isinstance(last_item, dict):
-            last_h2 = str(last_item.get("h2") or "").strip()
-        else:
-            last_h2 = str(last_item).strip()
-        if "fazit" not in last_h2.lower():
-            outline_errors.append("final_h2_not_fazit")
+        if _normalize_keyword_phrase(str(outline_items[-1].get("h2") or "") if isinstance(outline_items[-1], dict) else str(outline_items[-1])) != "faq":
+            outline_errors.append("final_h2_not_faq")
+            continue
+        penultimate_item = outline_items[-2] if len(outline_items) >= 2 else {}
+        penultimate_h2 = str(penultimate_item.get("h2") or "").strip() if isinstance(penultimate_item, dict) else str(penultimate_item).strip()
+        if _normalize_keyword_phrase(penultimate_h2) != "fazit":
+            outline_errors.append("penultimate_h2_not_fazit")
             continue
         if not anchor_text_final:
             anchor_text_final = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
@@ -1982,14 +2019,9 @@ def run_creator_pipeline(
 
     phase4 = outline
     debug["faq_generation"] = {
-        "faq_enabled": faq_enabled,
+        "faq_enabled": True,
         "faq_candidates": faq_candidates[:3],
-        "faq_in_outline": any(
-            "faq" in str(item.get("h2") or "").strip().lower()
-            if isinstance(item, dict)
-            else "faq" in str(item).strip().lower()
-            for item in (phase4.get("outline") or [])
-        ),
+        "faq_in_outline": True,
     }
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
     progress(4, PHASE_LABELS[4], 56)
@@ -2011,7 +2043,8 @@ def run_creator_pipeline(
                 "(aim for 750 words). Use neutral authoritative tone, "
                 "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
                 "No external links beyond the backlink, no CTA spam, no 'visit our site' language. "
-                "Include H1 and 3-5 H2 sections, with a concise final H2 titled 'Fazit'. "
+                f"Include H1 and {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
+                "The penultimate H2 must be titled 'Fazit' and the final H2 must be titled 'FAQ'. "
                 "Each section should have 1-2 substantial paragraphs. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
                 "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
@@ -2046,7 +2079,7 @@ def run_creator_pipeline(
             system_prompt = (
                 "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
                 f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "Include a concise final H2 titled 'Fazit'. "
+                "Keep the penultimate H2 titled 'Fazit' and the final H2 titled 'FAQ'. "
                 "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
                 "If the outline includes an FAQ section, answer each FAQ H3 directly and concretely. "
                 "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
@@ -2060,7 +2093,7 @@ def run_creator_pipeline(
                 f"Issues: {last_validation_errors}\n"
                 f"Required H1: {phase4['h1']}\n"
                 f"Required outline: {phase4['outline']}\n"
-                "Constraints: 650-800 words, H1 + 3-5 H2 sections.\n"
+                f"Constraints: 650-800 words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
@@ -2080,7 +2113,7 @@ def run_creator_pipeline(
             system_prompt = (
                 "Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be 650-800 words "
                 "(aim for 750 words). Each H2 section needs 1-2 substantial paragraphs. "
-                "Include a concise final H2 titled 'Fazit'. "
+                "The penultimate H2 must be titled 'Fazit' and the final H2 must be titled 'FAQ'. "
                 "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
                 "No external links beyond the backlink. "
                 "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
@@ -2100,7 +2133,7 @@ def run_creator_pipeline(
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
                 f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                "Constraints: 650-800 words (aim for 750), H1 + 3-5 H2 sections, "
+                f"Constraints: 650-800 words (aim for 750), H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, "
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
@@ -2163,7 +2196,7 @@ def run_creator_pipeline(
                 max_internal_links=effective_internal_max,
             )
         )
-        if not (3 <= count_h2(article_html) <= 5):
+        if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
             validation_errors.append("h2_count_invalid")
         validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
         validation_errors.extend(
@@ -2202,7 +2235,7 @@ def run_creator_pipeline(
                         max_internal_links=effective_internal_max,
                     )
                 )
-                if not (3 <= count_h2(repaired_html) <= 5):
+                if not (ARTICLE_MIN_H2 <= count_h2(repaired_html) <= ARTICLE_MAX_H2):
                     repaired_errors.append("h2_count_invalid")
                 repaired_errors.extend(_validate_language_and_conclusion(repaired_html, phase3["final_article_topic"]))
                 repaired_errors.extend(
@@ -2273,7 +2306,7 @@ def run_creator_pipeline(
                     max_internal_links=effective_internal_max,
                 )
             )
-            if not (3 <= count_h2(article_html) <= 5):
+            if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
                 validation_errors.append("h2_count_invalid")
             validation_errors.extend(_validate_language_and_conclusion(article_html, phase3["final_article_topic"]))
             validation_errors.extend(
@@ -2417,7 +2450,7 @@ def run_creator_pipeline(
     )
     if validate_word_count(phase5["article_html"], 600, 850):
         phase7_errors.append("word_count_invalid")
-    if not (3 <= count_h2(phase5["article_html"]) <= 5):
+    if not (ARTICLE_MIN_H2 <= count_h2(phase5["article_html"]) <= ARTICLE_MAX_H2):
         phase7_errors.append("h2_count_invalid")
     phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
     phase7_errors.extend(
@@ -2446,7 +2479,8 @@ def run_creator_pipeline(
         system_prompt = (
             "Fix the HTML article to satisfy SEO checks. "
             f"{wc_instruction} "
-            "Keep 3-5 H2 sections, ending with a concise 'Fazit'. "
+            f"Keep {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
+            "The penultimate H2 must be 'Fazit' and the final H2 must be 'FAQ'. "
             "Enforce link contract: exactly one backlink to Backlink URL, "
             f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
             f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
@@ -2523,7 +2557,7 @@ def run_creator_pipeline(
             )
             if validate_word_count(phase5["article_html"], 600, 850):
                 phase7_errors.append("word_count_invalid")
-            if not (3 <= count_h2(phase5["article_html"]) <= 5):
+            if not (ARTICLE_MIN_H2 <= count_h2(phase5["article_html"]) <= ARTICLE_MAX_H2):
                 phase7_errors.append("h2_count_invalid")
             phase7_errors.extend(_validate_language_and_conclusion(phase5["article_html"], phase3["final_article_topic"]))
             phase7_errors.extend(

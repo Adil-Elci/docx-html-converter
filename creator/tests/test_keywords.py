@@ -3,9 +3,11 @@ from creator.api.pipeline import (
     KEYWORD_MIN_SECONDARY,
     _build_keyword_query_variants,
     _discover_keyword_candidates,
+    _ensure_faq_candidates,
     _fetch_google_de_suggestions,
     _inject_faq_section,
     _select_keywords,
+    _validate_language_and_conclusion,
     _validate_keyword_coverage,
 )
 
@@ -88,7 +90,14 @@ def test_discover_keyword_candidates_extracts_faqs(monkeypatch):
     assert any(item.startswith("was ist ") for item in result["faq_candidates"])
 
 
-def test_inject_faq_section_before_fazit():
+def test_ensure_faq_candidates_falls_back_to_topic_questions():
+    faqs = _ensure_faq_candidates("Baby vorbereiten Checkliste", [])
+
+    assert len(faqs) == 3
+    assert faqs[0].startswith("Was ist ")
+
+
+def test_inject_faq_section_after_fazit():
     outline = [
         {"h2": "Ursachen", "h3": []},
         {"h2": "Hilfen im Alltag", "h3": []},
@@ -101,12 +110,13 @@ def test_inject_faq_section_before_fazit():
             "wie wirkt sich eltern sucht auf kinder aus",
             "wann brauchen familien professionelle hilfe",
         ],
+        "Eltern-Sucht in der Schwangerschaft",
     )
 
     assert len(updated) == 4
-    assert updated[-2]["h2"] == "FAQ"
-    assert updated[-1]["h2"] == "Fazit"
-    assert len(updated[-2]["h3"]) >= 2
+    assert updated[-2]["h2"] == "Fazit"
+    assert updated[-1]["h2"] == "FAQ"
+    assert len(updated[-1]["h3"]) >= 2
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):
@@ -178,4 +188,23 @@ def test_validate_keyword_coverage_ok():
             "hilfsangebote fuer familien",
         ],
     )
+    assert not errors
+
+
+def test_validate_language_and_conclusion_requires_fazit_then_faq():
+    html = """
+    <h1>Eltern Sucht Schwangerschaft: Auswirkungen und Hilfe</h1>
+    <p>Eltern sucht schwangerschaft betrifft viele Familien und erfordert fruehe Hilfe.</p>
+    <h2>Eltern Sucht Schwangerschaft im Alltag</h2>
+    <p>Auswirkungen auf familienbeziehungen sind deutlich sichtbar.</p>
+    <h2>Unterstuetzung</h2>
+    <p>Unterstuetzung fuer betroffene familien ist zentral.</p>
+    <h2>Fazit</h2>
+    <p>Bei eltern sucht in der schwangerschaft sind fruehe hilfen, klare absprachen und stabile bezugspersonen besonders wichtig.</p>
+    <h2>FAQ</h2>
+    <h3>Was ist eltern sucht in der schwangerschaft?</h3>
+    <p>Eine belastende familiensituation mit konkretem hilfebedarf.</p>
+    </p>
+    """
+    errors = _validate_language_and_conclusion(html, "Eltern-Sucht in der Schwangerschaft")
     assert not errors

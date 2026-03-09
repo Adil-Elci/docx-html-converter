@@ -37,4 +37,4 @@ pytest
 - The creator service is standalone and does not run database migrations.
 - It fetches and analyzes live target/publishing sites; ensure outbound HTTP is allowed.
 - Keyword enrichment uses German Google Suggest (`hl=de`, `gl=de`) and keeps a lightweight in-process cache for repeated queries.
-- When enough FAQ candidates are discovered for a topic, the creator can inject a `FAQ` section before `Fazit`.
+- Every article now includes a mandatory `FAQ` section as the final `H2`, with `Fazit` immediately before it.

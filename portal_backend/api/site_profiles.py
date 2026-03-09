@@ -32,16 +32,20 @@ PROFILE_KIND_TARGET = "target_site"
 PROFILE_VERSION = "v1"
 
 CONTEXT_KEYWORDS = {
-    "health": {"gesundheit", "therapie", "arzt", "medizin", "symptome", "vorsorge", "sucht", "behandlung"},
-    "family_life": {"familie", "eltern", "kinder", "baby", "schwangerschaft", "alltag", "erziehung"},
+    "health": {"augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz", "sicht", "symptome", "therapie", "vorsorge"},
+    "safety": {"absicherung", "praevention", "risiko", "sicherheit", "schutz", "uv", "vorsicht", "warnzeichen"},
+    "lifestyle": {"alltag", "ideen", "leben", "mode", "ratgeber", "stil", "trends"},
+    "family_life": {"alltag", "baby", "eltern", "familie", "familien", "kinder", "partnerschaft", "schwangerschaft"},
+    "parenting": {"baby", "eltern", "erziehung", "familie", "kinder", "kleinkind", "schule", "schwangerschaft"},
     "education": {"lernen", "schule", "bildung", "kita", "ausbildung", "studium"},
     "daily_routine": {"alltag", "routine", "organisation", "planung", "tipps", "haushalt"},
     "finance": {"kosten", "budget", "finanzierung", "sparen", "steuer", "versicherung"},
     "home": {"wohnen", "haus", "wohnung", "garten", "immobilien", "einrichten"},
-    "lifestyle": {"ratgeber", "trends", "mode", "beauty", "leben", "ideen"},
-    "safety": {"sicherheit", "schutz", "risiko", "warnzeichen", "prävention"},
     "productivity": {"produktiv", "effizienz", "planung", "workflow", "management"},
     "wellbeing": {"wohlbefinden", "balance", "stress", "entspannung", "mental"},
+    "mobility": {"auto", "fahrt", "mobil", "mobilitaet", "reise", "reisen", "unterwegs", "verkehr"},
+    "outdoor": {"ausflug", "draussen", "freizeit", "natur", "outdoor", "reise", "reisen", "sommer", "sonne", "urlaub"},
+    "beauty": {"beauty", "haut", "kosmetik", "pflege", "stil"},
     "shopping": {"kaufen", "shop", "produkt", "preis", "vergleich", "online"},
 }
 GERMAN_STOPWORDS = {
@@ -49,6 +53,20 @@ GERMAN_STOPWORDS = {
     "de", "dem", "den", "der", "des", "die", "doch", "ein", "eine", "einer", "eines", "er", "es", "für",
     "hat", "hier", "ich", "im", "in", "ist", "mit", "nach", "nicht", "nur", "oder", "sie", "sind", "so",
     "und", "uns", "von", "vor", "wie", "wir", "zu", "zum", "zur",
+}
+EXTRA_STOPWORDS = {
+    "beim", "diese", "diesem", "dieser", "dieses", "durch", "einen", "einem", "einer", "erste", "erstes",
+    "haben", "hilfreiche", "ihr", "ihre", "ihren", "ihres", "jede", "jeder", "jedes", "kein", "keine", "mehr",
+    "muss", "mussen", "noch", "rund", "sehr", "sich", "sollte", "sollten", "thema", "themen", "unter",
+    "viele", "vielen", "vom", "warum", "was", "welche", "welcher", "welches", "wenn", "weiter", "wird",
+}
+LOW_SIGNAL_TOKENS = {
+    "allgemein", "artikel", "beitrag", "blog", "einfach", "forum", "home", "infos", "jetzt", "magazin",
+    "menu", "navigation", "news", "online", "portal", "seite", "service", "start", "startseite", "suche",
+    "thema", "themen", "tipps", "weiterlesen", "wissen",
+}
+BOILERPLATE_PHRASES = {
+    "datenschutz", "impressum", "kontakt", "login", "registrieren", "warenkorb", "konto", "agb",
 }
 COMMERCIAL_TERMS = {
     "kaufen", "shop", "angebot", "preis", "preise", "bestellen", "produkt", "produkte", "versand", "marke",
@@ -183,8 +201,15 @@ def fetch_site_profile_payload(
     meta_descriptions = _dedupe_preserve_order(
         [page.get("meta_description", "") for page in pages if page.get("meta_description")]
     )
-    keywords = _extract_keywords(" ".join(page_titles + headings + [combined_text]), limit=18)
-    contexts = _infer_contexts(keywords + headings + page_titles + meta_descriptions)
+    keywords = _extract_weighted_keywords(pages, limit=18)
+    contexts = _infer_contexts(
+        keywords
+        + headings
+        + page_titles
+        + meta_descriptions
+        + _coerce_string_list((inventory_context or {}).get("site_categories"))
+        + _coerce_string_list((inventory_context or {}).get("prominent_titles"))
+    )
     primary_context = contexts[0] if contexts else ("shopping" if profile_kind == PROFILE_KIND_TARGET else "lifestyle")
     content_tone = _detect_content_tone(combined_text, headings, page_titles)
     domain_topic = _derive_domain_topic(page_titles, headings, keywords, normalized_url)
@@ -466,6 +491,21 @@ def get_combined_target_profile(
     return combined_payload, combined_hash, exact_record, root_record
 
 
+def _expanded_profile_contexts(profile: Dict[str, Any]) -> List[str]:
+    values = (
+        _coerce_string_list(profile.get("topics"))
+        + _coerce_string_list(profile.get("site_categories"))
+        + _coerce_string_list(profile.get("topic_clusters"))
+        + _coerce_string_list(profile.get("repeated_keywords"))
+        + _coerce_string_list(profile.get("services_or_products"))
+        + _coerce_string_list(profile.get("visible_headings"))
+        + _coerce_string_list(profile.get("sample_page_titles"))
+    )
+    return _dedupe_preserve_order(
+        _coerce_string_list(profile.get("contexts")) + _infer_contexts(values)
+    )[:8]
+
+
 def score_publishing_site_fit(
     publishing_profile: Dict[str, Any],
     target_profile: Dict[str, Any],
@@ -484,8 +524,8 @@ def score_publishing_site_fit(
         target_profile.get("services_or_products"),
         target_profile.get("visible_headings"),
     )
-    publishing_contexts = set(_coerce_string_list(publishing_profile.get("contexts")))
-    target_contexts = set(_coerce_string_list(target_profile.get("contexts")))
+    publishing_contexts = set(_expanded_profile_contexts(publishing_profile))
+    target_contexts = set(_expanded_profile_contexts(target_profile))
     topic_overlap = len(publishing_topics & target_topics)
     context_overlap = len(publishing_contexts & target_contexts)
     score = topic_overlap * 8 + context_overlap * 16
@@ -493,7 +533,7 @@ def score_publishing_site_fit(
         score += 12
     if publishing_profile.get("primary_context") in target_contexts:
         score += 6
-    if target_profile.get("business_intent") == "commercial":
+    if target_profile.get("business_intent") == "commercial" and context_overlap == 0:
         score -= 4
     if score < 0:
         score = 0
@@ -741,9 +781,43 @@ def _extract_page_signals(url: str, html: str) -> Dict[str, Any]:
     }
 
 
+def _normalize_signal_token(value: str) -> str:
+    return re.sub(r"[^a-zA-ZäöüÄÖÜß]", "", (value or "").lower()).strip()
+
+
+def _is_signal_token(token: str) -> bool:
+    cleaned = _normalize_signal_token(token)
+    if len(cleaned) < 4:
+        return False
+    if cleaned in GERMAN_STOPWORDS or cleaned in EXTRA_STOPWORDS or cleaned in LOW_SIGNAL_TOKENS:
+        return False
+    if cleaned in BOILERPLATE_PHRASES:
+        return False
+    return True
+
+
 def _extract_keywords(text: str, *, limit: int) -> List[str]:
     tokens = re.findall(r"\b[a-zA-ZäöüÄÖÜß]{3,}\b", (text or "").lower())
-    counter = Counter(token for token in tokens if token not in GERMAN_STOPWORDS)
+    counter = Counter(_normalize_signal_token(token) for token in tokens if _is_signal_token(token))
+    return [token for token, _ in counter.most_common(limit)]
+
+
+def _extract_weighted_keywords(pages: Sequence[Dict[str, Any]], *, limit: int) -> List[str]:
+    counter: Counter[str] = Counter()
+    for page in pages:
+        for token in _extract_keywords(str(page.get("title") or ""), limit=12):
+            counter[token] += 4
+        for token in _extract_keywords(str(page.get("meta_description") or ""), limit=12):
+            counter[token] += 2
+        seen_heading_tokens: set[str] = set()
+        for heading in page.get("headings") or []:
+            for token in _extract_keywords(str(heading), limit=10):
+                if token in seen_heading_tokens:
+                    continue
+                seen_heading_tokens.add(token)
+                counter[token] += 2
+        for token in _extract_keywords(str(page.get("text") or ""), limit=24):
+            counter[token] += 1
     return [token for token, _ in counter.most_common(limit)]
 
 
@@ -855,7 +929,7 @@ def _text_set(*values: Any) -> set[str]:
             iterable = [str(value or "")]
         for item in iterable:
             for token in re.findall(r"\b[a-zA-ZäöüÄÖÜß]{3,}\b", item.lower()):
-                if token in GERMAN_STOPWORDS:
+                if not _is_signal_token(token):
                     continue
-                tokens.add(token)
+                tokens.add(_normalize_signal_token(token))
     return tokens

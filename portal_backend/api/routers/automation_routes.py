@@ -218,6 +218,7 @@ def _select_best_accepted_pair(
     exclude_topics: Optional[list[str]],
     timeout_seconds: int,
 ) -> Tuple[Optional[Dict[str, object]], list[Dict[str, object]]]:
+    allow_rejected_pairs = _read_bool_env("ALLOW_REJECTED_PAIRS_FOR_TESTING", False)
     evaluated: list[Dict[str, object]] = []
     for candidate in candidate_rankings:
         try:
@@ -241,24 +242,36 @@ def _select_best_accepted_pair(
                     **candidate,
                     "pair_fit_error": str(exc),
                     "accepted": False,
+                    "override_selected": False,
                 }
             )
             continue
         pair_fit = dict(pair_fit_result.get("pair_fit") or {})
-        decision = str(pair_fit.get("decision") or "").strip().lower()
-        accepted = decision == "accepted" and bool(pair_fit.get("backlink_fit_ok"))
+        final_match_decision = str(pair_fit.get("final_match_decision") or "").strip().lower()
+        if not final_match_decision:
+            final_match_decision = "accepted" if bool(pair_fit.get("backlink_fit_ok")) else "hard_reject"
+        accepted = final_match_decision == "accepted" and bool(pair_fit.get("backlink_fit_ok"))
+        override_selected = bool(allow_rejected_pairs and final_match_decision in {"weak_fit", "hard_reject"})
         combined_score = int(candidate.get("score") or 0) + int(pair_fit.get("fit_score") or 0)
         evaluated.append(
             {
                 **candidate,
                 "pair_fit": pair_fit,
                 "pair_fit_cached": bool(pair_fit_result.get("cached")),
-                "accepted": accepted,
+                "accepted": accepted or override_selected,
+                "override_selected": override_selected and not accepted,
+                "final_match_decision": final_match_decision,
                 "combined_score": combined_score,
             }
         )
     accepted_pairs = [item for item in evaluated if item.get("accepted")]
-    accepted_pairs.sort(key=lambda item: (-int(item.get("combined_score") or 0), -int(item.get("score") or 0)))
+    accepted_pairs.sort(
+        key=lambda item: (
+            bool(item.get("override_selected")),
+            -int(item.get("combined_score") or 0),
+            -int(item.get("score") or 0),
+        )
+    )
     return (accepted_pairs[0] if accepted_pairs else None), evaluated
 
 

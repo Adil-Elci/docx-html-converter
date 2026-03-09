@@ -1,5 +1,4 @@
 from creator.api.pipeline import (
-    CreatorError,
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
@@ -507,38 +506,7 @@ def test_validate_language_and_conclusion_rejects_thin_faq():
     assert any(error.startswith("faq_question_count_too_low") or error.startswith("faq_answers_too_thin") for error in errors)
 
 
-def test_pair_fit_reasoning_requires_scored_candidate_set(monkeypatch):
-    def fake_call_llm_json(**kwargs):
-        return {
-            "publishing_site_topics": ["Familie", "Elternratgeber"],
-            "target_site_topics": ["Schwimmbrille", "Sehhilfe fuer Kinder"],
-            "publishing_site_contexts": ["family_life", "wellbeing"],
-            "target_site_contexts": ["family_life", "health"],
-            "intersection_contexts": ["family_life", "health"],
-            "best_overlap_reason": "Familienalltag und kindgerechte Sehhilfen schneiden sich natuerlich im Gesundheitskontext.",
-            "topic_candidates": [
-                {
-                    "topic": f"Kandidat {idx}",
-                    "publishing_site_relevance": 8,
-                    "backlink_naturalness": 7,
-                    "informational_value": 8,
-                    "seo_plausibility": 7,
-                    "non_spamminess": 9,
-                    "total_score": 39,
-                    "backlink_angle": "kindgerechte Produkthilfe als Zusatzressource",
-                }
-                for idx in range(1, 6)
-            ],
-            "final_article_topic": "Kandidat 1",
-            "why_this_topic_was_chosen": "Das Thema bleibt im Familienkontext und bindet die Zielseite nur als Zusatzressource ein.",
-            "backlink_fit_ok": True,
-            "fit_score": 72,
-            "decision": "accepted",
-            "rejection_reason": "",
-        }
-
-    monkeypatch.setattr("creator.api.pipeline.call_llm_json", fake_call_llm_json)
-
+def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():
     result = _run_pair_fit_reasoning(
         requested_topic="",
         exclude_topics=[],
@@ -546,16 +514,20 @@ def test_pair_fit_reasoning_requires_scored_candidate_set(monkeypatch):
         publishing_site_url="https://publisher.example.com",
         target_profile={
             "normalized_url": "https://target.example.com",
-            "topics": ["Schwimmbrille", "Sehhilfe fuer Kinder"],
-            "contexts": ["family_life", "health"],
+            "topics": ["Sonnenbrillen", "Augenschutz fuer Kinder", "UV Schutz unterwegs"],
+            "contexts": ["shopping", "safety"],
             "business_type": "E-Commerce",
-            "services_or_products": ["Schwimmbrillen"],
+            "services_or_products": ["Sonnenbrillen", "Kinderbrillen"],
+            "repeated_keywords": ["sonnenbrillen", "uv", "schutz", "kinder"],
+            "visible_headings": ["Kinderaugen vor UV Strahlung schuetzen"],
             "business_intent": "commercial",
         },
         publishing_profile={
             "normalized_url": "https://publisher.example.com",
-            "topics": ["Familie", "Elternratgeber"],
-            "contexts": ["family_life", "wellbeing"],
+            "topics": ["Familie", "Elternratgeber", "Gesunder Familienalltag"],
+            "contexts": ["family_life", "health"],
+            "site_categories": ["Familie", "Kinder", "Gesundheit"],
+            "repeated_keywords": ["kinder", "familie", "schutz", "alltag"],
             "content_style": ["hilfreich", "sachlich"],
         },
         llm_api_key="test-key",
@@ -565,10 +537,12 @@ def test_pair_fit_reasoning_requires_scored_candidate_set(monkeypatch):
         usage_collector=None,
     )
 
-    assert result["decision"] == "accepted"
+    assert result["final_match_decision"] in {"accepted", "weak_fit"}
     assert len(result["topic_candidates"]) == 5
-    assert result["topic_candidates"][0]["topic"] == "Kandidat 1"
-    assert result["final_article_topic"] == "Kandidat 1"
+    assert result["generated_bridge_topics"]
+    assert result["final_article_topic"]
+    assert "safety" in result["target_site_contexts"]
+    assert any(item in result["publishing_site_contexts"] for item in ["family_life", "health", "parenting"])
 
 
 def test_compact_pair_fit_profile_limits_prompt_fields() -> None:
@@ -598,43 +572,35 @@ def test_compact_pair_fit_profile_limits_prompt_fields() -> None:
     assert len(compact["services_or_products"]) == 8
 
 
-def test_pair_fit_reasoning_rejects_invalid_candidate_count(monkeypatch):
-    monkeypatch.setattr(
-        "creator.api.pipeline.call_llm_json",
-        lambda **kwargs: {
-            "publishing_site_topics": ["Familie"],
-            "target_site_topics": ["Schwimmbrille"],
-            "publishing_site_contexts": ["family_life"],
-            "target_site_contexts": ["health"],
-            "intersection_contexts": ["health"],
-            "best_overlap_reason": "Schwacher Uebergang.",
-            "topic_candidates": [{"topic": "Nur ein Kandidat"}],
-            "final_article_topic": "Nur ein Kandidat",
-            "why_this_topic_was_chosen": "Zu wenig Kandidaten.",
-            "backlink_fit_ok": True,
-            "fit_score": 44,
-            "decision": "accepted",
-            "rejection_reason": "",
+def test_pair_fit_reasoning_distinguishes_hard_reject():
+    result = _run_pair_fit_reasoning(
+        requested_topic="",
+        exclude_topics=[],
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        target_profile={
+            "normalized_url": "https://target.example.com",
+            "topics": ["Industrie Ersatzteile", "B2B Beschaffung"],
+            "contexts": ["shopping", "productivity"],
+            "services_or_products": ["Ersatzteile", "Grossbestellungen"],
+            "business_intent": "commercial",
         },
+        publishing_profile={
+            "normalized_url": "https://publisher.example.com",
+            "topics": ["Meditation", "Achtsamkeit", "Wellbeing"],
+            "contexts": ["wellbeing"],
+            "site_categories": ["Entspannung"],
+        },
+        llm_api_key="test-key",
+        llm_base_url="https://api.openai.com/v1",
+        planning_model="gpt-4.1-mini",
+        timeout_seconds=2,
+        usage_collector=None,
     )
 
-    try:
-        _run_pair_fit_reasoning(
-            requested_topic="",
-            exclude_topics=[],
-            target_site_url="https://target.example.com",
-            publishing_site_url="https://publisher.example.com",
-            target_profile={"normalized_url": "https://target.example.com", "topics": ["a"], "contexts": ["health"]},
-            publishing_profile={"normalized_url": "https://publisher.example.com", "topics": ["b"], "contexts": ["family_life"]},
-            llm_api_key="test-key",
-            llm_base_url="https://api.openai.com/v1",
-            planning_model="gpt-4.1-mini",
-            timeout_seconds=2,
-            usage_collector=None,
-        )
-        assert False, "expected CreatorError"
-    except CreatorError as exc:
-        assert "invalid candidate count" in str(exc)
+    assert result["final_match_decision"] == "hard_reject"
+    assert result["decision"] == "rejected"
+    assert result["reject_reason"]
 
 
 def test_pair_fit_cache_payload_is_usable_requires_complete_accepted_payload():

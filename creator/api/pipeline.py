@@ -79,6 +79,81 @@ ENGLISH_FUNCTION_WORDS = {
     "the", "and", "is", "are", "with", "for", "this", "that", "to", "of", "in", "on", "as", "be", "by", "an",
     "or", "from", "it", "at", "we", "you", "your", "our", "has", "have", "was", "were", "will", "can",
 }
+PAIR_FIT_EXTRA_STOPWORDS = {
+    "alle", "alles", "beim", "bereits", "beste", "besten", "diese", "diesem", "dieser", "dieses", "durch",
+    "einfach", "einen", "einem", "einer", "eines", "erste", "erstes", "etwa", "fuer", "gegen", "genau",
+    "haben", "hilfreiche", "ihr", "ihre", "ihren", "ihres", "jede", "jeder", "jedes", "jetzt", "kein", "keine",
+    "mehr", "muss", "mussen", "nachdem", "naechste", "noch", "rund", "sehr", "sich", "sollte", "sollten",
+    "thema", "themen", "unsere", "unter", "viele", "vielen", "vom", "warum", "was", "welche", "welcher",
+    "welches", "wenn", "weiter", "weiterlesen", "wird", "wurden", "zeigt", "zeigen", "zwischen",
+}
+PAIR_FIT_BOILERPLATE_TOKENS = {
+    "artikel", "beitrag", "beitraege", "blog", "cookie", "datenschutz", "entdecken", "forum", "hilfe", "home",
+    "impressum", "jetzt", "kategorie", "kategorien", "login", "magazin", "mehr", "menu", "navigation", "news",
+    "online", "portal", "registrieren", "service", "shop", "start", "startseite", "suche", "tag", "tags",
+    "uebersicht", "weiterlesen",
+}
+PAIR_FIT_PROMO_TOKENS = {
+    "angebot", "angebote", "bestellen", "guenstig", "kaufen", "marke", "marken", "preis", "preise", "rabatt",
+    "sale", "shop", "sofort", "versand",
+}
+PAIR_FIT_INFORMATIONAL_CUES = {
+    "alltag", "antworten", "anleitung", "aufpassen", "beachten", "checkliste", "einordnung", "erklaert", "hilfe",
+    "hinweise", "orientierung", "praevention", "praxis", "ratgeber", "sicherheit", "schutz", "tipps", "wissen",
+    "worauf",
+}
+PAIR_FIT_CONTEXT_KEYWORDS = {
+    "health": {"arzt", "augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz", "sicht", "symptome", "therapie", "vorsorge"},
+    "safety": {"absicherung", "sicherheit", "schutz", "uv", "vorsicht", "warnung", "warnzeichen", "praevention", "risiko"},
+    "lifestyle": {"alltag", "ideen", "leben", "lifestyle", "mode", "ratgeber", "stil", "trends"},
+    "family_life": {"alltag", "baby", "eltern", "familie", "familien", "haushalt", "kinder", "partnerschaft", "schwangerschaft"},
+    "parenting": {"baby", "eltern", "erziehung", "familie", "kinder", "kleinkind", "schule", "schwangerschaft"},
+    "home": {"garten", "haus", "haushalt", "wohnen", "wohnung"},
+    "finance": {"budget", "finanzierung", "kosten", "preis", "preise", "sparen", "versicherung"},
+    "education": {"bildung", "kita", "lernen", "schule", "wissen"},
+    "wellbeing": {"balance", "entspannung", "mental", "ruhe", "stress", "wohlbefinden"},
+    "mobility": {"auto", "fahrt", "mobil", "mobilitaet", "reise", "reisen", "unterwegs", "verkehr"},
+    "outdoor": {"ausflug", "draussen", "freizeit", "natur", "outdoor", "reise", "reisen", "sommer", "sonne", "urlaub"},
+    "productivity": {"organisation", "planung", "produktiv", "routine", "workflow"},
+    "beauty": {"beauty", "haut", "kosmetik", "pflege", "stil"},
+    "shopping": {"angebot", "bestellen", "kaufen", "marke", "preis", "preise", "produkt", "produkte", "shop", "vergleich"},
+}
+PAIR_FIT_CONTEXT_LABELS = {
+    "health": "gesundheitlichen Fragen",
+    "safety": "Sicherheit im Alltag",
+    "lifestyle": "alltagsnahen Entscheidungen",
+    "family_life": "Familienalltag",
+    "parenting": "Elternalltag",
+    "home": "Zuhause",
+    "finance": "Kosten und Entscheidungen",
+    "education": "Orientierung und Lernen",
+    "wellbeing": "Wohlbefinden",
+    "mobility": "unterwegs",
+    "outdoor": "Aktivitaeten im Freien",
+    "productivity": "Organisation im Alltag",
+    "beauty": "Pflege und Stil",
+    "shopping": "Auswahl und Orientierung",
+}
+PAIR_FIT_CONTEXT_AUDIENCES = {
+    "family_life": "Eltern und Familien",
+    "parenting": "Eltern und Bezugspersonen",
+    "education": "Lernende und Familien",
+    "health": "gesundheitsbewusste Leserinnen und Leser",
+    "wellbeing": "achtsame Leserinnen und Leser",
+    "home": "Haushalte",
+    "finance": "preisbewusste Leserinnen und Leser",
+    "mobility": "Menschen unterwegs",
+    "outdoor": "aktive Leserinnen und Leser",
+    "beauty": "pflegebewusste Leserinnen und Leser",
+    "productivity": "organisierte Teams und Einzelpersonen",
+}
+PAIR_FIT_AUDIENCE_TOKENS = {
+    "baby", "babys", "eltern", "familie", "familien", "kinder", "kundinnen", "kunden", "leser",
+    "leserinnen", "menschen", "nutzer", "patienten", "schueler", "schwangere", "teams",
+}
+PAIR_FIT_ACCEPT_SCORE = 34
+PAIR_FIT_WEAK_SCORE = 26
+PAIR_FIT_CANDIDATE_COUNT = 5
 
 GENERIC_CONCLUSION_PHRASES = (
     "this article has examined the key factors",
@@ -600,8 +675,11 @@ def _coerce_pair_fit_topic_candidates(value: Any) -> List[Dict[str, Any]]:
                     "informational_value": max(0, min(10, int(item.get("informational_value") or 0))),
                     "seo_plausibility": max(0, min(10, int(item.get("seo_plausibility") or 0))),
                     "non_spamminess": max(0, min(10, int(item.get("non_spamminess") or 0))),
+                    "target_site_relevance": max(0, min(10, int(item.get("target_site_relevance") or 0))),
+                    "spam_risk": max(0, min(10, int(item.get("spam_risk") or 0))),
                     "total_score": max(0, min(50, int(item.get("total_score") or 0))),
                     "backlink_angle": str(item.get("backlink_angle") or "").strip(),
+                    "score_breakdown": item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {},
                 }
             )
             continue
@@ -615,8 +693,11 @@ def _coerce_pair_fit_topic_candidates(value: Any) -> List[Dict[str, Any]]:
                     "informational_value": 0,
                     "seo_plausibility": 0,
                     "non_spamminess": 0,
+                    "target_site_relevance": 0,
+                    "spam_risk": 10,
                     "total_score": 0,
                     "backlink_angle": "",
+                    "score_breakdown": {},
                 }
             )
     return candidates[:5]
@@ -746,7 +827,8 @@ def _derive_deterministic_phase2_analysis(
 
 def _pair_fit_cache_payload_is_usable(payload: Dict[str, Any]) -> bool:
     decision = str(payload.get("decision") or "").strip().lower()
-    if decision == "rejected":
+    final_match_decision = str(payload.get("final_match_decision") or "").strip().lower()
+    if decision == "rejected" or final_match_decision in {"weak_fit", "hard_reject"}:
         return True
     candidates = _coerce_pair_fit_topic_candidates(payload.get("topic_candidates"))
     return bool(
@@ -754,8 +836,306 @@ def _pair_fit_cache_payload_is_usable(payload: Dict[str, Any]) -> bool:
         and len(candidates) == 5
         and isinstance(payload.get("intersection_contexts"), list)
         and bool(payload.get("why_this_topic_was_chosen"))
-        and bool(payload.get("backlink_fit_ok"))
+        and final_match_decision in {"accepted", ""}
     )
+
+
+def _pair_fit_tokens_from_text(value: str) -> List[str]:
+    tokens = re.findall(r"\b[a-zA-ZäöüÄÖÜß]{3,}\b", _normalize_keyword_phrase(value))
+    out: List[str] = []
+    for token in tokens:
+        if len(token) < 4:
+            continue
+        if token in STOPWORDS or token in GERMAN_FUNCTION_WORDS or token in ENGLISH_FUNCTION_WORDS:
+            continue
+        if token in PAIR_FIT_EXTRA_STOPWORDS or token in PAIR_FIT_BOILERPLATE_TOKENS:
+            continue
+        out.append(token)
+    return out
+
+
+def _pair_fit_term_weights(profile: Dict[str, Any], *, site_kind: str) -> Dict[str, float]:
+    weighted_fields: List[tuple[Any, float]] = [
+        (profile.get("topics"), 4.0),
+        (profile.get("site_categories"), 3.5),
+        (profile.get("topic_clusters"), 3.0),
+        (profile.get("services_or_products"), 4.0 if site_kind == "target" else 2.0),
+        (profile.get("prominent_titles"), 2.5),
+        (profile.get("sample_page_titles"), 2.0),
+        (profile.get("visible_headings"), 1.8),
+        (profile.get("repeated_keywords"), 1.2),
+        ([profile.get("page_title")], 2.4),
+        ([profile.get("domain_level_topic")], 2.0),
+        ([profile.get("meta_description")], 1.0),
+    ]
+    scores: Dict[str, float] = {}
+    for raw_values, weight in weighted_fields:
+        values = raw_values if isinstance(raw_values, list) else [raw_values]
+        for raw_value in values:
+            cleaned = re.sub(r"\s+", " ", str(raw_value or "").strip())
+            if not cleaned:
+                continue
+            tokens = _pair_fit_tokens_from_text(cleaned)
+            if not tokens:
+                continue
+            phrase = " ".join(tokens[:6]).strip()
+            if len(phrase) < 4:
+                continue
+            scores[phrase] = scores.get(phrase, 0.0) + weight
+    return scores
+
+
+def _pair_fit_ranked_terms(profile: Dict[str, Any], *, site_kind: str, max_items: int = 10) -> List[str]:
+    weighted = _pair_fit_term_weights(profile, site_kind=site_kind)
+    ranked = sorted(weighted.items(), key=lambda item: (-item[1], item[0]))
+    return [term for term, _score in ranked[:max_items]]
+
+
+def _pair_fit_overlap_terms(publishing_terms: List[str], target_terms: List[str], *, max_items: int = 12) -> List[str]:
+    publishing_tokens = {token for term in publishing_terms for token in _pair_fit_tokens_from_text(term)}
+    target_tokens = {token for term in target_terms for token in _pair_fit_tokens_from_text(term)}
+    ranked = sorted(publishing_tokens & target_tokens)
+    return ranked[:max_items]
+
+
+def _pair_fit_expand_contexts(profile: Dict[str, Any], *, ranked_terms: List[str]) -> List[str]:
+    contexts = _dedupe_preserve_order([str(item).strip() for item in (profile.get("contexts") or []) if str(item).strip()])
+    text = " ".join(
+        ranked_terms
+        + [str(profile.get("page_title") or "").strip(), str(profile.get("domain_level_topic") or "").strip()]
+    ).lower()
+    for context, keywords in PAIR_FIT_CONTEXT_KEYWORDS.items():
+        matches = sum(1 for keyword in keywords if keyword in text)
+        if matches > 0:
+            contexts.append(context)
+    return _dedupe_preserve_order(contexts)[:8]
+
+
+def _pair_fit_context_label(contexts: List[str]) -> str:
+    for context in contexts:
+        label = PAIR_FIT_CONTEXT_LABELS.get(context)
+        if label:
+            return label
+    return "den Alltag"
+
+
+def _pair_fit_focus_term(terms: List[str], *, fallback: str) -> str:
+    for term in terms:
+        tokens = _pair_fit_tokens_from_text(term)
+        if 1 <= len(tokens) <= 5:
+            return _format_title_case(" ".join(tokens))
+    return _format_title_case(" ".join(_pair_fit_tokens_from_text(fallback)[:5]) or fallback or "Hilfreiche Orientierung")
+
+
+def _pair_fit_audience_term(terms: List[str], contexts: List[str]) -> str:
+    for context in contexts:
+        audience = PAIR_FIT_CONTEXT_AUDIENCES.get(context)
+        if audience:
+            return audience
+    for term in terms:
+        tokens = _pair_fit_tokens_from_text(term)
+        if 1 <= len(tokens) <= 4 and any(token in PAIR_FIT_AUDIENCE_TOKENS for token in tokens):
+            return _format_title_case(" ".join(tokens))
+    return "Leserinnen und Leser"
+
+
+def _pair_fit_generate_bridge_topics(
+    *,
+    requested_topic: str,
+    exclude_topics: List[str],
+    publishing_terms: List[str],
+    target_terms: List[str],
+    publishing_contexts: List[str],
+    target_contexts: List[str],
+) -> List[str]:
+    target_focus = _pair_fit_focus_term(target_terms, fallback=requested_topic or (target_terms[0] if target_terms else "Thema"))
+    publishing_audience = _pair_fit_audience_term(publishing_terms, publishing_contexts)
+    shared_contexts = _dedupe_preserve_order(publishing_contexts + target_contexts)
+    context_label = _pair_fit_context_label(shared_contexts)
+    templates = [
+        requested_topic.strip(),
+        f"{target_focus}: worauf {publishing_audience} achten sollten",
+        f"{target_focus} im {context_label}: praktische Orientierung",
+        f"Alltag und {target_focus}: hilfreiche Hinweise fuer {publishing_audience}",
+        f"{target_focus}: sinnvolle Kriterien fuer {publishing_audience}",
+        f"{target_focus} ohne Werbedruck: was im {context_label} wirklich wichtig ist",
+        f"{target_focus} im Alltag: typische Fehler und bessere Entscheidungen",
+    ]
+    candidates: List[str] = []
+    normalized_excluded = [_normalize_keyword_phrase(item) for item in exclude_topics if _normalize_keyword_phrase(item)]
+    for template in templates:
+        cleaned = re.sub(r"\s+", " ", str(template or "").strip())
+        if not cleaned:
+            continue
+        normalized = _normalize_keyword_phrase(cleaned)
+        if not normalized or any(_keyword_similarity(normalized, excluded) >= 0.8 for excluded in normalized_excluded):
+            continue
+        if any(_keyword_similarity(normalized, _normalize_keyword_phrase(existing)) >= 0.82 for existing in candidates):
+            continue
+        candidates.append(cleaned)
+        if len(candidates) >= PAIR_FIT_CANDIDATE_COUNT:
+            break
+    while len(candidates) < PAIR_FIT_CANDIDATE_COUNT:
+        fallback = f"{target_focus}: hilfreiche Orientierung fuer {publishing_audience}"
+        if not any(_keyword_similarity(_normalize_keyword_phrase(fallback), _normalize_keyword_phrase(existing)) >= 0.82 for existing in candidates):
+            candidates.append(fallback)
+        else:
+            candidates.append(f"{target_focus}: alltagsnahe Einordnung fuer {publishing_audience}")
+    return candidates[:PAIR_FIT_CANDIDATE_COUNT]
+
+
+def _pair_fit_score_candidate(
+    topic: str,
+    *,
+    publishing_terms: List[str],
+    target_terms: List[str],
+    publishing_contexts: List[str],
+    target_contexts: List[str],
+    overlap_terms: List[str],
+    target_business_intent: str,
+) -> Dict[str, Any]:
+    topic_tokens = set(_pair_fit_tokens_from_text(topic))
+    publishing_tokens = {token for term in publishing_terms for token in _pair_fit_tokens_from_text(term)}
+    target_tokens = {token for term in target_terms for token in _pair_fit_tokens_from_text(term)}
+    shared_contexts = set(publishing_contexts) & set(target_contexts)
+    publishing_overlap = len(topic_tokens & publishing_tokens)
+    target_overlap = len(topic_tokens & target_tokens)
+    overlap_bonus = len(topic_tokens & set(overlap_terms))
+    shared_context_count = len(shared_contexts)
+    bridge_evidence_score = shared_context_count * 3 + overlap_bonus * 2
+    if publishing_overlap >= 2:
+        bridge_evidence_score += 1
+    if target_overlap >= 2:
+        bridge_evidence_score += 1
+    publishing_site_relevance = 2 + publishing_overlap * 2 + min(2, shared_context_count)
+    target_site_relevance = 2 + target_overlap * 2 + min(2, shared_context_count) + min(1, overlap_bonus)
+    if shared_context_count == 0 and overlap_bonus == 0:
+        publishing_site_relevance -= 1
+        target_site_relevance -= 1
+    publishing_site_relevance = max(1, min(10, publishing_site_relevance))
+    target_site_relevance = max(1, min(10, target_site_relevance))
+    informational_value = 5 + sum(1 for cue in PAIR_FIT_INFORMATIONAL_CUES if cue in _normalize_keyword_phrase(topic))
+    if "vergleich" in _normalize_keyword_phrase(topic) or "kriterien" in _normalize_keyword_phrase(topic):
+        informational_value += 1
+    informational_value = max(1, min(10, informational_value))
+    backlink_naturalness = 2 + shared_context_count * 2 + min(2, overlap_bonus) + min(1, publishing_overlap) + min(1, target_overlap)
+    if target_business_intent == "commercial" and shared_context_count == 0:
+        backlink_naturalness -= 1
+    if shared_context_count == 0 and overlap_bonus == 0:
+        backlink_naturalness -= 2
+    backlink_naturalness = max(1, min(10, backlink_naturalness))
+    spam_risk = 1 + sum(1 for token in topic_tokens if token in PAIR_FIT_PROMO_TOKENS)
+    if target_business_intent == "commercial":
+        spam_risk += 1
+    if shared_context_count == 0:
+        spam_risk += 2
+    if overlap_bonus == 0:
+        spam_risk += 1
+    if publishing_overlap == 0:
+        spam_risk += 2
+    if target_overlap == 0:
+        spam_risk += 1
+    if publishing_overlap <= 1 and target_overlap <= 1 and shared_context_count == 0:
+        spam_risk += 1
+    spam_risk = max(0, min(10, spam_risk))
+    non_spamminess = max(1, min(10, 10 - spam_risk))
+    seo_plausibility = 2 + publishing_overlap + target_overlap + min(3, shared_context_count + overlap_bonus)
+    if shared_context_count == 0 and overlap_bonus == 0:
+        seo_plausibility -= 1
+    seo_plausibility = max(1, min(10, seo_plausibility))
+    total_score = publishing_site_relevance + backlink_naturalness + informational_value + seo_plausibility + non_spamminess
+    backlink_angle = (
+        "Die Zielseite dient als weiterfuehrende Ressource innerhalb eines informativen Hauptthemas."
+        if backlink_naturalness >= 6
+        else "Die Zielseite kann nur vorsichtig und klar nachrangig als Zusatzquelle eingebunden werden."
+    )
+    return {
+        "topic": topic,
+        "publishing_site_relevance": publishing_site_relevance,
+        "target_site_relevance": target_site_relevance,
+        "backlink_naturalness": backlink_naturalness,
+        "informational_value": informational_value,
+        "seo_plausibility": seo_plausibility,
+        "non_spamminess": non_spamminess,
+        "spam_risk": spam_risk,
+        "total_score": max(0, min(50, total_score)),
+        "backlink_angle": backlink_angle,
+        "score_breakdown": {
+            "publishing_site_relevance": publishing_site_relevance,
+            "target_site_relevance": target_site_relevance,
+            "informational_value": informational_value,
+            "backlink_naturalness": backlink_naturalness,
+            "spam_risk": spam_risk,
+            "publishing_overlap": publishing_overlap,
+            "target_overlap": target_overlap,
+            "shared_context_count": shared_context_count,
+            "overlap_term_matches": overlap_bonus,
+            "bridge_evidence_score": bridge_evidence_score,
+        },
+    }
+
+
+def _pair_fit_final_match_decision(candidate: Dict[str, Any]) -> str:
+    total_score = int(candidate.get("total_score") or 0)
+    publishing_site_relevance = int(candidate.get("publishing_site_relevance") or 0)
+    target_site_relevance = int(candidate.get("target_site_relevance") or 0)
+    informational_value = int(candidate.get("informational_value") or 0)
+    backlink_naturalness = int(candidate.get("backlink_naturalness") or 0)
+    spam_risk = int(candidate.get("spam_risk") or 10)
+    score_breakdown = candidate.get("score_breakdown") if isinstance(candidate.get("score_breakdown"), dict) else {}
+    publishing_overlap = int(score_breakdown.get("publishing_overlap") or 0)
+    target_overlap = int(score_breakdown.get("target_overlap") or 0)
+    shared_context_count = int(score_breakdown.get("shared_context_count") or 0)
+    overlap_term_matches = int(score_breakdown.get("overlap_term_matches") or 0)
+    bridge_evidence_score = int(score_breakdown.get("bridge_evidence_score") or 0)
+    if (
+        total_score >= PAIR_FIT_ACCEPT_SCORE
+        and publishing_site_relevance >= 6
+        and target_site_relevance >= 5
+        and informational_value >= 6
+        and backlink_naturalness >= 5
+        and spam_risk <= 5
+        and bridge_evidence_score >= 4
+        and (shared_context_count >= 1 or overlap_term_matches >= 1)
+    ):
+        return "accepted"
+    if (
+        total_score >= PAIR_FIT_WEAK_SCORE
+        and publishing_site_relevance >= 4
+        and target_site_relevance >= 4
+        and informational_value >= 5
+        and backlink_naturalness >= 4
+        and spam_risk <= 7
+        and (
+            shared_context_count >= 1
+            or overlap_term_matches >= 1
+            or (publishing_overlap >= 2 and target_overlap >= 2)
+        )
+    ):
+        return "weak_fit"
+    return "hard_reject"
+
+
+def _pair_fit_reject_reason(final_match_decision: str, best_candidate: Dict[str, Any], overlap_terms: List[str]) -> str:
+    if final_match_decision == "accepted":
+        return ""
+    if final_match_decision == "weak_fit":
+        if overlap_terms:
+            return "Es gibt eine grundsaetzlich denkbare Verbindung, aber sie bleibt noch schwach und braucht eine sehr vorsichtige redaktionelle Einbettung."
+        return "Die Verbindung ist nur lose erkennbar und wirkt ohne starke redaktionelle Fuehrung schnell erzwungen."
+    if overlap_terms:
+        return "Zwischen beiden Seiten fehlt ein ausreichend natuerlicher Informationsraum; gemeinsame Signale reichen nicht fuer einen glaubwuerdigen Hauptartikel mit sinnvoller Zusatzressource."
+    return "Die beiden Seiten teilen keinen tragfaehigen inhaltlichen Kontext fuer einen natuerlichen informativen Brueckenartikel."
+
+
+def _pair_fit_overlap_reason(final_match_decision: str, overlap_terms: List[str], shared_contexts: List[str]) -> str:
+    overlap_text = ", ".join(overlap_terms[:4])
+    context_text = ", ".join(shared_contexts[:3])
+    if final_match_decision == "accepted":
+        return f"Gemeinsame Kontexte ({context_text}) und passende Signale ({overlap_text}) erlauben einen informativen Hauptartikel ohne werbliche Schwerpunktverschiebung.".strip()
+    if final_match_decision == "weak_fit":
+        return f"Es gibt gewisse Beruehrungspunkte ueber {context_text or 'einzelne Kontexte'}, aber die Verbindung bleibt redaktionell empfindlich.".strip()
+    return f"Die Kontexte ueberlappen zu wenig ({context_text or 'keine tragfaehigen Kontexte'}) und die gemeinsamen Signale ({overlap_text or 'kaum relevante Signale'}) tragen keinen natuerlichen Artikel.".strip()
 
 
 def _run_pair_fit_reasoning(
@@ -772,92 +1152,88 @@ def _run_pair_fit_reasoning(
     timeout_seconds: int,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]],
 ) -> Dict[str, Any]:
-    compact_publishing_profile = _compact_pair_fit_profile(publishing_profile, site_kind="publishing")
-    compact_target_profile = _compact_pair_fit_profile(target_profile, site_kind="target")
-    system_prompt = (
-        "You select a German guest-post topic from compact structured site profiles only. "
-        "Do not infer from raw HTML, and do not invent unsupported site meanings. "
-        "Publishing site must stay the main world; target site may appear only as one supporting resource. "
-        "Expand semantics beyond literal keywords into contexts like health, family_life, education, daily_routine, finance, home, lifestyle, safety, productivity, wellbeing. "
-        "If the fit is weak or forced, reject the pair. Never force a commercial target into an unrelated publishing site. "
-        "Return JSON only. Keep all free-text fields short and specific. Natural-language fields must be in German (de-DE). "
-        "Required keys: publishing_site_topics, target_site_topics, publishing_site_contexts, target_site_contexts, intersection_contexts, "
-        "best_overlap_reason, topic_candidates, final_article_topic, why_this_topic_was_chosen, backlink_fit_ok, fit_score, decision, rejection_reason. "
-        "topic_candidates must be an array of exactly 5 objects with keys: topic, publishing_site_relevance, backlink_naturalness, informational_value, seo_plausibility, non_spamminess, total_score, backlink_angle. "
-        "Use integer scores only. fit_score is 0-100. decision is accepted or rejected. "
-        "Do not add any markdown, commentary, or extra keys."
+    del llm_api_key, llm_base_url, planning_model, timeout_seconds, usage_collector
+    publishing_terms = _pair_fit_ranked_terms(publishing_profile, site_kind="publishing")
+    target_terms = _pair_fit_ranked_terms(target_profile, site_kind="target")
+    publishing_contexts = _pair_fit_expand_contexts(publishing_profile, ranked_terms=publishing_terms)
+    target_contexts = _pair_fit_expand_contexts(target_profile, ranked_terms=target_terms)
+    overlap_terms = _pair_fit_overlap_terms(publishing_terms, target_terms)
+    generated_topics = _pair_fit_generate_bridge_topics(
+        requested_topic=requested_topic,
+        exclude_topics=exclude_topics,
+        publishing_terms=publishing_terms,
+        target_terms=target_terms,
+        publishing_contexts=publishing_contexts,
+        target_contexts=target_contexts,
     )
-    exclude_block = ""
-    if exclude_topics:
-        exclude_block = "Bereits verwendete Themen (nicht erneut verwenden oder eng paraphrasieren):\n" + "\n".join(
-            f"- {topic}" for topic in exclude_topics[:20]
+    topic_candidates = [
+        _pair_fit_score_candidate(
+            topic,
+            publishing_terms=publishing_terms,
+            target_terms=target_terms,
+            publishing_contexts=publishing_contexts,
+            target_contexts=target_contexts,
+            overlap_terms=overlap_terms,
+            target_business_intent=str(target_profile.get("business_intent") or "").strip().lower(),
         )
-        exclude_block += "\n\n"
-    requested_block = f"Gewuenschtes Thema: {requested_topic}\n\n" if requested_topic else ""
-    user_prompt = (
-        f"{requested_block}"
-        f"{exclude_block}"
-        f"Publishing site URL: {publishing_site_url}\n"
-        f"Publishing profile: {json.dumps(compact_publishing_profile, ensure_ascii=False)}\n\n"
-        f"Target site URL: {target_site_url}\n"
-        f"Target profile: {json.dumps(compact_target_profile, ensure_ascii=False)}\n\n"
-        "Output schema example:\n"
-        '{"publishing_site_topics":["..."],"target_site_topics":["..."],"publishing_site_contexts":["..."],"target_site_contexts":["..."],'
-        '"intersection_contexts":["..."],"best_overlap_reason":"...","topic_candidates":[{"topic":"...","publishing_site_relevance":8,"backlink_naturalness":8,"informational_value":8,"seo_plausibility":8,"non_spamminess":9,"total_score":41,"backlink_angle":"..."}],'
-        '"final_article_topic":"...","why_this_topic_was_chosen":"...","backlink_fit_ok":true,"fit_score":72,"decision":"accepted","rejection_reason":""}\n\n'
-        "Generate exactly 5 candidates if the overlap is natural; otherwise reject. "
-        "Avoid promotional phrasing and exact-match commercial wording. "
-        "The backlink must fit contextually and the article must still make sense without the backlink."
-    )
-    llm_out = call_llm_json(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        api_key=llm_api_key,
-        base_url=llm_base_url,
-        model=planning_model,
-        timeout_seconds=timeout_seconds,
-        max_tokens=3000,
-        temperature=0.1,
-        request_label="phase3_pair_fit",
-        usage_collector=usage_collector,
-    )
-    topic_candidates = _coerce_pair_fit_topic_candidates(llm_out.get("topic_candidates"))
-    payload = {
-        "publishing_site_topics": [str(item).strip() for item in (llm_out.get("publishing_site_topics") or []) if str(item).strip()],
-        "target_site_topics": [str(item).strip() for item in (llm_out.get("target_site_topics") or []) if str(item).strip()],
-        "publishing_site_contexts": [str(item).strip() for item in (llm_out.get("publishing_site_contexts") or []) if str(item).strip()],
-        "target_site_contexts": [str(item).strip() for item in (llm_out.get("target_site_contexts") or []) if str(item).strip()],
-        "intersection_contexts": [str(item).strip() for item in (llm_out.get("intersection_contexts") or []) if str(item).strip()],
-        "best_overlap_reason": str(llm_out.get("best_overlap_reason") or "").strip(),
-        "topic_candidates": topic_candidates,
-        "final_article_topic": str(llm_out.get("final_article_topic") or requested_topic or "").strip(),
-        "why_this_topic_was_chosen": str(llm_out.get("why_this_topic_was_chosen") or "").strip(),
-        "backlink_fit_ok": bool(llm_out.get("backlink_fit_ok")),
-        "fit_score": max(0, min(100, int(llm_out.get("fit_score") or 0))),
-        "decision": "rejected" if str(llm_out.get("decision") or "").strip().lower() == "rejected" else "accepted",
-        "rejection_reason": str(llm_out.get("rejection_reason") or "").strip(),
-    }
-    if not payload["final_article_topic"] and topic_candidates:
-        payload["final_article_topic"] = str(topic_candidates[0].get("topic") or "").strip()
-    if requested_topic and payload["decision"] == "accepted":
-        payload["final_article_topic"] = requested_topic
-    if payload["decision"] == "accepted":
-        candidate_topics = _pair_fit_candidate_topics(topic_candidates)
-        if len(topic_candidates) != 5:
-            raise CreatorError(f"Pair fit returned invalid candidate count:{len(topic_candidates)}")
-        if payload["final_article_topic"] not in candidate_topics:
-            payload["final_article_topic"] = candidate_topics[0]
-        selected_candidate = next(
-            (item for item in topic_candidates if str(item.get("topic") or "").strip() == payload["final_article_topic"]),
+        for topic in generated_topics
+    ]
+    topic_candidates = sorted(
+        topic_candidates,
+        key=lambda item: (
+            -int(item.get("total_score") or 0),
+            -int(item.get("publishing_site_relevance") or 0),
+            -int(item.get("target_site_relevance") or 0),
+            int(item.get("spam_risk") or 10),
+            str(item.get("topic") or ""),
+        ),
+    )[:PAIR_FIT_CANDIDATE_COUNT]
+    if len(topic_candidates) < PAIR_FIT_CANDIDATE_COUNT:
+        raise CreatorError(f"Pair fit returned invalid candidate count:{len(topic_candidates)}")
+    best_candidate = topic_candidates[0]
+    final_match_decision = _pair_fit_final_match_decision(best_candidate)
+    shared_contexts = _dedupe_preserve_order([context for context in publishing_contexts if context in set(target_contexts)])
+    final_topic = str(best_candidate.get("topic") or "").strip()
+    if requested_topic.strip():
+        requested_normalized = _normalize_keyword_phrase(requested_topic)
+        requested_candidate = next(
+            (item for item in topic_candidates if _normalize_keyword_phrase(str(item.get("topic") or "")) == requested_normalized),
             None,
         )
-        if not payload["why_this_topic_was_chosen"] and selected_candidate:
-            payload["why_this_topic_was_chosen"] = (
-                f"Das Thema passt natuerlich zum Publishing-Kontext und erlaubt einen unaufdringlichen Verweis "
-                f"auf die Zielseite als ergaenzende Ressource."
-            )
-        if selected_candidate and not payload["best_overlap_reason"]:
-            payload["best_overlap_reason"] = str(selected_candidate.get("backlink_angle") or "").strip()
+        if requested_candidate is not None and _pair_fit_final_match_decision(requested_candidate) != "hard_reject":
+            best_candidate = requested_candidate
+            final_match_decision = _pair_fit_final_match_decision(best_candidate)
+            final_topic = str(best_candidate.get("topic") or "").strip()
+    payload = {
+        "publishing_site_topics": publishing_terms[:8],
+        "target_site_topics": target_terms[:8],
+        "publishing_site_contexts": publishing_contexts,
+        "target_site_contexts": target_contexts,
+        "intersection_contexts": shared_contexts,
+        "overlap_terms": overlap_terms,
+        "generated_bridge_topics": [dict(item) for item in topic_candidates],
+        "score_breakdown": {
+            "best_candidate": dict(best_candidate),
+            "accept_threshold": PAIR_FIT_ACCEPT_SCORE,
+            "weak_threshold": PAIR_FIT_WEAK_SCORE,
+            "shared_context_count": len(shared_contexts),
+            "overlap_term_count": len(overlap_terms),
+        },
+        "best_overlap_reason": _pair_fit_overlap_reason(final_match_decision, overlap_terms, shared_contexts),
+        "topic_candidates": topic_candidates,
+        "final_article_topic": final_topic,
+        "why_this_topic_was_chosen": (
+            "Das Thema bleibt klar informativ, passt zum Publishing-Kontext und nutzt die Zielseite nur als nachrangige Zusatzressource."
+            if final_match_decision == "accepted"
+            else "Das Thema ist als Bruecke denkbar, braucht aber besondere redaktionelle Vorsicht, damit der Verweis nicht werblich wirkt."
+        ),
+        "backlink_fit_ok": final_match_decision == "accepted",
+        "fit_score": max(0, min(100, int(best_candidate.get("total_score") or 0) * 2)),
+        "decision": "accepted" if final_match_decision == "accepted" else "rejected",
+        "final_match_decision": final_match_decision,
+        "rejection_reason": _pair_fit_reject_reason(final_match_decision, best_candidate, overlap_terms),
+        "reject_reason": _pair_fit_reject_reason(final_match_decision, best_candidate, overlap_terms),
+    }
     return payload
 
 
@@ -3214,9 +3590,22 @@ def run_creator_pipeline(
         )
     except LLMError as exc:
         raise CreatorError(f"Pair fit reasoning failed: {exc}") from exc
-    if str(pair_fit.get("decision") or "").strip().lower() == "rejected" or not bool(pair_fit.get("backlink_fit_ok")):
-        rejection_reason = str(pair_fit.get("rejection_reason") or pair_fit.get("best_overlap_reason") or "no_natural_semantic_fit").strip()
-        raise CreatorError(f"Pair fit rejected: {rejection_reason}")
+    final_match_decision = str(pair_fit.get("final_match_decision") or "").strip().lower() or (
+        "accepted" if bool(pair_fit.get("backlink_fit_ok")) else "hard_reject"
+    )
+    allow_rejected_pairs_for_testing = _read_bool_env("ALLOW_REJECTED_PAIRS_FOR_TESTING", False)
+    if final_match_decision != "accepted":
+        rejection_reason = str(
+            pair_fit.get("reject_reason")
+            or pair_fit.get("rejection_reason")
+            or pair_fit.get("best_overlap_reason")
+            or "no_natural_semantic_fit"
+        ).strip()
+        if not allow_rejected_pairs_for_testing:
+            raise CreatorError(f"Pair fit rejected: {rejection_reason}")
+        warnings.append(f"pair_fit_override_enabled:{final_match_decision}")
+    elif final_match_decision == "accepted":
+        pair_fit["backlink_fit_ok"] = True
 
     resolved_topic = str(pair_fit.get("final_article_topic") or requested_topic or "").strip()
     if not resolved_topic:

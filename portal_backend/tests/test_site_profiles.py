@@ -1,4 +1,4 @@
-from portal_backend.api.site_profiles import build_combined_target_profile, score_publishing_site_fit
+from portal_backend.api.site_profiles import _extract_keywords, build_combined_target_profile, score_publishing_site_fit
 
 
 def test_score_publishing_site_fit_rewards_semantic_overlap() -> None:
@@ -78,3 +78,15 @@ def test_build_combined_target_profile_merges_page_and_root_context() -> None:
     assert "Brillen fuer Kinder" in combined["topics"]
     assert "Schwimmbrille" in combined["services_or_products"]
     assert "Kinderbrillen" in combined["services_or_products"]
+
+
+def test_extract_keywords_filters_low_signal_terms() -> None:
+    keywords = _extract_keywords(
+        "Was man wissen sollte weiterlesen familie sonne schutz welche man sich navigation kinderschutz alltag",
+        limit=10,
+    )
+
+    assert "man" not in keywords
+    assert "welche" not in keywords
+    assert "weiterlesen" not in keywords
+    assert "schutz" in keywords

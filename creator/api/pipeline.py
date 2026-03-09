@@ -3121,6 +3121,7 @@ def run_creator_pipeline(
                 target_profile.get("topics") or [],
                 target_profile.get("repeated_keywords") or [],
                 target_profile.get("visible_headings") or [],
+                max_items=24,
             )
         ),
         "content_hash": target_content_hash,
@@ -3182,6 +3183,7 @@ def run_creator_pipeline(
                 publishing_profile.get("topics") or [],
                 publishing_profile.get("topic_clusters") or [],
                 publishing_profile.get("visible_headings") or [],
+                max_items=24,
             )
         ),
         "content_hash": publishing_content_hash,

@@ -561,6 +561,24 @@ def test_ensure_faq_candidates_keeps_three_questions_for_question_like_topics():
     assert len(set(faqs)) == 3
 
 
+def test_ensure_faq_candidates_does_not_repeat_exact_topic_phrase_in_every_fallback_question():
+    faqs = _ensure_faq_candidates(
+        "Augenschutz im Sommerurlaub",
+        [],
+        topic_signature={
+            "subject_phrase": "augenschutz im sommerurlaub",
+            "target_terms": ["kinder sonnenbrillen"],
+            "target_support_phrases": ["kinder sonnenbrillen", "uv schutz"],
+            "support_phrases": ["uv schutz", "kinder sonnenbrillen"],
+            "keyword_cluster_phrases": ["uv schutz"],
+        },
+    )
+
+    assert len(faqs) == 3
+    assert sum("augenschutz im sommerurlaub" in question.lower() for question in faqs) == 1
+    assert any("kinder sonnenbrillen" in question.lower() or "uv schutz" in question.lower() for question in faqs[1:])
+
+
 def test_format_faq_question_preserves_explicit_question_mark():
     assert _format_faq_question("Kindersonnenbrillen richtig waehlen?") == "Kindersonnenbrillen richtig waehlen?"
 

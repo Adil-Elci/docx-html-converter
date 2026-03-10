@@ -4236,23 +4236,23 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
             raw_target_term_value = normalized
             break
     raw_target_term = _format_title_case(raw_target_term_value)
+    support_question_focus = _format_sentence_start(support_phrase) if support_phrase else ""
+    target_question_focus = raw_target_term if raw_target_term_value else ""
     if question_phrase:
         direct_question = question_phrase if question_phrase.endswith("?") else f"{question_phrase}?"
         questions = [
             direct_question,
-            f"Woran erkennt man fruehzeitig Hinweise auf {_format_sentence_start(support_phrase or subject_phrase)}?",
-            f"Welche naechsten Schritte sind bei {_format_sentence_start(subject_phrase)} sinnvoll?",
+            f"Woran erkennt man fruehzeitig Hinweise auf {support_question_focus or _format_sentence_start(subject_phrase)}?",
+            "Welche naechsten Schritte helfen dann im Alltag?",
         ]
         if raw_target_term:
             questions[-1] = f"Worauf sollte man bei {raw_target_term} achten?"
         return questions
     questions = [
         f"Was ist bei {subject_phrase} wichtig?",
-        f"Welche Ursachen sind bei {subject_phrase} haeufig?",
-        f"Welche naechsten Schritte sind bei {subject_phrase} sinnvoll?",
+        f"Worauf sollte man bei {target_question_focus or support_question_focus or 'der Auswahl'} achten?",
+        "Welche naechsten Schritte helfen dann im Alltag?",
     ]
-    if raw_target_term:
-        questions[-1] = f"Worauf sollte man bei {raw_target_term} achten?"
     return questions
 
 
@@ -6764,7 +6764,7 @@ def run_creator_pipeline(
         break
 
     if not article_payload:
-        raise CreatorError(f"Phase 5 writer failed: {errors}")
+        raise CreatorError(f"Phase 5 writer failed: {_dedupe_preserve_order(errors)}")
 
     art_html = (article_payload.get("article_html") or "").strip()
     art_html = _strip_empty_blocks(art_html)

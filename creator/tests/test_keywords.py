@@ -483,6 +483,11 @@ def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
     assert "wissen amp ideen" not in result["secondary_keywords"]
 
 
+def test_sanitize_editorial_phrase_rejects_catalog_chrome_phrases():
+    assert _sanitize_editorial_phrase("Neu im Sortiment") == ""
+    assert _sanitize_editorial_phrase("Unsere Bestseller") == ""
+
+
 def test_align_primary_keyword_to_topic_prefers_topic_head():
     aligned = _align_primary_keyword_to_topic(
         topic="Kinder Sonnenbrillen: Worauf Eltern beim UV Schutz achten sollten",
@@ -882,8 +887,20 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
         topic="Kinder Sehprobleme erkennen und richtig reagieren",
         exclude_topics=[],
         internal_link_inventory=[
-            {"url": "https://familien4leben.com/gesundheit/kinderaugen", "title": "Kinderaugen verstehen", "slug": "kinderaugen-verstehen"},
-            {"url": "https://familien4leben.com/familie/arzttermine-mit-kind", "title": "Arzttermine mit Kind vorbereiten", "slug": "arzttermine-mit-kind"},
+            {
+                "url": "https://familien4leben.com/gesundheit/kinderaugen-warnzeichen",
+                "title": "Kinderaugen verstehen und Warnzeichen erkennen",
+                "slug": "kinderaugen-warnzeichen",
+                "excerpt": "Welche Anzeichen fuer Sehprobleme Eltern kennen sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            },
+            {
+                "url": "https://familien4leben.com/familie/arzttermine-mit-kind",
+                "title": "Arzttermine mit Kind vorbereiten",
+                "slug": "arzttermine-mit-kind",
+                "excerpt": "So bereiten Familien den Augenarzt Termin mit Kind vor",
+                "categories": ["Familie", "Gesundheit"],
+            },
         ],
         target_profile_payload={
             "normalized_url": "https://www.brillenhaus24.de/",
@@ -918,7 +935,7 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
     assert 'href="https://www.brillenhaus24.de/"' in result["phase5"]["article_html"]
 
 
-def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_no_relevant_matches(monkeypatch):
+def test_run_creator_pipeline_fails_when_internal_link_inventory_has_no_relevant_matches(monkeypatch):
     monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
 
     monkeypatch.setattr(
@@ -988,55 +1005,53 @@ def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_n
 
     monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
 
-    result = run_creator_pipeline(
-        target_site_url="https://www.brillenhaus24.de/Sonnenbrille_1",
-        publishing_site_url="https://familien4leben.com/",
-        publishing_site_id=None,
-        client_target_site_id=None,
-        anchor=None,
-        topic=None,
-        exclude_topics=[],
-        internal_link_inventory=[
-            {
-                "url": "https://familien4leben.com/lieferoptionen",
-                "title": "Lieferoptionen fuer Familien vergleichen und sparen",
-                "slug": "lieferoptionen-vergleichen",
-                "excerpt": "Tipps zum Sparen beim Onlinekauf",
+    with pytest.raises(CreatorError, match="No relevant internal link candidates found for publishing site."):
+        run_creator_pipeline(
+            target_site_url="https://www.brillenhaus24.de/Sonnenbrille_1",
+            publishing_site_url="https://familien4leben.com/",
+            publishing_site_id=None,
+            client_target_site_id=None,
+            anchor=None,
+            topic=None,
+            exclude_topics=[],
+            internal_link_inventory=[
+                {
+                    "url": "https://familien4leben.com/lieferoptionen",
+                    "title": "Lieferoptionen fuer Familien vergleichen und sparen",
+                    "slug": "lieferoptionen-vergleichen",
+                    "excerpt": "Tipps zum Sparen beim Onlinekauf",
+                },
+                {
+                    "url": "https://familien4leben.com/hautpflege-routinen",
+                    "title": "Hautpflege-Routinen fuer die ganze Familie",
+                    "slug": "hautpflege-routinen-familie",
+                    "excerpt": "Pflegeideen fuer den Sommer",
+                },
+            ],
+            target_profile_payload={
+                "normalized_url": "https://www.brillenhaus24.de/Sonnenbrille_1",
+                "page_title": "Sonnenbrillen fuer Kinder",
+                "meta_description": "Kinder Sonnenbrillen mit UV Schutz und robusten Materialien.",
+                "topics": ["Kinder Sonnenbrillen", "UV Schutz fuer Kinderaugen"],
+                "contexts": ["shopping", "outdoor"],
+                "repeated_keywords": ["sonnenbrillen", "kinder", "uv", "schutz"],
+                "services_or_products": ["Kinder Sonnenbrillen", "Kindersonnenbrillen"],
+                "business_type": "Optiker",
+                "business_intent": "commercial",
             },
-            {
-                "url": "https://familien4leben.com/hautpflege-routinen",
-                "title": "Hautpflege-Routinen fuer die ganze Familie",
-                "slug": "hautpflege-routinen-familie",
-                "excerpt": "Pflegeideen fuer den Sommer",
+            publishing_profile_payload={
+                "normalized_url": "https://familien4leben.com/",
+                "page_title": "Familien4Leben",
+                "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
+                "topics": ["Familienalltag", "Familienleben im Sommer"],
+                "contexts": ["Familienalltag"],
+                "site_categories": ["Familie"],
+                "topic_clusters": ["Familienratgeber", "Sommer"],
+                "content_style": ["sachlich"],
+                "content_tone": "hilfreich",
             },
-        ],
-        target_profile_payload={
-            "normalized_url": "https://www.brillenhaus24.de/Sonnenbrille_1",
-            "page_title": "Sonnenbrillen fuer Kinder",
-            "meta_description": "Kinder Sonnenbrillen mit UV Schutz und robusten Materialien.",
-            "topics": ["Kinder Sonnenbrillen", "UV Schutz fuer Kinderaugen"],
-            "contexts": ["shopping", "outdoor"],
-            "repeated_keywords": ["sonnenbrillen", "kinder", "uv", "schutz"],
-            "services_or_products": ["Kinder Sonnenbrillen", "Kindersonnenbrillen"],
-            "business_type": "Optiker",
-            "business_intent": "commercial",
-        },
-        publishing_profile_payload={
-            "normalized_url": "https://familien4leben.com/",
-            "page_title": "Familien4Leben",
-            "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
-            "topics": ["Familienalltag", "Familienleben im Sommer"],
-            "contexts": ["Familienalltag"],
-            "site_categories": ["Familie"],
-            "topic_clusters": ["Familienratgeber", "Sommer"],
-            "content_style": ["sachlich"],
-            "content_tone": "hilfreich",
-        },
-        dry_run=True,
-    )
-
-    assert result["debug"]["internal_linking"]["candidate_count"] == 0
-    assert 'href="https://familien4leben.com/' not in result["phase5"]["article_html"]
+            dry_run=True,
+        )
 
 
 def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(monkeypatch):
@@ -1086,7 +1101,20 @@ def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(
             anchor=None,
             topic="Kinder Sehprobleme erkennen und richtig reagieren",
             exclude_topics=[],
-            internal_link_inventory=[],
+            internal_link_inventory=[
+                {
+                    "url": "https://familien4leben.com/gesundheit/kinderaugen",
+                    "title": "Kinderaugen verstehen und Warnzeichen erkennen",
+                    "slug": "kinderaugen-warnzeichen",
+                    "excerpt": "Welche Anzeichen fuer Sehprobleme Eltern kennen sollten",
+                },
+                {
+                    "url": "https://familien4leben.com/familie/arzttermine-mit-kind",
+                    "title": "Arzttermine mit Kind vorbereiten",
+                    "slug": "arzttermine-mit-kind",
+                    "excerpt": "So bereiten Familien medizinische Termine mit Kindern vor",
+                },
+            ],
             target_profile_payload={
                 "normalized_url": "https://www.brillenhaus24.de/",
                 "page_title": "Brillenhaus24",

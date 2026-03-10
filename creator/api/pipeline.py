@@ -98,7 +98,8 @@ PAIR_FIT_BOILERPLATE_TOKENS = {
 }
 PAIR_FIT_PROMO_TOKENS = {
     "angebot", "angebote", "bestellen", "guenstig", "guenstige", "günstig", "günstige", "kaufen",
-    "komplettbrille", "komplettbrillen", "marke", "marken", "preis", "preise", "rabatt", "sale", "shop",
+    "bestseller", "kollektion", "kollektionen", "komplettbrille", "komplettbrillen", "marke", "marken",
+    "neu", "neuheit", "neuheiten", "preis", "preise", "rabatt", "sale", "shop", "sortiment",
     "sofort", "versand",
 }
 PAIR_FIT_INFORMATIONAL_CUES = {
@@ -2198,6 +2199,8 @@ def _sanitize_editorial_phrase(value: str, *, allow_single_token: bool = False) 
         return ""
     if "onlineshop" in folded_tokens and promo_hits >= 1:
         return ""
+    if promo_hits >= max(1, len(tokens) - 1) and len(folded_tokens - PAIR_FIT_PROMO_TOKENS) <= 1:
+        return ""
     if {"brillen", "komplettbrillen"} <= folded_tokens and {"guenstig", "guenstige"} & folded_tokens:
         return ""
     if folded_tokens and all(
@@ -2304,11 +2307,14 @@ def _select_topic_relevant_signals(
             + 1.5 * len(candidate_tokens & overlap_tokens)
             + _keyword_similarity(candidate, topic)
         )
+        drift = candidate_tokens - (topic_tokens | overlap_tokens)
         if relevance < 1.15 and not (candidate_tokens & overlap_tokens):
+            continue
+        if drift and len(drift) >= len(candidate_tokens & (topic_tokens | overlap_tokens)) + 1:
             continue
         scored.append((relevance, candidate))
     ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
-    return [_format_title_case(value) for _score, value in ranked[:max_items]]
+    return [_format_sentence_start(value) for _score, value in ranked[:max_items]]
 
 
 def _build_content_brief(
@@ -6632,6 +6638,11 @@ def run_creator_pipeline(
         internal_link_source = "none"
         internal_link_anchor_map = {}
         internal_links_prompt_entries = []
+    if internal_link_min > 0:
+        if not provided_internal_link_inventory:
+            raise CreatorError("Internal link inventory unavailable for publishing site.")
+        if not internal_link_candidates:
+            raise CreatorError("No relevant internal link candidates found for publishing site.")
     effective_internal_min = min(internal_link_min, len(internal_link_candidates))
     effective_internal_max = min(internal_link_max, len(internal_link_candidates))
     if effective_internal_max < effective_internal_min:

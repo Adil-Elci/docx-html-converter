@@ -1681,7 +1681,7 @@ def _build_anchor_text(anchor_type: str, brand_name: str, keyword_cluster: List[
         return brand_name
     if anchor_type == "partial_match" and keyword_cluster:
         return " ".join(keyword_cluster[:3]).title()
-    return "this resource"
+    return "Weitere Informationen"
 
 
 def _strip_code_fences(text: str) -> str:
@@ -2438,12 +2438,133 @@ def _keyword_candidate_has_relevance(
     return len(candidate_tokens & trend_focus) >= 2
 
 
+def _keyword_is_strict_token_subset(candidate: str, reference: str) -> bool:
+    candidate_tokens = _keyword_token_set(candidate)
+    reference_tokens = _keyword_token_set(reference)
+    return bool(candidate_tokens) and bool(reference_tokens) and candidate_tokens < reference_tokens
+
+
+def _to_keyword_dative_phrase(value: str) -> str:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    if not words:
+        return ""
+    last = words[-1]
+    if last.endswith("e") and not last.endswith("ee"):
+        words[-1] = f"{last}n"
+    return " ".join(words)
+
+
+def _build_secondary_keyword_fallbacks(
+    *,
+    topic: str,
+    primary_keyword: str,
+    keyword_cluster: List[str],
+    allowed_topics: List[str],
+) -> List[str]:
+    topic_head = _topic_head_keyword(topic) or _topic_head_keyword(primary_keyword) or _build_topic_phrase(topic)
+    cluster_candidates = _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(keyword_cluster, max_phrases=10))
+    base_phrase = next((candidate for candidate in cluster_candidates if 2 <= len(candidate.split()) <= 4), "") or topic_head
+
+    base_tokens = base_phrase.split()
+    audience_term = base_tokens[0] if base_tokens and base_tokens[0] in PAIR_FIT_AUDIENCE_TOKENS else ""
+    audience_dative = {
+        "baby": "babys",
+        "babys": "babys",
+        "eltern": "eltern",
+        "familie": "familien",
+        "familien": "familien",
+        "kinder": "kindern",
+        "kunden": "kunden",
+        "kundinnen": "kundinnen",
+        "leser": "lesern",
+        "leserinnen": "leserinnen",
+        "menschen": "menschen",
+        "nutzer": "nutzern",
+        "patienten": "patienten",
+        "schueler": "schuelern",
+        "schwangere": "schwangeren",
+        "teams": "teams",
+    }.get(audience_term, audience_term)
+    core_phrase = " ".join(base_tokens[1:]).strip() if audience_term and len(base_tokens) > 1 else base_phrase
+    if not core_phrase:
+        core_phrase = topic_head
+
+    support_phrase = next(
+        (
+            candidate
+            for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8))
+            if _keyword_similarity(candidate, primary_keyword) < 0.7
+            and not _keyword_is_strict_token_subset(candidate, primary_keyword)
+        ),
+        "",
+    )
+
+    topic_tokens = _keyword_token_set(topic)
+    candidates = [
+        f"{core_phrase} bei {audience_dative}" if audience_term and audience_dative else "",
+        f"{core_phrase} frueh erkennen" if "erkennen" in topic_tokens else "",
+        f"ursachen fuer {core_phrase}",
+        f"hilfe bei {_to_keyword_dative_phrase(core_phrase)}",
+        f"{support_phrase} im alltag" if support_phrase else "",
+        f"{core_phrase} im familienalltag" if "familie" in topic_tokens or "familien" in topic_tokens else "",
+    ]
+    return _dedupe_keyword_phrases(candidates)
+
+
+def _finalize_secondary_keywords(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    keyword_cluster: List[str],
+    allowed_topics: List[str],
+) -> List[str]:
+    finalized = [
+        candidate
+        for candidate in _dedupe_keyword_phrases(secondary_keywords)
+        if _keyword_similarity(candidate, primary_keyword) < 0.75
+    ]
+    if len(finalized) >= KEYWORD_MIN_SECONDARY:
+        return finalized[:KEYWORD_MAX_SECONDARY]
+
+    for candidate in _build_secondary_keyword_fallbacks(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        keyword_cluster=keyword_cluster,
+        allowed_topics=allowed_topics,
+    ):
+        if len(finalized) >= KEYWORD_MIN_SECONDARY:
+            break
+        if _keyword_similarity(candidate, primary_keyword) >= 0.75:
+            continue
+        if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
+            continue
+        finalized.append(candidate)
+    return finalized[:KEYWORD_MAX_SECONDARY]
+
+
 def _topic_head_keyword(topic: str) -> str:
     cleaned = re.split(r"[:|\\-]", str(topic or ""), maxsplit=1)[0]
     normalized = _normalize_keyword_phrase(cleaned)
     words = normalized.split()
-    if len(words) > 4:
-        normalized = " ".join(words[:4])
+    focus_words = [
+        word
+        for word in words
+        if word not in STOPWORDS
+        and word not in GERMAN_FUNCTION_WORDS
+        and word not in ENGLISH_FUNCTION_WORDS
+        and word not in KEYWORD_LOW_SIGNAL_TOKENS
+        and word not in GERMAN_KEYWORD_MODIFIERS
+    ]
+    if len(focus_words) >= 2:
+        words = focus_words
+    if len(words) > 3:
+        normalized = " ".join(words[:3])
+    else:
+        normalized = " ".join(words)
     return normalized if _is_valid_keyword_phrase(normalized) else ""
 
 
@@ -2459,12 +2580,7 @@ def _align_primary_keyword_to_topic(
         return current_primary
 
     topic_head = _topic_head_keyword(topic)
-    if current_primary and _keyword_present_relaxed(normalized_topic, current_primary):
-        current_tokens = _keyword_token_set(current_primary)
-        head_tokens = _keyword_token_set(topic_head)
-        if not head_tokens or len(current_tokens & head_tokens) >= max(1, len(head_tokens) - 1):
-            return current_primary
-
+    current_primary_normalized = _normalize_keyword_phrase(current_primary)
     topic_tokens = _keyword_token_set(normalized_topic)
     head_tokens = _keyword_token_set(topic_head)
     cluster_candidates = _dedupe_keyword_phrases(
@@ -2479,6 +2595,37 @@ def _align_primary_keyword_to_topic(
     )
     if not candidate_pool:
         return current_primary or topic_head or normalized_topic
+
+    if (
+        current_primary_normalized
+        and len(current_primary_normalized.split()) > 4
+        and _keyword_similarity(current_primary_normalized, normalized_topic) >= 0.88
+    ):
+        refined_candidates = [
+            item
+            for item in candidate_pool
+            if 2 <= len(_keyword_token_set(item)) <= 4
+            and _keyword_similarity(item, normalized_topic) >= 0.15
+            and not _keyword_is_strict_token_subset(item, normalized_topic)
+        ]
+        if refined_candidates:
+            return max(
+                refined_candidates,
+                key=lambda item: (
+                    6.0 * len(_keyword_token_set(item) & head_tokens)
+                    + 2.5 * len(_keyword_token_set(item) & topic_tokens)
+                    + 2.0 * len(_keyword_token_set(item) - topic_tokens),
+                    -len(_keyword_token_set(item)),
+                ),
+            )
+        if topic_head:
+            return topic_head
+
+    if current_primary and _keyword_present_relaxed(normalized_topic, current_primary):
+        current_tokens = _keyword_token_set(current_primary)
+        if not head_tokens or len(current_tokens & head_tokens) >= max(1, len(head_tokens) - 1):
+            return current_primary
+
     if topic_head and topic_head in candidate_pool:
         return topic_head
 
@@ -2558,7 +2705,9 @@ def _select_keywords(
     secondary_pool = _dedupe_keyword_phrases(
         llm_secondary
         + trend_candidates
+        + _extract_candidate_phrases_from_topics(keyword_cluster)
         + _extract_candidate_phrases_from_topics(relevant_allowed_topics)
+        + [_topic_head_keyword(topic)]
         + [topic_phrase]
     )
     ranked_secondary = sorted(
@@ -2566,6 +2715,7 @@ def _select_keywords(
             candidate
             for candidate in secondary_pool
             if _keyword_similarity(candidate, primary_keyword) < 0.8
+            and not _keyword_is_strict_token_subset(candidate, primary_keyword)
             and _keyword_candidate_has_relevance(
                 candidate,
                 topic_tokens=topic_tokens,
@@ -2584,8 +2734,11 @@ def _select_keywords(
     )
     secondary_keywords = ranked_secondary[:KEYWORD_MAX_SECONDARY]
     if len(secondary_keywords) < KEYWORD_MIN_SECONDARY:
-        fallback_secondary = _dedupe_keyword_phrases(
-            [f"{primary_keyword} tipps", f"{primary_keyword} ratgeber", f"{primary_keyword} auswirkungen"]
+        fallback_secondary = _build_secondary_keyword_fallbacks(
+            topic=topic,
+            primary_keyword=primary_keyword,
+            keyword_cluster=keyword_cluster,
+            allowed_topics=relevant_allowed_topics,
         )
         for candidate in fallback_secondary:
             if len(secondary_keywords) >= KEYWORD_MIN_SECONDARY:
@@ -2593,6 +2746,8 @@ def _select_keywords(
             if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in secondary_keywords):
                 continue
             if _keyword_similarity(candidate, primary_keyword) >= 0.8:
+                continue
+            if _keyword_is_strict_token_subset(candidate, primary_keyword):
                 continue
             secondary_keywords.append(candidate)
 
@@ -3354,6 +3509,356 @@ def _build_phase4_fallback_outline(
         "outline": outline["outline"],
         "backlink_placement": outline["backlink_placement"],
         "anchor_text_final": outline["anchor_text_final"],
+    }
+
+
+def _section_goal_from_heading(heading: str, *, section_kind: str, topic: str) -> str:
+    normalized = _normalize_keyword_phrase(heading)
+    topic_phrase = _format_title_case(topic or heading or "das Thema")
+    if section_kind == "fazit":
+        return f"Verdichte die wichtigsten Entscheidungen und naechsten Schritte zu {topic_phrase} in einer klaren, konkreten Einordnung."
+    if section_kind == "faq":
+        return f"Beantworte die haeufigsten Rueckfragen zu {topic_phrase} knapp, konkret und ohne Wiederholungen."
+    if any(term in normalized for term in {"ueberblick", "wichtigste", "vergleich", "checkliste"}):
+        return f"Gib einen konkreten Einstieg in {topic_phrase} und leite die wichtigsten Kriterien fuer Leserinnen und Leser her."
+    if any(term in normalized for term in {"ursachen", "hintergruende", "ausloeser"}):
+        return f"Erklaere Ursachen, Zusammenhaenge und typische Ausloeser zu {topic_phrase} mit alltagsnahen Beispielen."
+    if any(term in normalized for term in {"auswirkungen", "herausforderungen", "risiken"}):
+        return f"Zeige konkrete Folgen, Risiken und typische Herausforderungen zu {topic_phrase} auf."
+    if any(term in normalized for term in {"tipps", "schritte", "hilfe", "unterstuetzung", "fehler"}):
+        return f"Leite konkrete Handlungsschritte und Entscheidungshilfen zu {topic_phrase} ab."
+    return f"Erklaere den Abschnittsfokus {heading} mit konkreten Kriterien, Beispielen und praktischer Orientierung zu {topic_phrase}."
+
+
+def _build_deterministic_article_plan(
+    *,
+    phase1: Dict[str, Any],
+    phase3: Dict[str, Any],
+    anchor: str,
+    anchor_safe: bool,
+) -> Dict[str, Any]:
+    topic = str(phase3.get("final_article_topic") or "").strip()
+    primary_keyword = str(phase3.get("primary_keyword") or "").strip()
+    secondary_keywords = _dedupe_keyword_phrases(phase3.get("secondary_keywords") or [])[:KEYWORD_MAX_SECONDARY]
+    faq_questions = _ensure_faq_candidates(topic, phase3.get("faq_candidates") or [])
+    structured_mode = str(phase3.get("structured_content_mode") or "none").strip().lower()
+    content_brief = phase3.get("content_brief") or {}
+    anchor_text_final = anchor if anchor_safe else _build_anchor_text(
+        str(phase1.get("anchor_type") or "").strip(),
+        str(phase1.get("brand_name") or "").strip(),
+        [str(item).strip() for item in (phase1.get("keyword_cluster") or []) if str(item).strip()],
+    )
+    outline_package = _build_deterministic_outline(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=secondary_keywords,
+        faq_candidates=faq_questions,
+        structured_mode=structured_mode,
+        anchor_text_final=anchor_text_final,
+    )
+    outline_items = outline_package["outline"]
+    target_signals = _merge_string_lists(
+        [str(item).strip() for item in (content_brief.get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
+        max_items=6,
+    )
+    publishing_signals = _merge_string_lists(
+        [str(content_brief.get("audience") or "").strip()],
+        [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
+        max_items=5,
+    )
+    core_positions = [
+        index
+        for index, item in enumerate(outline_items)
+        if _normalize_keyword_phrase(str(item.get("h2") or "")) not in {"fazit", "faq"}
+    ]
+    core_count = max(1, len(core_positions))
+    secondary_assignments: List[List[str]] = [[] for _ in range(core_count)]
+    for index, keyword in enumerate(secondary_keywords):
+        secondary_assignments[index % core_count].append(keyword)
+    target_assignments: List[List[str]] = [[] for _ in range(core_count)]
+    for index, term in enumerate(target_signals):
+        target_assignments[index % core_count].append(term)
+    publishing_assignments: List[List[str]] = [[] for _ in range(core_count)]
+    for index, term in enumerate(publishing_signals):
+        publishing_assignments[index % core_count].append(term)
+
+    intro_words = 95
+    fazit_words = 75
+    faq_answer_words = 45
+    target_total = 760
+    core_target = max(
+        110,
+        min(
+            170,
+            int((target_total - intro_words - fazit_words - (len(faq_questions) * faq_answer_words)) / core_count),
+        ),
+    )
+    backlink_placement = "section_2" if len(outline_items) >= 4 else "intro"
+    if len(outline_items) < 2:
+        backlink_placement = "intro"
+
+    sections: List[Dict[str, Any]] = []
+    core_cursor = 0
+    for index, item in enumerate(outline_items, start=1):
+        h2 = str(item.get("h2") or "").strip()
+        normalized_h2 = _normalize_keyword_phrase(h2)
+        h3_items = [str(value).strip() for value in (item.get("h3") or []) if str(value).strip()]
+        section_id = f"section_{index}"
+        if normalized_h2 == "faq":
+            sections.append(
+                {
+                    "section_id": section_id,
+                    "kind": "faq",
+                    "h2": "FAQ",
+                    "h3": faq_questions[:FAQ_MIN_QUESTIONS],
+                    "goal": _section_goal_from_heading(h2, section_kind="faq", topic=topic),
+                    "required_keywords": _dedupe_keyword_phrases(secondary_keywords[:2]),
+                    "required_terms": target_signals[:1],
+                    "required_elements": [],
+                    "target_words": {"per_answer_min": 35, "per_answer_max": 55},
+                }
+            )
+            continue
+        if normalized_h2 == "fazit":
+            sections.append(
+                {
+                    "section_id": section_id,
+                    "kind": "fazit",
+                    "h2": "Fazit",
+                    "h3": [],
+                    "goal": _section_goal_from_heading(h2, section_kind="fazit", topic=topic),
+                    "required_keywords": [],
+                    "required_terms": _merge_string_lists(target_signals[:1], publishing_signals[:1], max_items=2),
+                    "required_elements": [],
+                    "target_words": {"min": 65, "max": 95},
+                }
+            )
+            continue
+
+        assigned_secondaries = secondary_assignments[core_cursor] if core_cursor < len(secondary_assignments) else []
+        assigned_targets = target_assignments[core_cursor][:1] if core_cursor < len(target_assignments) else []
+        assigned_publishing = publishing_assignments[core_cursor][:1] if core_cursor < len(publishing_assignments) else []
+        required_keywords = _dedupe_keyword_phrases(assigned_secondaries)
+        required_terms = _merge_string_lists(assigned_targets, assigned_publishing, max_items=3)
+        required_elements: List[str] = []
+        if core_cursor == 0 and structured_mode == "list":
+            required_elements.append("list")
+        if core_cursor == 0 and structured_mode == "table":
+            required_elements.append("table")
+        sections.append(
+            {
+                "section_id": section_id,
+                "kind": "body",
+                "h2": h2,
+                "h3": h3_items,
+                "goal": _section_goal_from_heading(h2, section_kind="body", topic=topic),
+                "required_keywords": required_keywords,
+                "required_terms": required_terms,
+                "required_elements": required_elements,
+                "target_words": {"min": max(90, core_target - 20), "max": min(185, core_target + 20)},
+            }
+        )
+        core_cursor += 1
+
+    return {
+        "plan_version": "deterministic_v2",
+        "h1": str(phase3.get("title_package", {}).get("h1") or "").strip(),
+        "outline": outline_items,
+        "sections": sections,
+        "faq_questions": faq_questions[:FAQ_MIN_QUESTIONS],
+        "backlink_placement": backlink_placement,
+        "anchor_text_final": anchor_text_final,
+        "structured_mode": structured_mode,
+    }
+
+
+def _normalize_writer_html_fragment(value: str) -> str:
+    cleaned = _strip_code_fences(value or "")
+    if not cleaned.strip():
+        return ""
+    cleaned = re.sub(r"</?(?:html|body)[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<h[1-6][^>]*>.*?</h[1-6]>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    if not re.search(r"<(?:p|ul|ol|table)\b", cleaned, flags=re.IGNORECASE):
+        cleaned = _wrap_paragraphs(cleaned)
+    return _strip_empty_blocks(cleaned).strip()
+
+
+def _coerce_writer_section_bodies(value: Any) -> Dict[str, str]:
+    if not isinstance(value, list):
+        return {}
+    out: Dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        section_id = str(item.get("section_id") or item.get("id") or "").strip()
+        body_html = _normalize_writer_html_fragment(
+            str(
+                item.get("body_html")
+                or item.get("html")
+                or item.get("content_html")
+                or item.get("content")
+                or ""
+            ).strip()
+        )
+        if section_id and body_html:
+            out[section_id] = body_html
+    return out
+
+
+def _render_article_from_plan(
+    *,
+    article_plan: Dict[str, Any],
+    intro_html: str,
+    section_bodies: Dict[str, str],
+    faq_items: List[Dict[str, str]],
+) -> str:
+    parts: List[str] = [f"<h1>{article_plan['h1']}</h1>"]
+    if intro_html:
+        parts.append(intro_html)
+    used_faq_indexes: set[int] = set()
+    fallback_faq_answers = [item for item in faq_items if item.get("answer_html")]
+
+    for section in article_plan.get("sections") or []:
+        h2 = str(section.get("h2") or "").strip()
+        if not h2:
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        section_kind = str(section.get("kind") or "body").strip()
+        parts.append(f"<h2>{h2}</h2>")
+        if section_kind == "faq":
+            questions = [str(item).strip() for item in (section.get("h3") or []) if str(item).strip()]
+            for question in questions:
+                answer_html = ""
+                for idx, item in enumerate(faq_items):
+                    if idx in used_faq_indexes:
+                        continue
+                    if _keyword_similarity(str(item.get("question") or ""), question) >= 0.75:
+                        answer_html = str(item.get("answer_html") or "").strip()
+                        used_faq_indexes.add(idx)
+                        break
+                if not answer_html and fallback_faq_answers:
+                    for idx, item in enumerate(fallback_faq_answers):
+                        if idx in used_faq_indexes:
+                            continue
+                        answer_html = str(item.get("answer_html") or "").strip()
+                        used_faq_indexes.add(idx)
+                        break
+                if not answer_html:
+                    answer_html = "<p></p>"
+                parts.append(f"<h3>{question}</h3>{answer_html}")
+            continue
+        body_html = section_bodies.get(section_id, "")
+        parts.append(body_html)
+
+    return "".join(parts)
+
+
+def _generate_article_from_plan(
+    *,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    backlink_url: str,
+    publishing_site_url: str,
+    internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
+    min_internal_links: int,
+    max_internal_links: int,
+    llm_api_key: str,
+    llm_base_url: str,
+    llm_model: str,
+    http_timeout: int,
+    max_tokens: int,
+    validation_feedback: Optional[List[str]] = None,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
+    plan_payload = {
+        "h1": article_plan.get("h1"),
+        "structured_mode": article_plan.get("structured_mode"),
+        "sections": article_plan.get("sections"),
+        "faq_questions": article_plan.get("faq_questions"),
+    }
+    system_prompt = (
+        "Write a German (de-DE) SEO article for a fixed deterministic plan. "
+        "The structure is owned by the application, so you must only fill the approved content slots. "
+        "Do not add or remove sections. Do not add hyperlinks. Do not include H1/H2 wrappers inside section bodies. "
+        "Return valid JSON only."
+    )
+    user_prompt = (
+        f"Topic: {phase3.get('final_article_topic', '')}\n"
+        f"Primary keyword: {phase3.get('primary_keyword', '')}\n"
+        f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
+        f"Editorial brief: {content_brief_text}\n"
+        f"Plan:\n{json.dumps(plan_payload, ensure_ascii=False, sort_keys=True, indent=2)}\n\n"
+        "Output JSON schema:\n"
+        "{\n"
+        '  "intro_html": "<p>...</p>",\n'
+        '  "sections": [{"section_id": "section_1", "body_html": "<p>...</p>"}],\n'
+        '  "faq_items": [{"question": "...?", "answer_html": "<p>...</p>"}],\n'
+        '  "excerpt": "string"\n'
+        "}\n"
+        "Rules:\n"
+        "- intro_html: exactly one opening paragraph, 80-120 words, include the primary keyword naturally.\n"
+        "- For each non-FAQ section, return body_html only with 1-2 substantial paragraphs and any required list/table.\n"
+        "- For each section, naturally include its required_keywords and required_terms.\n"
+        "- Use concrete criteria, examples, risks, comparisons, or next steps. Avoid generic filler.\n"
+        "- The Fazit must be topic-specific, concrete, and non-generic.\n"
+        "- faq_items must answer the provided FAQ questions directly, 35-55 words each, with no links.\n"
+        "- Keep language strictly German (de-DE)."
+    )
+    if validation_feedback:
+        user_prompt += f"\nPrevious validation issues to fix exactly: {validation_feedback}"
+
+    llm_out = call_llm_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        model=llm_model,
+        timeout_seconds=http_timeout,
+        max_tokens=max_tokens,
+        temperature=0.2,
+        request_label="phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry",
+        usage_collector=usage_collector,
+    )
+    intro_html = _normalize_writer_html_fragment(
+        str(llm_out.get("intro_html") or llm_out.get("intro") or llm_out.get("opening_html") or "").strip()
+    )
+    section_bodies = _coerce_writer_section_bodies(llm_out.get("sections"))
+    faq_items = _coerce_generated_faqs(llm_out.get("faq_items") or llm_out.get("faqs"))
+    article_html = _render_article_from_plan(
+        article_plan=article_plan,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=faq_items,
+    )
+    article_html = _ensure_primary_keyword_in_intro(article_html, phase3.get("primary_keyword", ""))
+    article_html = _repair_link_constraints(
+        article_html=article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
+        min_internal_links=min_internal_links,
+        max_internal_links=max_internal_links,
+        backlink_placement=str(article_plan.get("backlink_placement") or "intro"),
+        anchor_text=str(article_plan.get("anchor_text_final") or "Weitere Informationen"),
+        required_h1=str(article_plan.get("h1") or ""),
+    )
+    article_html = _strip_empty_blocks(article_html)
+    article_html = _strip_leading_empty_blocks(article_html)
+    article_html = _trim_article_to_word_limit(article_html, ARTICLE_MAX_WORDS)
+    excerpt = str(llm_out.get("excerpt") or "").strip()
+    if not excerpt:
+        excerpt = _extract_first_paragraph_text(article_html)[:200]
+    return {
+        "meta_title": str(article_plan.get("h1") or "").strip(),
+        "meta_description": "",
+        "slug": "",
+        "excerpt": excerpt,
+        "article_html": article_html,
     }
 
 
@@ -4625,10 +5130,18 @@ def run_creator_pipeline(
     phase3["primary_keyword"] = _align_primary_keyword_to_topic(
         topic=phase3.get("final_article_topic", ""),
         current_primary=keyword_selection["primary_keyword"],
-        trend_candidates=keyword_selection.get("trend_candidates") or [],
+        trend_candidates=_dedupe_keyword_phrases(
+            (keyword_selection.get("secondary_keywords") or []) + (keyword_selection.get("trend_candidates") or [])
+        ),
         keyword_cluster=keyword_cluster,
     )
-    phase3["secondary_keywords"] = keyword_selection["secondary_keywords"]
+    phase3["secondary_keywords"] = _finalize_secondary_keywords(
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=keyword_selection.get("secondary_keywords") or [],
+        keyword_cluster=keyword_cluster,
+        allowed_topics=phase2.get("allowed_topics") or [],
+    )
     phase3["faq_candidates"] = _ensure_faq_candidates(
         phase3.get("final_article_topic", ""),
         keyword_selection.get("faq_candidates") or [],
@@ -4719,145 +5232,20 @@ def run_creator_pipeline(
     phase_start = time.time()
     logger.info("creator.phase4.start")
     anchor_safe = _is_anchor_safe(anchor)
-    outline = None
-    phase4 = {}
-    outline_errors: List[str] = []
-    last_phase4_llm_out: Dict[str, Any] = {}
-    faq_candidates = _ensure_faq_candidates(phase3.get("final_article_topic", ""), phase3.get("faq_candidates") or [])
-    for attempt in range(1, phase4_max_attempts + 1):
-        system_prompt = (
-            f"Create a German (de-DE) SEO article outline using the REQUIRED H1 exactly. Provide {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, optional H3. "
-            "The penultimate H2 must be titled 'Fazit'. "
-            "The final H2 must be titled 'FAQ'. "
-            "Ensure keyword intent mapping: include the primary keyword in H1 and in at least one H2; "
-            "cover secondary keywords naturally across remaining H2/H3 headings. "
-            "When a structured content mode is provided, make room for that structure naturally in the outline. "
-            f"If H1 includes a year, it must be {current_year} (no other years in titles). "
-            "Ensure H3 headings only appear under their respective H2 parents (no orphan H3). "
-            "Choose backlink placement as intro or one specific section (section_2..section_5). "
-            "Return JSON only."
-        )
-        user_prompt = (
-            f"Topic: {phase3['final_article_topic']}\n"
-            f"Required H1: {phase3['title_package']['h1']}\n"
-            f"Allowed topics: {phase2['allowed_topics']}\n"
-            f"Primary keyword: {phase3['primary_keyword']}\n"
-            f"Secondary keywords: {phase3['secondary_keywords']}\n"
-            f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-            f"FAQ candidates: {faq_candidates[:3]}\n"
-            f"Anchor provided: {anchor or ''}\n"
-            f"Anchor safe: {anchor_safe}\n"
-            "Language: German (de-DE).\n"
-            "Return JSON: {\"outline\":[{\"h2\":\"...\",\"h3\":[\"...\"]}],"
-            "\"backlink_placement\":\"intro|section_2|section_3|section_4|section_5\",\"anchor_text_final\":\"...\"}"
-        )
-        try:
-            llm_out = call_llm_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                model=planning_model,
-                timeout_seconds=http_timeout,
-                max_tokens=phase4_max_tokens,
-                temperature=0.1,
-                request_label="phase4",
-                usage_collector=_collect_llm_usage,
-            )
-        except LLMError as exc:
-            outline_errors.append(str(exc))
-            continue
-
-        if isinstance(llm_out, dict):
-            last_phase4_llm_out = llm_out
-        h1 = phase3["title_package"]["h1"]
-        outline_items = llm_out.get("outline") or []
-        backlink_placement = (llm_out.get("backlink_placement") or "").strip()
-        anchor_text_final = (llm_out.get("anchor_text_final") or "").strip()
-        outline_items = _inject_faq_section(outline_items, faq_candidates, phase3.get("final_article_topic", ""))
-        if not h1 or not isinstance(outline_items, list) or not (ARTICLE_MIN_H2 <= len(outline_items) <= ARTICLE_MAX_H2):
-            outline_errors.append("invalid_outline_structure")
-            continue
-        if backlink_placement not in {"intro", "section_2", "section_3", "section_4", "section_5"}:
-            outline_errors.append("invalid_backlink_placement")
-            continue
-        primary_keyword_phase3 = _normalize_keyword_phrase(phase3.get("primary_keyword", ""))
-        topic_phase3 = _normalize_keyword_phrase(phase3.get("final_article_topic", ""))
-        outline_h2_combined = " ".join(
-            _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
-            for item in outline_items
-        )
-        if primary_keyword_phase3 and not (
-            _keyword_present_relaxed(outline_h2_combined, primary_keyword_phase3)
-            or (topic_phase3 and _keyword_present_relaxed(outline_h2_combined, topic_phase3))
-        ):
-            for idx, outline_item in enumerate(outline_items):
-                if not isinstance(outline_item, dict):
-                    continue
-                current_h2 = str(outline_item.get("h2") or "").strip()
-                normalized_h2 = _normalize_keyword_phrase(current_h2)
-                if normalized_h2 in {"fazit", "faq"}:
-                    continue
-                outline_items[idx] = {
-                    **outline_item,
-                    "h2": f"{_format_title_case(phase3['final_article_topic'])}: {current_h2}",
-                }
-                break
-            outline_h2_combined = " ".join(
-                _normalize_keyword_phrase(item.get("h2", "") if isinstance(item, dict) else str(item))
-                for item in outline_items
-            )
-            if not (
-                _keyword_present_relaxed(outline_h2_combined, primary_keyword_phase3)
-                or (topic_phase3 and _keyword_present_relaxed(outline_h2_combined, topic_phase3))
-            ):
-                outline_errors.append("primary_keyword_missing_in_outline")
-                continue
-        if _normalize_keyword_phrase(str(outline_items[-1].get("h2") or "") if isinstance(outline_items[-1], dict) else str(outline_items[-1])) != "faq":
-            outline_errors.append("final_h2_not_faq")
-            continue
-        penultimate_item = outline_items[-2] if len(outline_items) >= 2 else {}
-        penultimate_h2 = str(penultimate_item.get("h2") or "").strip() if isinstance(penultimate_item, dict) else str(penultimate_item).strip()
-        if _normalize_keyword_phrase(penultimate_h2) != "fazit":
-            outline_errors.append("penultimate_h2_not_fazit")
-            continue
-        if not anchor_text_final:
-            anchor_text_final = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
-        outline = {
-            "h1": h1,
-            "outline": outline_items,
-            "backlink_placement": backlink_placement,
-            "anchor_text_final": anchor_text_final,
-        }
-        break
-
-    if not outline and not execution_policy["phase4_outline_fallback_enabled"]:
-        raise CreatorError(f"Phase 4 outline generation failed: {outline_errors}")
-
-    if not outline:
-        fallback_reason = ",".join(_dedupe_preserve_order(outline_errors)) or "unknown"
-        warnings.append(f"phase4_outline_fallback:{fallback_reason}")
-        outline = _build_phase4_fallback_outline(
-            h1=phase3["title_package"]["h1"],
-            topic=phase3.get("final_article_topic", ""),
-            primary_keyword=phase3.get("primary_keyword", ""),
-            secondary_keywords=phase3.get("secondary_keywords") or [],
-            faq_candidates=faq_candidates,
-            structured_mode=phase3.get("structured_content_mode", "none"),
-            anchor=anchor,
-            anchor_safe=anchor_safe,
-            anchor_type=anchor_type,
-            brand_name=brand_name,
-            keyword_cluster=keyword_cluster,
-            llm_out=last_phase4_llm_out,
-        )
-
-    phase4 = outline
+    phase4 = _build_deterministic_article_plan(
+        phase1=phase1,
+        phase3=phase3,
+        anchor=anchor or "",
+        anchor_safe=anchor_safe,
+    )
+    faq_candidates = phase4.get("faq_questions") or []
     debug["faq_generation"] = {
         "faq_enabled": True,
         "faq_candidates": faq_candidates[:3],
         "faq_in_outline": True,
+        "generation_mode": "deterministic_plan",
     }
+    debug["article_plan"] = phase4
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
     progress(4, PHASE_LABELS[4], 56)
 
@@ -4867,15 +5255,16 @@ def run_creator_pipeline(
     article_payload = None
     errors: List[str] = []
     backlink_url = phase1["backlink_url"]
-    last_article_html = ""
-    last_validation_errors: List[str] = []
-    internal_links_prompt_text = internal_links_prompt_entries[:effective_internal_max]
-    faq_prompt_text = phase3.get("faq_candidates") or []
-    content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
+    writer_feedback: List[str] = []
+    writer_token_floor = _estimate_html_max_tokens(ARTICLE_MAX_WORDS, floor=2600, ceiling=3800)
     for attempt in range(1, phase5_max_attempts + 1):
-        if attempt == 1:
-            article_payload = _generate_article_by_sections(
-                phase4=phase4,
+        try:
+            writer_max_tokens = max(
+                phase5_max_tokens_attempt1 if attempt == 1 else phase5_max_tokens_retry,
+                writer_token_floor,
+            )
+            article_payload = _generate_article_from_plan(
+                article_plan=phase4,
                 phase3=phase3,
                 backlink_url=backlink_url,
                 publishing_site_url=publishing_site_url,
@@ -4883,199 +5272,33 @@ def run_creator_pipeline(
                 internal_link_anchor_map=internal_link_anchor_map,
                 min_internal_links=effective_internal_min,
                 max_internal_links=effective_internal_max,
-                faq_candidates=faq_candidates,
-                structured_mode=phase3.get("structured_content_mode", "none"),
                 llm_api_key=llm_api_key,
                 llm_base_url=llm_base_url,
                 llm_model=writing_model,
                 http_timeout=http_timeout,
-                expand_passes=int(execution_policy["phase5_expand_passes"]),
-                section_max_tokens=phase5_max_tokens_attempt1,
-                expand_max_tokens=phase5_max_tokens_retry,
-                usage_collector=_collect_llm_usage,
-            )
-            if not article_payload:
-                if strict_failure_mode:
-                    raise CreatorError("Phase 5 section generation failed: section_generation_failed")
-                errors.append("section_generation_failed")
-                continue
-            article_html = (article_payload.get("article_html") or "").strip()
-            if not article_html:
-                if strict_failure_mode:
-                    raise CreatorError("Phase 5 section generation failed: missing_article_html")
-                errors.append("missing_article_html")
-                continue
-
-            wc = word_count_from_html(article_html)
-            logger.info("creator.phase5.attempt attempt=%s mode=sectioned word_count=%s", attempt, wc)
-
-            validation_errors = _collect_article_validation_errors(
-                article_html=article_html,
-                meta_title=phase3["title_package"]["meta_title"],
-                meta_description=_build_deterministic_meta_description(
-                    topic=phase3["final_article_topic"],
-                    primary_keyword=phase3["primary_keyword"],
-                    secondary_keywords=phase3.get("secondary_keywords") or [],
-                    structured_mode=phase3.get("structured_content_mode", "none"),
-                ),
-                slug=phase3["title_package"]["slug"],
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3.get("primary_keyword", ""),
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                required_h1=phase4["h1"],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-                backlink_url=backlink_url,
-                backlink_placement=phase4["backlink_placement"],
-                publishing_site_url=publishing_site_url,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-                content_brief=phase3.get("content_brief") or {},
-            )
-
-            if validation_errors:
-                if strict_failure_mode:
-                    raise CreatorError(f"Phase 5 section generation validation failed: {validation_errors}")
-                errors.extend(validation_errors)
-                last_article_html = article_html
-                last_validation_errors = validation_errors
-                continue
-
-            article_payload = {
-                "meta_title": phase4["h1"],
-                "meta_description": "",
-                "slug": "",
-                "excerpt": article_payload.get("excerpt") or "",
-                "article_html": article_html,
-            }
-            break
-        elif last_article_html:
-            system_prompt = (
-                "Fix or rewrite the HTML to satisfy all constraints. Do not return markdown fences. "
-                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "Keep the penultimate H2 titled 'Fazit' and the final H2 titled 'FAQ'. "
-                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
-                "Keep language strictly German (de-DE). Keep the final 'Fazit' topic-specific, not generic. "
-                "Enforce keyword contract: primary in H1+intro+>=1 H2, and 4-6 secondary keywords covered naturally. "
-                "Preserve the required meta title and slug unless they violate a hard validation rule. "
-                "If structured content mode is 'list', include at least one meaningful HTML list. "
-                "If structured content mode is 'table', include at least one meaningful HTML table. "
-                "Enforce link contract: exactly one backlink to Backlink URL, "
-                f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
-                "Return only the fixed article HTML. Do not return JSON. Do not return markdown fences."
-            )
-            user_prompt = (
-                f"Current article_html:\n{last_article_html}\n\n"
-                f"Issues: {last_validation_errors}\n"
-                f"Required H1: {phase4['h1']}\n"
-                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
-                f"Required slug: {phase3['title_package']['slug']}\n"
-                f"Required outline: {phase4['outline']}\n"
-                f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
-                f"{content_brief_text}\n"
-                f"Backlink URL: {backlink_url}\n"
-                f"Backlink placement: {phase4['backlink_placement']}\n"
-                f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
-                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-                f"FAQ candidates: {faq_prompt_text[:3]}\n"
-                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
-                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
-                "Language: German (de-DE).\n"
-                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Every section must add concrete substance, not generic filler.\n"
-                "Return only the fixed article HTML."
-            )
-            model_for_attempt = writing_model
-            max_tokens = phase5_max_tokens_retry
-            temperature = 0.2
-        else:
-            system_prompt = (
-                f"Write a NEW German (de-DE) article from scratch. CRITICAL: the article body MUST be {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words "
-                "(aim for about 800 words). Each H2 section needs 1-2 substantial paragraphs. "
-                "The penultimate H2 must be titled 'Fazit' and the final H2 must be titled 'FAQ'. "
-                "Include exactly one backlink to the provided Backlink URL, plus internal links to the publishing site. "
-                "No external links beyond the backlink. "
-                "Keyword contract: primary keyword must appear in H1, first paragraph, and at least one H2. "
-                "Use 4-6 secondary keywords naturally in the body at least once each. Avoid keyword stuffing. "
-                "Follow the required meta title and slug exactly unless they violate a hard validation rule. "
-                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "In body content, historical years or specific dates only when necessary for factual accuracy. "
-                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "If structured content mode is 'list', include at least one meaningful HTML list. "
-                "If structured content mode is 'table', include at least one meaningful HTML table. "
-                "If the outline includes an FAQ section, answer each FAQ H3 directly, avoid duplicate questions, and keep each answer concise but useful. "
-                "The final 'Fazit' must summarize the specific article topic (not generic text). "
-                "Return only the final article HTML. Do not return JSON. Do not return markdown fences."
-            )
-            user_prompt = (
-                f"H1: {phase4['h1']}\n"
-                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
-                f"Required slug: {phase3['title_package']['slug']}\n"
-                f"Outline: {phase4['outline']}\n"
-                f"Backlink placement: {phase4['backlink_placement']}\n"
-                f"Backlink URL: {backlink_url}\n"
-                f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
-                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
-                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words (aim for about 800), H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, "
-                "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
-                f"{content_brief_text}\n"
-                f"Primary keyword: {phase3['primary_keyword']}\n"
-                f"Secondary keywords: {phase3['secondary_keywords']}\n"
-                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-                f"FAQ candidates: {faq_prompt_text[:3]}\n"
-                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
-                "Language: German (de-DE).\n"
-                "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
-                "Every section must add concrete substance, not generic filler.\n"
-                "Return only the final article HTML."
-            )
-            model_for_attempt = writing_model
-            max_tokens = phase5_max_tokens_retry
-            temperature = 0.2
-        try:
-            article_html = call_llm_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                model=model_for_attempt,
-                timeout_seconds=http_timeout,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                request_label=f"phase5_attempt_{attempt}",
+                max_tokens=writer_max_tokens,
+                validation_feedback=writer_feedback if writer_feedback else None,
                 usage_collector=_collect_llm_usage,
             )
         except LLMError as exc:
             if strict_failure_mode:
-                raise CreatorError(f"Phase 5 attempt {attempt} failed: {exc}") from exc
+                raise CreatorError(f"Phase 5 writer attempt {attempt} failed: {exc}") from exc
             errors.append(str(exc))
             continue
 
-        article_html = (article_html or "").strip()
-        if not article_html:
-            if strict_failure_mode:
-                raise CreatorError(f"Phase 5 attempt {attempt} failed: missing_article_html")
-            errors.append("missing_article_html")
-            continue
-
-        wc = word_count_from_html(article_html)
-        logger.info(
-            "creator.phase5.attempt attempt=%s word_count=%s",
-            attempt, wc,
+        phase5_candidate = _apply_deterministic_article_metadata(
+            article_payload,
+            phase3=phase3,
+            phase4=phase4,
         )
+        wc = word_count_from_html(phase5_candidate["article_html"])
+        logger.info("creator.phase5.attempt attempt=%s mode=planned word_count=%s", attempt, wc)
 
         validation_errors = _collect_article_validation_errors(
-            article_html=article_html,
-            meta_title=phase3["title_package"]["meta_title"],
-            meta_description=_build_deterministic_meta_description(
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3["primary_keyword"],
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-            ),
-            slug=phase3["title_package"]["slug"],
+            article_html=phase5_candidate["article_html"],
+            meta_title=phase5_candidate.get("meta_title") or phase3["title_package"]["meta_title"],
+            meta_description=phase5_candidate.get("meta_description") or "",
+            slug=phase5_candidate.get("slug") or phase3["title_package"]["slug"],
             topic=phase3["final_article_topic"],
             primary_keyword=phase3.get("primary_keyword", ""),
             secondary_keywords=phase3.get("secondary_keywords") or [],
@@ -5091,23 +5314,17 @@ def run_creator_pipeline(
 
         if validation_errors:
             if strict_failure_mode:
-                raise CreatorError(f"Phase 5 attempt {attempt} validation failed: {validation_errors}")
+                raise CreatorError(f"Phase 5 writer attempt {attempt} validation failed: {validation_errors}")
             errors.extend(validation_errors)
-            last_article_html = article_html
-            last_validation_errors = validation_errors
+            writer_feedback = validation_errors
+            article_payload = None
             continue
 
-        article_payload = {
-            "meta_title": phase4["h1"],
-            "meta_description": "",
-            "slug": "",
-            "excerpt": "",
-            "article_html": article_html,
-        }
+        article_payload = phase5_candidate
         break
 
     if not article_payload:
-        raise CreatorError(f"Article generation failed: {errors}")
+        raise CreatorError(f"Phase 5 writer failed: {errors}")
 
     art_html = (article_payload.get("article_html") or "").strip()
     art_html = _strip_empty_blocks(art_html)
@@ -5118,44 +5335,8 @@ def run_creator_pipeline(
         phase3=phase3,
         phase4=phase4,
     )
-    faq_enrichment_debug: Dict[str, Any] = {"enabled": True, "applied": False, "queries": [], "search_questions": [], "items": []}
-    try:
-        faq_enrichment = _generate_search_informed_faqs(
-            article_html=article_payload["article_html"],
-            topic=phase3["final_article_topic"],
-            primary_keyword=phase3["primary_keyword"],
-            secondary_keywords=phase3.get("secondary_keywords") or [],
-            current_faq_candidates=phase3.get("faq_candidates") or [],
-            llm_api_key=llm_api_key,
-            llm_base_url=llm_base_url,
-            llm_model=writing_model,
-            timeout_seconds=http_timeout,
-            usage_collector=_collect_llm_usage,
-        )
-        article_payload["article_html"] = _replace_faq_section(
-            article_payload["article_html"],
-            faq_enrichment["faq_html"],
-        )
-        faq_enrichment_debug = {
-            "enabled": True,
-            "applied": True,
-            "queries": faq_enrichment["queries"],
-            "search_questions": faq_enrichment["search_questions"],
-            "items": faq_enrichment["faqs"],
-        }
-    except (CreatorError, LLMError) as exc:
-        if not execution_policy["phase5_faq_enrichment_soft_fail"]:
-            raise CreatorError(f"Phase 5 FAQ enrichment failed: {exc}") from exc
-        warnings.append(f"phase5_faq_enrichment_failed:{exc}")
-        faq_enrichment_debug["error"] = str(exc)
-
-    article_payload = _apply_deterministic_article_metadata(
-        article_payload,
-        phase3=phase3,
-        phase4=phase4,
-    )
     phase5 = article_payload
-    debug["faq_enrichment"] = faq_enrichment_debug
+    debug["faq_enrichment"] = {"enabled": False, "applied": False, "generation_mode": "writer_inline"}
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
     progress(5, PHASE_LABELS[5], 70)
 
@@ -5292,151 +5473,7 @@ def run_creator_pipeline(
     if phase7_errors:
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
-        if execution_policy["phase7_keyword_context_repair_enabled"] and all(
-            _is_keyword_context_repairable_error(error) for error in phase7_errors
-        ):
-            phase5["article_html"] = _repair_keyword_context_gaps(
-                article_html=phase5["article_html"],
-                errors=phase7_errors,
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3["primary_keyword"],
-                content_brief=phase3.get("content_brief") or {},
-            )
-            phase5 = _apply_deterministic_article_metadata(
-                phase5,
-                phase3=phase3,
-                phase4=phase4,
-                reset_excerpt=True,
-            )
-            phase7_errors = _collect_article_validation_errors(
-                article_html=phase5["article_html"],
-                meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
-                meta_description=phase5.get("meta_description") or "",
-                slug=phase5.get("slug") or phase3["title_package"]["slug"],
-                topic=phase3["final_article_topic"],
-                primary_keyword=phase3.get("primary_keyword", ""),
-                secondary_keywords=phase3.get("secondary_keywords") or [],
-                required_h1=phase4["h1"],
-                structured_mode=phase3.get("structured_content_mode", "none"),
-                backlink_url=backlink_url,
-                backlink_placement=phase4["backlink_placement"],
-                publishing_site_url=publishing_site_url,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-                content_brief=phase3.get("content_brief") or {},
-            )
-            current_wc = word_count_from_html(phase5["article_html"])
-            logger.info("creator.phase7.deterministic_fix_result errors=%s word_count=%s", phase7_errors, current_wc)
-        for repair_attempt in range(phase7_repair_attempts):
-            if not phase7_errors:
-                break
-            wc_ok = ARTICLE_MIN_WORDS <= current_wc <= ARTICLE_MAX_WORDS
-            if wc_ok:
-                wc_instruction = (
-                    f"The word count ({current_wc}) is fine - do NOT add or remove content. "
-                    "Only fix the specific issues listed below."
-                )
-            else:
-                wc_instruction = (
-                    f"The article currently has {current_wc} words. "
-                    f"Adjust it to be between {ARTICLE_MIN_WORDS} and {ARTICLE_MAX_WORDS} words."
-                )
-            system_prompt = (
-                "Fix the HTML article to satisfy SEO checks. "
-                f"{wc_instruction} "
-                f"Keep {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections. "
-                "The penultimate H2 must be 'Fazit' and the final H2 must be 'FAQ'. "
-                "Enforce link contract: exactly one backlink to Backlink URL, "
-                f"{effective_internal_min}-{effective_internal_max} internal links from allowed list, no other external links. "
-                f"If H1 or meta_title includes a year, it must be {current_year} (no other years in titles). "
-                "Maintain strict heading hierarchy: H3 headings must follow and belong to their H2 parents. "
-                "Keep the required meta title and slug aligned with the SEO contract. "
-                "If structured content mode is 'list', include at least one meaningful HTML list. "
-                "If structured content mode is 'table', include at least one meaningful HTML table. "
-                "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
-                "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
-                "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
-                "Return only the fixed article HTML. Do not return JSON. Do not return markdown fences."
-            )
-            user_prompt = (
-                f"Article_html: {phase5['article_html']}\n"
-                f"Issues to fix: {phase7_errors}\n"
-                f"Current word count: {current_wc}\n"
-                f"{content_brief_text}\n"
-                f"Backlink URL: {backlink_url}\n"
-                f"Placement: {phase4['backlink_placement']}\n"
-                f"Anchor text: {phase4['anchor_text_final']}\n"
-                f"FAQ candidates: {(phase3.get('faq_candidates') or [])[:3]}\n"
-                f"Allowed internal links (publishing site only): {internal_links_prompt_text}\n"
-                f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
-                f"Primary keyword: {phase3['primary_keyword']}\n"
-                f"Secondary keywords: {phase3['secondary_keywords']}\n"
-                f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
-                f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
-                "Language: German (de-DE).\n"
-                "Every section must add concrete substance, not generic filler.\n"
-                "Return only the fixed article HTML."
-            )
-            try:
-                fixed_html = call_llm_text(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    api_key=llm_api_key,
-                    base_url=llm_base_url,
-                    model=planning_model,
-                    timeout_seconds=http_timeout,
-                    max_tokens=phase7_repair_max_tokens,
-                    request_label="phase7_repair",
-                    usage_collector=_collect_llm_usage,
-                )
-                fixed_html = (fixed_html or "").strip()
-                fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
-                logger.info("creator.phase7.fix_result attempt=%s before=%s after=%s", repair_attempt + 1, current_wc, fixed_wc)
-                if fixed_html and ARTICLE_MIN_WORDS <= fixed_wc <= ARTICLE_MAX_WORDS:
-                    phase5["article_html"] = fixed_html
-                elif fixed_html and fixed_wc > 0 and not wc_ok:
-                    phase5["article_html"] = fixed_html
-                phase5["article_html"] = _repair_link_constraints(
-                    article_html=phase5["article_html"],
-                    backlink_url=backlink_url,
-                    publishing_site_url=publishing_site_url,
-                    internal_links=internal_link_candidates,
-                    internal_link_anchor_map=internal_link_anchor_map,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                    backlink_placement=phase4["backlink_placement"],
-                    anchor_text=phase4["anchor_text_final"],
-                    required_h1=phase4["h1"],
-                )
-                phase5 = _apply_deterministic_article_metadata(
-                    phase5,
-                    phase3=phase3,
-                    phase4=phase4,
-                    reset_excerpt=True,
-                )
-                phase7_errors = _collect_article_validation_errors(
-                    article_html=phase5["article_html"],
-                    meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
-                    meta_description=phase5.get("meta_description") or "",
-                    slug=phase5.get("slug") or phase3["title_package"]["slug"],
-                    topic=phase3["final_article_topic"],
-                    primary_keyword=phase3.get("primary_keyword", ""),
-                    secondary_keywords=phase3.get("secondary_keywords") or [],
-                    required_h1=phase4["h1"],
-                    structured_mode=phase3.get("structured_content_mode", "none"),
-                    backlink_url=backlink_url,
-                    backlink_placement=phase4["backlink_placement"],
-                    publishing_site_url=publishing_site_url,
-                    min_internal_links=effective_internal_min,
-                    max_internal_links=effective_internal_max,
-                    content_brief=phase3.get("content_brief") or {},
-                )
-                current_wc = word_count_from_html(phase5["article_html"])
-                if not phase7_errors:
-                    break
-            except LLMError as exc:
-                phase7_errors.append(f"phase7_fix_failed:{exc}")
-                break
+        phase7_errors = _dedupe_preserve_order(phase7_errors)
 
     if phase7_errors:
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")

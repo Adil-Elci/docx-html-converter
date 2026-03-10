@@ -8,6 +8,7 @@ from creator.api.pipeline import (
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
     _align_primary_keyword_to_topic,
+    _build_deterministic_article_plan,
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
@@ -190,6 +191,23 @@ def test_select_keywords_keeps_topic_focused_primary_keyword():
     assert result["primary_keyword"] != "eltern sucht ratgeber erziehung familie kinder liebe"
     assert "kinder" in result["primary_keyword"]
     assert "sonnen" in result["primary_keyword"]
+
+
+def test_select_keywords_builds_secondary_fallbacks_without_trends():
+    result = _select_keywords(
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        llm_primary="Kinder Sehprobleme erkennen und richtig reagieren",
+        llm_secondary=[],
+        keyword_cluster=["kinder", "sehprobleme", "augen", "kinder sehprobleme", "kinderbrillen"],
+        allowed_topics=["Familienalltag", "Kindergesundheit"],
+        trend_candidates=[],
+        faq_candidates=[],
+    )
+
+    assert result["primary_keyword"] == "kinder sehprobleme erkennen und richtig reagieren"
+    assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
+    assert any("sehprobleme" in item for item in result["secondary_keywords"])
+    assert any("ursachen" in item or "hilfe" in item or "frueh erkennen" in item for item in result["secondary_keywords"])
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
@@ -478,7 +496,164 @@ def test_build_pipeline_execution_policy_honors_strict_failure_mode(monkeypatch)
     assert strict_policy["phase7_repair_attempts"] == 0
 
 
-def test_run_creator_pipeline_strict_mode_raises_phase4_error_without_fallback(monkeypatch):
+def test_build_deterministic_article_plan_assigns_structure_and_keyword_coverage():
+    plan = _build_deterministic_article_plan(
+        phase1={
+            "brand_name": "Brillenhaus24",
+            "anchor_type": "partial_match",
+            "keyword_cluster": ["kinder", "sehprobleme", "augen"],
+        },
+        phase3={
+            "final_article_topic": "Kinder Sehprobleme erkennen und richtig reagieren",
+            "primary_keyword": "kinder sehprobleme erkennen",
+            "secondary_keywords": [
+                "symptome von sehproblemen bei kindern",
+                "augenarzt termin mit kind vorbereiten",
+                "kinder augen gesundheit verstehen",
+                "sehprobleme bei kindern alltag",
+            ],
+            "faq_candidates": [
+                "Wann sollte ein Kind zum Augenarzt?",
+                "Wie erkennt man Sehprobleme bei Kindern?",
+                "Was hilft bei auffaelligen Sehzeichen?",
+            ],
+            "structured_content_mode": "none",
+            "title_package": {"h1": "Kinder Sehprobleme erkennen: Orientierung fuer Eltern"},
+            "content_brief": {
+                "audience": "Eltern und Familien",
+                "publishing_signals": ["Familienalltag"],
+                "target_signals": ["Kinderbrillen", "Augengesundheit"],
+                "overlap_terms": ["kinder"],
+            },
+        },
+        anchor="",
+        anchor_safe=False,
+    )
+
+    assert plan["outline"][-2]["h2"] == "Fazit"
+    assert plan["outline"][-1]["h2"] == "FAQ"
+    assert plan["sections"][0]["kind"] == "body"
+    assert plan["sections"][0]["required_keywords"]
+    assert "kinder sehprobleme erkennen" not in plan["sections"][0]["required_keywords"]
+    assert plan["sections"][-1]["kind"] == "faq"
+    assert len(plan["faq_questions"]) == 3
+
+
+def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(monkeypatch):
+    monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
+
+    monkeypatch.setattr(
+        "creator.api.pipeline._run_pair_fit_reasoning",
+        lambda **kwargs: {
+            "final_match_decision": "accepted",
+            "backlink_fit_ok": True,
+            "final_article_topic": "Kinder Sehprobleme erkennen und richtig reagieren",
+            "why_this_topic_was_chosen": "Passt zum Familien- und Gesundheitskontext.",
+            "best_overlap_reason": "Familienalltag und Kindergesundheit ueberlappen sinnvoll.",
+            "overlap_terms": ["kinder", "gesundheit"],
+            "publishing_site_contexts": ["Familienalltag"],
+            "target_site_contexts": ["Kinderbrillen"],
+        },
+    )
+    captured_labels: list[str] = []
+
+    def fake_call_llm_json(**kwargs):
+        label = str(kwargs.get("request_label") or "")
+        captured_labels.append(label)
+        assert label.startswith("phase5_writer")
+        prompt = str(kwargs.get("user_prompt") or "")
+        plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput JSON schema:", 1)[0]
+        plan = json.loads(plan_json)
+        sections = []
+        faq_items = []
+        for section in plan["sections"]:
+            if section["kind"] == "faq":
+                for question in section["h3"]:
+                    faq_items.append(
+                        {
+                            "question": question,
+                            "answer_html": (
+                                "<p>Die Antwort erklaert den konkreten Alltag, nennt klare Beobachtungen, "
+                                "ordnet Risiken ein und zeigt Eltern, wann praktische Unterstuetzung oder "
+                                "ein Termin zur weiteren Abklaerung sinnvoll wird.</p>"
+                            ),
+                        }
+                    )
+                continue
+            required_keywords = " und ".join(section.get("required_keywords") or ["praxisnahe einordnung"])
+            required_terms = " und ".join(section.get("required_terms") or ["Familienalltag", "Kinderbrillen"])
+            body_html = (
+                f"<p>Im Abschnitt {section['h2']} erhalten Eltern zu {required_keywords} konkrete Kriterien, "
+                f"alltagsnahe Beobachtungen und klare Unterschiede. Gerade {required_terms} hilft dabei, "
+                "nicht bei allgemeinen Aussagen zu bleiben, sondern belastbare Orientierung fuer die naechsten "
+                "Schritte im Familienalltag zu gewinnen.</p>"
+                f"<p>Darueber hinaus zeigt {section['h2']}, welche Signale wirklich wichtig sind, wie sich "
+                f"{required_keywords} praktisch einordnen laesst und warum {required_terms} fuer eine "
+                "sichere Entscheidung im Alltag relevant bleibt.</p>"
+            )
+            if "list" in (section.get("required_elements") or []):
+                body_html += "<ul><li>Signal beobachten</li><li>Alltag dokumentieren</li></ul>"
+            if "table" in (section.get("required_elements") or []):
+                body_html += "<table><tr><th>Signal</th><th>Bedeutung</th></tr><tr><td>Blinzeln</td><td>Abklaeren</td></tr></table>"
+            sections.append({"section_id": section["section_id"], "body_html": body_html})
+        return {
+            "intro_html": (
+                "<p>Kinder sehprobleme erkennen hilft Eltern, Unsicherheiten im Familienalltag frueh einzuordnen, "
+                "klare Beobachtungen zu sammeln und passende naechste Schritte ohne Alarmismus abzuleiten.</p>"
+            ),
+            "sections": sections,
+            "faq_items": faq_items,
+            "excerpt": "Konkrete Orientierung fuer Eltern bei ersten Anzeichen von Sehproblemen.",
+        }
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_json", fake_call_llm_json)
+
+    result = run_creator_pipeline(
+        target_site_url="https://www.brillenhaus24.de/",
+        publishing_site_url="https://familien4leben.com/",
+        publishing_site_id=None,
+        client_target_site_id=None,
+        anchor=None,
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        exclude_topics=[],
+        internal_link_inventory=[
+            {"url": "https://familien4leben.com/gesundheit/kinderaugen", "title": "Kinderaugen verstehen", "slug": "kinderaugen-verstehen"},
+            {"url": "https://familien4leben.com/familie/arzttermine-mit-kind", "title": "Arzttermine mit Kind vorbereiten", "slug": "arzttermine-mit-kind"},
+        ],
+        target_profile_payload={
+            "normalized_url": "https://www.brillenhaus24.de/",
+            "page_title": "Brillenhaus24",
+            "meta_description": "Kinderbrillen und alltagstaugliche Sehhilfen.",
+            "topics": ["Kinder Sehprobleme", "Kinderbrillen"],
+            "contexts": ["Augengesundheit"],
+            "repeated_keywords": ["kinder", "sehprobleme", "augen"],
+            "services_or_products": ["Kinderbrillen"],
+            "business_type": "Optiker",
+            "business_intent": "commercial",
+        },
+        publishing_profile_payload={
+            "normalized_url": "https://familien4leben.com/",
+            "page_title": "Familien4Leben",
+            "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
+            "topics": ["Familienalltag", "Kindergesundheit"],
+            "contexts": ["Familienalltag"],
+            "site_categories": ["Familie"],
+            "topic_clusters": ["Gesundheit", "Elternratgeber"],
+            "content_style": ["sachlich"],
+            "content_tone": "hilfreich",
+        },
+        dry_run=True,
+    )
+
+    assert captured_labels == ["phase5_writer_attempt_1"]
+    assert result["phase4"]["outline"][-2]["h2"] == "Fazit"
+    assert result["phase4"]["outline"][-1]["h2"] == "FAQ"
+    assert "<h2>FAQ</h2>" in result["phase5"]["article_html"]
+    assert "<h2>Fazit</h2>" in result["phase5"]["article_html"]
+    assert 'href="https://www.brillenhaus24.de/"' in result["phase5"]["article_html"]
+
+
+def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(monkeypatch):
     monkeypatch.setenv("CREATOR_STRICT_FAILURE_MODE", "true")
     monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
 
@@ -495,16 +670,17 @@ def test_run_creator_pipeline_strict_mode_raises_phase4_error_without_fallback(m
             "target_site_contexts": ["Kinderbrillen"],
         },
     )
+
     monkeypatch.setattr(
         "creator.api.pipeline.call_llm_json",
         lambda **kwargs: {
-            "outline": [{"h2": "Nur ein Abschnitt", "h3": []}],
-            "backlink_placement": "intro",
-            "anchor_text_final": "Mehr erfahren",
+            "intro_html": "<p>Kinder sehprobleme erkennen.</p>",
+            "sections": [{"section_id": "section_1", "body_html": "<p>Kurz.</p>"}],
+            "faq_items": [{"question": "Wann sollte ein Kind zum Augenarzt?", "answer_html": "<p>Kurz.</p>"}],
         },
     )
 
-    with pytest.raises(CreatorError, match=r"Phase 4 outline generation failed: \['invalid_outline_structure'\]"):
+    with pytest.raises(CreatorError, match=r"Phase 5 writer attempt 1 validation failed:"):
         run_creator_pipeline(
             target_site_url="https://www.brillenhaus24.de/",
             publishing_site_url="https://familien4leben.com/",

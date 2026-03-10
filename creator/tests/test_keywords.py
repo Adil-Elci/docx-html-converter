@@ -225,6 +225,16 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         ],
         trend_candidates=[],
         faq_candidates=[],
+        target_terms=["Kinderbrillen", "Augengesundheit"],
+        overlap_terms=["kinder", "gesundheit"],
+        internal_link_inventory=[
+            {
+                "url": "https://familien4leben.com/kinderaugen-warnzeichen",
+                "title": "Kinderaugen verstehen und Warnzeichen erkennen",
+                "excerpt": "Welche Anzeichen fuer Sehprobleme Eltern kennen sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            }
+        ],
     )
 
     title_package = _build_deterministic_title_package(
@@ -235,7 +245,7 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         structured_mode="none",
         current_year=2026,
     )
-    faqs = _ensure_faq_candidates(topic, [])
+    faqs = _ensure_faq_candidates(topic, [], topic_signature=result["topic_signature"])
     outline = _build_deterministic_outline(
         topic=topic,
         primary_keyword=result["primary_keyword"],
@@ -243,30 +253,25 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         faq_candidates=result["faq_candidates"],
         structured_mode="none",
         anchor_text_final="Mehr erfahren",
+        topic_signature=result["topic_signature"],
     )
 
     assert result["primary_keyword"] == "sehstärke bei kindern"
-    assert result["secondary_keywords"] == [
-        "wann braucht ein kind eine brille",
-        "sehprobleme bei kindern",
-        "warnzeichen fuer sehprobleme bei kindern",
-        "augenarzt termin mit kind",
-    ]
+    assert "familienurlaub auf inseln tipps ideen" not in result["secondary_keywords"]
+    assert "jeans richtig kombinieren tipps fuer jeden stil" not in result["secondary_keywords"]
+    assert any(item == "sehprobleme bei kindern" for item in result["secondary_keywords"])
+    assert any("kinderbrillen" in item for item in result["secondary_keywords"])
     assert title_package["h1"] == "Wann braucht mein Kind eine Brille? Warnsignale fuer Eltern"
     assert title_package["slug"] == "sehstaerke-bei-kindern"
     assert faqs == [
-        "Welche Anzeichen sprechen fuer Sehprobleme bei Kindern?",
-        "Wann sollte mein Kind zum Augenarzt?",
-        "Worauf sollten Eltern bei einer Kinderbrille achten?",
+        "Wann braucht mein Kind eine Brille?",
+        "Woran erkennt man fruehzeitig Hinweise auf Sehprobleme bei kindern?",
+        "Worauf sollte man bei Kinderbrillen achten?",
     ]
-    assert [item["h2"] for item in outline["outline"]] == [
-        "Wann braucht mein Kind eine Brille? Anzeichen und erste Schritte",
-        "Typische Warnzeichen und Ursachen fuer Sehprobleme bei Kindern",
-        "Wann zum Augenarzt und wie die Untersuchung ablaeuft",
-        "Kinderbrille richtig auswaehlen und im Alltag akzeptieren",
-        "Fazit",
-        "FAQ",
-    ]
+    assert outline["outline"][0]["h2"] == "Wann braucht mein Kind eine Brille? Einordnung und erste Schritte"
+    assert "sehprobleme" in outline["outline"][1]["h2"].lower()
+    assert outline["outline"][-2]["h2"] == "Fazit"
+    assert outline["outline"][-1]["h2"] == "FAQ"
 
 
 def test_normalize_writer_html_fragment_strips_promo_and_tagline_noise():

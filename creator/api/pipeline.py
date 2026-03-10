@@ -224,6 +224,16 @@ GERMAN_QUESTION_PREFIXES = (
 GOOGLE_SUGGEST_CACHE: Dict[str, Dict[str, Any]] = {}
 STRUCTURED_LIST_HINTS = {"tipps", "checkliste", "schritte", "anleitung", "symptome", "ursachen"}
 STRUCTURED_TABLE_HINTS = {"vergleich", "kosten", "unterschied", "vs", "tabelle"}
+TOPIC_SUFFIX_MODIFIERS = set(GERMAN_KEYWORD_MODIFIERS) | {"ideen", "fragen"}
+VISION_TOPIC_TOKENS = {
+    "amblyopie", "astigmatismus", "augen", "augenarzt", "brille", "brillen", "hyperopie", "kindersicht",
+    "kinderbrille", "kinderbrillen", "kurzsichtigkeit", "myopie", "optiker", "sehprobleme", "sehstarke",
+    "sehstärke", "weitsichtigkeit",
+}
+INTERNAL_LINK_GENERIC_TOKENS = {
+    "alltag", "eltern", "familie", "familien", "gesundheit", "ideen", "kind", "kinder", "kindern", "leben",
+    "ratgeber", "tipps", "zuhause", "familien4leben", "glueck", "teilen",
+}
 
 
 class CreatorError(RuntimeError):
@@ -394,6 +404,77 @@ def _truncate_title(value: str, *, max_chars: int = SEO_TITLE_MAX_CHARS) -> str:
     return clipped or cleaned[:max_chars].strip()
 
 
+def _split_topic_segments(topic: str) -> List[str]:
+    raw = re.sub(r"\s+", " ", str(topic or "").strip())
+    if not raw:
+        return []
+    return [
+        segment.strip(" -")
+        for segment in re.split(r"\s*[:|]\s*", raw)
+        if segment.strip(" -")
+    ]
+
+
+def _strip_trailing_topic_modifiers(words: List[str]) -> List[str]:
+    trimmed = list(words)
+    while len(trimmed) > 2 and trimmed[-1] in TOPIC_SUFFIX_MODIFIERS:
+        trimmed.pop()
+    return trimmed
+
+
+def _clean_topic_segment_raw(segment: str, *, preserve_question: bool = False) -> str:
+    raw = re.sub(r"\s+", " ", str(segment or "").strip()).strip(" -")
+    if not raw:
+        return ""
+    question_mark = raw.endswith("?")
+    raw = raw.rstrip("?").strip()
+    words = raw.split()
+    while len(words) > 2 and _normalize_keyword_phrase(words[-1]) in TOPIC_SUFFIX_MODIFIERS:
+        words.pop()
+    cleaned = " ".join(words).strip(" -")
+    if not cleaned:
+        return ""
+    if preserve_question and (question_mark or _looks_like_question_phrase(cleaned)):
+        return cleaned.rstrip("?").strip() + "?"
+    return cleaned
+
+
+def _extract_topic_subject_phrase(topic: str) -> str:
+    for segment in _split_topic_segments(topic):
+        cleaned = _clean_topic_segment_raw(segment)
+        if cleaned and not _looks_like_question_phrase(cleaned):
+            return cleaned
+    normalized = _normalize_keyword_phrase(topic)
+    words = _strip_trailing_topic_modifiers(normalized.split())
+    if len(words) > KEYWORD_MAX_WORDS:
+        words = words[:KEYWORD_MAX_WORDS]
+    candidate = " ".join(words).strip()
+    return candidate if candidate and not _looks_like_question_phrase(candidate) else ""
+
+
+def _extract_topic_question_phrase(topic: str) -> str:
+    segments = _split_topic_segments(topic)
+    for segment in segments[1:]:
+        cleaned = _clean_topic_segment_raw(segment, preserve_question=True)
+        if cleaned and _looks_like_question_phrase(cleaned):
+            return cleaned
+    fallback = _clean_topic_segment_raw(topic, preserve_question=True)
+    if fallback and _looks_like_question_phrase(fallback):
+        return fallback
+    normalized = _normalize_keyword_phrase(topic)
+    if _looks_like_question_phrase(normalized):
+        words = _strip_trailing_topic_modifiers(normalized.split())
+        return " ".join(words).strip() + "?"
+    return ""
+
+
+def _format_sentence_start(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return ""
+    return cleaned[:1].upper() + cleaned[1:]
+
+
 def _append_sentence_with_limit(current: str, sentence: str, *, max_chars: int) -> str:
     cleaned_sentence = re.sub(r"\s+", " ", str(sentence or "").strip())
     if not cleaned_sentence:
@@ -415,7 +496,13 @@ def _build_deterministic_title_package(
     structured_mode: str,
     current_year: int,
 ) -> Dict[str, str]:
-    topic_title = _format_title_case(topic or primary_keyword or "Ratgeber")
+    subject_title = _extract_topic_subject_phrase(topic)
+    question_title = _extract_topic_question_phrase(topic)
+    topic_title = (
+        _format_sentence_start(question_title)
+        if question_title
+        else _format_title_case(subject_title or topic or primary_keyword or "Ratgeber")
+    )
     normalized_topic = _normalize_keyword_phrase(topic)
     include_year = "checkliste" in normalized_topic or "trend" in normalized_topic
     if structured_mode == "table":
@@ -426,7 +513,19 @@ def _build_deterministic_title_package(
         suffix = "Vergleich, Kosten und Tipps"
     else:
         suffix = "Wichtige Hinweise und Orientierung"
-    h1 = _truncate_title(topic_title)
+    if question_title:
+        for candidate in (
+            f"{topic_title} Warnsignale fuer Eltern",
+            f"{topic_title} Warnsignale",
+            topic_title,
+        ):
+            if len(candidate) <= SEO_TITLE_MAX_CHARS:
+                h1 = candidate
+                break
+        else:
+            h1 = _truncate_title(topic_title)
+    else:
+        h1 = _truncate_title(topic_title)
     if ":" not in h1 and len(h1) < SEO_TITLE_MIN_CHARS:
         h1 = _truncate_title(f"{h1}: {suffix}")
     if len(h1) < SEO_TITLE_MIN_CHARS:
@@ -1574,6 +1673,12 @@ def _infer_meta_description(html: str) -> str:
 
 def _derive_slug(value: str) -> str:
     cleaned = re.sub(r"<[^>]+>", "", value or "").strip().lower()
+    cleaned = (
+        cleaned.replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
     cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
     return cleaned.strip("-")[:80]
 
@@ -1801,6 +1906,8 @@ def _is_valid_keyword_phrase(value: str) -> bool:
         return False
     if any(token.isdigit() for token in words):
         return False
+    if any(any(char.isdigit() for char in token) and any(char.isalpha() for char in token) for token in words):
+        return False
     return len(_keyword_token_set(normalized)) >= 2
 
 
@@ -1846,11 +1953,17 @@ def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
 
 
 def _build_topic_phrase(topic: str) -> str:
-    normalized = _normalize_keyword_phrase(topic)
-    words = normalized.split()
+    preferred = (
+        _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
+        or _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
+        or _normalize_keyword_phrase(topic)
+    )
+    words = _strip_trailing_topic_modifiers(preferred.split())
     if len(words) > KEYWORD_MAX_WORDS:
         normalized = " ".join(words[:KEYWORD_MAX_WORDS])
-    return normalized
+    else:
+        normalized = " ".join(words)
+    return normalized.strip()
 
 
 def _extract_candidate_phrases_from_topics(topics: List[str], *, max_phrases: int = 16) -> List[str]:
@@ -1892,6 +2005,8 @@ def _select_topic_relevant_signals(
     candidates = _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(values, max_phrases=max_items * 6))
     scored: List[tuple[float, str]] = []
     for candidate in candidates:
+        if not _is_valid_keyword_phrase(candidate):
+            continue
         candidate_tokens = _keyword_token_set(candidate)
         if not candidate_tokens:
             continue
@@ -2457,6 +2572,40 @@ def _to_keyword_dative_phrase(value: str) -> str:
     return " ".join(words)
 
 
+def _topic_focus_token_set(topic: str, primary_keyword: str, keyword_cluster: List[str]) -> set[str]:
+    return _keyword_focus_tokens(f"{topic} {primary_keyword} {' '.join(keyword_cluster)}")
+
+
+def _is_child_vision_topic(topic: str, primary_keyword: str, keyword_cluster: List[str]) -> bool:
+    focus_tokens = _topic_focus_token_set(topic, primary_keyword, keyword_cluster)
+    child_tokens = {"kind", "kinder", "kindern", "kindes"}
+    return bool(focus_tokens & child_tokens) and bool(focus_tokens & VISION_TOPIC_TOKENS)
+
+
+def _build_child_vision_secondary_fallbacks(topic: str) -> List[str]:
+    question_phrase = _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
+    candidates = [
+        "sehprobleme bei kindern",
+        "warnzeichen fuer sehprobleme bei kindern",
+        "augenarzt termin mit kind",
+        "augenuntersuchung bei kindern",
+        "kinderbrille richtig auswaehlen",
+        "sehschwaeche bei kindern erkennen",
+    ]
+    if "brille" in question_phrase or "brillen" in question_phrase:
+        candidates.insert(0, "wann braucht ein kind eine brille")
+    return _dedupe_keyword_phrases(candidates)
+
+
+def _is_child_vision_secondary_candidate(candidate: str) -> bool:
+    tokens = _keyword_focus_tokens(candidate)
+    if not tokens:
+        return False
+    if tokens & {"verstehen", "gestalten", "teilen"}:
+        return False
+    return bool(tokens & VISION_TOPIC_TOKENS) or "kind" in tokens or "kinder" in tokens or "kindern" in tokens
+
+
 def _build_secondary_keyword_fallbacks(
     *,
     topic: str,
@@ -2464,6 +2613,9 @@ def _build_secondary_keyword_fallbacks(
     keyword_cluster: List[str],
     allowed_topics: List[str],
 ) -> List[str]:
+    if _is_child_vision_topic(topic, primary_keyword, keyword_cluster):
+        return _build_child_vision_secondary_fallbacks(topic)
+
     topic_head = _topic_head_keyword(topic) or _topic_head_keyword(primary_keyword) or _build_topic_phrase(topic)
     cluster_candidates = _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(keyword_cluster, max_phrases=10))
     base_phrase = next((candidate for candidate in cluster_candidates if 2 <= len(candidate.split()) <= 4), "") or topic_head
@@ -2506,8 +2658,9 @@ def _build_secondary_keyword_fallbacks(
     candidates = [
         f"{core_phrase} bei {audience_dative}" if audience_term and audience_dative else "",
         f"{core_phrase} frueh erkennen" if "erkennen" in topic_tokens else "",
-        f"ursachen fuer {core_phrase}",
-        f"hilfe bei {_to_keyword_dative_phrase(core_phrase)}",
+        f"ursachen von {core_phrase}",
+        f"tipps zu {core_phrase}",
+        f"unterstuetzung bei {_to_keyword_dative_phrase(core_phrase)}",
         f"{support_phrase} im alltag" if support_phrase else "",
         f"{core_phrase} im familienalltag" if "familie" in topic_tokens or "familien" in topic_tokens else "",
     ]
@@ -2547,22 +2700,20 @@ def _finalize_secondary_keywords(
 
 
 def _topic_head_keyword(topic: str) -> str:
-    cleaned = re.split(r"[:|\\-]", str(topic or ""), maxsplit=1)[0]
-    normalized = _normalize_keyword_phrase(cleaned)
-    words = normalized.split()
-    focus_words = [
+    subject_phrase = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
+    normalized = subject_phrase or _build_topic_phrase(topic)
+    words = _strip_trailing_topic_modifiers(normalized.split())
+    compressed_words = [
         word
         for word in words
-        if word not in STOPWORDS
-        and word not in GERMAN_FUNCTION_WORDS
-        and word not in ENGLISH_FUNCTION_WORDS
-        and word not in KEYWORD_LOW_SIGNAL_TOKENS
+        if word not in KEYWORD_LOW_SIGNAL_TOKENS
         and word not in GERMAN_KEYWORD_MODIFIERS
+        and word not in {"und", "oder"}
     ]
-    if len(focus_words) >= 2:
-        words = focus_words
-    if len(words) > 3:
-        normalized = " ".join(words[:3])
+    if len(compressed_words) >= 2:
+        words = compressed_words
+    if len(words) > 4:
+        normalized = " ".join(words[:4])
     else:
         normalized = " ".join(words)
     return normalized if _is_valid_keyword_phrase(normalized) else ""
@@ -2732,7 +2883,14 @@ def _select_keywords(
         ),
         reverse=True,
     )
-    secondary_keywords = ranked_secondary[:KEYWORD_MAX_SECONDARY]
+    if _is_child_vision_topic(topic, primary_keyword, keyword_cluster):
+        secondary_keywords = [
+            candidate
+            for candidate in ranked_secondary
+            if _is_child_vision_secondary_candidate(candidate)
+        ][:KEYWORD_MAX_SECONDARY]
+    else:
+        secondary_keywords = ranked_secondary[:KEYWORD_MAX_SECONDARY]
     if len(secondary_keywords) < KEYWORD_MIN_SECONDARY:
         fallback_secondary = _build_secondary_keyword_fallbacks(
             topic=topic,
@@ -2799,23 +2957,33 @@ def _score_internal_link_inventory_item(
     primary_keyword: str,
     secondary_keywords: List[str],
 ) -> float:
-    topic_tokens = _keyword_token_set(topic)
-    primary_tokens = _keyword_token_set(primary_keyword)
-    secondary_tokens = _keyword_token_set(" ".join(secondary_keywords))
-    title_tokens = _keyword_token_set(str(item.get("title") or ""))
-    excerpt_tokens = _keyword_token_set(str(item.get("excerpt") or ""))
-    slug_tokens = _keyword_token_set(str(item.get("slug") or ""))
-    category_tokens = _keyword_token_set(" ".join(item.get("categories") or []))
+    topic_tokens = _keyword_focus_tokens(topic)
+    primary_tokens = _keyword_focus_tokens(primary_keyword)
+    secondary_tokens = _keyword_focus_tokens(" ".join(secondary_keywords))
+    title_tokens = _keyword_focus_tokens(str(item.get("title") or ""))
+    excerpt_tokens = _keyword_focus_tokens(str(item.get("excerpt") or ""))
+    slug_tokens = _keyword_focus_tokens(str(item.get("slug") or ""))
+    category_tokens = _keyword_focus_tokens(" ".join(item.get("categories") or []))
     combined = title_tokens | excerpt_tokens | slug_tokens | category_tokens
     if not combined:
         return 0.0
+
+    article_focus = _filter_keyword_focus_tokens(topic_tokens | primary_tokens | secondary_tokens)
+    item_focus = _filter_keyword_focus_tokens(combined)
+    non_generic_article = {token for token in article_focus if token not in INTERNAL_LINK_GENERIC_TOKENS}
+    non_generic_item = {token for token in item_focus if token not in INTERNAL_LINK_GENERIC_TOKENS}
+    specific_overlap = non_generic_article & non_generic_item
+    if not non_generic_item or not specific_overlap:
+        return 0.0
+
     score = 0.0
-    score += 4.0 * len(combined & topic_tokens)
-    score += 3.0 * len(combined & primary_tokens)
-    score += 1.5 * len(combined & secondary_tokens)
+    score += 5.0 * len(specific_overlap)
+    score += 2.5 * len(item_focus & primary_tokens)
+    score += 1.5 * len(item_focus & secondary_tokens)
     score += 1.0 * _keyword_similarity(str(item.get("title") or ""), primary_keyword)
     score += 0.8 * _keyword_similarity(str(item.get("title") or ""), topic)
     score += min(1.0, len(title_tokens) * 0.2)
+    score -= 0.4 * len({token for token in item_focus if token in INTERNAL_LINK_GENERIC_TOKENS and token not in specific_overlap})
     if str(item.get("published_at") or "").strip():
         score += 0.3
     return score
@@ -3202,7 +3370,7 @@ def _format_faq_question(question: str) -> str:
     normalized = _normalize_keyword_phrase(raw)
     if not normalized:
         return ""
-    formatted = normalized[:1].upper() + normalized[1:]
+    formatted = raw.rstrip("?").strip() if any(char.isupper() for char in raw[1:]) else normalized[:1].upper() + normalized[1:]
     if (raw.endswith("?") or _looks_like_question_phrase(normalized)) and not formatted.endswith("?"):
         formatted += "?"
     return formatted
@@ -3238,17 +3406,36 @@ def _dedupe_faq_questions(values: List[str], *, max_items: int = FAQ_MIN_QUESTIO
     return out
 
 
+def _build_faq_fallback_questions(topic: str) -> List[str]:
+    subject_phrase = _build_topic_phrase(topic) or "dieses thema"
+    question_phrase = _format_sentence_start(_extract_topic_question_phrase(topic))
+    if _is_child_vision_topic(topic, subject_phrase, []):
+        return [
+            "Welche Anzeichen sprechen fuer Sehprobleme bei Kindern?",
+            "Wann sollte mein Kind zum Augenarzt?",
+            "Worauf sollten Eltern bei einer Kinderbrille achten?",
+        ]
+    if question_phrase:
+        direct_question = question_phrase if question_phrase.endswith("?") else f"{question_phrase}?"
+        return [
+            direct_question,
+            f"Woran erkennt man {subject_phrase} fruehzeitig?",
+            f"Welche naechsten Schritte sind bei {subject_phrase} sinnvoll?",
+        ]
+    return [
+        f"Was ist bei {subject_phrase} wichtig?",
+        f"Welche Ursachen sind bei {subject_phrase} haeufig?",
+        f"Welche naechsten Schritte sind bei {subject_phrase} sinnvoll?",
+    ]
+
+
 def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
     normalized_faqs = _dedupe_faq_questions(faq_candidates, max_items=FAQ_MIN_QUESTIONS)
     if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
         return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
     topic_phrase = _build_topic_phrase(topic) or "dieses thema"
-    fallback_questions = [
-        f"Was ist {topic_phrase}?",
-        f"Welche Ursachen hat {topic_phrase}?",
-        f"Wann ist Hilfe bei {topic_phrase} sinnvoll?",
-    ]
+    fallback_questions = _build_faq_fallback_questions(topic)
     normalized_faqs = _dedupe_faq_questions(normalized_faqs + fallback_questions, max_items=FAQ_MIN_QUESTIONS)
     if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
         return normalized_faqs[:FAQ_MIN_QUESTIONS]
@@ -3447,6 +3634,46 @@ def _format_outline_heading(value: str) -> str:
     return cleaned[:1].upper() + cleaned[1:]
 
 
+def _build_question_topic_outline_headings(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    structured_mode: str,
+) -> List[str]:
+    question_phrase = _format_sentence_start(_extract_topic_question_phrase(topic))
+    subject_phrase = _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses thema"
+    subject_heading = _format_outline_heading(subject_phrase)
+    if _is_child_vision_topic(topic, primary_keyword, secondary_keywords):
+        first_heading = (
+            f"{question_phrase} Anzeichen und erste Schritte"
+            if question_phrase
+            else "Wann braucht ein Kind eine Brille? Anzeichen und erste Schritte"
+        )
+        return [
+            first_heading,
+            "Typische Warnzeichen und Ursachen fuer Sehprobleme bei Kindern",
+            "Wann zum Augenarzt und wie die Untersuchung ablaeuft",
+            "Kinderbrille richtig auswaehlen und im Alltag akzeptieren",
+        ]
+
+    if question_phrase:
+        first_heading = f"{question_phrase} Einordnung und erste Schritte"
+    elif structured_mode == "list":
+        first_heading = f"{subject_heading}: Checkliste und wichtigste Schritte"
+    elif structured_mode == "table":
+        first_heading = f"{subject_heading}: Vergleich und Ueberblick"
+    else:
+        first_heading = f"{subject_heading}: Das Wichtigste im Ueberblick"
+
+    return [
+        first_heading,
+        f"Typische Ursachen und Hintergruende zu {subject_phrase}",
+        f"Konkrete Kriterien und sinnvolle naechste Schritte zu {subject_phrase}",
+        f"Praktische Tipps und alltagsnahe Orientierung zu {subject_phrase}",
+    ]
+
+
 def _build_deterministic_outline(
     *,
     topic: str,
@@ -3457,34 +3684,14 @@ def _build_deterministic_outline(
     anchor_text_final: str,
 ) -> Dict[str, Any]:
     topic_phrase = _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses Thema"
-    primary_heading = _format_outline_heading(primary_keyword or topic_phrase)
-    secondary_pool = [
-        _format_outline_heading(item)
-        for item in secondary_keywords
-        if _format_outline_heading(item)
-        and _keyword_similarity(_normalize_keyword_phrase(item), _normalize_keyword_phrase(primary_heading)) < 0.85
-    ]
-
-    if structured_mode == "list":
-        first_heading = f"{primary_heading}: Checkliste und wichtigste Schritte"
-    elif structured_mode == "table":
-        first_heading = f"{primary_heading}: Vergleich und Ueberblick"
-    else:
-        first_heading = f"{primary_heading}: Das Wichtigste im Ueberblick"
-
-    core_sections: List[Dict[str, Any]] = [{"h2": first_heading, "h3": []}]
-
-    fallback_headings = [
-        f"Ursachen und Hintergruende zu {topic_phrase}",
-        f"Auswirkungen und typische Herausforderungen bei {topic_phrase}",
-        f"Praktische Tipps und Unterstuetzung zu {topic_phrase}",
-        f"Haeufige Fehler und sinnvolle naechste Schritte bei {topic_phrase}",
-    ]
-    for heading in secondary_pool:
-        core_sections.append({"h2": heading, "h3": []})
-        if len(core_sections) >= ARTICLE_MAX_H2 - 2:
-            break
-    for heading in fallback_headings:
+    raw_headings = _build_question_topic_outline_headings(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=secondary_keywords,
+        structured_mode=structured_mode,
+    )
+    core_sections: List[Dict[str, Any]] = []
+    for heading in raw_headings:
         if len(core_sections) >= ARTICLE_MAX_H2 - 2:
             break
         normalized = _normalize_keyword_phrase(heading)
@@ -3701,6 +3908,37 @@ def _build_deterministic_article_plan(
     }
 
 
+def _looks_like_promotional_text_block(value: str) -> bool:
+    raw = str(value or "").strip()
+    normalized = _normalize_keyword_phrase(_strip_html_tags(raw))
+    if not normalized:
+        return False
+    words = normalized.split()
+    has_domain = bool(re.search(r"\b[\w-]+\.(?:de|com|net|org)\b", raw, flags=re.IGNORECASE))
+    has_alpha_numeric_brand = any(any(char.isalpha() for char in word) and any(char.isdigit() for char in word) for word in words)
+    generic_hits = sum(1 for word in words if word in INTERNAL_LINK_GENERIC_TOKENS)
+    promo_hits = sum(1 for word in words if word in {"onlineshop", "shop", "komplettbrille", "komplettbrillen", "guenstig", "guenstige"})
+    return (has_domain and promo_hits >= 1) or (has_alpha_numeric_brand and generic_hits >= 3)
+
+
+def _sanitize_generated_fragment_html(value: str) -> str:
+    cleaned = str(value or "")
+
+    def _drop_noisy_block(match: re.Match[str]) -> str:
+        block = match.group(0) or ""
+        return "" if _looks_like_promotional_text_block(block) else block
+
+    cleaned = re.sub(r"<p[^>]*>.*?</p>", _drop_noisy_block, cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<li[^>]*>.*?</li>", _drop_noisy_block, cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(
+        r"\b[\w-]+\.(?:de|com|net|org)\b\s*[–-]\s*[^<]{0,120}",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
+
+
 def _normalize_writer_html_fragment(value: str) -> str:
     cleaned = _strip_code_fences(value or "")
     if not cleaned.strip():
@@ -3708,6 +3946,7 @@ def _normalize_writer_html_fragment(value: str) -> str:
     cleaned = re.sub(r"</?(?:html|body)[^>]*>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"<h[1-6][^>]*>.*?</h[1-6]>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = _sanitize_generated_fragment_html(cleaned)
     if not re.search(r"<(?:p|ul|ol|table)\b", cleaned, flags=re.IGNORECASE):
         cleaned = _wrap_paragraphs(cleaned)
     return _strip_empty_blocks(cleaned).strip()
@@ -3893,6 +4132,7 @@ def _generate_article_from_plan(
         "Write a German (de-DE) SEO article for a fixed deterministic plan. "
         "The structure is owned by the application, so you must only fill the approved content slots. "
         "Do not add or remove sections. Do not add hyperlinks. Do not include H1/H2 wrappers inside section bodies. "
+        "Do not repeat domain names, site slogans, navigation labels, or unrelated article titles as prose. "
         "Return only the tagged slot format requested by the application."
     )
     slot_lines = [
@@ -3973,6 +4213,7 @@ def _generate_article_from_plan(
         section_bodies=section_bodies,
         faq_items=faq_items,
     )
+    article_html = _sanitize_generated_fragment_html(article_html)
     article_html = _ensure_primary_keyword_in_intro(article_html, phase3.get("primary_keyword", ""))
     article_html = _repair_link_constraints(
         article_html=article_html,

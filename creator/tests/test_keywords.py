@@ -30,6 +30,7 @@ from creator.api.pipeline import (
     _inject_faq_section,
     _merge_phase2_analysis,
     _normalize_section_html,
+    _normalize_writer_html_fragment,
     _format_content_brief_prompt_text,
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
@@ -207,7 +208,77 @@ def test_select_keywords_builds_secondary_fallbacks_without_trends():
     assert result["primary_keyword"] == "kinder sehprobleme erkennen und richtig reagieren"
     assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
     assert any("sehprobleme" in item for item in result["secondary_keywords"])
-    assert any("ursachen" in item or "hilfe" in item or "frueh erkennen" in item for item in result["secondary_keywords"])
+    assert any("warnzeichen" in item or "erkennen" in item or "augenarzt" in item for item in result["secondary_keywords"])
+
+
+def test_question_topic_builds_natural_title_keywords_outline_and_faq():
+    topic = "Sehstärke bei Kindern: Wann braucht mein Kind eine Brille? Tipps"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="Sehstärke bei Kindern wann braucht mein Kind eine",
+        llm_secondary=[],
+        keyword_cluster=["kinder", "sehprobleme", "augen", "kinderbrillen"],
+        allowed_topics=[
+            "Familienurlaub auf Inseln Tipps Ideen",
+            "Jeans richtig kombinieren Tipps fuer jeden Stil",
+            "Kinder Augen Gesundheit verstehen",
+        ],
+        trend_candidates=[],
+        faq_candidates=[],
+    )
+
+    title_package = _build_deterministic_title_package(
+        topic=topic,
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        search_intent_type="informational",
+        structured_mode="none",
+        current_year=2026,
+    )
+    faqs = _ensure_faq_candidates(topic, [])
+    outline = _build_deterministic_outline(
+        topic=topic,
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        faq_candidates=result["faq_candidates"],
+        structured_mode="none",
+        anchor_text_final="Mehr erfahren",
+    )
+
+    assert result["primary_keyword"] == "sehstärke bei kindern"
+    assert result["secondary_keywords"] == [
+        "wann braucht ein kind eine brille",
+        "sehprobleme bei kindern",
+        "warnzeichen fuer sehprobleme bei kindern",
+        "augenarzt termin mit kind",
+    ]
+    assert title_package["h1"] == "Wann braucht mein Kind eine Brille? Warnsignale fuer Eltern"
+    assert title_package["slug"] == "sehstaerke-bei-kindern"
+    assert faqs == [
+        "Welche Anzeichen sprechen fuer Sehprobleme bei Kindern?",
+        "Wann sollte mein Kind zum Augenarzt?",
+        "Worauf sollten Eltern bei einer Kinderbrille achten?",
+    ]
+    assert [item["h2"] for item in outline["outline"]] == [
+        "Wann braucht mein Kind eine Brille? Anzeichen und erste Schritte",
+        "Typische Warnzeichen und Ursachen fuer Sehprobleme bei Kindern",
+        "Wann zum Augenarzt und wie die Untersuchung ablaeuft",
+        "Kinderbrille richtig auswaehlen und im Alltag akzeptieren",
+        "Fazit",
+        "FAQ",
+    ]
+
+
+def test_normalize_writer_html_fragment_strips_promo_and_tagline_noise():
+    normalized = _normalize_writer_html_fragment(
+        "<p>Brillenhaus24.de – Ihr Onlineshop fuer guenstige Brillen und Komplettbrillen.</p>"
+        "<p>Familien4leben zuhause gestalten glueck teilen im alltag.</p>"
+        "<p>Ein sauberer, hilfreicher Absatz bleibt erhalten.</p>"
+    )
+
+    assert "Onlineshop" not in normalized
+    assert "Familien4leben" not in normalized
+    assert "Ein sauberer, hilfreicher Absatz bleibt erhalten." in normalized
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
@@ -436,7 +507,7 @@ def test_build_deterministic_outline_produces_valid_structure():
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
-    assert "eltern sucht schwangerschaft" in outline["outline"][0]["h2"].lower()
+    assert "wie eltern-sucht die schwangerschaft und familienbeziehungen beeinflusst" in outline["outline"][0]["h2"].lower()
 
 
 def test_build_phase4_fallback_outline_recovers_invalid_llm_outline():
@@ -574,8 +645,9 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
         parts = [
             "[[INTRO_HTML]]",
             (
-                "<p>Kinder sehprobleme erkennen hilft Eltern, Unsicherheiten im Familienalltag frueh einzuordnen, "
-                "klare Beobachtungen zu sammeln und passende naechste Schritte ohne Alarmismus abzuleiten.</p>"
+                "<p>Auffaellige Sehzeichen bei Kindern frueh zu erkennen hilft Eltern, Beobachtungen sicher "
+                "einzuordnen, klare Unterschiede festzuhalten und passende naechste Schritte ohne Alarmismus "
+                "abzuleiten.</p>"
             ),
             "[[/INTRO_HTML]]",
         ]
@@ -592,17 +664,18 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
                             ),
                             f"[[/FAQ_{index}]]",
                         ]
-                    )
-                continue
-            required_keywords = " und ".join(section.get("required_keywords") or ["praxisnahe einordnung"])
+                        )
+                    continue
+            required_keywords = " und ".join((section.get("required_keywords") or ["praxisnahe einordnung"])[:1])
             required_terms = " und ".join(section.get("required_terms") or ["Familienalltag", "Kinderbrillen"])
             body_html = (
-                f"<p>Im Abschnitt {section['h2']} erhalten Eltern zu {required_keywords} konkrete Kriterien, "
+                f"<p>Dieser Abschnitt gibt Eltern zu {required_keywords} konkrete Kriterien, "
                 f"alltagsnahe Beobachtungen und klare Unterschiede. Gerade {required_terms} hilft dabei, "
                 "nicht bei allgemeinen Aussagen zu bleiben, sondern belastbare Orientierung fuer die naechsten "
                 "Schritte im Familienalltag zu gewinnen.</p>"
-                f"<p>Darueber hinaus zeigt {section['h2']}, welche Signale wirklich wichtig sind, wie sich "
-                f"{required_keywords} praktisch einordnen laesst und warum {required_terms} fuer eine "
+                "<p>Darueber hinaus zeigt der Abschnitt, welche Signale wirklich wichtig sind, wie sich "
+                "das Thema praktisch einordnen laesst und warum "
+                f"{required_terms} fuer eine "
                 "sichere Entscheidung im Alltag relevant bleibt.</p>"
             )
             if "list" in (section.get("required_elements") or []):

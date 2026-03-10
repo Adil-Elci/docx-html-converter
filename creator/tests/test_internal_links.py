@@ -140,3 +140,39 @@ def test_rank_internal_link_inventory_prefers_relevant_same_site_articles():
     assert ranked
     assert ranked[0]["url"] == "https://publisher.example.com/baby-schlaf-tipps"
     assert all(item["url"].startswith("https://publisher.example.com") for item in ranked)
+
+
+def test_rank_internal_link_inventory_rejects_generic_family_articles_for_specific_topic():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/familienurlaub-inseln",
+                "title": "Familienurlaub auf Inseln Tipps Ideen",
+                "excerpt": "Inspiration fuer Eltern und Kinder im Sommer",
+                "categories": ["Familie", "Reisen"],
+            },
+            {
+                "url": "https://publisher.example.com/jeans-kombinieren",
+                "title": "Jeans richtig kombinieren Tipps fuer jeden Stil",
+                "excerpt": "Modeideen fuer den Alltag",
+                "categories": ["Mode"],
+            },
+            {
+                "url": "https://publisher.example.com/kinderaugen-warnzeichen",
+                "title": "Kinderaugen verstehen und Warnzeichen erkennen",
+                "excerpt": "Welche Anzeichen fuer Sehprobleme Eltern kennen sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            },
+        ],
+        topic="Sehstärke bei Kindern: Wann braucht mein Kind eine Brille? Tipps",
+        primary_keyword="sehprobleme bei kindern",
+        secondary_keywords=[
+            "warnzeichen fuer sehprobleme bei kindern",
+            "augenarzt termin mit kind",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/kinderaugen-warnzeichen"]

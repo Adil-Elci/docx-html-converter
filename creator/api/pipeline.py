@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import html
 import hashlib
 import json
 import logging
@@ -220,6 +221,19 @@ GENERIC_UI_CHROME_TOKENS = {
 EDITORIAL_ACTION_TOKENS = {
     "achten", "auswaehlen", "erkennen", "kaufen", "nutzen", "reagieren", "vergleichen", "verstehen",
 }
+EDITORIAL_NOISE_TOKENS = {"amp"}
+EDITORIAL_GREETING_PREFIXES = (
+    "herzlich willkommen",
+    "willkommen",
+)
+SELF_ASSESSMENT_QUESTION_FRAGMENTS = (
+    " bin ich",
+    " passt zu mir",
+    " zu mir passt",
+    " steht mir",
+    " ist mein typ",
+    " passt am besten zu mir",
+)
 OUTLINE_PROBLEM_TOKENS = {
     "anzeichen", "behandlung", "diagnose", "erkennen", "hilfe", "problem", "probleme", "risiko",
     "risiken", "symptome", "therapie", "ursachen", "warnzeichen", "wann",
@@ -495,6 +509,8 @@ def _clean_topic_segment_raw(segment: str, *, preserve_question: bool = False) -
     words = raw.split()
     while len(words) > 2 and _normalize_keyword_phrase(words[-1]) in TOPIC_SUFFIX_MODIFIERS:
         words.pop()
+    while len(words) > 2 and _normalize_keyword_phrase(words[-1]) in TRAILING_TITLE_STOPWORDS:
+        words.pop()
     cleaned = " ".join(words).strip(" -")
     if not cleaned:
         return ""
@@ -549,6 +565,32 @@ def _append_sentence_with_limit(current: str, sentence: str, *, max_chars: int) 
     if len(candidate) <= max_chars:
         return candidate
     return current
+
+
+def _looks_like_self_assessment_question(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(_fold_keyword_text(value))
+    if not normalized or not _looks_like_question_phrase(normalized):
+        return False
+    return any(fragment in normalized for fragment in SELF_ASSESSMENT_QUESTION_FRAGMENTS)
+
+
+def _phrase_has_editorial_noise(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return True
+    folded = _normalize_keyword_phrase(_fold_keyword_text(normalized))
+    tokens = folded.split()
+    if not tokens:
+        return True
+    if any(folded.startswith(prefix) for prefix in EDITORIAL_GREETING_PREFIXES):
+        return True
+    if any(token in EDITORIAL_NOISE_TOKENS for token in tokens):
+        return True
+    if len(tokens) >= 2 and tokens[-1] in TRAILING_TITLE_STOPWORDS:
+        return True
+    if _looks_like_self_assessment_question(folded):
+        return True
+    return False
 
 
 def _ensure_primary_keyword_in_title(
@@ -1237,8 +1279,9 @@ def _pair_fit_audience_term(terms: List[str], contexts: List[str]) -> str:
             return audience
     for term in terms:
         tokens = _pair_fit_tokens_from_text(term)
-        if 1 <= len(tokens) <= 4 and any(token in PAIR_FIT_AUDIENCE_TOKENS for token in tokens):
-            return _format_title_case(" ".join(tokens))
+        audience_tokens = [token for token in tokens if token in PAIR_FIT_AUDIENCE_TOKENS]
+        if audience_tokens:
+            return _format_title_case(audience_tokens[0])
     return "Leserinnen und Leser"
 
 
@@ -2113,8 +2156,11 @@ def _sanitize_editorial_phrase(value: str, *, allow_single_token: bool = False) 
     cleaned = re.sub(r"\[[^\]]*\d[^\]]*\]", " ", cleaned)
     cleaned = re.sub(r"\b[\w.-]+\.(?:de|com|net|org|at|ch)\b", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"[>|»•]+", " ", cleaned)
+    cleaned = re.sub(r"(?<!&)\bamp\b(?!;)", " ", cleaned, flags=re.IGNORECASE)
     normalized = _normalize_keyword_phrase(cleaned)
     if not normalized:
+        return ""
+    if _phrase_has_editorial_noise(normalized):
         return ""
     tokens = _keyword_token_set(normalized)
     if not tokens:
@@ -2133,6 +2179,13 @@ def _sanitize_editorial_phrase(value: str, *, allow_single_token: bool = False) 
     if "onlineshop" in folded_tokens and promo_hits >= 1:
         return ""
     if {"brillen", "komplettbrillen"} <= folded_tokens and {"guenstig", "guenstige"} & folded_tokens:
+        return ""
+    if folded_tokens and all(
+        token in PAIR_FIT_AUDIENCE_TOKENS
+        or token in INTERNAL_LINK_GENERIC_TOKENS
+        or token in KEYWORD_LOW_SIGNAL_TOKENS
+        for token in folded_tokens
+    ):
         return ""
     if len(tokens) < KEYWORD_MIN_WORDS:
         if allow_single_token and len(tokens) == 1:
@@ -2156,8 +2209,8 @@ def _keyword_similarity(a: str, b: str) -> float:
 def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
     out: List[str] = []
     for item in values:
-        normalized = _normalize_keyword_phrase(item)
-        if not _is_valid_keyword_phrase(normalized):
+        normalized = _sanitize_editorial_phrase(item)
+        if not normalized:
             continue
         if _is_low_signal_keyword_phrase(normalized):
             continue
@@ -3113,6 +3166,8 @@ def _topic_signature_candidate_score(candidate: str, topic_signature: Optional[D
 
 
 def _keyword_candidate_has_editorial_quality(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> bool:
+    if not _sanitize_editorial_phrase(candidate):
+        return False
     stats = _topic_signature_candidate_stats(candidate, topic_signature)
     if len(stats["non_generic_tokens"]) >= 2:
         return True
@@ -3124,6 +3179,8 @@ def _keyword_candidate_has_editorial_quality(candidate: str, topic_signature: Op
 
 def _keyword_candidate_has_question_noise(candidate: str) -> bool:
     normalized = _normalize_keyword_phrase(candidate)
+    if _looks_like_self_assessment_question(normalized):
+        return True
     words = normalized.split()
     if len(words) <= 4:
         return False
@@ -3393,7 +3450,7 @@ def _select_keywords(
     )
     topic_signature = _build_topic_signature(
         topic=topic,
-        primary_keyword=llm_primary or topic_phrase,
+        primary_keyword=_sanitize_editorial_phrase(llm_primary) or topic_phrase,
         secondary_keywords=[],
         target_terms=[str(item).strip() for item in (target_terms or []) if str(item).strip()],
         overlap_terms=[str(item).strip() for item in (overlap_terms or []) if str(item).strip()],
@@ -3404,7 +3461,8 @@ def _select_keywords(
     relevant_allowed_topics = [
         item
         for item in allowed_topics
-        if (
+        if _sanitize_editorial_phrase(item)
+        and (
             _keyword_candidate_has_relevance(
                 item,
                 topic_tokens=topic_tokens,
@@ -3981,6 +4039,7 @@ def _score_seo_output(
         "keyword_coverage": _validate_keyword_coverage(article_html, primary_keyword, secondary_keywords),
         "language_conclusion": _validate_language_and_conclusion(article_html, topic),
         "section_substance": _validate_section_substance(article_html),
+        "phrase_integrity": _validate_phrase_integrity(article_html),
         "contextual_alignment": _validate_contextual_alignment(article_html, content_brief),
         "link_strategy": _validate_link_strategy(
             article_html,
@@ -4054,6 +4113,7 @@ def _collect_article_validation_errors(
         errors.append("h2_count_invalid")
     errors.extend(_validate_language_and_conclusion(article_html, topic))
     errors.extend(_validate_section_substance(article_html))
+    errors.extend(_validate_phrase_integrity(article_html))
     errors.extend(_validate_contextual_alignment(article_html, content_brief))
     errors.extend(_validate_keyword_coverage(article_html, primary_keyword, secondary_keywords))
     errors.extend(
@@ -4080,9 +4140,14 @@ def _format_faq_question(question: str) -> str:
     normalized = _normalize_keyword_phrase(raw)
     if not normalized:
         return ""
+    if _phrase_has_editorial_noise(normalized):
+        return ""
     formatted = raw.rstrip("?").strip() if any(char.isupper() for char in raw[1:]) else normalized[:1].upper() + normalized[1:]
     if (raw.endswith("?") or _looks_like_question_phrase(normalized)) and not formatted.endswith("?"):
         formatted += "?"
+    formatted_tokens = _normalize_keyword_phrase(formatted.rstrip("?")).split()
+    if formatted_tokens and formatted_tokens[-1] in TRAILING_TITLE_STOPWORDS:
+        return ""
     return formatted
 
 
@@ -4804,7 +4869,7 @@ def _looks_like_promotional_text_block(value: str) -> bool:
 
 
 def _sanitize_generated_fragment_html(value: str) -> str:
-    cleaned = str(value or "")
+    cleaned = html.unescape(str(value or ""))
 
     def _drop_noisy_block(match: re.Match[str]) -> str:
         block = match.group(0) or ""
@@ -4818,6 +4883,7 @@ def _sanitize_generated_fragment_html(value: str) -> str:
         cleaned,
         flags=re.IGNORECASE,
     )
+    cleaned = re.sub(r"(?<!&)\bamp\b(?!;)", "und", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(
         r"(?i)\bherzlich willkommen(?:[^<\n]{0,140}?)(?:[:.!?])\s*",
         "",
@@ -5195,6 +5261,36 @@ def _validate_section_substance(article_html: str) -> List[str]:
         has_structure = bool(re.search(r"<(?:ul|ol|table)\b", section_html or "", flags=re.IGNORECASE))
         if section_words < ARTICLE_SECTION_MIN_WORDS and not has_structure:
             errors.append(f"section_too_thin:{normalized}")
+    return errors
+
+
+def _validate_phrase_integrity(article_html: str) -> List[str]:
+    errors: List[str] = []
+    plain_text = _normalize_keyword_phrase(_strip_html_tags(article_html))
+    if any(prefix in plain_text for prefix in EDITORIAL_GREETING_PREFIXES):
+        errors.append("greeting_noise_detected")
+    if re.search(r"(?<!&)\bamp\b(?!;)", plain_text, flags=re.IGNORECASE):
+        errors.append("entity_noise_detected")
+
+    for heading in _extract_h2_headings(article_html):
+        normalized = _normalize_keyword_phrase(heading)
+        if normalized in {"fazit", "faq"}:
+            continue
+        if _phrase_has_editorial_noise(normalized):
+            errors.append(f"heading_phrase_invalid:{normalized}")
+            break
+
+    faq_html = _extract_h2_section_html(article_html, "FAQ")
+    for question in [
+        _strip_html_tags(match.group(1)).strip()
+        for match in re.finditer(r"<h3[^>]*>(.*?)</h3>", faq_html or "", flags=re.IGNORECASE | re.DOTALL)
+    ]:
+        normalized_question = _normalize_keyword_phrase(question)
+        if not normalized_question:
+            continue
+        if _phrase_has_editorial_noise(normalized_question):
+            errors.append(f"faq_question_integrity_invalid:{normalized_question}")
+            break
     return errors
 
 

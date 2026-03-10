@@ -44,6 +44,7 @@ from creator.api.pipeline import (
     _structured_content_mode,
     _trend_entry_is_fresh,
     _validate_contextual_alignment,
+    _validate_phrase_integrity,
     _validate_seo_metadata,
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
@@ -228,6 +229,53 @@ def test_select_keywords_prefers_target_product_phrase_for_broad_family_topic():
     assert "Sonnenschutz Fuer Die Ganze Familie" in title_package["h1"]
 
 
+def test_select_keywords_rejects_self_assessment_page_labels_as_primary_keyword():
+    result = _select_keywords(
+        topic="Augenschutz im Familienalltag",
+        llm_primary="Augenschutz im Familienalltag",
+        llm_secondary=[],
+        keyword_cluster=["augen", "sonnenbrillen", "uv schutz", "familie", "kinder"],
+        allowed_topics=[
+            "Welcher Sonnenbrillen Typ Bin Ich",
+            "Familienalltag im Sommer",
+            "Gesunde Augen im Alltag",
+        ],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=[
+            "Welcher Sonnenbrillen Typ Bin Ich",
+            "Ihr Onlineshop fuer guenstige Brillen & Komplettbrillen",
+            "Sonnenbrillen fuer die ganze Familie",
+        ],
+        overlap_terms=["familie", "alltag"],
+    )
+
+    title_package = _build_deterministic_title_package(
+        topic="Augenschutz im Familienalltag",
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        search_intent_type="informational",
+        structured_mode="none",
+        current_year=2026,
+    )
+    faqs = _ensure_faq_candidates("Augenschutz im Familienalltag", [], topic_signature=result["topic_signature"])
+    outline = _build_deterministic_outline(
+        topic="Augenschutz im Familienalltag",
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        faq_candidates=result["faq_candidates"],
+        structured_mode="none",
+        anchor_text_final="Mehr erfahren",
+        topic_signature=result["topic_signature"],
+    )
+
+    assert result["primary_keyword"] != "welcher sonnenbrillen typ bin ich"
+    assert all("welcher sonnenbrillen typ bin ich" not in item for item in result["secondary_keywords"])
+    assert "welcher sonnenbrillen typ bin ich" not in title_package["h1"].lower()
+    assert all("welcher sonnenbrillen typ bin ich" not in question.lower() for question in faqs)
+    assert all("welcher sonnenbrillen typ bin ich" not in item["h2"].lower() for item in outline["outline"])
+
+
 def test_select_keywords_builds_secondary_fallbacks_without_trends():
     result = _select_keywords(
         topic="Kinder Sehprobleme erkennen und richtig reagieren",
@@ -331,6 +379,9 @@ def test_sanitize_editorial_phrase_drops_shop_promo_noise():
         "Brillenhaus24.de – Ihr Onlineshop für günstige Brillen & Komplettbrillen",
         allow_single_token=True,
     ) == ""
+    assert _sanitize_editorial_phrase("Welcher Sonnenbrillen Typ Bin Ich", allow_single_token=True) == ""
+    assert _sanitize_editorial_phrase("Herzlich willkommen", allow_single_token=True) == ""
+    assert _sanitize_editorial_phrase("Familie Amp Kinder", allow_single_token=True) == ""
 
 
 def test_normalize_writer_html_fragment_strips_greeting_filler():
@@ -375,6 +426,27 @@ def test_normalize_faq_section_questions_repairs_missing_question_marks():
 
     assert "<h3>Was ist wichtig?</h3>" in normalized
     assert "<h3>Worauf sollte man bei Kinder Sonnenbrillen achten?</h3>" in normalized
+
+
+def test_validate_phrase_integrity_rejects_greeting_entity_and_self_assessment_noise():
+    html = (
+        "<h1>Titel</h1>"
+        "<p>Herzlich willkommen zu einem allgemeinen Einstieg fuer Familien.</p>"
+        "<h2>Welcher Sonnenbrillen Typ Bin Ich</h2>"
+        "<p>Familie Amp Kinder brauchen Orientierung.</p>"
+        "<h2>Fazit</h2><p>Konkreter Abschluss zum Augenschutz im Familienalltag.</p>"
+        "<h2>FAQ</h2>"
+        "<h3>Worauf sollte man bei?</h3><p>Antwort mit ausreichend Woertern fuer eine stabile Validierung im FAQ Bereich und mehr Kontext.</p>"
+        "<h3>Was ist wichtig?</h3><p>Noch eine laengere Antwort mit ausreichend Woertern und ohne weitere Stoerung.</p>"
+        "<h3>Welche Ursachen sind haeufig?</h3><p>Eine weitere laengere Antwort mit ausreichend Woertern fuer die FAQ Validierung.</p>"
+    )
+
+    errors = _validate_phrase_integrity(html)
+
+    assert "greeting_noise_detected" in errors
+    assert "entity_noise_detected" in errors
+    assert any(error.startswith("heading_phrase_invalid:") for error in errors)
+    assert any(error.startswith("faq_question_integrity_invalid:") for error in errors)
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
@@ -883,7 +955,7 @@ def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_n
                     )
                 continue
             body_html = (
-                "<p>Gute Sonnenbrillen fuer Kinder brauchen UV Schutz, bequemen Sitz und robuste Materialien fuer den Alltag. "
+                "<p>Gute Sonnenbrillen fuer Kinder brauchen UV Schutz, bequemen Sitz und robuste Materialien fuer den Familienalltag. "
                 "Eltern sollten auf klare Kennzeichnungen, eine stabile Passform beim Spielen und eine leichte Fassung achten, "
                 "damit die Brille draussen wirklich getragen wird und Schutz nicht nur auf dem Etikett steht.</p>"
                 "<p>Praktisch relevant sind ausserdem Schutzklasse, Materialqualitaet, seitlicher Lichtschutz und die Frage, "

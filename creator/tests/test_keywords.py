@@ -35,6 +35,7 @@ from creator.api.pipeline import (
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
+    _render_article_from_plan,
     _run_pair_fit_reasoning,
     _sanitize_editorial_phrase,
     run_creator_pipeline,
@@ -293,7 +294,8 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
     assert "jeans richtig kombinieren tipps fuer jeden stil" not in result["secondary_keywords"]
     assert any(item == "sehprobleme bei kindern" for item in result["secondary_keywords"])
     assert any("kinderbrillen" in item for item in result["secondary_keywords"])
-    assert title_package["h1"] == "Wann braucht mein Kind eine Brille? Warnsignale fuer Eltern"
+    assert title_package["h1"] == "Sehstärke Bei Kindern: Wann braucht mein Kind eine Brille?"
+    assert "sehstärke bei kindern" in title_package["meta_title"].lower()
     assert title_package["slug"] == "sehstaerke-bei-kindern"
     assert faqs == [
         "Wann braucht mein Kind eine Brille?",
@@ -301,7 +303,8 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         "Worauf sollte man bei Kinderbrillen achten?",
     ]
     assert outline["outline"][0]["h2"] == "Wann braucht mein Kind eine Brille? Einordnung und erste Schritte"
-    assert "sehprobleme" in outline["outline"][1]["h2"].lower()
+    assert "sehstärke bei kindern" in outline["outline"][1]["h2"].lower()
+    assert "warnzeichen" in outline["outline"][1]["h2"].lower()
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
 
@@ -337,6 +340,27 @@ def test_normalize_writer_html_fragment_strips_greeting_filler():
 
     assert "Herzlich willkommen" not in normalized
     assert "Kinder brauchen alltagstaugliche Sonnenbrillen" in normalized
+
+
+def test_render_article_from_plan_formats_faq_questions_as_questions():
+    article_html = _render_article_from_plan(
+        article_plan={
+            "h1": "Kinder Sonnenbrillen: Orientierung",
+            "sections": [
+                {"section_id": "section_1", "kind": "body", "h2": "Kinder sonnenbrillen: wichtige Kriterien", "h3": []},
+                {"section_id": "section_2", "kind": "faq", "h2": "FAQ", "h3": ["Was ist wichtig", "Worauf sollte man achten"]},
+            ],
+        },
+        intro_html="<p>Intro mit Kinder Sonnenbrillen.</p>",
+        section_bodies={"section_1": "<p>Abschnitt.</p>"},
+        faq_items=[
+            {"question": "Was ist wichtig?", "answer_html": "<p>Antwort eins.</p>"},
+            {"question": "Worauf sollte man achten?", "answer_html": "<p>Antwort zwei.</p>"},
+        ],
+    )
+
+    assert "<h3>Was ist wichtig?</h3>" in article_html
+    assert "<h3>Worauf sollte man achten?</h3>" in article_html
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
@@ -1288,6 +1312,20 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     assert any("Qualitaetsmerkmale" in heading for heading in headings)
     assert any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
+
+
+def test_build_deterministic_outline_forces_primary_keyword_into_heading_when_needed():
+    outline = _build_deterministic_outline(
+        topic="Sonnenschutz fuer die ganze Familie",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=["uv schutz fuer kinderaugen"],
+        faq_candidates=["Was ist wichtig?", "Welche Ursachen sind haeufig?", "Worauf sollte man achten?"],
+        structured_mode="none",
+        anchor_text_final="Mehr erfahren",
+    )
+
+    headings = [item["h2"] for item in outline["outline"]]
+    assert any("kinder sonnenbrillen" in heading.lower() for heading in headings)
 
 
 def test_structured_content_mode_detects_list_and_table_topics():

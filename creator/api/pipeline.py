@@ -551,6 +551,59 @@ def _append_sentence_with_limit(current: str, sentence: str, *, max_chars: int) 
     return current
 
 
+def _ensure_primary_keyword_in_title(
+    *,
+    title: str,
+    primary_title: str,
+    question_title: str,
+    subject_title: str,
+    suffix: str,
+) -> str:
+    if not primary_title or _keyword_present_relaxed(title, primary_title):
+        return title
+    reference_text = _normalize_keyword_phrase(" ".join([question_title, subject_title, title]))
+    primary_tokens = _keyword_token_set(primary_title)
+    if len(primary_tokens) > 4 and _keyword_similarity(primary_title, reference_text) < 0.2:
+        return title
+
+    question_title = _format_sentence_start(question_title)
+    subject_title = _format_title_case(subject_title)
+    candidates: List[str] = []
+    if question_title:
+        candidates.extend(
+            [
+                f"{primary_title}: {question_title}",
+                f"{question_title}: {primary_title}",
+            ]
+        )
+    if subject_title:
+        candidates.extend(
+            [
+                f"{primary_title}: {subject_title}",
+                f"{subject_title}: {primary_title}",
+            ]
+        )
+    candidates.extend(
+        [
+            f"{primary_title}: {suffix}",
+            primary_title,
+        ]
+    )
+
+    normalized_original = _normalize_keyword_phrase(title)
+    for candidate in candidates:
+        normalized_candidate = _truncate_title(candidate)
+        if not _keyword_present_relaxed(normalized_candidate, primary_title):
+            continue
+        if len(normalized_candidate) > SEO_TITLE_MAX_CHARS:
+            continue
+        if len(normalized_candidate) >= SEO_TITLE_MIN_CHARS:
+            return normalized_candidate
+        if normalized_original and _keyword_similarity(normalized_candidate, normalized_original) >= 0.35:
+            return normalized_candidate
+    return title
+
+
 def _build_deterministic_title_package(
     *,
     topic: str,
@@ -608,6 +661,13 @@ def _build_deterministic_title_package(
         h1 = _truncate_title(f"{h1}: {suffix}")
     if len(h1) < SEO_TITLE_MIN_CHARS:
         h1 = _truncate_title(f"{h1} fuer Betroffene und Familien")
+    h1 = _ensure_primary_keyword_in_title(
+        title=h1,
+        primary_title=primary_title,
+        question_title=question_title,
+        subject_title=subject_title or topic or primary_keyword,
+        suffix=suffix,
+    )
     if include_year and str(current_year) not in h1:
         h1 = _truncate_title(f"{h1} {current_year}")
     meta_title = _truncate_title(h1)
@@ -4449,6 +4509,24 @@ def _build_deterministic_outline(
         structured_mode=structured_mode,
         topic_signature=topic_signature,
     )
+    if primary_keyword and not any(
+        _keyword_present(heading, primary_keyword) or _keyword_similarity(heading, primary_keyword) >= 0.78
+        for heading in raw_headings
+    ):
+        primary_title = _format_sentence_start(_sanitize_editorial_phrase(primary_keyword) or primary_keyword)
+        if primary_title:
+            target_index = 1 if len(raw_headings) > 1 else 0
+            reference_heading = _normalize_keyword_phrase(raw_headings[target_index] if raw_headings else "")
+            if structured_mode == "table" or any(
+                token in reference_heading for token in {"vergleich", "kriterien", "qualitaetsmerkmale", "unterschiede"}
+            ):
+                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Qualitaetsmerkmale"
+            elif any(token in reference_heading for token in {"anzeichen", "ursachen", "warnzeichen", "hilfe"}):
+                raw_headings[target_index] = f"{primary_title}: Warnzeichen, Ursachen und Einordnung"
+            elif structured_mode == "list":
+                raw_headings[target_index] = f"{primary_title}: Checkliste und wichtige Schritte"
+            else:
+                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Einordnung"
     core_sections: List[Dict[str, Any]] = []
     for heading in raw_headings:
         if len(core_sections) >= ARTICLE_MAX_H2 - 2:
@@ -4853,11 +4931,14 @@ def _render_article_from_plan(
         if section_kind == "faq":
             questions = [str(item).strip() for item in (section.get("h3") or []) if str(item).strip()]
             for question in questions:
+                formatted_question = _format_faq_question(question) or question.strip()
+                if formatted_question and not formatted_question.endswith("?"):
+                    formatted_question = formatted_question.rstrip(".! ") + "?"
                 answer_html = ""
                 for idx, item in enumerate(faq_items):
                     if idx in used_faq_indexes:
                         continue
-                    if _keyword_similarity(str(item.get("question") or ""), question) >= 0.75:
+                    if _keyword_similarity(str(item.get("question") or ""), formatted_question) >= 0.75:
                         answer_html = str(item.get("answer_html") or "").strip()
                         used_faq_indexes.add(idx)
                         break
@@ -4870,7 +4951,7 @@ def _render_article_from_plan(
                         break
                 if not answer_html:
                     answer_html = "<p></p>"
-                parts.append(f"<h3>{question}</h3>{answer_html}")
+                parts.append(f"<h3>{formatted_question}</h3>{answer_html}")
             continue
         body_html = section_bodies.get(section_id, "")
         parts.append(body_html)

@@ -20,18 +20,22 @@ from creator.api.pipeline import (
     _ensure_faq_candidates,
     _fetch_google_de_suggestions,
     _generate_search_informed_faqs,
+    _generate_article_by_sections,
     _inject_faq_section,
     _merge_phase2_analysis,
     _normalize_section_html,
+    _format_content_brief_prompt_text,
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _run_pair_fit_reasoning,
     _select_keywords,
     _structured_content_mode,
     _trend_entry_is_fresh,
+    _validate_contextual_alignment,
     _validate_seo_metadata,
     _validate_language_and_conclusion,
     _validate_keyword_coverage,
+    _validate_section_substance,
 )
 from creator.api.validators import word_count_from_html
 
@@ -733,6 +737,139 @@ def test_validate_language_and_conclusion_rejects_thin_faq():
     """
     errors = _validate_language_and_conclusion(html, "Eltern-Sucht in der Schwangerschaft")
     assert any(error.startswith("faq_question_count_too_low") or error.startswith("faq_answers_too_thin") for error in errors)
+
+
+def test_validate_contextual_alignment_rejects_generic_off_context_copy():
+    html = """
+    <h1>Kinder Sonnenbrillen: worauf Eltern achten sollten</h1>
+    <p>In der heutigen Zeit spielt das Thema eine wichtige Rolle und es ist wichtig zu beachten, dass verschiedene Aspekte relevant sind.</p>
+    <h2>Das Wichtigste im Ueberblick</h2>
+    <p>Abschliessend laesst sich sagen, dass zahlreiche Moeglichkeiten betrachtet werden koennen.</p>
+    """
+
+    errors = _validate_contextual_alignment(
+        html,
+        {
+            "audience": "Eltern und Familien",
+            "publishing_signals": ["Familienalltag", "Gesundheit"],
+            "target_signals": ["UV Schutz fuer Kinderaugen", "Kinderbrillen"],
+            "overlap_terms": ["schutz"],
+            "style_cues": ["hilfreich", "sachlich"],
+            "fit_reason": "Familie, Gesundheit und Schutz ergeben einen natuerlichen Kontext.",
+        },
+    )
+
+    assert "publishing_context_missing" in errors
+    assert "target_specificity_missing" in errors
+    assert any(error.startswith("generic_filler_excessive") for error in errors)
+
+
+def test_validate_section_substance_flags_thin_main_sections():
+    html = """
+    <h1>Kinder Sonnenbrillen: worauf Eltern achten sollten</h1>
+    <p>Kinder sonnenbrillen helfen Familien im Alltag.</p>
+    <h2>Passform</h2>
+    <p>Kurz erklaert.</p>
+    <h2>Material</h2>
+    <p>Noch kuerzer.</p>
+    <h2>Fazit</h2>
+    <p>Bei kinder sonnenbrillen helfen klare Kriterien fuer Familien im Alltag.</p>
+    <h2>FAQ</h2>
+    <h3>Was ist wichtig?</h3>
+    <p>Antwort mit genug Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    <h3>Wann hilft UV Schutz?</h3>
+    <p>Antwort mit genug Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    <h3>Wie prueft man die Passform?</h3>
+    <p>Antwort mit genug Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    """
+
+    errors = _validate_section_substance(html)
+    assert any(error.startswith("section_too_thin:passform") for error in errors)
+    assert any(error.startswith("section_too_thin:material") for error in errors)
+
+
+def test_generate_article_by_sections_uses_editorial_brief_and_bounded_tokens(monkeypatch):
+    captured: list[dict[str, object]] = []
+    content_brief = {
+        "audience": "Eltern und Familien",
+        "publishing_signals": ["Familienalltag", "Gesundheit"],
+        "target_signals": ["UV Schutz fuer Kinderaugen", "Kinderbrillen"],
+        "overlap_terms": ["schutz"],
+        "style_cues": ["hilfreich", "sachlich"],
+        "fit_reason": "Familie, Gesundheit und Schutz ergeben einen natuerlichen Ratgeber-Kontext.",
+    }
+
+    def fake_call_llm_text(**kwargs):
+        captured.append(
+            {
+                "label": kwargs.get("request_label"),
+                "prompt": kwargs.get("user_prompt"),
+                "max_tokens": kwargs.get("max_tokens"),
+            }
+        )
+        if kwargs.get("request_label") == "phase5_section_intro":
+            return (
+                "<p>Eltern und Familien achten bei Kinder Sonnenbrillen auf UV Schutz, gute Passform und "
+                "alltagstaugliche Materialien, damit Kinderaugen im Alltag besser geschuetzt bleiben.</p>"
+            )
+        return (
+            "<p>Eltern und Familien pruefen UV Schutz, Passform, Haltbarkeit und Alltagseinsatz. "
+            "Eine Kinderbrille sollte bequem sitzen, beim Spielen stabil bleiben und Kinderaugen vor "
+            "Blendung schuetzen. So entstehen konkrete Kriterien statt allgemeiner Aussagen.</p>"
+        )
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
+
+    payload = _generate_article_by_sections(
+        phase4={
+            "h1": "Kinder Sonnenbrillen: worauf Eltern achten sollten",
+            "outline": [
+                {"h2": "Passform im Familienalltag", "h3": []},
+                {"h2": "Material und UV Schutz", "h3": []},
+                {"h2": "Fazit", "h3": []},
+                {"h2": "FAQ", "h3": ["Was ist wichtig?", "Wie prueft man die Passform?", "Wann hilft UV Schutz?"]},
+            ],
+            "backlink_placement": "intro",
+            "anchor_text_final": "Kinderbrillen Auswahlhilfe",
+        },
+        phase3={
+            "final_article_topic": "Kinder Sonnenbrillen: worauf Eltern achten sollten",
+            "primary_keyword": "kinder sonnenbrillen",
+            "secondary_keywords": [
+                "uv schutz fuer kinderaugen",
+                "kinderbrillen im alltag",
+                "passform fuer kinder",
+                "sonnenbrillen fuer familien",
+            ],
+            "content_brief": content_brief,
+        },
+        backlink_url="https://target.example.com/kinderbrillen",
+        publishing_site_url="https://publisher.example.com",
+        internal_link_candidates=[
+            "https://publisher.example.com/familienalltag",
+            "https://publisher.example.com/gesundheit/kinderaugen",
+        ],
+        internal_link_anchor_map=None,
+        min_internal_links=1,
+        max_internal_links=2,
+        faq_candidates=["Was ist wichtig?", "Wie prueft man die Passform?", "Wann hilft UV Schutz?"],
+        structured_mode="none",
+        llm_api_key="test-key",
+        llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-4.1-mini",
+        http_timeout=2,
+        expand_passes=0,
+        section_max_tokens=900,
+        expand_max_tokens=1800,
+        usage_collector=None,
+    )
+
+    assert payload is not None
+    brief_text = _format_content_brief_prompt_text(content_brief)
+    section_prompts = [item for item in captured if str(item["label"]).startswith("phase5_section")]
+    assert section_prompts
+    assert all(brief_text in str(item["prompt"]) for item in section_prompts)
+    assert all(int(item["max_tokens"]) < 600 for item in section_prompts)
 
 
 def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():

@@ -162,6 +162,17 @@ GENERIC_CONCLUSION_PHRASES = (
     "ultimately, a multifaceted approach",
     "addressing the challenges and opportunities presented by this subject matter",
 )
+GENERIC_BODY_PHRASES = (
+    "in der heutigen zeit",
+    "spielt eine wichtige rolle",
+    "es ist wichtig zu beachten",
+    "laesst sich festhalten",
+    "ganzheitlicher ansatz",
+    "verschiedene aspekte",
+    "zahlreiche moeglichkeiten",
+    "im fokus steht",
+    "abschliessend laesst sich sagen",
+)
 
 KEYWORD_MIN_SECONDARY = 4
 KEYWORD_MAX_SECONDARY = 6
@@ -172,6 +183,7 @@ DEFAULT_INTERNAL_LINK_MAX = 4
 KEYWORD_MAX_FAQ = 5
 ARTICLE_MIN_H2 = 4
 ARTICLE_MAX_H2 = 6
+ARTICLE_SECTION_MIN_WORDS = 55
 GOOGLE_SUGGEST_CACHE_TTL_SECONDS = 6 * 60 * 60
 GOOGLE_SUGGEST_CACHE_MAX_ENTRIES = 256
 DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -1781,6 +1793,120 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
     return out
 
 
+def _select_topic_relevant_signals(
+    *,
+    topic: str,
+    values: List[str],
+    overlap_terms: List[str],
+    max_items: int,
+) -> List[str]:
+    topic_tokens = _keyword_token_set(topic)
+    overlap_tokens = _keyword_token_set(" ".join(overlap_terms))
+    candidates = _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(values, max_phrases=max_items * 6))
+    scored: List[tuple[float, str]] = []
+    for candidate in candidates:
+        candidate_tokens = _keyword_token_set(candidate)
+        if not candidate_tokens:
+            continue
+        relevance = (
+            3.0 * len(candidate_tokens & topic_tokens)
+            + 1.5 * len(candidate_tokens & overlap_tokens)
+            + _keyword_similarity(candidate, topic)
+        )
+        if relevance < 1.15 and not (candidate_tokens & overlap_tokens):
+            continue
+        scored.append((relevance, candidate))
+    ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
+    return [_format_title_case(value) for _score, value in ranked[:max_items]]
+
+
+def _build_content_brief(
+    *,
+    topic: str,
+    phase2: Dict[str, Any],
+    pair_fit: Dict[str, Any],
+    target_profile: Dict[str, Any],
+    publishing_profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()][:4]
+    publishing_terms = _pair_fit_ranked_terms(publishing_profile, site_kind="publishing")
+    target_terms = _pair_fit_ranked_terms(target_profile, site_kind="target")
+    publishing_contexts = [str(item).strip() for item in (pair_fit.get("publishing_site_contexts") or []) if str(item).strip()]
+    audience = _pair_fit_audience_term(publishing_terms, publishing_contexts)
+    publishing_signals = _select_topic_relevant_signals(
+        topic=topic,
+        values=_merge_string_lists(
+            phase2.get("allowed_topics") or [],
+            phase2.get("site_categories") or [],
+            publishing_terms,
+            max_items=18,
+        ),
+        overlap_terms=overlap_terms,
+        max_items=3,
+    )
+    target_signals = [
+        signal
+        for signal in _select_topic_relevant_signals(
+            topic=topic,
+            values=_merge_string_lists(
+                target_profile.get("topics") or [],
+                target_profile.get("services_or_products") or [],
+                target_terms,
+                max_items=18,
+            ),
+            overlap_terms=overlap_terms,
+            max_items=4,
+        )
+        if _keyword_similarity(signal, topic) < 0.85
+    ]
+    style_cues = _merge_string_lists(
+        phase2.get("content_style_constraints") or [],
+        publishing_profile.get("content_style") or [],
+        [str(publishing_profile.get("content_tone") or "").strip()],
+        max_items=3,
+    )
+    fit_reason = _limit_text(
+        str(pair_fit.get("why_this_topic_was_chosen") or pair_fit.get("best_overlap_reason") or "").strip(),
+        180,
+    )
+    return {
+        "audience": audience,
+        "publishing_signals": publishing_signals,
+        "target_signals": target_signals,
+        "overlap_terms": overlap_terms,
+        "style_cues": style_cues,
+        "fit_reason": fit_reason,
+    }
+
+
+def _format_content_brief_prompt_text(content_brief: Dict[str, Any]) -> str:
+    if not isinstance(content_brief, dict) or not content_brief:
+        return ""
+    parts: List[str] = []
+    audience = str(content_brief.get("audience") or "").strip()
+    publishing_signals = [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()]
+    target_signals = [str(item).strip() for item in (content_brief.get("target_signals") or []) if str(item).strip()]
+    style_cues = [str(item).strip() for item in (content_brief.get("style_cues") or []) if str(item).strip()]
+    fit_reason = str(content_brief.get("fit_reason") or "").strip()
+    if audience:
+        parts.append(f"audience={audience}")
+    if publishing_signals:
+        parts.append(f"publishing={', '.join(publishing_signals[:3])}")
+    if target_signals:
+        parts.append(f"target={', '.join(target_signals[:3])}")
+    if style_cues:
+        parts.append(f"style={', '.join(style_cues[:3])}")
+    if fit_reason:
+        parts.append(f"fit={fit_reason}")
+    parts.append("backlink=secondary resource only")
+    return "Editorial brief: " + " | ".join(parts)
+
+
+def _estimate_html_max_tokens(target_words: int, *, floor: int, ceiling: int) -> int:
+    estimated = int(target_words * 2.4)
+    return max(floor, min(ceiling, estimated))
+
+
 def _build_keyword_query_variants(
     *,
     topic: str,
@@ -2690,10 +2816,13 @@ def _score_seo_output(
     min_internal_links: int,
     max_internal_links: int,
     topic: str,
+    content_brief: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     checks = {
         "keyword_coverage": _validate_keyword_coverage(article_html, primary_keyword, secondary_keywords),
         "language_conclusion": _validate_language_and_conclusion(article_html, topic),
+        "section_substance": _validate_section_substance(article_html),
+        "contextual_alignment": _validate_contextual_alignment(article_html, content_brief),
         "link_strategy": _validate_link_strategy(
             article_html,
             backlink_url=backlink_url,
@@ -2737,6 +2866,7 @@ def _collect_article_validation_errors(
     publishing_site_url: str,
     min_internal_links: int,
     max_internal_links: int,
+    content_brief: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     errors: List[str] = []
     for check in (
@@ -2764,6 +2894,8 @@ def _collect_article_validation_errors(
     if not (ARTICLE_MIN_H2 <= count_h2(article_html) <= ARTICLE_MAX_H2):
         errors.append("h2_count_invalid")
     errors.extend(_validate_language_and_conclusion(article_html, topic))
+    errors.extend(_validate_section_substance(article_html))
+    errors.extend(_validate_contextual_alignment(article_html, content_brief))
     errors.extend(_validate_keyword_coverage(article_html, primary_keyword, secondary_keywords))
     errors.extend(
         _validate_seo_metadata(
@@ -3107,6 +3239,47 @@ def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str
         if word_count_from_html(faq_html) < FAQ_MIN_WORDS:
             errors.append(f"faq_answers_too_thin:{word_count_from_html(faq_html)}")
 
+    return errors
+
+
+def _validate_section_substance(article_html: str) -> List[str]:
+    errors: List[str] = []
+    for heading in _extract_h2_headings(article_html):
+        normalized = _normalize_keyword_phrase(heading)
+        if normalized in {"fazit", "faq"}:
+            continue
+        section_html = _extract_h2_section_html(article_html, heading)
+        section_words = word_count_from_html(section_html)
+        has_structure = bool(re.search(r"<(?:ul|ol|table)\b", section_html or "", flags=re.IGNORECASE))
+        if section_words < ARTICLE_SECTION_MIN_WORDS and not has_structure:
+            errors.append(f"section_too_thin:{normalized}")
+    return errors
+
+
+def _validate_contextual_alignment(article_html: str, content_brief: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(content_brief, dict) or not content_brief:
+        return []
+    body_html = re.sub(r"<h1[^>]*>.*?</h1>", "", article_html or "", flags=re.IGNORECASE | re.DOTALL)
+    plain_text = _strip_html_tags(body_html)
+    normalized_text = _normalize_keyword_phrase(plain_text)
+    errors: List[str] = []
+    publishing_cues = _merge_string_lists(
+        [str(content_brief.get("audience") or "").strip()],
+        [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
+        max_items=4,
+    )
+    target_cues = _merge_string_lists(
+        [str(item).strip() for item in (content_brief.get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
+        max_items=4,
+    )
+    if publishing_cues and not any(_keyword_present_relaxed(plain_text, cue) for cue in publishing_cues):
+        errors.append("publishing_context_missing")
+    if target_cues and not any(_keyword_present_relaxed(plain_text, cue) for cue in target_cues):
+        errors.append("target_specificity_missing")
+    filler_hits = sum(1 for phrase in GENERIC_BODY_PHRASES if phrase in normalized_text)
+    if filler_hits >= 3:
+        errors.append(f"generic_filler_excessive:{filler_hits}")
     return errors
 
 
@@ -3573,6 +3746,8 @@ def _generate_article_by_sections(
     llm_model: str,
     http_timeout: int,
     expand_passes: int,
+    section_max_tokens: int,
+    expand_max_tokens: int,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Optional[Dict[str, Any]]:
     outline_items = phase4.get("outline") or []
@@ -3589,6 +3764,10 @@ def _generate_article_by_sections(
     backlink_placement = phase4.get("backlink_placement") or "intro"
     anchor_text = phase4.get("anchor_text_final") or "this resource"
     internal_links_prompt = internal_link_candidates[:max_internal_links]
+    content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
+    intro_max_tokens = min(section_max_tokens, _estimate_html_max_tokens(intro_target + 20, floor=180, ceiling=420))
+    body_section_max_tokens = min(section_max_tokens, _estimate_html_max_tokens(per_max + 20, floor=220, ceiling=560))
+    expansion_max_tokens = min(expand_max_tokens, _estimate_html_max_tokens(130, floor=180, ceiling=360))
 
     intro_system = "Write a short introduction paragraph in German (de-DE) in HTML. Return only HTML."
     intro_user = (
@@ -3596,7 +3775,9 @@ def _generate_article_by_sections(
         f"H1: {phase4.get('h1','')}\n"
         f"Primary keyword: {phase3.get('primary_keyword','')}\n"
         f"Length: {intro_target - 15}-{intro_target + 15} words.\n"
+        f"{content_brief_text}\n"
         "Do not include links unless explicitly requested. Language: German (de-DE). "
+        "Open with a concrete reader problem or decision, not generic scene-setting. "
         "Include the primary keyword naturally in this first paragraph."
     )
     if backlink_placement == "intro":
@@ -3610,7 +3791,7 @@ def _generate_article_by_sections(
             base_url=llm_base_url,
             model=llm_model,
             timeout_seconds=http_timeout,
-            max_tokens=3000,
+            max_tokens=intro_max_tokens,
             temperature=0.2,
             request_label="phase5_section_intro",
             usage_collector=usage_collector,
@@ -3641,7 +3822,10 @@ def _generate_article_by_sections(
             f"Primary keyword: {phase3.get('primary_keyword','')}\n"
             f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
             f"Length: {per_min}-{per_max} words.\n"
-            "Write in a neutral authoritative tone in German (de-DE). Do not use bullet lists unless necessary."
+            f"{content_brief_text}\n"
+            "Write in a neutral authoritative tone in German (de-DE). "
+            "Each section must add at least one concrete criterion, example, risk, checklist point, or decision aid. "
+            "Avoid generic filler and repeated framing. Do not use bullet lists unless necessary."
             "\nDo not include links unless explicitly requested."
         )
         if "faq" in h2.lower():
@@ -3674,7 +3858,7 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=3000,
+                max_tokens=body_section_max_tokens,
                 temperature=0.2,
                 request_label=f"phase5_section_{index}",
                 usage_collector=usage_collector,
@@ -3712,8 +3896,9 @@ def _generate_article_by_sections(
             f"Primary keyword: {phase3.get('primary_keyword','')}\n"
             f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
             f"Current word count: {word_count}. Need at least {ARTICLE_MIN_WORDS} words.\n"
+            f"{content_brief_text}\n"
             f"Write one additional paragraph of 80-120 words that fits the article. "
-            "No hyperlinks. Language: German (de-DE)."
+            "Add concrete detail rather than summary or filler. No hyperlinks. Language: German (de-DE)."
         )
         try:
             extra = call_llm_text(
@@ -3723,7 +3908,7 @@ def _generate_article_by_sections(
                 base_url=llm_base_url,
                 model=llm_model,
                 timeout_seconds=http_timeout,
-                max_tokens=3000,
+                max_tokens=expansion_max_tokens,
                 temperature=0.2,
                 request_label="phase5_section_expand",
                 usage_collector=usage_collector,
@@ -3865,11 +4050,11 @@ def run_creator_pipeline(
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 3000)
     phase4_max_attempts = 1
     phase4_max_tokens = _read_int_env("CREATOR_PHASE4_MAX_TOKENS", 3000)
-    phase5_max_attempts = 1
-    phase5_max_tokens_attempt1 = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 3000)
-    phase5_max_tokens_retry = _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 3000)
+    phase5_max_attempts = max(1, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2))
+    phase5_max_tokens_attempt1 = max(320, _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 900))
+    phase5_max_tokens_retry = max(800, _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1800))
     phase5_fallback_expand_passes = 0
-    phase7_repair_attempts = 0
+    phase7_repair_attempts = max(0, _read_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 1))
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
     internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
     internal_link_candidates_max = max(internal_link_max, _read_int_env("CREATOR_INTERNAL_LINK_CANDIDATES_MAX", 10))
@@ -4158,6 +4343,13 @@ def run_creator_pipeline(
         current_year=current_year,
     )
     phase3["title_package"] = title_package
+    phase3["content_brief"] = _build_content_brief(
+        topic=phase3.get("final_article_topic", ""),
+        phase2=phase2,
+        pair_fit=pair_fit,
+        target_profile=target_profile,
+        publishing_profile=publishing_profile,
+    )
     ranked_internal_link_inventory = _rank_internal_link_inventory(
         provided_internal_link_inventory,
         topic=phase3.get("final_article_topic", ""),
@@ -4204,6 +4396,7 @@ def run_creator_pipeline(
         "structured_content_mode": phase3.get("structured_content_mode", "none"),
         "title_package": title_package,
         "pair_fit": pair_fit,
+        "content_brief": phase3.get("content_brief") or {},
     }
     debug["internal_linking"] = {
         "configured_min": internal_link_min,
@@ -4353,6 +4546,7 @@ def run_creator_pipeline(
     last_validation_errors: List[str] = []
     internal_links_prompt_text = internal_links_prompt_entries[:effective_internal_max]
     faq_prompt_text = phase3.get("faq_candidates") or []
+    content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
     for attempt in range(1, phase5_max_attempts + 1):
         if attempt == 1:
             article_payload = _generate_article_by_sections(
@@ -4371,6 +4565,8 @@ def run_creator_pipeline(
                 llm_model=writing_model,
                 http_timeout=http_timeout,
                 expand_passes=max(0, phase5_max_attempts - 1),
+                section_max_tokens=phase5_max_tokens_attempt1,
+                expand_max_tokens=phase5_max_tokens_retry,
                 usage_collector=_collect_llm_usage,
             )
             if not article_payload:
@@ -4404,6 +4600,7 @@ def run_creator_pipeline(
                 publishing_site_url=publishing_site_url,
                 min_internal_links=effective_internal_min,
                 max_internal_links=effective_internal_max,
+                content_brief=phase3.get("content_brief") or {},
             )
 
             if validation_errors:
@@ -4444,6 +4641,7 @@ def run_creator_pipeline(
                 f"Required slug: {phase3['title_package']['slug']}\n"
                 f"Required outline: {phase4['outline']}\n"
                 f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words, H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections.\n"
+                f"{content_brief_text}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Backlink placement: {phase4['backlink_placement']}\n"
                 f"Anchor text (use exactly): {phase4['anchor_text_final']}\n"
@@ -4454,6 +4652,7 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
+                "Every section must add concrete substance, not generic filler.\n"
                 "Return only the fixed article HTML."
             )
             model_for_attempt = writing_model
@@ -4490,6 +4689,7 @@ def run_creator_pipeline(
                 f"Internal link rule: min {effective_internal_min}, max {effective_internal_max}\n"
                 f"Constraints: {ARTICLE_MIN_WORDS}-{ARTICLE_MAX_WORDS} words (aim for about 800), H1 + {ARTICLE_MIN_H2}-{ARTICLE_MAX_H2} H2 sections, "
                 "neutral authoritative tone, no CTA spam, no 'visit our site' language.\n"
+                f"{content_brief_text}\n"
                 f"Primary keyword: {phase3['primary_keyword']}\n"
                 f"Secondary keywords: {phase3['secondary_keywords']}\n"
                 f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
@@ -4497,6 +4697,7 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Keyword rules: primary in H1+intro+>=1 H2, each secondary >=1 mention, natural density.\n"
+                "Every section must add concrete substance, not generic filler.\n"
                 "Return only the final article HTML."
             )
             model_for_attempt = writing_model
@@ -4550,6 +4751,7 @@ def run_creator_pipeline(
             publishing_site_url=publishing_site_url,
             min_internal_links=effective_internal_min,
             max_internal_links=effective_internal_max,
+            content_brief=phase3.get("content_brief") or {},
         )
 
         if validation_errors:
@@ -4735,6 +4937,7 @@ def run_creator_pipeline(
         publishing_site_url=publishing_site_url,
         min_internal_links=effective_internal_min,
         max_internal_links=effective_internal_max,
+        content_brief=phase3.get("content_brief") or {},
     )
 
     if phase7_errors:
@@ -4775,6 +4978,7 @@ def run_creator_pipeline(
                 f"Current word count: {current_wc}\n"
                 f"Required meta_title: {phase3['title_package']['meta_title']}\n"
                 f"Required slug: {phase3['title_package']['slug']}\n"
+                f"{content_brief_text}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Placement: {phase4['backlink_placement']}\n"
                 f"Anchor text: {phase4['anchor_text_final']}\n"
@@ -4786,6 +4990,7 @@ def run_creator_pipeline(
                 f"Structured content mode: {phase3.get('structured_content_mode', 'none')}\n"
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
+                "Every section must add concrete substance, not generic filler.\n"
                 "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
                 "\"excerpt\":\"...\",\"article_html\":\"...\"}"
             )
@@ -4849,6 +5054,7 @@ def run_creator_pipeline(
                     publishing_site_url=publishing_site_url,
                     min_internal_links=effective_internal_min,
                     max_internal_links=effective_internal_max,
+                    content_brief=phase3.get("content_brief") or {},
                 )
                 current_wc = word_count_from_html(phase5["article_html"])
                 if not phase7_errors:
@@ -4874,6 +5080,7 @@ def run_creator_pipeline(
         min_internal_links=effective_internal_min,
         max_internal_links=effective_internal_max,
         topic=phase3["final_article_topic"],
+        content_brief=phase3.get("content_brief") or {},
     )
     debug["seo_evaluation"] = seo_evaluation
 

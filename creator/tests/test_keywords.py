@@ -24,6 +24,7 @@ from creator.api.pipeline import (
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
+    _extract_keywords,
     _fetch_google_de_suggestions,
     _generate_search_informed_faqs,
     _generate_article_by_sections,
@@ -133,6 +134,41 @@ def test_select_keywords_filters_low_signal_secondary_phrases():
 
     assert "spannende und aktuelle themen" not in result["secondary_keywords"]
     assert "wertvolle infos fuer eltern" not in result["secondary_keywords"]
+
+
+def test_extract_keywords_filters_ui_chrome_tokens():
+    keywords = _extract_keywords(
+        "navigation menu suche augenschutz sommerurlaub uv schutz augenschutz uv schutz",
+        max_terms=8,
+    )
+
+    assert "navigation" not in keywords
+    assert "menu" not in keywords
+    assert "suche" not in keywords
+    assert "augenschutz" in keywords
+
+
+def test_select_keywords_does_not_reuse_irrelevant_allowed_topics_as_support_phrases():
+    result = _select_keywords(
+        topic="Augenschutz im Sommerurlaub",
+        llm_primary="augenschutz im sommerurlaub",
+        llm_secondary=[],
+        keyword_cluster=["augenschutz", "sommerurlaub", "uv schutz", "kinder sonnenbrillen"],
+        allowed_topics=[
+            "Kontaktformular im Alltag",
+            "Gesundheit psychologie im Alltag",
+            "Kinderaugen im Sommer",
+            "UV Schutz fuer den Strandurlaub",
+        ],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=["Kinder Sonnenbrillen", "UV Schutz"],
+        overlap_terms=["sommer", "schutz"],
+        internal_link_inventory=[],
+    )
+
+    assert not any("kontaktformular" in item for item in result["secondary_keywords"])
+    assert not any("psychologie" in item for item in result["secondary_keywords"])
 
 
 def test_select_keywords_filters_unrelated_secondary_topics():

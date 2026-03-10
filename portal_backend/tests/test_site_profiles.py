@@ -1,4 +1,10 @@
-from portal_backend.api.site_profiles import _extract_keywords, build_combined_target_profile, score_publishing_site_fit
+from portal_backend.api.site_profiles import (
+    _extract_internal_links,
+    _extract_keywords,
+    _extract_page_signals,
+    build_combined_target_profile,
+    score_publishing_site_fit,
+)
 
 
 def test_score_publishing_site_fit_rewards_semantic_overlap() -> None:
@@ -90,3 +96,75 @@ def test_extract_keywords_filters_low_signal_terms() -> None:
     assert "welche" not in keywords
     assert "weiterlesen" not in keywords
     assert "schutz" in keywords
+
+
+def test_extract_page_signals_prefers_content_region_over_form_and_nav_chrome() -> None:
+    html = """
+    <html>
+      <body>
+        <header>
+          <nav>
+            <a href="/kontakt">Kontakt</a>
+            <a href="/impressum">Impressum</a>
+          </nav>
+        </header>
+        <main>
+          <article>
+            <h1>Augenschutz im Sommerurlaub</h1>
+            <h2>UV Schutz fuer Kinderaugen</h2>
+            <p>Eltern achten im Sommerurlaub auf UV Schutz, Passform und Alltagstauglichkeit.</p>
+            <a href="/augenschutz-kinder">Augenschutz fuer Kinder im Sommer</a>
+          </article>
+          <section>
+            <form>
+              <h2>Kontaktformular</h2>
+              <label>E-Mail</label>
+              <input type="email" />
+            </form>
+          </section>
+        </main>
+        <footer>
+          <a href="/datenschutz">Datenschutz</a>
+        </footer>
+      </body>
+    </html>
+    """
+
+    signals = _extract_page_signals("https://publisher.example.com", html)
+
+    assert "Augenschutz im Sommerurlaub" in signals["headings"]
+    assert "UV Schutz fuer Kinderaugen" in signals["headings"]
+    assert "Kontaktformular" not in signals["headings"]
+    assert "Datenschutz" not in signals["text"]
+
+
+def test_extract_internal_links_prefers_content_links_over_boilerplate_links() -> None:
+    html = """
+    <html>
+      <body>
+        <header>
+          <nav>
+            <a href="/kontakt">Kontakt</a>
+            <a href="/login">Login</a>
+          </nav>
+        </header>
+        <main>
+          <article>
+            <h1>Sommerurlaub mit Kindern</h1>
+            <a href="/augenschutz-kinder">Augenschutz fuer Kinder im Sommer</a>
+            <a href="/uv-schutz-strand">UV Schutz am Strand richtig einordnen</a>
+          </article>
+        </main>
+        <footer>
+          <a href="/impressum">Impressum</a>
+        </footer>
+      </body>
+    </html>
+    """
+
+    links = _extract_internal_links("https://publisher.example.com", html, limit=4)
+
+    assert links == [
+        "https://publisher.example.com/augenschutz-kinder",
+        "https://publisher.example.com/uv-schutz-strand",
+    ]

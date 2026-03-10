@@ -29,7 +29,47 @@ logger = logging.getLogger("portal_backend.site_profiles")
 
 PROFILE_KIND_PUBLISHING = "publishing_site"
 PROFILE_KIND_TARGET = "target_site"
-PROFILE_VERSION = "v1"
+PROFILE_VERSION = "v2"
+PROFILE_MIN_PRIMARY_TEXT_CHARS = 220
+PROFILE_NOISE_TAGS = (
+    "script",
+    "style",
+    "noscript",
+    "template",
+    "svg",
+    "header",
+    "footer",
+    "nav",
+    "aside",
+    "form",
+    "dialog",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "option",
+    "label",
+)
+PROFILE_BOILERPLATE_LINK_TOKENS = {
+    "account",
+    "agb",
+    "cart",
+    "checkout",
+    "contact",
+    "datenschutz",
+    "impressum",
+    "konto",
+    "kontakt",
+    "kontaktformular",
+    "login",
+    "privacy",
+    "register",
+    "registrieren",
+    "suche",
+    "support",
+    "terms",
+    "warenkorb",
+}
 
 CONTEXT_KEYWORDS = {
     "health": {"augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz", "sicht", "symptome", "therapie", "vorsorge"},
@@ -294,7 +334,12 @@ def ensure_publishing_site_profile(
         normalized_url=normalized_url,
         publishing_site_id=site.id,
     )
-    if existing is not None and isinstance(existing.payload, dict) and existing.payload:
+    if (
+        existing is not None
+        and isinstance(existing.payload, dict)
+        and existing.payload
+        and str(existing.profile_version or "").strip() == PROFILE_VERSION
+    ):
         return existing
     inventory_context = build_publishing_inventory_context(db, site_id=site.id)
     payload = fetch_site_profile_payload(
@@ -331,7 +376,12 @@ def ensure_target_site_profile(
         normalized_url=normalized_url,
         client_target_site_id=client_target_site_id,
     )
-    if existing is not None and isinstance(existing.payload, dict) and existing.payload:
+    if (
+        existing is not None
+        and isinstance(existing.payload, dict)
+        and existing.payload
+        and str(existing.profile_version or "").strip() == PROFILE_VERSION
+    ):
         return existing
     payload = fetch_site_profile_payload(
         site_url=target_site_url,
@@ -733,10 +783,11 @@ def _fetch_html(url: str, *, timeout_seconds: int) -> str:
 
 
 def _extract_internal_links(base_url: str, html: str, *, limit: int) -> List[str]:
-    soup = BeautifulSoup(html or "", "lxml")
+    soup = _extract_profile_content_fragment(html or "")
     base_host = urlparse(base_url).netloc.lower()
-    links: List[str] = []
-    for anchor in soup.find_all("a", href=True):
+    scored_links: List[Tuple[float, int, str]] = []
+    seen_links: set[str] = set()
+    for index, anchor in enumerate(soup.find_all("a", href=True)):
         href = (anchor.get("href") or "").strip()
         if not href or href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
             continue
@@ -749,12 +800,18 @@ def _extract_internal_links(base_url: str, html: str, *, limit: int) -> List[str
         normalized = normalize_site_profile_url(absolute)
         if normalized == normalize_site_profile_url(base_url):
             continue
-        if normalized in links:
+        if normalized in seen_links:
             continue
-        links.append(normalized)
-        if len(links) >= limit:
-            break
-    return links
+        score = _score_profile_internal_link_candidate(
+            anchor_text=re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip(),
+            absolute_url=normalized,
+        )
+        if score <= 0:
+            continue
+        seen_links.add(normalized)
+        scored_links.append((score, index, normalized))
+    ranked = sorted(scored_links, key=lambda item: (-item[0], item[1], item[2]))
+    return [url for _score, _index, url in ranked[:limit]]
 
 
 def _extract_page_signals(url: str, html: str) -> Dict[str, Any]:
@@ -762,16 +819,14 @@ def _extract_page_signals(url: str, html: str) -> Dict[str, Any]:
     title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
     meta = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
     meta_description = (meta.get("content") or "").strip() if meta else ""
+    content_root = _extract_profile_content_fragment(html or "")
     headings: List[str] = []
     for tag_name in ("h1", "h2", "h3"):
-        for tag in soup.find_all(tag_name):
+        for tag in content_root.find_all(tag_name):
             text = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
             if text:
                 headings.append(text)
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    body = soup.body or soup
-    text = re.sub(r"\s+", " ", body.get_text(" ", strip=True)).strip()
+    text = re.sub(r"\s+", " ", content_root.get_text(" ", strip=True)).strip()
     return {
         "url": normalize_site_profile_url(url),
         "title": title,
@@ -779,6 +834,72 @@ def _extract_page_signals(url: str, html: str) -> Dict[str, Any]:
         "headings": headings[:18],
         "text": text[:12000],
     }
+
+
+def _strip_profile_noise(container: BeautifulSoup) -> BeautifulSoup:
+    for tag in container(PROFILE_NOISE_TAGS):
+        tag.decompose()
+    return container
+
+
+def _extract_profile_content_fragment(html: str) -> BeautifulSoup:
+    base = BeautifulSoup(html or "", "lxml")
+    _strip_profile_noise(base)
+    body = base.body or base
+    candidates: List[Tuple[int, str]] = []
+    for source in (
+        body.find("main"),
+        body.find("article"),
+        body.find(attrs={"role": "main"}),
+        body,
+    ):
+        if source is None:
+            continue
+        fragment = BeautifulSoup(str(source), "lxml")
+        root = _strip_profile_noise(fragment.body or fragment)
+        text = re.sub(r"\s+", " ", root.get_text(" ", strip=True)).strip()
+        if text:
+            candidates.append((len(text), str(root)))
+            if source is not body and len(text) >= PROFILE_MIN_PRIMARY_TEXT_CHARS:
+                return root
+    if candidates:
+        best_html = max(candidates, key=lambda item: item[0])[1]
+        best = BeautifulSoup(best_html, "lxml")
+        return best.body or best
+    fallback = BeautifulSoup("", "lxml")
+    return fallback
+
+
+def _profile_link_tokens(value: str) -> List[str]:
+    tokens: List[str] = []
+    for token in re.findall(r"\b[a-zA-ZäöüÄÖÜß-]{3,}\b", (value or "").lower()):
+        cleaned = _normalize_signal_token(token)
+        if cleaned:
+            tokens.append(cleaned)
+    return tokens
+
+
+def _score_profile_internal_link_candidate(*, anchor_text: str, absolute_url: str) -> float:
+    parsed = urlparse(absolute_url)
+    path_tokens = [
+        token
+        for token in _profile_link_tokens((parsed.path or "").replace("/", " "))
+        if token
+    ]
+    anchor_tokens = [token for token in _profile_link_tokens(anchor_text) if token]
+    combined_tokens = set(path_tokens + anchor_tokens)
+    signal_tokens = {token for token in combined_tokens if _is_signal_token(token)}
+    boilerplate_hits = combined_tokens & PROFILE_BOILERPLATE_LINK_TOKENS
+    if boilerplate_hits and len(signal_tokens - boilerplate_hits) <= 1:
+        return -1.0
+    if not signal_tokens:
+        return -1.0
+    depth = len([segment for segment in (parsed.path or "").split("/") if segment.strip()])
+    score = 3.0 * len(signal_tokens) + min(1.5, depth * 0.5)
+    if anchor_text:
+        score += min(1.5, len(anchor_tokens) * 0.3)
+    score -= 1.6 * len(boilerplate_hits - signal_tokens)
+    return score
 
 
 def _normalize_signal_token(value: str) -> str:

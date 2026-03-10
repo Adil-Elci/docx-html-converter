@@ -1916,9 +1916,16 @@ def _extract_keywords(text: str, max_terms: int = 10) -> List[str]:
     words = re.findall(r"\b[a-zA-Z][a-zA-Z-]{2,}\b", (text or "").lower())
     counts: Dict[str, int] = {}
     for word in words:
-        if word in STOPWORDS:
+        normalized = _normalize_keyword_phrase(word)
+        if not normalized:
             continue
-        counts[word] = counts.get(word, 0) + 1
+        if normalized in STOPWORDS or normalized in GERMAN_FUNCTION_WORDS or normalized in ENGLISH_FUNCTION_WORDS:
+            continue
+        if normalized in KEYWORD_LOW_SIGNAL_TOKENS or normalized in GENERIC_UI_CHROME_TOKENS:
+            continue
+        if normalized in PAIR_FIT_BOILERPLATE_TOKENS:
+            continue
+        counts[normalized] = counts.get(normalized, 0) + 1
     sorted_terms = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return [term for term, _ in sorted_terms[:max_terms]]
 
@@ -3302,11 +3309,27 @@ def _build_secondary_keyword_fallbacks(
     signature_support = _pick_topic_signature_support_phrase(signature, exclude_phrases=[primary_keyword, subject_phrase])
     target_support_phrases = [str(item).strip() for item in (signature.get("target_support_phrases") or []) if str(item).strip()]
     cluster_support_phrases = [str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()]
+    topic_reference_tokens = _filter_topic_signature_tokens(
+        _keyword_focus_tokens(f"{topic} {subject_phrase} {primary_keyword}")
+    )
+    cluster_reference_tokens = _filter_topic_signature_tokens(
+        _keyword_focus_tokens(
+            " ".join(keyword_cluster + target_support_phrases + cluster_support_phrases + [signature_support])
+        )
+    )
     allowed_support_phrases = [
         candidate
         for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8))
         if _keyword_similarity(candidate, primary_keyword) < 0.7
         and not _keyword_is_strict_token_subset(candidate, primary_keyword)
+        and _topic_signature_candidate_has_relevance(candidate, signature)
+        and _keyword_candidate_has_relevance(
+            candidate,
+            topic_tokens=topic_reference_tokens,
+            cluster_tokens=cluster_reference_tokens,
+            trend_tokens=set(),
+        )
+        and _topic_signature_candidate_score(candidate, signature) >= 2.0
     ][:2]
     support_phrase = allowed_support_phrases[0] if allowed_support_phrases else ""
     question_phrase = _normalize_keyword_phrase(str(signature.get("question_phrase") or ""))

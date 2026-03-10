@@ -6638,11 +6638,6 @@ def run_creator_pipeline(
         internal_link_source = "none"
         internal_link_anchor_map = {}
         internal_links_prompt_entries = []
-    if internal_link_min > 0:
-        if not provided_internal_link_inventory:
-            raise CreatorError("Internal link inventory unavailable for publishing site.")
-        if not internal_link_candidates:
-            raise CreatorError("No relevant internal link candidates found for publishing site.")
     effective_internal_min = min(internal_link_min, len(internal_link_candidates))
     effective_internal_max = min(internal_link_max, len(internal_link_candidates))
     if effective_internal_max < effective_internal_min:

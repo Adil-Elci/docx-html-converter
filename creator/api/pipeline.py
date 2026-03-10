@@ -194,7 +194,7 @@ ARTICLE_MAX_WORDS = 1200
 KEYWORD_LOW_SIGNAL_TOKENS = {
     "aktuell", "aktuelle", "aktuellen", "allgemein", "beitrag", "beitraege", "beliebt", "beliebte",
     "entdecken", "hilfe", "hilfreich", "infos", "magazin", "mehr", "ratgeber", "spannend", "spannende",
-    "thema", "themen", "tipps", "wissen", "wertvolle",
+    "thema", "themen", "tipps", "wissen", "wertvolle", "amp", "ideen", "richtig", "fuer", "jeden",
 }
 
 GERMAN_KEYWORD_MODIFIERS = (
@@ -1758,6 +1758,22 @@ def _keyword_token_set(value: str) -> set[str]:
     }
 
 
+def _keyword_focus_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _keyword_token_set(value)
+        if token not in KEYWORD_LOW_SIGNAL_TOKENS and token not in GERMAN_KEYWORD_MODIFIERS
+    }
+
+
+def _filter_keyword_focus_tokens(tokens: set[str]) -> set[str]:
+    return {
+        token
+        for token in tokens
+        if token not in KEYWORD_LOW_SIGNAL_TOKENS and token not in GERMAN_KEYWORD_MODIFIERS
+    }
+
+
 def _is_valid_keyword_phrase(value: str) -> bool:
     normalized = _normalize_keyword_phrase(value)
     if not normalized:
@@ -2021,6 +2037,24 @@ def _derive_trend_query_family(value: str) -> str:
     if len(words) > 4:
         words = words[:4]
     return " ".join(words).strip()
+
+
+def _derive_repeated_trend_tokens(
+    values: List[str],
+    *,
+    focus_tokens: set[str],
+    min_count: int = 2,
+) -> set[str]:
+    counts: Dict[str, int] = {}
+    for value in values:
+        for token in _keyword_focus_tokens(value):
+            counts[token] = counts.get(token, 0) + 1
+    repeated = {token for token, count in counts.items() if count >= min_count}
+    if focus_tokens:
+        focused = repeated & focus_tokens
+        if focused:
+            return focused
+    return repeated
 
 
 def _get_cached_google_suggestions(query: str) -> Optional[List[str]]:
@@ -2289,9 +2323,12 @@ def _discover_keyword_candidates(
         faq_candidates.extend(item for item in query_variants if _looks_like_question_phrase(item))
 
     topic_tokens = _keyword_token_set(topic)
-    cluster_tokens = {_normalize_keyword_phrase(item) for item in keyword_cluster if _normalize_keyword_phrase(item)}
+    cluster_tokens = _keyword_token_set(" ".join(keyword_cluster))
     allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
-    trend_tokens = _keyword_token_set(" ".join(keyword_candidates))
+    trend_tokens = _derive_repeated_trend_tokens(
+        keyword_candidates,
+        focus_tokens=_filter_keyword_focus_tokens(topic_tokens | allowed_tokens | cluster_tokens),
+    )
 
     ranked_keywords = _rank_keyword_candidates(
         keyword_candidates or query_variants,
@@ -2345,14 +2382,24 @@ def _score_keyword_candidate(
     allowed_tokens: set[str],
     trend_tokens: set[str],
 ) -> float:
-    candidate_tokens = _keyword_token_set(candidate)
+    candidate_tokens = _keyword_focus_tokens(candidate)
     if not candidate_tokens:
         return -1.0
+    topic_focus = _filter_keyword_focus_tokens(topic_tokens)
+    cluster_focus = _filter_keyword_focus_tokens(cluster_tokens)
+    allowed_focus = _filter_keyword_focus_tokens(allowed_tokens)
+    trend_focus = _filter_keyword_focus_tokens(trend_tokens)
+    topic_overlap = candidate_tokens & topic_focus
+    cluster_overlap = candidate_tokens & cluster_focus
+    trend_overlap = candidate_tokens & trend_focus
+    if not topic_overlap and not cluster_overlap and len(trend_overlap) < 2:
+        return -1.0
     score = 0.0
-    score += 3.0 * len(candidate_tokens & topic_tokens)
-    score += 1.5 * len(candidate_tokens & cluster_tokens)
-    score += 1.0 * len(candidate_tokens & allowed_tokens)
-    score += 2.0 * len(candidate_tokens & trend_tokens)
+    score += 4.0 * len(topic_overlap)
+    score += 2.0 * len(cluster_overlap)
+    score += 0.8 * len(candidate_tokens & allowed_focus)
+    score += 0.6 * len(trend_overlap)
+    score += 1.4 * _keyword_similarity(candidate, " ".join(topic_focus))
     score += min(1.5, len(candidate_tokens) * 0.3)
     return score
 
@@ -2364,10 +2411,15 @@ def _keyword_candidate_has_relevance(
     cluster_tokens: set[str],
     trend_tokens: set[str],
 ) -> bool:
-    candidate_tokens = _keyword_token_set(candidate)
+    candidate_tokens = _keyword_focus_tokens(candidate)
     if not candidate_tokens:
         return False
-    return bool(candidate_tokens & (topic_tokens | cluster_tokens | trend_tokens))
+    topic_focus = _filter_keyword_focus_tokens(topic_tokens)
+    cluster_focus = _filter_keyword_focus_tokens(cluster_tokens)
+    trend_focus = _filter_keyword_focus_tokens(trend_tokens)
+    if candidate_tokens & (topic_focus | cluster_focus):
+        return True
+    return len(candidate_tokens & trend_focus) >= 2
 
 
 def _topic_head_keyword(topic: str) -> str:
@@ -2441,7 +2493,10 @@ def _select_keywords(
     topic_tokens = _keyword_token_set(topic_phrase)
     cluster_tokens = _keyword_token_set(" ".join(keyword_cluster))
     allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
-    trend_tokens = _keyword_token_set(" ".join(trend_candidates))
+    trend_tokens = _derive_repeated_trend_tokens(
+        trend_candidates,
+        focus_tokens=_filter_keyword_focus_tokens(topic_tokens | cluster_tokens | allowed_tokens),
+    )
     relevant_allowed_topics = [
         item
         for item in allowed_topics
@@ -3338,6 +3393,134 @@ def _validate_contextual_alignment(article_html: str, content_brief: Optional[Di
     return errors
 
 
+def _parse_missing_secondary_keywords(errors: List[str]) -> List[str]:
+    values: List[str] = []
+    for error in errors:
+        if not str(error).startswith("secondary_keywords_missing:"):
+            continue
+        raw = str(error).split(":", 1)[1]
+        values.extend(part.strip() for part in raw.split(",") if part.strip())
+    return _dedupe_keyword_phrases(values)
+
+
+def _parse_thin_section_headings(errors: List[str]) -> List[str]:
+    headings: List[str] = []
+    for error in errors:
+        if not str(error).startswith("section_too_thin:"):
+            continue
+        heading = str(error).split(":", 1)[1].strip()
+        if heading:
+            headings.append(heading)
+    return headings
+
+
+def _build_keyword_support_paragraph(
+    *,
+    topic: str,
+    primary_keyword: str,
+    target_signals: List[str],
+    secondary_keywords: List[str],
+) -> str:
+    sentences: List[str] = []
+    topic_phrase = _format_title_case(topic or primary_keyword or "dieses Thema")
+    if primary_keyword:
+        sentences.append(
+            f"Bei {_format_title_case(primary_keyword)} helfen Eltern konkrete Alltagssituationen, klare Vergleichskriterien und ein realistischer Blick auf Nutzung und Komfort."
+        )
+    else:
+        sentences.append(f"Bei {topic_phrase} helfen konkrete Alltagssituationen, klare Vergleichskriterien und ein realistischer Blick auf Nutzung und Komfort.")
+    if target_signals:
+        sentences.append(
+            f"Wichtig ist dabei auch {_format_title_case(target_signals[0])}, weil sich Schutz, Passform und langfristige Alltagstauglichkeit daran besser einordnen lassen."
+        )
+    if secondary_keywords:
+        sentences.append(
+            f"Ebenso sollte {_format_title_case(secondary_keywords[0])} in die Entscheidung einfliessen, damit Leserinnen und Leser nicht nur oberflaechliche Tipps, sondern belastbare Orientierung erhalten."
+        )
+    if len(target_signals) > 1:
+        sentences.append(f"Gerade {_format_title_case(target_signals[1])} zeigt, worauf es im konkreten Einsatz wirklich ankommt.")
+    elif len(secondary_keywords) > 1:
+        sentences.append(f"Auch {_format_title_case(secondary_keywords[1])} verdient einen kurzen Blick, weil daraus praxisnahe Unterschiede sichtbar werden.")
+    return " ".join(sentences[:3]).strip()
+
+
+def _find_section_end_node(h2_tag: Any) -> Any:
+    current = h2_tag
+    last = h2_tag
+    while current is not None:
+        current = current.next_sibling
+        if current is None:
+            break
+        if getattr(current, "name", None) == "h2":
+            break
+        last = current
+    return last
+
+
+def _repair_keyword_context_gaps(
+    *,
+    article_html: str,
+    errors: List[str],
+    topic: str,
+    primary_keyword: str,
+    content_brief: Optional[Dict[str, Any]],
+) -> str:
+    if not article_html.strip():
+        return article_html
+    soup = BeautifulSoup(article_html, "lxml")
+    body = soup.body or soup
+    h2_tags = [tag for tag in body.find_all("h2") if _normalize_keyword_phrase(tag.get_text(" ")) not in {"fazit", "faq"}]
+    if not h2_tags:
+        return article_html
+
+    main_h2 = h2_tags[0]
+    if "primary_keyword_missing_h2" in errors and primary_keyword and not _keyword_present_relaxed(main_h2.get_text(" "), primary_keyword):
+        current_heading = re.sub(r"\s+", " ", main_h2.get_text(" ")).strip()
+        main_h2.string = f"{_format_title_case(primary_keyword)}: {current_heading}"
+
+    plain_text = _strip_html_tags(str(body))
+    target_signals = [
+        signal
+        for signal in [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()]
+        if not _keyword_present_relaxed(plain_text, signal)
+    ]
+    missing_secondaries = [
+        keyword for keyword in _parse_missing_secondary_keywords(errors) if not _keyword_present_relaxed(plain_text, keyword)
+    ]
+    thin_sections = _parse_thin_section_headings(errors)
+
+    paragraph_targets: List[Any] = []
+    for thin_heading in thin_sections:
+        match = next((tag for tag in h2_tags if _normalize_keyword_phrase(tag.get_text(" ")) == thin_heading), None)
+        if match is not None:
+            paragraph_targets.append(match)
+    if not paragraph_targets:
+        paragraph_targets.append(main_h2)
+
+    if target_signals or missing_secondaries or thin_sections or "primary_keyword_missing_h2" in errors:
+        for target_h2 in paragraph_targets[:2]:
+            paragraph_text = _build_keyword_support_paragraph(
+                topic=topic,
+                primary_keyword=primary_keyword,
+                target_signals=target_signals[:2],
+                secondary_keywords=missing_secondaries[:2],
+            )
+            if not paragraph_text:
+                continue
+            new_paragraph = soup.new_tag("p")
+            new_paragraph.string = paragraph_text
+            insert_after = _find_section_end_node(target_h2)
+            insert_after.insert_after(new_paragraph)
+            plain_text = _strip_html_tags(str(body))
+            target_signals = [signal for signal in target_signals if not _keyword_present_relaxed(plain_text, signal)]
+            missing_secondaries = [keyword for keyword in missing_secondaries if not _keyword_present_relaxed(plain_text, keyword)]
+            if not target_signals and not missing_secondaries:
+                break
+
+    result = body.decode_contents() if getattr(body, "decode_contents", None) else str(body)
+    return _strip_empty_blocks(result)
+
+
 def _wrap_paragraphs(text: str) -> str:
     cleaned = _strip_code_fences(text)
     if "<p" in cleaned or "<h2" in cleaned:
@@ -3742,6 +3925,16 @@ def _is_link_only_error(error: str) -> bool:
         or value.startswith("internal_link_count_too_high")
         or value.startswith("internal_link_uniqueness_too_low")
         or value.startswith("external_link_count_invalid")
+    )
+
+
+def _is_keyword_context_repairable_error(error: str) -> bool:
+    value = (error or "").strip()
+    return (
+        value.startswith("target_specificity_missing")
+        or value.startswith("primary_keyword_missing_h2")
+        or value.startswith("secondary_keywords_missing:")
+        or value.startswith("section_too_thin:")
     )
 
 
@@ -5005,7 +5198,42 @@ def run_creator_pipeline(
     if phase7_errors:
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
+        if all(_is_keyword_context_repairable_error(error) for error in phase7_errors):
+            phase5["article_html"] = _repair_keyword_context_gaps(
+                article_html=phase5["article_html"],
+                errors=phase7_errors,
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3["primary_keyword"],
+                content_brief=phase3.get("content_brief") or {},
+            )
+            phase5 = _apply_deterministic_article_metadata(
+                phase5,
+                phase3=phase3,
+                phase4=phase4,
+                reset_excerpt=True,
+            )
+            phase7_errors = _collect_article_validation_errors(
+                article_html=phase5["article_html"],
+                meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
+                meta_description=phase5.get("meta_description") or "",
+                slug=phase5.get("slug") or phase3["title_package"]["slug"],
+                topic=phase3["final_article_topic"],
+                primary_keyword=phase3.get("primary_keyword", ""),
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                required_h1=phase4["h1"],
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                backlink_url=backlink_url,
+                backlink_placement=phase4["backlink_placement"],
+                publishing_site_url=publishing_site_url,
+                min_internal_links=effective_internal_min,
+                max_internal_links=effective_internal_max,
+                content_brief=phase3.get("content_brief") or {},
+            )
+            current_wc = word_count_from_html(phase5["article_html"])
+            logger.info("creator.phase7.deterministic_fix_result errors=%s word_count=%s", phase7_errors, current_wc)
         for repair_attempt in range(phase7_repair_attempts):
+            if not phase7_errors:
+                break
             wc_ok = ARTICLE_MIN_WORDS <= current_wc <= ARTICLE_MAX_WORDS
             if wc_ok:
                 wc_instruction = (

@@ -27,6 +27,7 @@ from creator.api.pipeline import (
     _format_content_brief_prompt_text,
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
+    _repair_keyword_context_gaps,
     _run_pair_fit_reasoning,
     _select_keywords,
     _structured_content_mode,
@@ -183,6 +184,40 @@ def test_select_keywords_keeps_topic_focused_primary_keyword():
     assert result["primary_keyword"] != "eltern sucht ratgeber erziehung familie kinder liebe"
     assert "kinder" in result["primary_keyword"]
     assert "sonnen" in result["primary_keyword"]
+
+
+def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
+    result = _select_keywords(
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        llm_primary="kinder sehprobleme erkennen",
+        llm_secondary=[
+            "symptome von sehproblemen bei kindern",
+            "augenarzt termin mit kind vorbereiten",
+        ],
+        keyword_cluster=["kinder", "sehprobleme", "augen", "vorsorge"],
+        allowed_topics=[
+            "Familienurlaub auf Inseln Tipps Ideen",
+            "Jeans richtig kombinieren Tipps fuer jeden Stil",
+            "Kinder Augen Gesundheit verstehen",
+        ],
+        trend_candidates=[
+            "kinder sehprobleme erkennen",
+            "symptome von sehproblemen bei kindern",
+            "augenarzt termin mit kind vorbereiten",
+            "familienurlaub auf inseln tipps ideen",
+            "jeans richtig kombinieren tipps fuer jeden stil",
+            "wissen amp ideen",
+        ],
+        faq_candidates=[
+            "wann sollte ein kind zum augenarzt",
+            "wie erkennt man sehprobleme bei kindern",
+            "was hilft bei auffaelligen sehzeichen",
+        ],
+    )
+
+    assert "familienurlaub auf inseln tipps ideen" not in result["secondary_keywords"]
+    assert "jeans richtig kombinieren tipps fuer jeden stil" not in result["secondary_keywords"]
+    assert "wissen amp ideen" not in result["secondary_keywords"]
 
 
 def test_align_primary_keyword_to_topic_prefers_topic_head():
@@ -882,6 +917,44 @@ def test_generate_article_by_sections_uses_editorial_brief_and_bounded_tokens(mo
     assert section_prompts
     assert all(brief_text in str(item["prompt"]) for item in section_prompts)
     assert all(int(item["max_tokens"]) < 600 for item in section_prompts)
+
+
+def test_repair_keyword_context_gaps_preserves_fazit_and_faq_structure():
+    html = """
+    <h1>Kinder Sehprobleme erkennen und richtig reagieren</h1>
+    <p>Einleitung fuer Eltern und Familien.</p>
+    <h2>Praktische Tipps fuer Eltern im Umgang mit Sehproblemen</h2>
+    <p>Kurz erklaert.</p>
+    <h2>Fazit</h2>
+    <p>Bei kinder sehproblemen helfen fruehe Beobachtung und klare naechste Schritte.</p>
+    <h2>FAQ</h2>
+    <h3>Wann sollte ein Kind zum Augenarzt?</h3>
+    <p>Antwort mit ausreichend Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    <h3>Wie erkennt man Sehprobleme?</h3>
+    <p>Antwort mit ausreichend Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    <h3>Was hilft im Alltag?</h3>
+    <p>Antwort mit ausreichend Woertern fuer den Test und etwas Kontext zu Familien im Alltag.</p>
+    """
+
+    repaired = _repair_keyword_context_gaps(
+        article_html=html,
+        errors=[
+            "target_specificity_missing",
+            "primary_keyword_missing_h2",
+            "secondary_keywords_missing:symptome von sehproblemen bei kindern,augenarzt termin mit kind vorbereiten",
+            "section_too_thin:praktische tipps fuer eltern im umgang mit sehproblemen",
+        ],
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        primary_keyword="kinder sehprobleme erkennen",
+        content_brief={
+            "target_signals": ["Augenarzt Termin Mit Kind Vorbereiten", "Symptome Von Sehproblemen Bei Kindern"],
+        },
+    )
+
+    assert repaired.count("<h2>FAQ</h2>") == 1
+    assert repaired.count("<h2>Fazit</h2>") == 1
+    assert "Kinder Sehprobleme Erkennen:" in repaired
+    assert "augenarzt termin mit kind vorbereiten" in repaired.lower()
 
 
 def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():

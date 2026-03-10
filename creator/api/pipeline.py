@@ -378,6 +378,18 @@ def _truncate_title(value: str, *, max_chars: int = SEO_TITLE_MAX_CHARS) -> str:
     return clipped or cleaned[:max_chars].strip()
 
 
+def _append_sentence_with_limit(current: str, sentence: str, *, max_chars: int) -> str:
+    cleaned_sentence = re.sub(r"\s+", " ", str(sentence or "").strip())
+    if not cleaned_sentence:
+        return current
+    if not current:
+        return _truncate_title(cleaned_sentence, max_chars=max_chars)
+    candidate = f"{current} {cleaned_sentence}".strip()
+    if len(candidate) <= max_chars:
+        return candidate
+    return current
+
+
 def _build_deterministic_title_package(
     *,
     topic: str,
@@ -418,23 +430,46 @@ def _build_deterministic_meta_description(
     secondary_keywords: List[str],
     structured_mode: str,
 ) -> str:
-    opening = _format_title_case(topic or primary_keyword or "Ratgeber")
-    if structured_mode == "table":
-        suffix = "mit Vergleich, Einordnung und klaren Unterschieden."
-    elif structured_mode == "list":
-        suffix = "mit Checkliste, Tipps und klaren Schritten."
-    else:
-        suffix = "mit Einordnung, Tipps und konkreten Hinweisen."
-    supporting = ""
-    if secondary_keywords:
-        supporting = f" Fokus auf {_format_title_case(secondary_keywords[0])}."
-    description = _truncate_title(f"{opening} {suffix}{supporting}", max_chars=SEO_DESCRIPTION_MAX_CHARS)
-    if len(description) < SEO_DESCRIPTION_MIN_CHARS and secondary_keywords[1:2]:
-        description = _truncate_title(
-            f"{description} Auch {_format_title_case(secondary_keywords[1])} wird kompakt erklaert.",
-            max_chars=SEO_DESCRIPTION_MAX_CHARS,
-        )
-    return description
+    opening_source = _format_title_case(topic or primary_keyword or "Ratgeber")
+    normalized_secondaries = _dedupe_keyword_phrases(secondary_keywords)[:3]
+    descriptions: List[str] = []
+
+    for opening_max_chars in (60, 52, 44):
+        opening = _truncate_title(opening_source, max_chars=opening_max_chars)
+        if structured_mode == "table":
+            description = f"{opening}: Vergleich, Einordnung und klare Unterschiede."
+        elif structured_mode == "list":
+            description = f"{opening}: Checkliste, konkrete Schritte und hilfreiche Tipps."
+        else:
+            description = f"{opening}: kompakte Einordnung, klare Kriterien und konkrete Tipps."
+
+        support_sentences: List[str] = []
+        if normalized_secondaries:
+            support_sentences.append(f"Fokus auf {_format_title_case(normalized_secondaries[0])}.")
+        if normalized_secondaries[1:2]:
+            support_sentences.append(f"Auch {_format_title_case(normalized_secondaries[1])} wird praxisnah erklaert.")
+        elif primary_keyword and not _keyword_present_relaxed(opening, primary_keyword):
+            support_sentences.append(f"{_format_title_case(primary_keyword)} wird praxisnah erklaert.")
+        if normalized_secondaries[2:3]:
+            support_sentences.append(f"Zusaetzlich geht es um {_format_title_case(normalized_secondaries[2])}.")
+        support_sentences.append("Hilfreich fuer schnelle Entscheidungen im Alltag.")
+
+        for sentence in support_sentences:
+            description = _append_sentence_with_limit(
+                description,
+                sentence,
+                max_chars=SEO_DESCRIPTION_MAX_CHARS,
+            )
+
+        descriptions.append(description)
+        if SEO_DESCRIPTION_MIN_CHARS <= len(description) <= SEO_DESCRIPTION_MAX_CHARS:
+            return description
+
+    fallback_opening = _truncate_title(opening_source, max_chars=44)
+    fallback = f"{fallback_opening}: kompakte Einordnung, klare Kriterien und konkrete Tipps. Hilfreich fuer schnelle Entscheidungen im Alltag."
+    fallback = _truncate_title(fallback, max_chars=SEO_DESCRIPTION_MAX_CHARS)
+    descriptions.append(fallback)
+    return max(descriptions, key=len) if descriptions else fallback
 
 
 def _serialize_site_snapshot_pages(pages: List[Dict[str, str]]) -> str:
@@ -1540,6 +1575,26 @@ def _fill_article_metadata(article_payload: Dict[str, Any], fallback_title: str)
     article_payload["slug"] = slug
     article_payload["excerpt"] = excerpt
     return article_payload
+
+
+def _apply_deterministic_article_metadata(
+    article_payload: Dict[str, Any],
+    *,
+    phase3: Dict[str, Any],
+    phase4: Dict[str, Any],
+    reset_excerpt: bool = False,
+) -> Dict[str, Any]:
+    if reset_excerpt:
+        article_payload["excerpt"] = ""
+    article_payload["meta_title"] = phase3["title_package"]["meta_title"]
+    article_payload["slug"] = phase3["title_package"]["slug"]
+    article_payload["meta_description"] = _build_deterministic_meta_description(
+        topic=phase3["final_article_topic"],
+        primary_keyword=phase3["primary_keyword"],
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        structured_mode=phase3.get("structured_content_mode", "none"),
+    )
+    return _fill_article_metadata(article_payload, phase4["h1"])
 
 
 def _build_deterministic_image_prompts(topic: str) -> Dict[str, Any]:
@@ -4055,6 +4110,7 @@ def run_creator_pipeline(
     phase5_max_tokens_retry = max(800, _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1800))
     phase5_fallback_expand_passes = 0
     phase7_repair_attempts = max(0, _read_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 1))
+    phase7_repair_max_tokens = max(1200, _read_int_env("CREATOR_PHASE7_REPAIR_MAX_TOKENS", 2200))
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
     internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
     internal_link_candidates_max = max(internal_link_max, _read_int_env("CREATOR_INTERNAL_LINK_CANDIDATES_MAX", 10))
@@ -4776,15 +4832,11 @@ def run_creator_pipeline(
     art_html = _strip_empty_blocks(art_html)
     art_html = _strip_leading_empty_blocks(art_html)
     article_payload["article_html"] = art_html
-    article_payload["meta_title"] = phase3["title_package"]["meta_title"]
-    article_payload["slug"] = phase3["title_package"]["slug"]
-    article_payload["meta_description"] = _build_deterministic_meta_description(
-        topic=phase3["final_article_topic"],
-        primary_keyword=phase3["primary_keyword"],
-        secondary_keywords=phase3.get("secondary_keywords") or [],
-        structured_mode=phase3.get("structured_content_mode", "none"),
+    article_payload = _apply_deterministic_article_metadata(
+        article_payload,
+        phase3=phase3,
+        phase4=phase4,
     )
-    article_payload = _fill_article_metadata(article_payload, phase4["h1"])
     faq_enrichment_debug: Dict[str, Any] = {"enabled": True, "applied": False, "queries": [], "search_questions": [], "items": []}
     try:
         faq_enrichment = _generate_search_informed_faqs(
@@ -4814,6 +4866,11 @@ def run_creator_pipeline(
         warnings.append(f"phase5_faq_enrichment_failed:{exc}")
         faq_enrichment_debug["error"] = str(exc)
 
+    article_payload = _apply_deterministic_article_metadata(
+        article_payload,
+        phase3=phase3,
+        phase4=phase4,
+    )
     phase5 = article_payload
     debug["faq_enrichment"] = faq_enrichment_debug
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
@@ -4912,6 +4969,11 @@ def run_creator_pipeline(
     p7_wc = word_count_from_html(phase5["article_html"])
     logger.info("creator.phase7.start word_count=%s", p7_wc)
     phase7_errors: List[str] = []
+    phase5 = _apply_deterministic_article_metadata(
+        phase5,
+        phase3=phase3,
+        phase4=phase4,
+    )
     allowed_topics = [t.lower() for t in phase2.get("allowed_topics") or [] if isinstance(t, str)]
     if allowed_topics:
         topic_lower = (phase3["final_article_topic"] or "").lower()
@@ -4970,14 +5032,12 @@ def run_creator_pipeline(
                 "If the outline includes an FAQ section, answer the FAQ H3 headings directly, avoid duplicate questions, and keep each answer concise but useful. "
                 "Language must be strictly German (de-DE). Keep the final 'Fazit' topic-specific and non-generic. "
                 "Keyword contract: primary in H1+intro+>=1 H2 and 4-6 secondary keywords covered naturally. "
-                "Return JSON only."
+                "Return only the fixed article HTML. Do not return JSON. Do not return markdown fences."
             )
             user_prompt = (
                 f"Article_html: {phase5['article_html']}\n"
                 f"Issues to fix: {phase7_errors}\n"
                 f"Current word count: {current_wc}\n"
-                f"Required meta_title: {phase3['title_package']['meta_title']}\n"
-                f"Required slug: {phase3['title_package']['slug']}\n"
                 f"{content_brief_text}\n"
                 f"Backlink URL: {backlink_url}\n"
                 f"Placement: {phase4['backlink_placement']}\n"
@@ -4991,23 +5051,21 @@ def run_creator_pipeline(
                 f"Topic for topic-specific Fazit: {phase3['final_article_topic']}\n"
                 "Language: German (de-DE).\n"
                 "Every section must add concrete substance, not generic filler.\n"
-                "Return JSON: {\"meta_title\":\"...\",\"meta_description\":\"...\",\"slug\":\"...\","
-                "\"excerpt\":\"...\",\"article_html\":\"...\"}"
+                "Return only the fixed article HTML."
             )
             try:
-                llm_out = call_llm_json(
+                fixed_html = call_llm_text(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     api_key=llm_api_key,
                     base_url=llm_base_url,
                     model=planning_model,
                     timeout_seconds=http_timeout,
-                    max_tokens=3000,
-                    allow_html_fallback=False,
+                    max_tokens=phase7_repair_max_tokens,
                     request_label="phase7_repair",
                     usage_collector=_collect_llm_usage,
                 )
-                fixed_html = (llm_out.get("article_html") or "").strip()
+                fixed_html = (fixed_html or "").strip()
                 fixed_wc = word_count_from_html(fixed_html) if fixed_html else 0
                 logger.info("creator.phase7.fix_result attempt=%s before=%s after=%s", repair_attempt + 1, current_wc, fixed_wc)
                 if fixed_html and ARTICLE_MIN_WORDS <= fixed_wc <= ARTICLE_MAX_WORDS:
@@ -5026,19 +5084,12 @@ def run_creator_pipeline(
                     anchor_text=phase4["anchor_text_final"],
                     required_h1=phase4["h1"],
                 )
-                phase5["meta_title"] = llm_out.get("meta_title") or phase5["meta_title"]
-                phase5["meta_description"] = llm_out.get("meta_description") or phase5["meta_description"]
-                phase5["slug"] = llm_out.get("slug") or phase5["slug"]
-                phase5["excerpt"] = llm_out.get("excerpt") or phase5["excerpt"]
-                phase5["meta_title"] = phase3["title_package"]["meta_title"]
-                phase5["slug"] = phase3["title_package"]["slug"]
-                phase5["meta_description"] = _build_deterministic_meta_description(
-                    topic=phase3["final_article_topic"],
-                    primary_keyword=phase3["primary_keyword"],
-                    secondary_keywords=phase3.get("secondary_keywords") or [],
-                    structured_mode=phase3.get("structured_content_mode", "none"),
+                phase5 = _apply_deterministic_article_metadata(
+                    phase5,
+                    phase3=phase3,
+                    phase4=phase4,
+                    reset_excerpt=True,
                 )
-                phase5 = _fill_article_metadata(phase5, phase4["h1"])
                 phase7_errors = _collect_article_validation_errors(
                     article_html=phase5["article_html"],
                     meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],

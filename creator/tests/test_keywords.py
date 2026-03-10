@@ -608,6 +608,18 @@ def test_build_deterministic_title_package_uses_topic_over_site_identity_keyword
     assert "Eltern Sucht Ratgeber" not in title_package["h1"]
 
 
+def test_build_deterministic_meta_description_meets_length_contract():
+    meta_description = _build_deterministic_meta_description(
+        topic="Kinder Sonnenbrillen: worauf Eltern achten sollten",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=["uv schutz fuer kinderaugen"],
+        structured_mode="none",
+    )
+
+    assert 120 <= len(meta_description) <= 160
+    assert "schutz fuer kinderaugen" in meta_description.lower()
+
+
 def test_structured_content_mode_detects_list_and_table_topics():
     assert _structured_content_mode("Baby vorbereiten Checkliste", "baby vorbereiten checkliste", "informational") == "list"
     assert _structured_content_mode("Geburtskosten Vergleich", "geburtskosten vergleich", "commercial") == "table"

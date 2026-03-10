@@ -557,27 +557,34 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
     )
     captured_labels: list[str] = []
 
-    def fake_call_llm_json(**kwargs):
+    def fake_call_llm_text(**kwargs):
         label = str(kwargs.get("request_label") or "")
         captured_labels.append(label)
         assert label.startswith("phase5_writer")
         prompt = str(kwargs.get("user_prompt") or "")
-        plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput JSON schema:", 1)[0]
+        plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
         plan = json.loads(plan_json)
-        sections = []
-        faq_items = []
+        parts = [
+            "[[INTRO_HTML]]",
+            (
+                "<p>Kinder sehprobleme erkennen hilft Eltern, Unsicherheiten im Familienalltag frueh einzuordnen, "
+                "klare Beobachtungen zu sammeln und passende naechste Schritte ohne Alarmismus abzuleiten.</p>"
+            ),
+            "[[/INTRO_HTML]]",
+        ]
         for section in plan["sections"]:
             if section["kind"] == "faq":
-                for question in section["h3"]:
-                    faq_items.append(
-                        {
-                            "question": question,
-                            "answer_html": (
+                for index, _question in enumerate(section["h3"], start=1):
+                    parts.extend(
+                        [
+                            f"[[FAQ_{index}]]",
+                            (
                                 "<p>Die Antwort erklaert den konkreten Alltag, nennt klare Beobachtungen, "
                                 "ordnet Risiken ein und zeigt Eltern, wann praktische Unterstuetzung oder "
                                 "ein Termin zur weiteren Abklaerung sinnvoll wird.</p>"
                             ),
-                        }
+                            f"[[/FAQ_{index}]]",
+                        ]
                     )
                 continue
             required_keywords = " und ".join(section.get("required_keywords") or ["praxisnahe einordnung"])
@@ -595,18 +602,17 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
                 body_html += "<ul><li>Signal beobachten</li><li>Alltag dokumentieren</li></ul>"
             if "table" in (section.get("required_elements") or []):
                 body_html += "<table><tr><th>Signal</th><th>Bedeutung</th></tr><tr><td>Blinzeln</td><td>Abklaeren</td></tr></table>"
-            sections.append({"section_id": section["section_id"], "body_html": body_html})
-        return {
-            "intro_html": (
-                "<p>Kinder sehprobleme erkennen hilft Eltern, Unsicherheiten im Familienalltag frueh einzuordnen, "
-                "klare Beobachtungen zu sammeln und passende naechste Schritte ohne Alarmismus abzuleiten.</p>"
-            ),
-            "sections": sections,
-            "faq_items": faq_items,
-            "excerpt": "Konkrete Orientierung fuer Eltern bei ersten Anzeichen von Sehproblemen.",
-        }
+            parts.extend([f"[[SECTION:{section['section_id']}]]", body_html, "[[/SECTION]]"])
+        parts.extend(
+            [
+                "[[EXCERPT]]",
+                "Konkrete Orientierung fuer Eltern bei ersten Anzeichen von Sehproblemen.",
+                "[[/EXCERPT]]",
+            ]
+        )
+        return "\n".join(parts)
 
-    monkeypatch.setattr("creator.api.pipeline.call_llm_json", fake_call_llm_json)
+    monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
 
     result = run_creator_pipeline(
         target_site_url="https://www.brillenhaus24.de/",
@@ -671,14 +677,25 @@ def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(
         },
     )
 
-    monkeypatch.setattr(
-        "creator.api.pipeline.call_llm_json",
-        lambda **kwargs: {
-            "intro_html": "<p>Kinder sehprobleme erkennen.</p>",
-            "sections": [{"section_id": "section_1", "body_html": "<p>Kurz.</p>"}],
-            "faq_items": [{"question": "Wann sollte ein Kind zum Augenarzt?", "answer_html": "<p>Kurz.</p>"}],
-        },
-    )
+    def fake_call_llm_text(**kwargs):
+        prompt = str(kwargs.get("user_prompt") or "")
+        plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
+        plan = json.loads(plan_json)
+        parts = [
+            "[[INTRO_HTML]]",
+            "<p>Kinder sehprobleme erkennen.</p>",
+            "[[/INTRO_HTML]]",
+        ]
+        for section in plan["sections"]:
+            if section["kind"] == "faq":
+                for index, _question in enumerate(section["h3"], start=1):
+                    parts.extend([f"[[FAQ_{index}]]", "<p>Kurz.</p>", f"[[/FAQ_{index}]]"])
+                continue
+            parts.extend([f"[[SECTION:{section['section_id']}]]", "<p>Kurz.</p>", "[[/SECTION]]"])
+        parts.extend(["[[EXCERPT]]", "Kurz.", "[[/EXCERPT]]"])
+        return "\n".join(parts)
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
 
     with pytest.raises(CreatorError, match=r"Phase 5 writer attempt 1 validation failed:"):
         run_creator_pipeline(

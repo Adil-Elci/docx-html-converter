@@ -3707,6 +3707,87 @@ def _coerce_writer_section_bodies(value: Any) -> Dict[str, str]:
     return out
 
 
+def _extract_writer_tagged_block(raw_text: str, tag: str) -> str:
+    pattern = rf"\[\[{re.escape(tag)}\]\](.*?)\[\[/{re.escape(tag)}\]\]"
+    match = re.search(pattern, raw_text or "", flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip()
+
+
+def _extract_writer_section_blocks(raw_text: str) -> Dict[str, str]:
+    sections: Dict[str, str] = {}
+    for section_id, body in re.findall(
+        r"\[\[SECTION:([A-Za-z0-9_\-]+)\]\](.*?)\[\[/SECTION\]\]",
+        raw_text or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        normalized_body = _normalize_writer_html_fragment(body)
+        if normalized_body:
+            sections[str(section_id).strip()] = normalized_body
+    return sections
+
+
+def _extract_writer_faq_answers(raw_text: str) -> Dict[int, str]:
+    answers: Dict[int, str] = {}
+    for raw_index, body in re.findall(
+        r"\[\[FAQ_(\d+)\]\](.*?)\[\[/FAQ_\1\]\]",
+        raw_text or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        try:
+            index = int(raw_index)
+        except ValueError:
+            continue
+        normalized_body = _normalize_writer_html_fragment(body)
+        if normalized_body:
+            answers[index] = normalized_body
+    return answers
+
+
+def _parse_writer_tagged_response(
+    *,
+    raw_text: str,
+    article_plan: Dict[str, Any],
+) -> Dict[str, Any]:
+    intro_html = _normalize_writer_html_fragment(_extract_writer_tagged_block(raw_text, "INTRO_HTML"))
+    if not intro_html:
+        raise LLMError("Writer output missing INTRO_HTML block.")
+
+    section_bodies = _extract_writer_section_blocks(raw_text)
+    expected_section_ids = [
+        str(section.get("section_id") or "").strip()
+        for section in (article_plan.get("sections") or [])
+        if str(section.get("kind") or "body").strip() != "faq"
+    ]
+    missing_sections = [section_id for section_id in expected_section_ids if section_id and section_id not in section_bodies]
+    if missing_sections:
+        raise LLMError("Writer output missing section blocks: " + ",".join(missing_sections[:4]))
+
+    faq_questions = [str(item).strip() for item in (article_plan.get("faq_questions") or []) if str(item).strip()]
+    faq_answers = _extract_writer_faq_answers(raw_text)
+    missing_faq_indexes = [index for index in range(1, len(faq_questions) + 1) if index not in faq_answers]
+    if missing_faq_indexes:
+        raise LLMError(
+            "Writer output missing FAQ answer blocks: " + ",".join(str(index) for index in missing_faq_indexes[:4])
+        )
+
+    faq_items = [
+        {"question": question, "answer_html": faq_answers[index]}
+        for index, question in enumerate(faq_questions, start=1)
+        if faq_answers.get(index)
+    ]
+    excerpt = re.sub(r"\s+", " ", _strip_html_tags(_extract_writer_tagged_block(raw_text, "EXCERPT"))).strip()
+    if not excerpt:
+        excerpt = _extract_first_paragraph_text(intro_html)[:200]
+    return {
+        "intro_html": intro_html,
+        "section_bodies": section_bodies,
+        "faq_items": faq_items,
+        "excerpt": excerpt,
+    }
+
+
 def _render_article_from_plan(
     *,
     article_plan: Dict[str, Any],
@@ -3784,7 +3865,40 @@ def _generate_article_from_plan(
         "Write a German (de-DE) SEO article for a fixed deterministic plan. "
         "The structure is owned by the application, so you must only fill the approved content slots. "
         "Do not add or remove sections. Do not add hyperlinks. Do not include H1/H2 wrappers inside section bodies. "
-        "Return valid JSON only."
+        "Return only the tagged slot format requested by the application."
+    )
+    slot_lines = [
+        "[[INTRO_HTML]]",
+        "<p>...</p>",
+        "[[/INTRO_HTML]]",
+    ]
+    for section in article_plan.get("sections") or []:
+        if str(section.get("kind") or "body").strip() == "faq":
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        if not section_id:
+            continue
+        slot_lines.extend(
+            [
+                f"[[SECTION:{section_id}]]",
+                "<p>...</p>",
+                "[[/SECTION]]",
+            ]
+        )
+    for index, _question in enumerate(article_plan.get("faq_questions") or [], start=1):
+        slot_lines.extend(
+            [
+                f"[[FAQ_{index}]]",
+                "<p>...</p>",
+                f"[[/FAQ_{index}]]",
+            ]
+        )
+    slot_lines.extend(
+        [
+            "[[EXCERPT]]",
+            "Ein kurzer Auszug.",
+            "[[/EXCERPT]]",
+        ]
     )
     user_prompt = (
         f"Topic: {phase3.get('final_article_topic', '')}\n"
@@ -3792,26 +3906,24 @@ def _generate_article_from_plan(
         f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
         f"Editorial brief: {content_brief_text}\n"
         f"Plan:\n{json.dumps(plan_payload, ensure_ascii=False, sort_keys=True, indent=2)}\n\n"
-        "Output JSON schema:\n"
-        "{\n"
-        '  "intro_html": "<p>...</p>",\n'
-        '  "sections": [{"section_id": "section_1", "body_html": "<p>...</p>"}],\n'
-        '  "faq_items": [{"question": "...?", "answer_html": "<p>...</p>"}],\n'
-        '  "excerpt": "string"\n'
-        "}\n"
+        "Output format:\n"
+        f"{chr(10).join(slot_lines)}\n"
         "Rules:\n"
-        "- intro_html: exactly one opening paragraph, 80-120 words, include the primary keyword naturally.\n"
-        "- For each non-FAQ section, return body_html only with 1-2 substantial paragraphs and any required list/table.\n"
+        "- Return every slot exactly once using the same markers and section ids.\n"
+        "- INTRO_HTML: exactly one opening paragraph, 80-120 words, include the primary keyword naturally.\n"
+        "- For each SECTION block, return only body HTML with 1-2 substantial paragraphs and any required list/table.\n"
         "- For each section, naturally include its required_keywords and required_terms.\n"
         "- Use concrete criteria, examples, risks, comparisons, or next steps. Avoid generic filler.\n"
-        "- The Fazit must be topic-specific, concrete, and non-generic.\n"
-        "- faq_items must answer the provided FAQ questions directly, 35-55 words each, with no links.\n"
+        "- The Fazit section body must be topic-specific, concrete, and non-generic.\n"
+        "- Each FAQ_n block must answer FAQ question n directly, 35-55 words, with no links.\n"
+        "- EXCERPT must be plain text, one sentence, max 160 characters.\n"
+        "- Do not output JSON, markdown fences, explanations, or any text outside the requested markers.\n"
         "- Keep language strictly German (de-DE)."
     )
     if validation_feedback:
         user_prompt += f"\nPrevious validation issues to fix exactly: {validation_feedback}"
 
-    llm_out = call_llm_json(
+    raw_text = call_llm_text(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         api_key=llm_api_key,
@@ -3823,11 +3935,10 @@ def _generate_article_from_plan(
         request_label="phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry",
         usage_collector=usage_collector,
     )
-    intro_html = _normalize_writer_html_fragment(
-        str(llm_out.get("intro_html") or llm_out.get("intro") or llm_out.get("opening_html") or "").strip()
-    )
-    section_bodies = _coerce_writer_section_bodies(llm_out.get("sections"))
-    faq_items = _coerce_generated_faqs(llm_out.get("faq_items") or llm_out.get("faqs"))
+    llm_out = _parse_writer_tagged_response(raw_text=raw_text, article_plan=article_plan)
+    intro_html = str(llm_out.get("intro_html") or "").strip()
+    section_bodies = dict(llm_out.get("section_bodies") or {})
+    faq_items = _coerce_generated_faqs(llm_out.get("faq_items") or [])
     article_html = _render_article_from_plan(
         article_plan=article_plan,
         intro_html=intro_html,

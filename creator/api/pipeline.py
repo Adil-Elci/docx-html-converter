@@ -2076,6 +2076,26 @@ def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
     return out
 
 
+def _topic_focus_terms(topic: str, *, max_terms: int = 2) -> List[str]:
+    out: List[str] = []
+    for term in _topic_keywords(topic, max_terms=max_terms * 3):
+        if term in PAIR_FIT_AUDIENCE_TOKENS or term in KEYWORD_LOW_SIGNAL_TOKENS:
+            continue
+        if term in GERMAN_KEYWORD_MODIFIERS:
+            continue
+        if term in out:
+            continue
+        out.append(term)
+        if len(out) >= max_terms:
+            break
+    if out:
+        return out
+    fallback = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic) or topic)
+    if not fallback:
+        return []
+    return [" ".join(fallback.split()[: max(1, max_terms)])]
+
+
 def _normalize_keyword_phrase(value: str) -> str:
     cleaned = re.sub(r"[^\wäöüÄÖÜß\s-]", " ", (value or "").strip().lower())
     cleaned = re.sub(r"[_-]+", " ", cleaned)
@@ -4744,6 +4764,7 @@ def _build_deterministic_article_plan(
         [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
         max_items=6,
     )
+    topic_focus_terms = _topic_focus_terms(topic, max_terms=2)
     publishing_signals = _merge_string_lists(
         [str(content_brief.get("audience") or "").strip()],
         [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
@@ -4795,8 +4816,8 @@ def _build_deterministic_article_plan(
                     "h2": "FAQ",
                     "h3": faq_questions[:FAQ_MIN_QUESTIONS],
                     "goal": _section_goal_from_heading(h2, section_kind="faq", topic=topic),
-                    "required_keywords": _dedupe_keyword_phrases(secondary_keywords[:2]),
-                    "required_terms": target_signals[:1],
+                    "required_keywords": [],
+                    "required_terms": [],
                     "required_elements": [],
                     "target_words": {"per_answer_min": 35, "per_answer_max": 55},
                 }
@@ -4811,7 +4832,7 @@ def _build_deterministic_article_plan(
                     "h3": [],
                     "goal": _section_goal_from_heading(h2, section_kind="fazit", topic=topic),
                     "required_keywords": [],
-                    "required_terms": _merge_string_lists(target_signals[:1], publishing_signals[:1], max_items=2),
+                    "required_terms": _merge_string_lists(topic_focus_terms, target_signals[:1], publishing_signals[:1], max_items=3),
                     "required_elements": [],
                     "target_words": {"min": 65, "max": 95},
                 }
@@ -5081,6 +5102,13 @@ def _generate_article_from_plan(
     plan_payload = {
         "h1": article_plan.get("h1"),
         "structured_mode": article_plan.get("structured_mode"),
+        "keyword_guardrails": {
+            "intro_exact_primary_required": True,
+            "body_exact_primary_max": 1,
+            "body_exact_secondary_max": 1,
+            "faq_exact_secondary_allowed": False,
+            "fazit_must_use_required_terms": True,
+        },
         "sections": article_plan.get("sections"),
         "faq_questions": article_plan.get("faq_questions"),
     }
@@ -5138,9 +5166,12 @@ def _generate_article_from_plan(
         "- INTRO_HTML: exactly one opening paragraph, 80-120 words, include the primary keyword naturally.\n"
         "- For each SECTION block, return only body HTML with 1-2 substantial paragraphs and any required list/table.\n"
         "- For each section, naturally include its required_keywords and required_terms.\n"
+        "- After INTRO_HTML, avoid repeating the exact primary keyword across multiple sections; use natural variants instead.\n"
+        "- Use each exact secondary keyword in at most one non-FAQ section, and do not force exact secondary keywords into FAQ answers.\n"
         "- Use concrete criteria, examples, risks, comparisons, or next steps. Avoid generic filler.\n"
         "- Do not use greeting-style intros or stock openers such as 'Herzlich willkommen'.\n"
-        "- The Fazit section body must be topic-specific, concrete, and non-generic.\n"
+        "- The Fazit section body must be topic-specific, concrete, non-generic, and explicitly use at least one of its required_terms.\n"
+        "- FAQ answers must answer the question directly without repeating the same keyword phrase across multiple answers.\n"
         "- Each FAQ_n block must answer FAQ question n directly, 35-55 words, with no links.\n"
         "- EXCERPT must be plain text, one sentence, max 160 characters.\n"
         "- Do not output JSON, markdown fences, explanations, or any text outside the requested markers.\n"

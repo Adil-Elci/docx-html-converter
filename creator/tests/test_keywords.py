@@ -781,7 +781,11 @@ def test_build_deterministic_article_plan_assigns_structure_and_keyword_coverage
     assert plan["sections"][0]["kind"] == "body"
     assert plan["sections"][0]["required_keywords"]
     assert "kinder sehprobleme erkennen" not in plan["sections"][0]["required_keywords"]
+    assert plan["sections"][-2]["kind"] == "fazit"
+    assert "sehprobleme" in plan["sections"][-2]["required_terms"]
     assert plan["sections"][-1]["kind"] == "faq"
+    assert plan["sections"][-1]["required_keywords"] == []
+    assert plan["sections"][-1]["required_terms"] == []
     assert len(plan["faq_questions"]) == 3
 
 
@@ -808,8 +812,13 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
         captured_labels.append(label)
         assert label.startswith("phase5_writer")
         prompt = str(kwargs.get("user_prompt") or "")
+        assert "do not force exact secondary keywords into FAQ answers" in prompt
+        assert "The Fazit section body must be topic-specific, concrete, non-generic, and explicitly use at least one of its required_terms." in prompt
         plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
         plan = json.loads(plan_json)
+        assert plan["sections"][-1]["required_keywords"] == []
+        assert plan["sections"][-2]["kind"] == "fazit"
+        assert "sehprobleme" in plan["sections"][-2]["required_terms"]
         parts = [
             "[[INTRO_HTML]]",
             (

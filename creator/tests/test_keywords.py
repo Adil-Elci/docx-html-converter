@@ -310,6 +310,13 @@ def test_ensure_faq_candidates_dedupes_similar_questions():
     assert len(set(faqs)) == 3
 
 
+def test_ensure_faq_candidates_keeps_three_questions_for_question_like_topics():
+    faqs = _ensure_faq_candidates("Wann ist Hilfe bei Sehproblemen sinnvoll", [])
+
+    assert len(faqs) == 3
+    assert len(set(faqs)) == 3
+
+
 def test_format_faq_question_preserves_explicit_question_mark():
     assert _format_faq_question("Kindersonnenbrillen richtig waehlen?") == "Kindersonnenbrillen richtig waehlen?"
 

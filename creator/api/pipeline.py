@@ -3208,6 +3208,16 @@ def _format_faq_question(question: str) -> str:
     return formatted
 
 
+def _faq_question_intent(question: str) -> str:
+    normalized = _normalize_keyword_phrase(question)
+    if not normalized:
+        return ""
+    for prefix in sorted(GERMAN_QUESTION_PREFIXES, key=len, reverse=True):
+        if normalized == prefix or normalized.startswith(f"{prefix} "):
+            return prefix
+    return normalized.split()[0]
+
+
 def _dedupe_faq_questions(values: List[str], *, max_items: int = FAQ_MIN_QUESTIONS) -> List[str]:
     out: List[str] = []
     for item in values:
@@ -3215,7 +3225,12 @@ def _dedupe_faq_questions(values: List[str], *, max_items: int = FAQ_MIN_QUESTIO
         if not formatted:
             continue
         normalized = _normalize_keyword_phrase(formatted)
-        if any(_keyword_similarity(normalized, _normalize_keyword_phrase(existing)) >= 0.7 for existing in out):
+        intent = _faq_question_intent(formatted)
+        if any(
+            _keyword_similarity(normalized, _normalize_keyword_phrase(existing)) >= 0.7
+            and _faq_question_intent(existing) == intent
+            for existing in out
+        ):
             continue
         out.append(formatted)
         if len(out) >= max_items:
@@ -3235,6 +3250,19 @@ def _ensure_faq_candidates(topic: str, faq_candidates: List[str]) -> List[str]:
         f"Wann ist Hilfe bei {topic_phrase} sinnvoll?",
     ]
     normalized_faqs = _dedupe_faq_questions(normalized_faqs + fallback_questions, max_items=FAQ_MIN_QUESTIONS)
+    if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
+        return normalized_faqs[:FAQ_MIN_QUESTIONS]
+
+    compact_topic = _topic_head_keyword(topic) or topic_phrase or "diesem thema"
+    backup_questions = [
+        f"Was bedeutet {compact_topic} im Alltag?",
+        f"Woran erkennt man {compact_topic} fruehzeitig?",
+        f"Wann ist fachlicher Rat bei {compact_topic} sinnvoll?",
+    ]
+    normalized_faqs = _dedupe_faq_questions(
+        normalized_faqs + backup_questions,
+        max_items=max(FAQ_MIN_QUESTIONS, len(normalized_faqs) + len(backup_questions)),
+    )
     return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
 

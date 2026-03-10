@@ -36,6 +36,7 @@ from creator.api.pipeline import (
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
     _run_pair_fit_reasoning,
+    _sanitize_editorial_phrase,
     run_creator_pipeline,
     _select_keywords,
     _structured_content_mode,
@@ -315,6 +316,27 @@ def test_normalize_writer_html_fragment_strips_promo_and_tagline_noise():
     assert "Onlineshop" not in normalized
     assert "Familien4leben" not in normalized
     assert "Ein sauberer, hilfreicher Absatz bleibt erhalten." in normalized
+
+
+def test_sanitize_editorial_phrase_drops_shop_promo_noise():
+    assert _sanitize_editorial_phrase(
+        "Brillenhaus24.de – Ihr Onlineshop fuer guenstige Brillen & Komplettbrillen",
+        allow_single_token=True,
+    ) == ""
+    assert _sanitize_editorial_phrase(
+        "Brillenhaus24.de – Ihr Onlineshop für günstige Brillen & Komplettbrillen",
+        allow_single_token=True,
+    ) == ""
+
+
+def test_normalize_writer_html_fragment_strips_greeting_filler():
+    normalized = _normalize_writer_html_fragment(
+        "<p>Herzlich willkommen zu einem Thema, das viele Eltern beschaeftigt: passender UV-Schutz fuer Kinderaugen.</p>"
+        "<p>Kinder brauchen alltagstaugliche Sonnenbrillen mit verlaesslichem UV-Schutz und stabilem Sitz.</p>"
+    )
+
+    assert "Herzlich willkommen" not in normalized
+    assert "Kinder brauchen alltagstaugliche Sonnenbrillen" in normalized
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
@@ -1248,7 +1270,11 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
         topic_signature={
             "subject_phrase": "sonnenschutz fuer die ganze familie",
             "question_phrase": "",
-            "target_terms": ["Warenkorb (0 Artikel)", "Kinder Sonnenbrillen"],
+            "target_terms": [
+                "Warenkorb (0 Artikel)",
+                "Brillenhaus24.de – Ihr Onlineshop fuer guenstige Brillen & Komplettbrillen",
+                "Kinder Sonnenbrillen",
+            ],
             "target_support_phrases": ["kinder sonnenbrillen", "uv schutz fuer kinderaugen"],
             "support_phrases": ["sonnenschutz fuer die ganze familie", "kinder sonnenbrillen"],
             "keyword_cluster_phrases": ["kinder sonnenbrillen", "uv schutz fuer kinderaugen"],
@@ -1258,6 +1284,7 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
 
     headings = [item["h2"] for item in outline["outline"]]
     assert all("Warenkorb" not in heading for heading in headings)
+    assert all("Onlineshop" not in heading for heading in headings)
     assert any("Qualitaetsmerkmale" in heading for heading in headings)
     assert any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)

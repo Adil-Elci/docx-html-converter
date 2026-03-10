@@ -91,12 +91,14 @@ PAIR_FIT_EXTRA_STOPWORDS = {
 PAIR_FIT_BOILERPLATE_TOKENS = {
     "artikel", "beitrag", "beitraege", "blog", "cookie", "datenschutz", "entdecken", "forum", "hilfe", "home",
     "impressum", "jetzt", "kategorie", "kategorien", "login", "magazin", "mehr", "menu", "navigation", "news",
+    "onlineshop",
     "online", "portal", "registrieren", "service", "shop", "start", "startseite", "suche", "tag", "tags",
     "uebersicht", "weiterlesen",
 }
 PAIR_FIT_PROMO_TOKENS = {
-    "angebot", "angebote", "bestellen", "guenstig", "kaufen", "marke", "marken", "preis", "preise", "rabatt",
-    "sale", "shop", "sofort", "versand",
+    "angebot", "angebote", "bestellen", "guenstig", "guenstige", "günstig", "günstige", "kaufen",
+    "komplettbrille", "komplettbrillen", "marke", "marken", "preis", "preise", "rabatt", "sale", "shop",
+    "sofort", "versand",
 }
 PAIR_FIT_INFORMATIONAL_CUES = {
     "alltag", "antworten", "anleitung", "aufpassen", "beachten", "checkliste", "einordnung", "erklaert", "hilfe",
@@ -1944,6 +1946,16 @@ def _normalize_keyword_phrase(value: str) -> str:
     return cleaned
 
 
+def _fold_keyword_text(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+
+
 def _keyword_token_set(value: str) -> set[str]:
     tokens = _tokenize_words(_normalize_keyword_phrase(value))
     return {
@@ -2013,11 +2025,20 @@ def _sanitize_editorial_phrase(value: str, *, allow_single_token: bool = False) 
     tokens = _keyword_token_set(normalized)
     if not tokens:
         return ""
-    ui_hits = sum(1 for token in tokens if token in GENERIC_UI_CHROME_TOKENS or token in PAIR_FIT_BOILERPLATE_TOKENS)
-    promo_hits = sum(1 for token in tokens if token in PAIR_FIT_PROMO_TOKENS)
+    folded_tokens = set(_normalize_keyword_phrase(_fold_keyword_text(normalized)).split())
+    ui_hits = sum(
+        1
+        for token in folded_tokens
+        if token in GENERIC_UI_CHROME_TOKENS or token in PAIR_FIT_BOILERPLATE_TOKENS
+    )
+    promo_hits = sum(1 for token in folded_tokens if token in PAIR_FIT_PROMO_TOKENS)
     if ui_hits >= max(1, len(tokens) - 1):
         return ""
     if len(tokens) >= 3 and (ui_hits + promo_hits) >= len(tokens) - 1:
+        return ""
+    if "onlineshop" in folded_tokens and promo_hits >= 1:
+        return ""
+    if {"brillen", "komplettbrillen"} <= folded_tokens and {"guenstig", "guenstige"} & folded_tokens:
         return ""
     if len(tokens) < KEYWORD_MIN_WORDS:
         if allow_single_token and len(tokens) == 1:
@@ -4685,6 +4706,11 @@ def _sanitize_generated_fragment_html(value: str) -> str:
         cleaned,
         flags=re.IGNORECASE,
     )
+    cleaned = re.sub(
+        r"(?i)\bherzlich willkommen(?:[^<\n]{0,140}?)(?:[:.!?])\s*",
+        "",
+        cleaned,
+    )
     return cleaned.strip()
 
 
@@ -4882,6 +4908,7 @@ def _generate_article_from_plan(
         "The structure is owned by the application, so you must only fill the approved content slots. "
         "Do not add or remove sections. Do not add hyperlinks. Do not include H1/H2 wrappers inside section bodies. "
         "Do not repeat domain names, site slogans, navigation labels, or unrelated article titles as prose. "
+        "Do not use stock openers such as 'Herzlich willkommen', 'Willkommen', or similar greeting filler. "
         "Return only the tagged slot format requested by the application."
     )
     slot_lines = [
@@ -4931,6 +4958,7 @@ def _generate_article_from_plan(
         "- For each SECTION block, return only body HTML with 1-2 substantial paragraphs and any required list/table.\n"
         "- For each section, naturally include its required_keywords and required_terms.\n"
         "- Use concrete criteria, examples, risks, comparisons, or next steps. Avoid generic filler.\n"
+        "- Do not use greeting-style intros or stock openers such as 'Herzlich willkommen'.\n"
         "- The Fazit section body must be topic-specific, concrete, and non-generic.\n"
         "- Each FAQ_n block must answer FAQ question n directly, 35-55 words, with no links.\n"
         "- EXCERPT must be plain text, one sentence, max 160 characters.\n"

@@ -1981,6 +1981,40 @@ def _extract_h2_section_text(html: str, heading_name: str) -> str:
     return _strip_html_tags(_extract_h2_section_html(html, heading_name)).strip()
 
 
+def _normalize_faq_section_questions(article_html: str) -> str:
+    html = article_html or ""
+    if not html:
+        return html
+    soup = BeautifulSoup(html, "lxml")
+    body = soup.body or soup
+    faq_h2 = next(
+        (
+            heading
+            for heading in body.find_all("h2")
+            if _normalize_keyword_phrase(heading.get_text(" ", strip=True)) == "faq"
+        ),
+        None,
+    )
+    if faq_h2 is None:
+        return html
+
+    current = faq_h2.next_sibling
+    while current is not None:
+        next_node = current.next_sibling
+        if getattr(current, "name", None) == "h2":
+            break
+        if getattr(current, "name", None) == "h3":
+            question_text = current.get_text(" ", strip=True)
+            formatted_question = _format_faq_question(question_text) or question_text
+            if formatted_question and not formatted_question.endswith("?"):
+                formatted_question = formatted_question.rstrip(".! ") + "?"
+            current.clear()
+            current.append(formatted_question)
+        current = next_node
+
+    return body.decode_contents() if getattr(body, "decode_contents", None) else str(body)
+
+
 def _topic_keywords(topic: str, *, max_terms: int = 5) -> List[str]:
     words = _tokenize_words(topic)
     out: List[str] = []
@@ -5085,9 +5119,11 @@ def _generate_article_from_plan(
         anchor_text=str(article_plan.get("anchor_text_final") or "Weitere Informationen"),
         required_h1=str(article_plan.get("h1") or ""),
     )
+    article_html = _normalize_faq_section_questions(article_html)
     article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)
     article_html = _trim_article_to_word_limit(article_html, ARTICLE_MAX_WORDS)
+    article_html = _normalize_faq_section_questions(article_html)
     excerpt = str(llm_out.get("excerpt") or "").strip()
     if not excerpt:
         excerpt = _extract_first_paragraph_text(article_html)[:200]

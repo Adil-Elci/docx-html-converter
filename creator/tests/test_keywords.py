@@ -38,6 +38,7 @@ from creator.api.pipeline import (
     _render_article_from_plan,
     _run_pair_fit_reasoning,
     _sanitize_editorial_phrase,
+    _normalize_faq_section_questions,
     run_creator_pipeline,
     _select_keywords,
     _structured_content_mode,
@@ -361,6 +362,19 @@ def test_render_article_from_plan_formats_faq_questions_as_questions():
 
     assert "<h3>Was ist wichtig?</h3>" in article_html
     assert "<h3>Worauf sollte man achten?</h3>" in article_html
+
+
+def test_normalize_faq_section_questions_repairs_missing_question_marks():
+    html = (
+        "<h1>Titel</h1><p>Einleitung.</p><h2>FAQ</h2>"
+        "<h3>Was ist wichtig</h3><p>Antwort eins.</p>"
+        "<h3>Worauf sollte man bei Kinder Sonnenbrillen achten</h3><p>Antwort zwei.</p>"
+    )
+
+    normalized = _normalize_faq_section_questions(html)
+
+    assert "<h3>Was ist wichtig?</h3>" in normalized
+    assert "<h3>Worauf sollte man bei Kinder Sonnenbrillen achten?</h3>" in normalized
 
 
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():

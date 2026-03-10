@@ -1,6 +1,9 @@
 import json
 
+import pytest
+
 from creator.api.pipeline import (
+    CreatorError,
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
@@ -8,6 +11,7 @@ from creator.api.pipeline import (
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
+    _build_pipeline_execution_policy,
     _build_phase4_fallback_outline,
     _build_site_snapshot,
     _compact_pair_fit_profile,
@@ -30,6 +34,7 @@ from creator.api.pipeline import (
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
     _run_pair_fit_reasoning,
+    run_creator_pipeline,
     _select_keywords,
     _structured_content_mode,
     _trend_entry_is_fresh,
@@ -443,6 +448,96 @@ def test_build_phase4_fallback_outline_recovers_invalid_llm_outline():
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
+
+
+def test_build_pipeline_execution_policy_honors_strict_failure_mode(monkeypatch):
+    monkeypatch.delenv("CREATOR_STRICT_FAILURE_MODE", raising=False)
+    monkeypatch.delenv("CREATOR_PHASE5_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("CREATOR_PHASE7_REPAIR_ATTEMPTS", raising=False)
+
+    default_policy = _build_pipeline_execution_policy()
+
+    assert default_policy["strict_failure_mode"] is False
+    assert default_policy["phase4_outline_fallback_enabled"] is True
+    assert default_policy["phase5_faq_enrichment_soft_fail"] is True
+    assert default_policy["phase7_keyword_context_repair_enabled"] is True
+
+    monkeypatch.setenv("CREATOR_STRICT_FAILURE_MODE", "true")
+    monkeypatch.setenv("CREATOR_PHASE5_MAX_ATTEMPTS", "5")
+    monkeypatch.setenv("CREATOR_PHASE7_REPAIR_ATTEMPTS", "3")
+
+    strict_policy = _build_pipeline_execution_policy()
+
+    assert strict_policy["strict_failure_mode"] is True
+    assert strict_policy["phase4_outline_fallback_enabled"] is False
+    assert strict_policy["phase5_max_attempts"] == 1
+    assert strict_policy["phase5_expand_passes"] == 0
+    assert strict_policy["phase5_faq_enrichment_soft_fail"] is False
+    assert strict_policy["phase6_image_soft_fail"] is False
+    assert strict_policy["phase7_keyword_context_repair_enabled"] is False
+    assert strict_policy["phase7_repair_attempts"] == 0
+
+
+def test_run_creator_pipeline_strict_mode_raises_phase4_error_without_fallback(monkeypatch):
+    monkeypatch.setenv("CREATOR_STRICT_FAILURE_MODE", "true")
+    monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
+
+    monkeypatch.setattr(
+        "creator.api.pipeline._run_pair_fit_reasoning",
+        lambda **kwargs: {
+            "final_match_decision": "accepted",
+            "backlink_fit_ok": True,
+            "final_article_topic": "Kinder Sehprobleme erkennen und richtig reagieren",
+            "why_this_topic_was_chosen": "Passt zum Familien- und Gesundheitskontext.",
+            "best_overlap_reason": "Familienalltag und Kindergesundheit ueberlappen sinnvoll.",
+            "overlap_terms": ["kinder", "gesundheit"],
+            "publishing_site_contexts": ["Familienalltag"],
+            "target_site_contexts": ["Kinderbrillen"],
+        },
+    )
+    monkeypatch.setattr(
+        "creator.api.pipeline.call_llm_json",
+        lambda **kwargs: {
+            "outline": [{"h2": "Nur ein Abschnitt", "h3": []}],
+            "backlink_placement": "intro",
+            "anchor_text_final": "Mehr erfahren",
+        },
+    )
+
+    with pytest.raises(CreatorError, match=r"Phase 4 outline generation failed: \['invalid_outline_structure'\]"):
+        run_creator_pipeline(
+            target_site_url="https://www.brillenhaus24.de/",
+            publishing_site_url="https://familien4leben.com/",
+            publishing_site_id=None,
+            client_target_site_id=None,
+            anchor=None,
+            topic="Kinder Sehprobleme erkennen und richtig reagieren",
+            exclude_topics=[],
+            internal_link_inventory=[],
+            target_profile_payload={
+                "normalized_url": "https://www.brillenhaus24.de/",
+                "page_title": "Brillenhaus24",
+                "meta_description": "Kinderbrillen und alltagstaugliche Sehhilfen.",
+                "topics": ["Kinder Sehprobleme", "Kinderbrillen"],
+                "contexts": ["Augengesundheit"],
+                "repeated_keywords": ["kinder", "sehprobleme", "augen"],
+                "services_or_products": ["Kinderbrillen"],
+                "business_type": "Optiker",
+                "business_intent": "commercial",
+            },
+            publishing_profile_payload={
+                "normalized_url": "https://familien4leben.com/",
+                "page_title": "Familien4Leben",
+                "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
+                "topics": ["Familienalltag", "Kindergesundheit"],
+                "contexts": ["Familienalltag"],
+                "site_categories": ["Familie"],
+                "topic_clusters": ["Gesundheit", "Elternratgeber"],
+                "content_style": ["sachlich"],
+                "content_tone": "hilfreich",
+            },
+            dry_run=True,
+        )
 
 
 def test_ensure_primary_keyword_in_intro_injects_missing_keyword():

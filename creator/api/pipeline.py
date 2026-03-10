@@ -255,6 +255,22 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _build_pipeline_execution_policy() -> Dict[str, Any]:
+    strict_failure_mode = _read_bool_env("CREATOR_STRICT_FAILURE_MODE", False)
+    phase5_max_attempts = 1 if strict_failure_mode else max(1, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2))
+    phase7_repair_attempts = 0 if strict_failure_mode else max(0, _read_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 1))
+    return {
+        "strict_failure_mode": strict_failure_mode,
+        "phase4_outline_fallback_enabled": not strict_failure_mode,
+        "phase5_max_attempts": phase5_max_attempts,
+        "phase5_expand_passes": max(0, phase5_max_attempts - 1),
+        "phase5_faq_enrichment_soft_fail": not strict_failure_mode,
+        "phase6_image_soft_fail": not strict_failure_mode,
+        "phase7_keyword_context_repair_enabled": not strict_failure_mode,
+        "phase7_repair_attempts": phase7_repair_attempts,
+    }
+
+
 def _normalize_url(url: str) -> str:
     cleaned = (url or "").strip()
     parsed = urlparse(cleaned)
@@ -4328,6 +4344,8 @@ def run_creator_pipeline(
     }
     current_year = datetime.datetime.now().year
 
+    execution_policy = _build_pipeline_execution_policy()
+    strict_failure_mode = bool(execution_policy["strict_failure_mode"])
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_non_negative_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
     site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
@@ -4335,11 +4353,10 @@ def run_creator_pipeline(
     phase2_max_tokens = _read_int_env("CREATOR_PHASE2_MAX_TOKENS", 3000)
     phase4_max_attempts = 1
     phase4_max_tokens = _read_int_env("CREATOR_PHASE4_MAX_TOKENS", 3000)
-    phase5_max_attempts = max(1, _read_int_env("CREATOR_PHASE5_MAX_ATTEMPTS", 2))
+    phase5_max_attempts = int(execution_policy["phase5_max_attempts"])
     phase5_max_tokens_attempt1 = max(320, _read_int_env("CREATOR_PHASE5_MAX_TOKENS_ATTEMPT1", 900))
     phase5_max_tokens_retry = max(800, _read_int_env("CREATOR_PHASE5_MAX_TOKENS_RETRY", 1800))
-    phase5_fallback_expand_passes = 0
-    phase7_repair_attempts = max(0, _read_int_env("CREATOR_PHASE7_REPAIR_ATTEMPTS", 1))
+    phase7_repair_attempts = int(execution_policy["phase7_repair_attempts"])
     phase7_repair_max_tokens = max(1200, _read_int_env("CREATOR_PHASE7_REPAIR_MAX_TOKENS", 2200))
     internal_link_min = max(0, _read_int_env("CREATOR_INTERNAL_LINK_MIN", DEFAULT_INTERNAL_LINK_MIN))
     internal_link_max = max(internal_link_min, _read_int_env("CREATOR_INTERNAL_LINK_MAX", DEFAULT_INTERNAL_LINK_MAX))
@@ -4381,6 +4398,7 @@ def run_creator_pipeline(
 
     debug["keyword_trends_enabled"] = keyword_trends_enabled
     debug["keyword_trend_cache_ttl_seconds"] = keyword_trend_cache_ttl_seconds
+    debug["strict_failure_mode"] = strict_failure_mode
     provided_internal_link_inventory = _coerce_internal_link_inventory(internal_link_inventory)
     target_profile = _coerce_site_profile_payload(target_profile_payload)
     publishing_profile = _coerce_site_profile_payload(publishing_profile_payload)
@@ -4813,6 +4831,9 @@ def run_creator_pipeline(
         }
         break
 
+    if not outline and not execution_policy["phase4_outline_fallback_enabled"]:
+        raise CreatorError(f"Phase 4 outline generation failed: {outline_errors}")
+
     if not outline:
         fallback_reason = ",".join(_dedupe_preserve_order(outline_errors)) or "unknown"
         warnings.append(f"phase4_outline_fallback:{fallback_reason}")
@@ -4868,16 +4889,20 @@ def run_creator_pipeline(
                 llm_base_url=llm_base_url,
                 llm_model=writing_model,
                 http_timeout=http_timeout,
-                expand_passes=max(0, phase5_max_attempts - 1),
+                expand_passes=int(execution_policy["phase5_expand_passes"]),
                 section_max_tokens=phase5_max_tokens_attempt1,
                 expand_max_tokens=phase5_max_tokens_retry,
                 usage_collector=_collect_llm_usage,
             )
             if not article_payload:
+                if strict_failure_mode:
+                    raise CreatorError("Phase 5 section generation failed: section_generation_failed")
                 errors.append("section_generation_failed")
                 continue
             article_html = (article_payload.get("article_html") or "").strip()
             if not article_html:
+                if strict_failure_mode:
+                    raise CreatorError("Phase 5 section generation failed: missing_article_html")
                 errors.append("missing_article_html")
                 continue
 
@@ -4908,6 +4933,8 @@ def run_creator_pipeline(
             )
 
             if validation_errors:
+                if strict_failure_mode:
+                    raise CreatorError(f"Phase 5 section generation validation failed: {validation_errors}")
                 errors.extend(validation_errors)
                 last_article_html = article_html
                 last_validation_errors = validation_errors
@@ -5021,11 +5048,15 @@ def run_creator_pipeline(
                 usage_collector=_collect_llm_usage,
             )
         except LLMError as exc:
+            if strict_failure_mode:
+                raise CreatorError(f"Phase 5 attempt {attempt} failed: {exc}") from exc
             errors.append(str(exc))
             continue
 
         article_html = (article_html or "").strip()
         if not article_html:
+            if strict_failure_mode:
+                raise CreatorError(f"Phase 5 attempt {attempt} failed: missing_article_html")
             errors.append("missing_article_html")
             continue
 
@@ -5059,6 +5090,8 @@ def run_creator_pipeline(
         )
 
         if validation_errors:
+            if strict_failure_mode:
+                raise CreatorError(f"Phase 5 attempt {attempt} validation failed: {validation_errors}")
             errors.extend(validation_errors)
             last_article_html = article_html
             last_validation_errors = validation_errors
@@ -5111,6 +5144,8 @@ def run_creator_pipeline(
             "items": faq_enrichment["faqs"],
         }
     except (CreatorError, LLMError) as exc:
+        if not execution_policy["phase5_faq_enrichment_soft_fail"]:
+            raise CreatorError(f"Phase 5 FAQ enrichment failed: {exc}") from exc
         warnings.append(f"phase5_faq_enrichment_failed:{exc}")
         faq_enrichment_debug["error"] = str(exc)
 
@@ -5175,6 +5210,8 @@ def run_creator_pipeline(
                 poll_interval_seconds=poll_interval,
             )
         except CreatorError as exc:
+            if not execution_policy["phase6_image_soft_fail"]:
+                raise CreatorError(f"Phase 6 featured image generation failed: {exc}") from exc
             warnings.append(f"phase6_featured_image_failed:{exc}")
             featured_image_url = ""
             include_in_content = False
@@ -5193,6 +5230,8 @@ def run_creator_pipeline(
                     poll_interval_seconds=poll_interval,
                 )
             except CreatorError as exc:
+                if not execution_policy["phase6_image_soft_fail"]:
+                    raise CreatorError(f"Phase 6 in-content image generation failed: {exc}") from exc
                 warnings.append(f"phase6_in_content_image_failed:{exc}")
                 in_content_image_url = ""
 
@@ -5253,7 +5292,9 @@ def run_creator_pipeline(
     if phase7_errors:
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
-        if all(_is_keyword_context_repairable_error(error) for error in phase7_errors):
+        if execution_policy["phase7_keyword_context_repair_enabled"] and all(
+            _is_keyword_context_repairable_error(error) for error in phase7_errors
+        ):
             phase5["article_html"] = _repair_keyword_context_gaps(
                 article_html=phase5["article_html"],
                 errors=phase7_errors,

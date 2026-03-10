@@ -176,3 +176,52 @@ def test_rank_internal_link_inventory_rejects_generic_family_articles_for_specif
     )
 
     assert [item["url"] for item in ranked] == ["https://publisher.example.com/kinderaugen-warnzeichen"]
+
+
+def test_rank_internal_link_inventory_returns_only_high_confidence_matches_in_rank_order():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/kinderaugen-uv",
+                "title": "Kinderaugen im Sommer: UV-Schutz richtig einordnen",
+                "excerpt": "Warum Kinderaugen Schutz brauchen und worauf Eltern achten sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            },
+            {
+                "url": "https://publisher.example.com/kinder-sonnenbrillen-passform",
+                "title": "Kinder Sonnenbrillen: Passform und Schutzklassen im Alltag",
+                "excerpt": "Worauf Eltern bei Sitz, Schutz und Material achten sollten",
+                "categories": ["Familie", "Gesundheit"],
+            },
+            {
+                "url": "https://publisher.example.com/hautpflege-familie",
+                "title": "Hautpflege-Routinen fuer die ganze Familie",
+                "excerpt": "Pflegeideen fuer sonnige Tage",
+                "categories": ["Familie", "Pflege"],
+            },
+        ],
+        topic="Sonnenschutz fuer die ganze Familie",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=[
+            "uv schutz fuer kinderaugen",
+            "passform fuer kinder sonnenbrillen",
+            "schutzklasse fuer sonnenbrillen",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenschutz fuer die ganze familie",
+            "primary_keyword": "kinder sonnenbrillen",
+            "target_terms": ["Kinder Sonnenbrillen", "UV Schutz fuer Kinderaugen"],
+            "target_support_phrases": ["kinder sonnenbrillen", "uv schutz fuer kinderaugen"],
+            "core_tokens": ["kinderaugen", "schutz", "sonnenbrillen", "sonnenschutz", "uv"],
+            "specific_tokens": ["kinderaugen", "schutz", "sonnenbrillen", "sonnenschutz", "uv"],
+            "all_tokens": ["kinderaugen", "schutz", "sonnenbrillen", "sonnenschutz", "uv", "passform", "schutzklasse"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == [
+        "https://publisher.example.com/kinderaugen-uv",
+        "https://publisher.example.com/kinder-sonnenbrillen-passform",
+    ]

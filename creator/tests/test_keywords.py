@@ -194,6 +194,37 @@ def test_select_keywords_keeps_topic_focused_primary_keyword():
     assert "sonnen" in result["primary_keyword"]
 
 
+def test_select_keywords_prefers_target_product_phrase_for_broad_family_topic():
+    result = _select_keywords(
+        topic="Sonnenschutz fuer die ganze Familie",
+        llm_primary="sonnenschutz fuer die ganze familie",
+        llm_secondary=[],
+        keyword_cluster=["kinder", "sonnenbrillen", "uv schutz", "kinderaugen"],
+        allowed_topics=[
+            "Familienalltag im Sommer",
+            "Kinderaugen vor UV Strahlung schuetzen",
+        ],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=["Warenkorb (0 Artikel)", "Kinder Sonnenbrillen", "UV Schutz fuer Kinderaugen"],
+        overlap_terms=["familie", "sommer"],
+    )
+
+    title_package = _build_deterministic_title_package(
+        topic="Sonnenschutz fuer die ganze Familie",
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        search_intent_type="commercial",
+        structured_mode="none",
+        current_year=2026,
+    )
+
+    assert result["primary_keyword"] == "kinder sonnenbrillen"
+    assert "Warenkorb" not in " ".join(result["secondary_keywords"])
+    assert title_package["h1"].startswith("Kinder Sonnenbrillen:")
+    assert "Sonnenschutz Fuer Die Ganze Familie" in title_package["h1"]
+
+
 def test_select_keywords_builds_secondary_fallbacks_without_trends():
     result = _select_keywords(
         topic="Kinder Sehprobleme erkennen und richtig reagieren",
@@ -662,14 +693,16 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
                     parts.extend(
                         [
                             f"[[FAQ_{index}]]",
-                            (
-                                "<p>Die Antwort erklaert den konkreten Alltag, nennt klare Beobachtungen, "
-                                "ordnet Risiken ein und zeigt Eltern, wann praktische Unterstuetzung oder "
-                                "ein Termin zur weiteren Abklaerung sinnvoll wird.</p>"
-                            ),
-                            f"[[/FAQ_{index}]]",
-                        ]
-                        )
+                                (
+                                    "<p>Die Antwort erklaert den konkreten Alltag, nennt klare Beobachtungen, "
+                                    "ordnet Risiken ein und zeigt Eltern, wann praktische Unterstuetzung oder "
+                                    "ein Termin zur weiteren Abklaerung sinnvoll wird. Zusaetzlich werden "
+                                    "naechste Schritte, typische Warnzeichen und sinnvolle Fragen fuer den "
+                                    "Augenarzttermin knapp und verstaendlich zusammengefasst.</p>"
+                                ),
+                                f"[[/FAQ_{index}]]",
+                            ]
+                            )
                     continue
             required_keywords = " und ".join((section.get("required_keywords") or ["praxisnahe einordnung"])[:1])
             required_terms = " und ".join(section.get("required_terms") or ["Familienalltag", "Kinderbrillen"])
@@ -742,6 +775,127 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
     assert "<h2>FAQ</h2>" in result["phase5"]["article_html"]
     assert "<h2>Fazit</h2>" in result["phase5"]["article_html"]
     assert 'href="https://www.brillenhaus24.de/"' in result["phase5"]["article_html"]
+
+
+def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_no_relevant_matches(monkeypatch):
+    monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
+
+    monkeypatch.setattr(
+        "creator.api.pipeline._run_pair_fit_reasoning",
+        lambda **kwargs: {
+            "final_match_decision": "accepted",
+            "backlink_fit_ok": True,
+            "final_article_topic": "Sonnenschutz fuer die ganze Familie",
+            "why_this_topic_was_chosen": "Familienkontext und Sonnenschutz passen grundsaetzlich zusammen.",
+            "best_overlap_reason": "Sonnenschutz und Familienalltag ueberlappen.",
+            "overlap_terms": ["familie", "schutz"],
+            "publishing_site_contexts": ["Familienalltag"],
+            "target_site_contexts": ["shopping", "outdoor"],
+        },
+    )
+
+    def fake_call_llm_text(**kwargs):
+        prompt = str(kwargs.get("user_prompt") or "")
+        plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
+        plan = json.loads(plan_json)
+        parts = [
+            "[[INTRO_HTML]]",
+            (
+                "<p>Eltern achten bei Kinder Sonnenbrillen auf UV Schutz, Passform und alltagstaugliche Materialien. "
+                "Gerade an langen Sommertagen hilft eine klare Orientierung dazu, Schutzklassen, Sitz und Material "
+                "nicht nur oberflaechlich zu vergleichen, sondern wirklich passend fuer Kinderaugen einzuordnen.</p>"
+            ),
+            "[[/INTRO_HTML]]",
+        ]
+        for section in plan["sections"]:
+            if section["kind"] == "faq":
+                for index, _question in enumerate(section["h3"], start=1):
+                    parts.extend(
+                        [
+                            f"[[FAQ_{index}]]",
+                            (
+                                "<p>Kinderaugen brauchen im Freien verlaesslichen UV Schutz, eine stabile Passform "
+                                "und eine Fassung, die auch beim Spielen bequem sitzt. Eltern sollten deshalb "
+                                "Schutzklasse, Material, Sitz und Alltagstauglichkeit gemeinsam bewerten.</p>"
+                            ),
+                            f"[[/FAQ_{index}]]",
+                        ]
+                    )
+                continue
+            body_html = (
+                "<p>Gute Sonnenbrillen fuer Kinder brauchen UV Schutz, bequemen Sitz und robuste Materialien fuer den Alltag. "
+                "Eltern sollten auf klare Kennzeichnungen, eine stabile Passform beim Spielen und eine leichte Fassung achten, "
+                "damit die Brille draussen wirklich getragen wird und Schutz nicht nur auf dem Etikett steht.</p>"
+                "<p>Praktisch relevant sind ausserdem Schutzklasse, Materialqualitaet, seitlicher Lichtschutz und die Frage, "
+                "wie gut die Brille auf Nase und Ohren sitzt. So entstehen konkrete Entscheidungskriterien statt allgemeiner "
+                "Sommertipps, und Familien koennen den Kauf alltagstauglich einordnen.</p>"
+            )
+            if "table" in (section.get("required_elements") or []):
+                body_html += (
+                    "<table><tr><th>Kriterium</th><th>Worauf Eltern achten</th></tr>"
+                    "<tr><td>UV Schutz</td><td>UV 400 und klare Herstellerangaben</td></tr></table>"
+                )
+            parts.extend(
+                [
+                    f"[[SECTION:{section['section_id']}]]",
+                    body_html,
+                    "[[/SECTION]]",
+                ]
+            )
+        parts.extend(["[[EXCERPT]]", "Konkrete Orientierung fuer Eltern beim Kauf von Kinder Sonnenbrillen.", "[[/EXCERPT]]"])
+        return "\n".join(parts)
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
+
+    result = run_creator_pipeline(
+        target_site_url="https://www.brillenhaus24.de/Sonnenbrille_1",
+        publishing_site_url="https://familien4leben.com/",
+        publishing_site_id=None,
+        client_target_site_id=None,
+        anchor=None,
+        topic=None,
+        exclude_topics=[],
+        internal_link_inventory=[
+            {
+                "url": "https://familien4leben.com/lieferoptionen",
+                "title": "Lieferoptionen fuer Familien vergleichen und sparen",
+                "slug": "lieferoptionen-vergleichen",
+                "excerpt": "Tipps zum Sparen beim Onlinekauf",
+            },
+            {
+                "url": "https://familien4leben.com/hautpflege-routinen",
+                "title": "Hautpflege-Routinen fuer die ganze Familie",
+                "slug": "hautpflege-routinen-familie",
+                "excerpt": "Pflegeideen fuer den Sommer",
+            },
+        ],
+        target_profile_payload={
+            "normalized_url": "https://www.brillenhaus24.de/Sonnenbrille_1",
+            "page_title": "Sonnenbrillen fuer Kinder",
+            "meta_description": "Kinder Sonnenbrillen mit UV Schutz und robusten Materialien.",
+            "topics": ["Kinder Sonnenbrillen", "UV Schutz fuer Kinderaugen"],
+            "contexts": ["shopping", "outdoor"],
+            "repeated_keywords": ["sonnenbrillen", "kinder", "uv", "schutz"],
+            "services_or_products": ["Kinder Sonnenbrillen", "Kindersonnenbrillen"],
+            "business_type": "Optiker",
+            "business_intent": "commercial",
+        },
+        publishing_profile_payload={
+            "normalized_url": "https://familien4leben.com/",
+            "page_title": "Familien4Leben",
+            "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
+            "topics": ["Familienalltag", "Familienleben im Sommer"],
+            "contexts": ["Familienalltag"],
+            "site_categories": ["Familie"],
+            "topic_clusters": ["Familienratgeber", "Sommer"],
+            "content_style": ["sachlich"],
+            "content_tone": "hilfreich",
+        },
+        dry_run=True,
+    )
+
+    assert result["debug"]["internal_linking"]["candidate_count"] == 0
+    assert 'href="https://familien4leben.com/' not in result["phase5"]["article_html"]
 
 
 def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(monkeypatch):
@@ -1053,6 +1207,21 @@ def test_build_deterministic_title_package_uses_topic_over_site_identity_keyword
     assert "Eltern Sucht Ratgeber" not in title_package["h1"]
 
 
+def test_build_deterministic_title_package_avoids_dangling_truncation_and_uses_specific_primary_keyword():
+    title_package = _build_deterministic_title_package(
+        topic="Sonnenschutz fuer die ganze Familie",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=["uv schutz fuer kinderaugen"],
+        search_intent_type="commercial",
+        structured_mode="table",
+        current_year=2026,
+    )
+
+    assert "Kinder Sonnenbrillen" in title_package["h1"]
+    assert not title_package["h1"].endswith(" und")
+    assert not title_package["h1"].endswith(":")
+
+
 def test_build_deterministic_meta_description_meets_length_contract():
     meta_description = _build_deterministic_meta_description(
         topic="Kinder Sonnenbrillen: worauf Eltern achten sollten",
@@ -1063,6 +1232,35 @@ def test_build_deterministic_meta_description_meets_length_contract():
 
     assert 120 <= len(meta_description) <= 160
     assert "schutz fuer kinderaugen" in meta_description.lower()
+
+
+def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decision_headings():
+    outline = _build_deterministic_outline(
+        topic="Sonnenschutz fuer die ganze Familie",
+        primary_keyword="kinder sonnenbrillen",
+        secondary_keywords=[
+            "uv schutz fuer kinderaugen",
+            "passform fuer kinder sonnenbrillen",
+        ],
+        faq_candidates=["Was ist wichtig?", "Welche Schutzklasse passt?", "Worauf sollten Eltern achten?"],
+        structured_mode="table",
+        anchor_text_final="Mehr zu Kinder Sonnenbrillen",
+        topic_signature={
+            "subject_phrase": "sonnenschutz fuer die ganze familie",
+            "question_phrase": "",
+            "target_terms": ["Warenkorb (0 Artikel)", "Kinder Sonnenbrillen"],
+            "target_support_phrases": ["kinder sonnenbrillen", "uv schutz fuer kinderaugen"],
+            "support_phrases": ["sonnenschutz fuer die ganze familie", "kinder sonnenbrillen"],
+            "keyword_cluster_phrases": ["kinder sonnenbrillen", "uv schutz fuer kinderaugen"],
+            "primary_keyword": "kinder sonnenbrillen",
+        },
+    )
+
+    headings = [item["h2"] for item in outline["outline"]]
+    assert all("Warenkorb" not in heading for heading in headings)
+    assert any("Qualitaetsmerkmale" in heading for heading in headings)
+    assert any("Kinder sonnenbrillen" in heading for heading in headings)
+    assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 
 
 def test_structured_content_mode_detects_list_and_table_topics():

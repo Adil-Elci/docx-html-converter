@@ -3304,6 +3304,43 @@ def _build_deterministic_outline(
     }
 
 
+def _build_phase4_fallback_outline(
+    *,
+    h1: str,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    faq_candidates: List[str],
+    structured_mode: str,
+    anchor: str,
+    anchor_safe: bool,
+    anchor_type: str,
+    brand_name: str,
+    keyword_cluster: List[str],
+    llm_out: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    anchor_text_final = str((llm_out or {}).get("anchor_text_final") or "").strip()
+    if not anchor_text_final:
+        anchor_text_final = anchor if anchor_safe else _build_anchor_text(anchor_type, brand_name, keyword_cluster)
+    outline = _build_deterministic_outline(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=secondary_keywords,
+        faq_candidates=faq_candidates,
+        structured_mode=structured_mode,
+        anchor_text_final=anchor_text_final,
+    )
+    backlink_placement = str((llm_out or {}).get("backlink_placement") or "").strip()
+    if backlink_placement in {"intro", "section_2", "section_3", "section_4", "section_5"}:
+        outline["backlink_placement"] = backlink_placement
+    return {
+        "h1": h1,
+        "outline": outline["outline"],
+        "backlink_placement": outline["backlink_placement"],
+        "anchor_text_final": outline["anchor_text_final"],
+    }
+
+
 def _validate_language_and_conclusion(article_html: str, topic: str) -> List[str]:
     errors: List[str] = []
     plain_text = _strip_html_tags(article_html)
@@ -4667,6 +4704,7 @@ def run_creator_pipeline(
     outline = None
     phase4 = {}
     outline_errors: List[str] = []
+    last_phase4_llm_out: Dict[str, Any] = {}
     faq_candidates = _ensure_faq_candidates(phase3.get("final_article_topic", ""), phase3.get("faq_candidates") or [])
     for attempt in range(1, phase4_max_attempts + 1):
         system_prompt = (
@@ -4712,6 +4750,8 @@ def run_creator_pipeline(
             outline_errors.append(str(exc))
             continue
 
+        if isinstance(llm_out, dict):
+            last_phase4_llm_out = llm_out
         h1 = phase3["title_package"]["h1"]
         outline_items = llm_out.get("outline") or []
         backlink_placement = (llm_out.get("backlink_placement") or "").strip()
@@ -4774,7 +4814,22 @@ def run_creator_pipeline(
         break
 
     if not outline:
-        raise CreatorError(f"Phase 4 outline generation failed: {outline_errors}")
+        fallback_reason = ",".join(_dedupe_preserve_order(outline_errors)) or "unknown"
+        warnings.append(f"phase4_outline_fallback:{fallback_reason}")
+        outline = _build_phase4_fallback_outline(
+            h1=phase3["title_package"]["h1"],
+            topic=phase3.get("final_article_topic", ""),
+            primary_keyword=phase3.get("primary_keyword", ""),
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            faq_candidates=faq_candidates,
+            structured_mode=phase3.get("structured_content_mode", "none"),
+            anchor=anchor,
+            anchor_safe=anchor_safe,
+            anchor_type=anchor_type,
+            brand_name=brand_name,
+            keyword_cluster=keyword_cluster,
+            llm_out=last_phase4_llm_out,
+        )
 
     phase4 = outline
     debug["faq_generation"] = {

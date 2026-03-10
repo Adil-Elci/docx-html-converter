@@ -8,6 +8,7 @@ from creator.api.pipeline import (
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
+    _build_phase4_fallback_outline,
     _build_site_snapshot,
     _compact_pair_fit_profile,
     _build_keyword_query_variants,
@@ -406,6 +407,42 @@ def test_build_deterministic_outline_produces_valid_structure():
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
     assert "eltern sucht schwangerschaft" in outline["outline"][0]["h2"].lower()
+
+
+def test_build_phase4_fallback_outline_recovers_invalid_llm_outline():
+    outline = _build_phase4_fallback_outline(
+        h1="Kinder Sehprobleme erkennen: Orientierung fuer Eltern",
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        primary_keyword="kinder sehprobleme erkennen",
+        secondary_keywords=[
+            "symptome von sehproblemen bei kindern",
+            "kinder augen gesundheit verstehen",
+            "augenarzt termin mit kind vorbereiten",
+            "sehprobleme bei kindern alltag",
+        ],
+        faq_candidates=[
+            "Wann sollte ein Kind zum Augenarzt?",
+            "Wie erkennt man Sehprobleme bei Kindern?",
+            "Was hilft bei auffaelligen Sehzeichen?",
+        ],
+        structured_mode="none",
+        anchor="",
+        anchor_safe=False,
+        anchor_type="partial_match",
+        brand_name="Brillenhaus24",
+        keyword_cluster=["kinder", "sehprobleme", "augen", "vorsorge"],
+        llm_out={
+            "outline": [{"h2": "Nur ein Abschnitt", "h3": []}],
+            "backlink_placement": "section_2",
+            "anchor_text_final": "Mehr zur Kinderbrille",
+        },
+    )
+
+    assert outline["backlink_placement"] == "section_2"
+    assert outline["anchor_text_final"] == "Mehr zur Kinderbrille"
+    assert outline["outline"][-2]["h2"] == "Fazit"
+    assert outline["outline"][-1]["h2"] == "FAQ"
+    assert 4 <= len(outline["outline"]) <= 6
 
 
 def test_ensure_primary_keyword_in_intro_injects_missing_keyword():

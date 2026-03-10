@@ -538,7 +538,7 @@ def wp_create_post(
     clean_html: str,
     excerpt: str,
     slug: str,
-    featured_media_id: int,
+    featured_media_id: Optional[int],
     post_status: str,
     author_id: int,
     category_ids: Optional[List[int]],
@@ -556,10 +556,11 @@ def wp_create_post(
         "slug": slug,
         "status": post_status,
         "author": author_id,
-        "featured_media": featured_media_id,
         "format": "standard",
         "date": datetime.now(timezone.utc).isoformat(),
     }
+    if featured_media_id is not None:
+        payload["featured_media"] = featured_media_id
     if category_ids:
         payload["categories"] = category_ids
     return _request_json(
@@ -583,7 +584,7 @@ def wp_update_post(
     clean_html: str,
     excerpt: str,
     slug: str,
-    featured_media_id: int,
+    featured_media_id: Optional[int],
     post_status: str,
     author_id: int,
     category_ids: Optional[List[int]],
@@ -601,10 +602,11 @@ def wp_update_post(
         "slug": slug,
         "status": post_status,
         "author": author_id,
-        "featured_media": featured_media_id,
         "format": "standard",
         "date": datetime.now(timezone.utc).isoformat(),
     }
+    if featured_media_id is not None:
+        payload["featured_media"] = featured_media_id
     if category_ids:
         payload["categories"] = category_ids
     return _request_json(
@@ -1051,43 +1053,25 @@ def run_create_article_pipeline(
     featured_meta = phase6.get("featured_image") if isinstance(phase6.get("featured_image"), dict) else {}
     if isinstance(featured_meta, dict):
         featured_alt = str(featured_meta.get("alt_text") or "").strip()
-    if not featured_url:
-        featured_prompt = ""
-        if isinstance(featured_meta, dict):
-            featured_prompt = str(featured_meta.get("prompt") or "").strip()
-        if not featured_prompt:
-            featured_prompt = f"Editorial photo illustrating: {title or 'blog post'}"
-        if not leonardo_api_key:
-            raise AutomationError("Creator output missing featured image URL and LEONARDO_API_KEY is not set for fallback.")
-        logger.warning("automation.creator.image_fallback generating featured image on portal side")
-        featured_url = generate_image_via_leonardo(
-            prompt=featured_prompt,
-            api_key=leonardo_api_key,
-            timeout_seconds=timeout_seconds,
-            poll_timeout_seconds=poll_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-            model_id=leonardo_model_id,
-            width=image_width,
-            height=image_height,
-            base_url=leonardo_base_url,
-        )
 
-    image_bytes, file_name, content_type = download_binary_file(
-        featured_url,
-        timeout_seconds=timeout_seconds,
-    )
-    media_payload = wp_create_media_item(
-        site_url=site_url,
-        wp_rest_base=wp_rest_base,
-        wp_username=wp_username,
-        wp_app_password=wp_app_password,
-        data=image_bytes,
-        file_name=file_name,
-        content_type=content_type,
-        title=title or "Generated Draft",
-        alt_text=featured_alt or None,
-        timeout_seconds=timeout_seconds,
-    )
+    media_payload: Dict[str, Any] = {}
+    if featured_url:
+        image_bytes, file_name, content_type = download_binary_file(
+            featured_url,
+            timeout_seconds=timeout_seconds,
+        )
+        media_payload = wp_create_media_item(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+            data=image_bytes,
+            file_name=file_name,
+            content_type=content_type,
+            title=title or "Generated Draft",
+            alt_text=featured_alt or None,
+            timeout_seconds=timeout_seconds,
+        )
 
     in_content_url = _pick_creator_image(images, "in_content")
     if in_content_url:
@@ -1116,7 +1100,13 @@ def run_create_article_pipeline(
         except AutomationError:
             logger.warning("automation.creator.in_content_upload_failed")
 
-    featured_media_id = int(media_payload.get("id"))
+    featured_media_id: Optional[int] = None
+    raw_featured_media_id = media_payload.get("id")
+    if isinstance(raw_featured_media_id, int):
+        featured_media_id = raw_featured_media_id
+    elif existing_wp_post_id:
+        # Clear stale featured media on draft updates when creator intentionally returned no image.
+        featured_media_id = 0
     if existing_wp_post_id:
         post_payload = wp_update_post(
             site_url=site_url,

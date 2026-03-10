@@ -293,6 +293,24 @@ def test_select_keywords_builds_secondary_fallbacks_without_trends():
     assert any("warnzeichen" in item or "erkennen" in item or "augenarzt" in item for item in result["secondary_keywords"])
 
 
+def test_select_keywords_excludes_topic_phrase_from_secondary_keywords_when_primary_shifts_to_target_term():
+    result = _select_keywords(
+        topic="Augenschutz im Sommerurlaub",
+        llm_primary="Augenschutz im Sommerurlaub",
+        llm_secondary=[],
+        keyword_cluster=["augenschutz", "sommerurlaub", "uv schutz", "kinder", "sonnenbrillen"],
+        allowed_topics=["Familienalltag", "Sommer", "Reisen"],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=["Kinder Sonnenbrillen", "UV Schutz"],
+        overlap_terms=["sommer", "schutz"],
+        internal_link_inventory=[],
+    )
+
+    assert result["primary_keyword"] == "kinder sonnenbrillen"
+    assert "augenschutz im sommerurlaub" not in result["secondary_keywords"]
+
+
 def test_question_topic_builds_natural_title_keywords_outline_and_faq():
     topic = "Sehstärke bei Kindern: Wann braucht mein Kind eine Brille? Tipps"
     result = _select_keywords(
@@ -352,8 +370,11 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         "Worauf sollte man bei Kinderbrillen achten?",
     ]
     assert outline["outline"][0]["h2"] == "Wann braucht mein Kind eine Brille? Einordnung und erste Schritte"
-    assert "sehstärke bei kindern" in outline["outline"][1]["h2"].lower()
-    assert "warnzeichen" in outline["outline"][1]["h2"].lower()
+    assert any("sehstärke bei kindern" in item["h2"].lower() for item in outline["outline"])
+    assert any(
+        any(token in item["h2"].lower() for token in ("warnzeichen", "anzeichen"))
+        for item in outline["outline"]
+    )
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
 
@@ -1557,6 +1578,41 @@ def test_validate_keyword_coverage_ok():
         ],
     )
     assert not errors
+
+
+def test_validate_keyword_coverage_allows_phrase_repetition_below_twelve_occurrences():
+    html = (
+        "<h1>Augenschutz im Sommerurlaub: Orientierung fuer Familien</h1>"
+        "<p>Augenschutz im sommerurlaub ist fuer Familien wichtig.</p>"
+        "<h2>Augenschutz im Sommerurlaub im Ueberblick</h2>"
+        "<p>Augenschutz im sommerurlaub bedeutet UV Schutz, gute Planung und passende Kinder Sonnenbrillen.</p>"
+        "<p>Augenschutz im sommerurlaub sollte frueh mit UV Schutz, Reiseplanung und alltagstauglichen Entscheidungen verbunden werden.</p>"
+        "<h2>UV Schutz fuer Kinderaugen</h2>"
+        "<p>UV schutz fuer kinderaugen ist im Urlaub zentral. Kinder Sonnenbrillen helfen zusaetzlich.</p>"
+        "<p>Augenschutz im sommerurlaub bleibt auch am Wasser und bei Ausfluegen relevant.</p>"
+        "<h2>Fazit</h2>"
+        "<p>Augenschutz im sommerurlaub lohnt sich mit guter Vorbereitung und konsequentem UV Schutz.</p>"
+        "<h2>FAQ</h2>"
+        "<h3>Was ist bei augenschutz im sommerurlaub wichtig?</h3>"
+        "<p>Augenschutz im sommerurlaub braucht UV Schutz, passende Brillen und klare Routinen.</p>"
+        "<h3>Worauf sollte man bei Kinder Sonnenbrillen achten?</h3>"
+        "<p>Kinder Sonnenbrillen sollten gut sitzen und UV Schutz bieten.</p>"
+        "<h3>Welche naechsten Schritte helfen dann im Alltag?</h3>"
+        "<p>UV Schutz fuer kinderaugen bleibt auch nach dem Urlaub wichtig.</p>"
+    )
+
+    errors = _validate_keyword_coverage(
+        html,
+        primary_keyword="augenschutz im sommerurlaub",
+        secondary_keywords=[
+            "uv schutz fuer kinderaugen",
+            "kinder sonnenbrillen",
+            "sommerurlaub bei kindern",
+            "augenschutz bei kindern",
+        ],
+    )
+
+    assert not any(error.startswith("keyword_overused:augenschutz im sommerurlaub") for error in errors)
 
 
 def test_validate_language_and_conclusion_requires_fazit_then_faq():

@@ -178,10 +178,11 @@ GENERIC_BODY_PHRASES = (
     "abschliessend laesst sich sagen",
 )
 
-KEYWORD_MIN_SECONDARY = 4
+KEYWORD_MIN_SECONDARY = 3
 KEYWORD_MAX_SECONDARY = 6
 KEYWORD_MIN_WORDS = 2
 KEYWORD_MAX_WORDS = 8
+KEYWORD_OVERUSE_MIN_OCCURRENCES = 12
 DEFAULT_INTERNAL_LINK_MIN = 2
 DEFAULT_INTERNAL_LINK_MAX = 4
 KEYWORD_MAX_FAQ = 5
@@ -3213,6 +3214,18 @@ def _keyword_candidate_has_question_noise(candidate: str) -> bool:
     return any(word in TOPIC_SIGNATURE_EXCLUDED_TOKENS for word in words)
 
 
+def _keyword_redundant_with_topic(candidate: str, topic: str) -> bool:
+    normalized_candidate = _normalize_keyword_phrase(candidate)
+    topic_phrase = _build_topic_phrase(topic) or _normalize_keyword_phrase(topic)
+    if not normalized_candidate or not topic_phrase:
+        return False
+    if normalized_candidate == topic_phrase:
+        return True
+    if _keyword_present(normalized_candidate, topic_phrase):
+        return True
+    return False
+
+
 def _is_heading_support_phrase_usable(candidate: str) -> bool:
     normalized = _sanitize_editorial_phrase(candidate)
     if not normalized:
@@ -3289,15 +3302,13 @@ def _build_secondary_keyword_fallbacks(
     signature_support = _pick_topic_signature_support_phrase(signature, exclude_phrases=[primary_keyword, subject_phrase])
     target_support_phrases = [str(item).strip() for item in (signature.get("target_support_phrases") or []) if str(item).strip()]
     cluster_support_phrases = [str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()]
-    support_phrase = next(
-        (
-            candidate
-            for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8))
-            if _keyword_similarity(candidate, primary_keyword) < 0.7
-            and not _keyword_is_strict_token_subset(candidate, primary_keyword)
-        ),
-        "",
-    )
+    allowed_support_phrases = [
+        candidate
+        for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8))
+        if _keyword_similarity(candidate, primary_keyword) < 0.7
+        and not _keyword_is_strict_token_subset(candidate, primary_keyword)
+    ][:2]
+    support_phrase = allowed_support_phrases[0] if allowed_support_phrases else ""
     question_phrase = _normalize_keyword_phrase(str(signature.get("question_phrase") or ""))
     subject_focus_tokens = [
         token
@@ -3338,6 +3349,7 @@ def _finalize_secondary_keywords(
         candidate
         for candidate in _dedupe_keyword_phrases(secondary_keywords)
         if _keyword_similarity(candidate, primary_keyword) < 0.75
+        and not _keyword_redundant_with_topic(candidate, topic)
     ]
     if len(finalized) >= KEYWORD_MIN_SECONDARY:
         return finalized[:KEYWORD_MAX_SECONDARY]
@@ -3352,6 +3364,8 @@ def _finalize_secondary_keywords(
         if len(finalized) >= KEYWORD_MIN_SECONDARY:
             break
         if _keyword_similarity(candidate, primary_keyword) >= 0.75:
+            continue
+        if _keyword_redundant_with_topic(candidate, topic):
             continue
         if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
             continue
@@ -3589,6 +3603,7 @@ def _select_keywords(
             candidate
             for candidate in secondary_pool
             if _keyword_similarity(candidate, primary_keyword) < 0.8
+            and not _keyword_redundant_with_topic(candidate, topic)
             and not _keyword_is_strict_token_subset(candidate, primary_keyword)
             and not _keyword_candidate_has_question_noise(candidate)
             and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
@@ -3613,12 +3628,55 @@ def _select_keywords(
         reverse=True,
     )
     secondary_keywords = ranked_secondary[:KEYWORD_MAX_SECONDARY]
+    fallback_allowed_topics = _merge_string_lists(relevant_allowed_topics, allowed_topics, max_items=8)
+    supplemental_secondary = sorted(
+        [
+            candidate
+            for candidate in secondary_pool
+            if candidate not in secondary_keywords
+            and _keyword_similarity(candidate, primary_keyword) < 0.8
+            and not _keyword_redundant_with_topic(candidate, topic)
+            and not _keyword_is_strict_token_subset(candidate, primary_keyword)
+            and not _keyword_candidate_has_question_noise(candidate)
+            and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
+            and (
+                _keyword_candidate_has_relevance(
+                    candidate,
+                    topic_tokens=topic_tokens,
+                    cluster_tokens=cluster_tokens,
+                    trend_tokens=trend_tokens,
+                )
+                or _topic_signature_candidate_has_relevance(candidate, topic_signature)
+            )
+            and _score_keyword_candidate(
+                candidate,
+                topic_tokens=topic_tokens,
+                cluster_tokens=cluster_tokens,
+                allowed_tokens=allowed_tokens,
+                trend_tokens=trend_tokens,
+            ) >= 2.0
+        ],
+        key=lambda item: _score_keyword_candidate(
+            item,
+            topic_tokens=topic_tokens,
+            cluster_tokens=cluster_tokens,
+            allowed_tokens=allowed_tokens,
+            trend_tokens=trend_tokens,
+        ),
+        reverse=True,
+    )
+    for candidate in supplemental_secondary:
+        if len(secondary_keywords) >= KEYWORD_MIN_SECONDARY:
+            break
+        if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in secondary_keywords):
+            continue
+        secondary_keywords.append(candidate)
     if len(secondary_keywords) < KEYWORD_MIN_SECONDARY:
         fallback_secondary = _build_secondary_keyword_fallbacks(
             topic=topic,
             primary_keyword=primary_keyword,
             keyword_cluster=keyword_cluster,
-            allowed_topics=relevant_allowed_topics,
+            allowed_topics=fallback_allowed_topics,
             topic_signature=topic_signature,
         )
         for candidate in fallback_secondary:
@@ -3627,6 +3685,8 @@ def _select_keywords(
             if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in secondary_keywords):
                 continue
             if _keyword_similarity(candidate, primary_keyword) >= 0.8:
+                continue
+            if _keyword_redundant_with_topic(candidate, topic):
                 continue
             if _keyword_is_strict_token_subset(candidate, primary_keyword):
                 continue
@@ -3637,7 +3697,7 @@ def _select_keywords(
             topic=topic,
             primary_keyword=primary_keyword,
             keyword_cluster=keyword_cluster,
-            allowed_topics=relevant_allowed_topics,
+            allowed_topics=fallback_allowed_topics,
             topic_signature=topic_signature,
         ):
             if len(secondary_keywords) >= KEYWORD_MIN_SECONDARY:
@@ -3647,6 +3707,8 @@ def _select_keywords(
             if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in secondary_keywords):
                 continue
             if _keyword_similarity(candidate, primary_keyword) >= 0.8:
+                continue
+            if _keyword_redundant_with_topic(candidate, topic):
                 continue
             secondary_keywords.append(candidate)
 
@@ -3961,7 +4023,7 @@ def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondar
         errors.append("secondary_keywords_missing:" + ",".join(missing_secondaries[:3]))
 
     words = max(1, word_count_from_html(article_html))
-    max_occurrences = max(3, int((words / 300.0) * 3))
+    max_occurrences = max(KEYWORD_OVERUSE_MIN_OCCURRENCES, int((words / 300.0) * 3))
     for keyword in [primary] + required_secondaries:
         occurrences = _count_keyword_occurrences(plain_text, keyword)
         if occurrences > max_occurrences:

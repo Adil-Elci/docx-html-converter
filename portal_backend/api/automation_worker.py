@@ -20,7 +20,7 @@ from .automation_service import (
     run_create_article_pipeline,
 )
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
-from .internal_linking_sync import run_internal_link_inventory_sync
+from .internal_linking_sync import fetch_creator_internal_link_inventory_for_site, run_internal_link_inventory_sync
 from .portal_models import (
     Asset,
     ClientTargetSite,
@@ -758,6 +758,19 @@ class AutomationJobWorker:
                     site_id=site.id,
                     limit=max(50, _read_int_env("INTERNAL_LINK_INVENTORY_LIMIT", 250)),
                 )
+                try:
+                    live_internal_link_inventory = fetch_creator_internal_link_inventory_for_site(
+                        site_url=site.site_url,
+                        wp_rest_base=site.wp_rest_base,
+                        wp_username=credential.wp_username,
+                        wp_app_password=credential.wp_app_password,
+                        per_page=max(50, min(100, _read_int_env("INTERNAL_LINK_INVENTORY_LIMIT", 250))),
+                        timeout_seconds=10,
+                    )
+                    if live_internal_link_inventory:
+                        internal_link_inventory = live_internal_link_inventory
+                except Exception:
+                    logger.warning("automation.worker.internal_link_inventory_live_fetch_failed job_id=%s", job_id, exc_info=True)
 
             return {
                 "source_url": source_url,

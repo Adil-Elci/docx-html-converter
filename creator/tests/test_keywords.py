@@ -1353,13 +1353,14 @@ def test_insert_backlink_maps_section_placement_correctly():
         backlink_url="https://target.example.com",
         anchor_text="Quelle",
         placement="section_2",
+        focus_phrase="Kinderbrillen",
     )
 
     assert 'href="https://target.example.com"' in updated
     first_section, second_section = updated.split("<h2>Zweiter Abschnitt</h2>")
     assert 'href="https://target.example.com"' not in first_section
     assert 'href="https://target.example.com"' in second_section
-    assert "Weitere Informationen bietet" in updated
+    assert "Wer sich zu Kinderbrillen weiter informieren moechte" in updated
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

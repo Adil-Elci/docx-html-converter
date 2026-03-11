@@ -104,6 +104,35 @@ def _derive_inventory_excerpt(post_payload: Dict[str, Any], *, max_chars: int = 
     return excerpt[:max_chars]
 
 
+def build_creator_internal_link_inventory_from_post_payloads(
+    post_payloads: List[Dict[str, Any]],
+    *,
+    limit: int = 250,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for payload in post_payloads:
+        if not isinstance(payload, dict):
+            continue
+        url = str(payload.get("link") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        out.append(
+            {
+                "url": url,
+                "title": _extract_rendered_text(payload.get("title")),
+                "excerpt": _derive_inventory_excerpt(payload),
+                "slug": str(payload.get("slug") or "").strip(),
+                "categories": [],
+                "published_at": str(payload.get("date_gmt") or payload.get("date") or "").strip(),
+            }
+        )
+        if len(out) >= max(1, limit):
+            break
+    return out
+
+
 def upsert_publishing_site_article(
     db: Session,
     *,

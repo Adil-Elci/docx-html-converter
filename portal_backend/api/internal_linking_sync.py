@@ -10,7 +10,11 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-from .internal_linking import mark_missing_publishing_site_articles, upsert_publishing_site_article
+from .internal_linking import (
+    build_creator_internal_link_inventory_from_post_payloads,
+    mark_missing_publishing_site_articles,
+    upsert_publishing_site_article,
+)
 from .portal_models import Site, SiteCredential
 
 logger = logging.getLogger("portal_backend.internal_linking_sync")
@@ -139,6 +143,26 @@ def _fetch_posts_for_site(
             timeout_seconds=timeout_seconds,
             mode="public",
         )
+
+
+def fetch_creator_internal_link_inventory_for_site(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    per_page: int,
+    timeout_seconds: int,
+) -> List[Dict[str, Any]]:
+    posts = _fetch_posts_for_site(
+        site_url=site_url,
+        wp_rest_base=wp_rest_base,
+        wp_username=wp_username,
+        wp_app_password=wp_app_password,
+        per_page=per_page,
+        timeout_seconds=timeout_seconds,
+    )
+    return build_creator_internal_link_inventory_from_post_payloads(posts, limit=per_page)
 
 
 def _select_sites(session, site_url_filter: Optional[str]) -> List[tuple[Site, SiteCredential]]:

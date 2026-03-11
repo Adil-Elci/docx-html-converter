@@ -1,4 +1,7 @@
-from portal_backend.api.internal_linking import _derive_inventory_excerpt
+from portal_backend.api.internal_linking import (
+    _derive_inventory_excerpt,
+    build_creator_internal_link_inventory_from_post_payloads,
+)
 
 
 def test_derive_inventory_excerpt_uses_content_when_wp_excerpt_is_meta_stub():
@@ -54,3 +57,37 @@ def test_derive_inventory_excerpt_collects_multiple_paragraphs_for_topic_signal(
 
     assert "Die Augen verlieren" in excerpt
     assert "Augengesundheit" in excerpt
+
+
+def test_build_creator_internal_link_inventory_from_post_payloads_uses_content_excerpt():
+    inventory = build_creator_internal_link_inventory_from_post_payloads(
+        [
+            {
+                "link": "https://publisher.example.com/sehstaerke",
+                "slug": "sehstaerke",
+                "date_gmt": "2026-03-01T10:00:00",
+                "title": {"rendered": "Sehstaerke im Alltag"},
+                "excerpt": {"rendered": "<p>Meta-Beschreibung:</p><p>Option 1</p>"},
+                "content": {
+                    "rendered": (
+                        "<p>Die Augen verlieren an Anpassungsfaehigkeit und kleine Schrift wird anstrengender.</p>"
+                        "<p>Mit dem richtigen Wissen laesst sich die Augengesundheit gezielt unterstuetzen.</p>"
+                    )
+                },
+            }
+        ]
+    )
+
+    assert inventory == [
+        {
+            "url": "https://publisher.example.com/sehstaerke",
+            "title": "Sehstaerke im Alltag",
+            "excerpt": (
+                "Die Augen verlieren an Anpassungsfaehigkeit und kleine Schrift wird anstrengender. "
+                "Mit dem richtigen Wissen laesst sich die Augengesundheit gezielt unterstuetzen."
+            ),
+            "slug": "sehstaerke",
+            "categories": [],
+            "published_at": "2026-03-01T10:00:00",
+        }
+    ]

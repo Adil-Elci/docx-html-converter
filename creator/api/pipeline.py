@@ -5710,6 +5710,7 @@ def _generate_article_from_plan(
         backlink_placement=str(article_plan.get("backlink_placement") or "intro"),
         anchor_text=str(article_plan.get("anchor_text_final") or "Weitere Informationen"),
         required_h1=str(article_plan.get("h1") or ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
     )
     article_html = _normalize_faq_section_questions(article_html)
     article_html = _strip_empty_blocks(article_html)
@@ -6259,9 +6260,42 @@ def _strip_disallowed_links(html: str, *, backlink_url: str, publishing_site_url
     )
 
 
-def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: str) -> str:
+def _backlink_focus_phrase(required_h1: str, primary_keyword: str) -> str:
+    for candidate in (
+        _extract_topic_subject_phrase(required_h1),
+        _sanitize_editorial_phrase(primary_keyword),
+        _normalize_keyword_phrase(primary_keyword),
+    ):
+        cleaned = re.sub(r"\s+", " ", str(candidate or "").strip())
+        if cleaned and len(cleaned.split()) <= 6:
+            return cleaned
+    return ""
+
+
+def _build_backlink_sentence(*, backlink_url: str, anchor_text: str, focus_phrase: str = "") -> str:
     anchor_html = f'<a href="{backlink_url}">{anchor_text}</a>'
-    backlink_html = f"Weitere Informationen bietet {anchor_html}."
+    cleaned_focus = re.sub(r"\s+", " ", str(focus_phrase or "").strip())
+    if cleaned_focus:
+        return (
+            f"Wer sich zu {cleaned_focus} weiter informieren moechte, "
+            f"findet beispielsweise bei {anchor_html} eine passende Anlaufstelle."
+        )
+    return f"Wer sich weiter informieren moechte, findet beispielsweise bei {anchor_html} eine passende Anlaufstelle."
+
+
+def _insert_backlink(
+    html: str,
+    backlink_url: str,
+    anchor_text: str,
+    placement: str,
+    *,
+    focus_phrase: str = "",
+) -> str:
+    backlink_html = _build_backlink_sentence(
+        backlink_url=backlink_url,
+        anchor_text=anchor_text,
+        focus_phrase=focus_phrase,
+    )
     if placement == "intro":
         match = re.search(r"</p>", html, flags=re.IGNORECASE)
         if match:
@@ -6405,11 +6439,18 @@ def _repair_link_constraints(
     backlink_placement: str,
     anchor_text: str,
     required_h1: str = "",
+    primary_keyword: str = "",
 ) -> str:
     # Remove all hyperlinks and then insert the required backlink + internal links.
     repaired = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", article_html or "", flags=re.IGNORECASE | re.DOTALL)
     if backlink_url and anchor_text:
-        repaired = _insert_backlink(repaired, backlink_url, anchor_text, backlink_placement)
+        repaired = _insert_backlink(
+            repaired,
+            backlink_url,
+            anchor_text,
+            backlink_placement,
+            focus_phrase=_backlink_focus_phrase(required_h1, primary_keyword),
+        )
     normalized_internal = _normalize_internal_link_candidates(
         internal_links,
         publishing_site_url=publishing_site_url,
@@ -6583,6 +6624,7 @@ def _generate_article_by_sections(
         backlink_placement=backlink_placement,
         anchor_text=anchor_text,
         required_h1=phase4.get("h1", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
     )
     article_html = _strip_empty_blocks(article_html)
     article_html = _strip_leading_empty_blocks(article_html)

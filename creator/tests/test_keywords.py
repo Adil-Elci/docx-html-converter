@@ -24,6 +24,7 @@ from creator.api.pipeline import (
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
+    ensure_prompt_trace_in_creator_output,
     _evaluate_backlink_naturalness,
     _evaluate_plan_quality,
     _evaluate_specificity,
@@ -1196,6 +1197,51 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
     assert prompt_trace["planner"]["attempts"][0]["input_packet"]["intent_type"] == "informational"
     assert prompt_trace["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["system_prompt"] or "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
+
+
+def test_ensure_prompt_trace_in_creator_output_backfills_missing_trace():
+    payload = ensure_prompt_trace_in_creator_output(
+        {
+            "phase3": {
+                "final_article_topic": "Kinder Sonnenbrillen",
+                "primary_keyword": "kinder sonnenbrillen",
+                "secondary_keywords": ["uv schutz kinderaugen"],
+                "search_intent_type": "informational",
+                "article_angle": "practical_guidance",
+                "topic_class": "parenting_health",
+                "style_profile": {"tone": "factual"},
+                "specificity_profile": {"min_specifics": 2},
+                "title_package": {"title": "Sonnenbrillen fuer Kinder"},
+                "content_brief": {"must_cover": ["uv schutz", "passform"]},
+                "faq_candidates": ["Worauf sollten Eltern achten?"],
+            },
+            "phase4": {
+                "h1": "Sonnenbrillen fuer Kinder",
+                "sections": [
+                    {
+                        "section_id": "sec_1",
+                        "kind": "body",
+                        "h2": "Worauf sollten Eltern beim Kauf achten?",
+                        "subquestion": "Welche Kriterien sind wichtig?",
+                        "required_keywords": ["kinder sonnenbrillen"],
+                        "required_terms": ["uv schutz", "passform"],
+                        "required_elements": [],
+                    }
+                ],
+                "faq_questions": ["Worauf sollten Eltern achten?"],
+            },
+            "debug": {
+                "planning_quality": {"score": 82},
+                "internal_linking": {"candidates": ["https://publisher.example.com/uv-tipps"]},
+            },
+        }
+    )
+
+    prompt_trace = payload["debug"]["prompt_trace"]
+    assert prompt_trace["planner"]["mode"] == "deterministic"
+    assert prompt_trace["planner"]["attempts"][0]["input_packet"]["topic"] == "Kinder Sonnenbrillen"
+    assert prompt_trace["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"
+    assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
 def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_no_relevant_matches(monkeypatch):

@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from creator.api.pipeline import ensure_prompt_trace_in_creator_output
+
 
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"
 DEFAULT_CREATOR_ENDPOINT = "http://localhost:8100"
@@ -1011,6 +1013,7 @@ def run_create_article_pipeline(
         on_phase=on_phase,
         should_cancel=should_cancel,
     )
+    creator_output = ensure_prompt_trace_in_creator_output(creator_output)
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}
     images = creator_output.get("images") or []

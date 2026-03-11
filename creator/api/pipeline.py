@@ -6117,24 +6117,13 @@ def _render_article_from_plan(
     return "".join(parts)
 
 
-def _generate_article_from_plan(
+def _build_writer_prompt_request(
     *,
     article_plan: Dict[str, Any],
     phase3: Dict[str, Any],
-    backlink_url: str,
-    publishing_site_url: str,
-    internal_link_candidates: List[str],
-    internal_link_anchor_map: Optional[Dict[str, str]],
-    min_internal_links: int,
-    max_internal_links: int,
-    llm_api_key: str,
-    llm_base_url: str,
     llm_model: str,
-    http_timeout: int,
     max_tokens: int,
     validation_feedback: Optional[List[str]] = None,
-    prompt_trace: Optional[List[Dict[str, Any]]] = None,
-    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
     style_profile = phase3.get("style_profile") or {}
@@ -6232,7 +6221,129 @@ def _generate_article_from_plan(
     if validation_feedback:
         user_prompt += f"\nPrevious validation issues to fix exactly: {validation_feedback}"
 
-    request_label = "phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry"
+    return {
+        "request_label": "phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry",
+        "model": llm_model,
+        "max_tokens": max_tokens,
+        "validation_feedback": list(validation_feedback or []),
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
+
+
+def _build_planner_prompt_trace_entry(
+    *,
+    phase3: Dict[str, Any],
+    phase4: Dict[str, Any],
+    planning_quality: Dict[str, Any],
+    internal_link_candidates: Optional[List[str]] = None,
+    attempt: int = 1,
+) -> Dict[str, Any]:
+    return {
+        "attempt": attempt,
+        "input_packet": {
+            "topic": phase3.get("final_article_topic", ""),
+            "primary_keyword": phase3.get("primary_keyword", ""),
+            "secondary_keywords": phase3.get("secondary_keywords") or [],
+            "intent_type": phase3.get("search_intent_type", ""),
+            "article_angle": phase3.get("article_angle", ""),
+            "topic_class": phase3.get("topic_class", ""),
+            "style_profile": phase3.get("style_profile") or {},
+            "specificity_profile": phase3.get("specificity_profile") or {},
+            "title_package": phase3.get("title_package") or {},
+            "content_brief": phase3.get("content_brief") or {},
+            "faq_candidates": phase3.get("faq_candidates") or [],
+            "internal_link_candidates": list(internal_link_candidates or [])[:8],
+        },
+        "plan": phase4,
+        "planning_quality": planning_quality,
+    }
+
+
+def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(creator_output, dict):
+        return creator_output
+
+    phase3 = creator_output.get("phase3") if isinstance(creator_output.get("phase3"), dict) else {}
+    phase4 = creator_output.get("phase4") if isinstance(creator_output.get("phase4"), dict) else {}
+    debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
+    if not debug:
+        debug = {}
+        creator_output["debug"] = debug
+
+    prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
+    if not prompt_trace:
+        prompt_trace = {
+            "planner": {
+                "mode": "deterministic",
+                "attempts": [],
+            },
+            "writer_attempts": [],
+        }
+        debug["prompt_trace"] = prompt_trace
+
+    planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else None
+    if planner_trace is None:
+        planner_trace = {"mode": "deterministic", "attempts": []}
+        prompt_trace["planner"] = planner_trace
+    planner_attempts = planner_trace.get("attempts") if isinstance(planner_trace.get("attempts"), list) else []
+    if not planner_attempts and phase3 and phase4:
+        planning_quality = debug.get("planning_quality") if isinstance(debug.get("planning_quality"), dict) else {}
+        internal_linking = debug.get("internal_linking") if isinstance(debug.get("internal_linking"), dict) else {}
+        planner_trace["attempts"] = [
+            _build_planner_prompt_trace_entry(
+                phase3=phase3,
+                phase4=phase4,
+                planning_quality=planning_quality,
+                internal_link_candidates=internal_linking.get("candidates") or [],
+                attempt=1,
+            )
+        ]
+
+    writer_attempts = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
+    if not writer_attempts and phase3 and phase4:
+        prompt_trace["writer_attempts"] = [
+            _build_writer_prompt_request(
+                article_plan=phase4,
+                phase3=phase3,
+                llm_model="",
+                max_tokens=0,
+                validation_feedback=None,
+            )
+        ]
+
+    return creator_output
+
+
+def _generate_article_from_plan(
+    *,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    backlink_url: str,
+    publishing_site_url: str,
+    internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
+    min_internal_links: int,
+    max_internal_links: int,
+    llm_api_key: str,
+    llm_base_url: str,
+    llm_model: str,
+    http_timeout: int,
+    max_tokens: int,
+    validation_feedback: Optional[List[str]] = None,
+    prompt_trace: Optional[List[Dict[str, Any]]] = None,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    prompt_request = _build_writer_prompt_request(
+        article_plan=article_plan,
+        phase3=phase3,
+        llm_model=llm_model,
+        max_tokens=max_tokens,
+        validation_feedback=validation_feedback,
+    )
+    system_prompt = str(prompt_request.get("system_prompt") or "")
+    user_prompt = str(prompt_request.get("user_prompt") or "")
+    request_label = str(prompt_request.get("request_label") or "phase5_writer_attempt_1")
     if prompt_trace is not None:
         prompt_trace.append(
             {
@@ -8441,7 +8552,8 @@ def run_creator_pipeline(
         "cache_read_input_tokens": sum(bucket.get("cache_read_input_tokens", 0) for bucket in tokens_by_phase.values()),
     }
 
-    return {
+    return ensure_prompt_trace_in_creator_output(
+        {
         "ok": True,
         "target_site_url": target_site_url,
         "host_site_url": publishing_site_url,
@@ -8465,4 +8577,5 @@ def run_creator_pipeline(
         "images": images,
         "warnings": warnings,
         "debug": debug,
-    }
+        }
+    )

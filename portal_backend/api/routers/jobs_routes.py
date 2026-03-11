@@ -1043,35 +1043,15 @@ def preview_pending_job_draft(
       const copyRichButton = document.getElementById("copy-rich-draft");
       const copyHtmlButton = document.getElementById("copy-html-draft");
       const copyStatus = document.getElementById("copy-status");
-      const titleNode = document.querySelector(".wrap > h1");
-      const excerptNode = document.querySelector(".wrap > .excerpt");
       const article = document.getElementById("draft-article");
       if (!article) return;
 
       const getDraftHtml = () => {{
-        const parts = [];
-        if (titleNode) {{
-          parts.push(titleNode.outerHTML);
-        }}
-        if (excerptNode) {{
-          parts.push(excerptNode.outerHTML);
-        }}
-        parts.push(article.innerHTML);
-        return parts.join("\\n");
+        return article.innerHTML;
       }};
 
       const getDraftPlainText = () => {{
-        const lines = [];
-        if (titleNode && titleNode.textContent) {{
-          lines.push(titleNode.textContent.trim());
-        }}
-        if (excerptNode && excerptNode.textContent) {{
-          lines.push(excerptNode.textContent.trim());
-        }}
-        if (article.textContent) {{
-          lines.push(article.textContent.trim());
-        }}
-        return lines.filter(Boolean).join("\\n\\n");
+        return (article.textContent || "").trim();
       }};
 
       const setCopyStatus = (message, isError = false) => {{

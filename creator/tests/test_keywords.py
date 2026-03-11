@@ -1016,15 +1016,16 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
                             )
                     continue
             required_keywords = " und ".join((section.get("required_keywords") or ["praxisnahe einordnung"])[:1])
-            required_terms = " und ".join(section.get("required_terms") or ["Familienalltag", "Kinderbrillen"])
+            required_terms = section.get("required_terms") or ["Familienalltag", "Kinderbrillen"]
+            section_focus = required_terms[0]
             body_html = (
                 f"<p>Dieser Abschnitt gibt Eltern zu {required_keywords} konkrete Kriterien, "
-                f"alltagsnahe Beobachtungen und klare Unterschiede. Gerade {required_terms} hilft dabei, "
+                f"alltagsnahe Beobachtungen und klare Unterschiede. Gerade {section_focus} hilft dabei, "
                 "nicht bei allgemeinen Aussagen zu bleiben, sondern belastbare Orientierung fuer die naechsten "
                 "Schritte im Familienalltag zu gewinnen.</p>"
                 "<p>Darueber hinaus zeigt der Abschnitt, welche Signale wirklich wichtig sind, wie sich "
                 "das Thema praktisch einordnen laesst und warum "
-                f"{required_terms} fuer eine "
+                "eine klare fachliche Einordnung fuer eine "
                 "sichere Entscheidung im Alltag relevant bleibt.</p>"
             )
             if "list" in (section.get("required_elements") or []):
@@ -1600,7 +1601,7 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     headings = [item["h2"] for item in outline["outline"]]
     assert all("Warenkorb" not in heading for heading in headings)
     assert all("Onlineshop" not in heading for heading in headings)
-    assert any("Qualitaetsmerkmale" in heading for heading in headings)
+    assert any("Qualitätsmerkmale" in heading for heading in headings)
     assert any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 

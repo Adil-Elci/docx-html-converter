@@ -72,7 +72,7 @@ def _fetch_posts_with_mode(
         "per_page": max(1, min(100, per_page)),
         "orderby": "date",
         "order": "desc",
-        "_fields": "id,link,slug,date,date_gmt,modified,modified_gmt,status,title,excerpt,categories",
+        "_fields": "id,link,slug,date,date_gmt,modified,modified_gmt,status,title,excerpt,content,categories",
     }
     if mode == "authenticated":
         headers["Authorization"] = _wp_auth_header(wp_username, wp_app_password)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import datetime, timezone
 import re
 from typing import Any, Dict, List, Optional
@@ -46,6 +47,62 @@ def _extract_rendered_text(value: Any) -> str:
     return ""
 
 
+def _strip_rendered_html(value: Any) -> str:
+    rendered = _extract_rendered_text(value)
+    if not rendered:
+        return ""
+    cleaned = re.sub(r"<[^>]+>", " ", rendered)
+    cleaned = html.unescape(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _excerpt_is_low_signal(value: str) -> bool:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return True
+    if len(_tokenize(normalized)) < 6:
+        return True
+    if any(
+        marker in normalized
+        for marker in (
+            "meta beschreibung",
+            "meta description",
+            "here are a few options",
+            "option 1",
+            "option 2",
+            "option 3",
+        )
+    ):
+        return True
+    return False
+
+
+def _derive_inventory_excerpt(post_payload: Dict[str, Any], *, max_chars: int = 600) -> str:
+    excerpt = _strip_rendered_html(post_payload.get("excerpt"))
+    if excerpt and not _excerpt_is_low_signal(excerpt):
+        return excerpt[:max_chars]
+
+    content_html = _extract_rendered_text(post_payload.get("content"))
+    if content_html:
+        paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", content_html, flags=re.IGNORECASE | re.DOTALL)
+        collected: List[str] = []
+        for paragraph in paragraphs:
+            candidate = _strip_rendered_html(paragraph)
+            if not candidate or _excerpt_is_low_signal(candidate):
+                continue
+            collected.append(candidate)
+            if len(" ".join(collected)) >= min(260, max_chars):
+                break
+        if collected:
+            return " ".join(collected)[:max_chars]
+
+    content_text = _strip_rendered_html(post_payload.get("content"))
+    if content_text and not _excerpt_is_low_signal(content_text):
+        return content_text[:max_chars]
+    return excerpt[:max_chars]
+
+
 def upsert_publishing_site_article(
     db: Session,
     *,
@@ -81,7 +138,7 @@ def upsert_publishing_site_article(
     article.url = url
     article.slug = str(post_payload.get("slug") or "").strip() or None
     article.title = _extract_rendered_text(post_payload.get("title")) or None
-    article.excerpt = _extract_rendered_text(post_payload.get("excerpt")) or None
+    article.excerpt = _derive_inventory_excerpt(post_payload) or None
     article.status = str(post_payload.get("status") or "unknown").strip().lower() or "unknown"
     article.published_at = _coerce_datetime(post_payload.get("date_gmt")) or _coerce_datetime(post_payload.get("date"))
     article.modified_at = _coerce_datetime(post_payload.get("modified_gmt")) or _coerce_datetime(post_payload.get("modified"))

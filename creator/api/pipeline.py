@@ -748,7 +748,7 @@ def _build_deterministic_meta_description(
         elif primary_keyword and not _keyword_present_relaxed(opening, primary_keyword):
             support_sentences.append(f"{_format_title_case(primary_keyword)} wird praxisnah erklaert.")
         if normalized_secondaries[2:3]:
-            support_sentences.append(f"Zusaetzlich geht es um {_format_title_case(normalized_secondaries[2])}.")
+            support_sentences.append(f"Zusätzlich geht es um {_format_title_case(normalized_secondaries[2])}.")
         support_sentences.append("Hilfreich fuer schnelle Entscheidungen im Alltag.")
 
         for sentence in support_sentences:
@@ -2357,7 +2357,7 @@ def _select_topic_relevant_signals(
     return [_format_sentence_start(value) for _score, value in ranked[:max_items]]
 
 
-def _token_matches_reference_family(token: str, reference_tokens: set[str]) -> bool:
+def _token_matches_reference_family(token: str, reference_tokens: set[str], *, allow_prefix_match: bool = True) -> bool:
     normalized = str(token).strip()
     if len(normalized) < 4:
         return False
@@ -2369,7 +2369,48 @@ def _token_matches_reference_family(token: str, reference_tokens: set[str]) -> b
             return True
         if normalized in reference or reference in normalized:
             return True
-        if len(normalized) >= 6 and len(reference) >= 6 and normalized[:3] == reference[:3]:
+        if (
+            allow_prefix_match
+            and len(normalized) >= 6
+            and len(reference) >= 6
+            and normalized[:3] == reference[:3]
+            and not any(
+                normalized.startswith(prefix) or reference.startswith(prefix)
+                for prefix in (PAIR_FIT_AUDIENCE_TOKENS | INTERNAL_LINK_GENERIC_TOKENS)
+                if len(prefix) >= 4
+            )
+        ):
+            return True
+    return False
+
+
+def _token_matches_internal_link_reference(token: str, reference_tokens: set[str]) -> bool:
+    normalized = str(token).strip()
+    if len(normalized) < 4:
+        return False
+    for reference in reference_tokens:
+        candidate = str(reference).strip()
+        if len(candidate) < 4:
+            continue
+        if normalized == candidate:
+            return True
+        shorter, longer = (normalized, candidate) if len(normalized) <= len(candidate) else (candidate, normalized)
+        if shorter in INTERNAL_LINK_GENERIC_TOKENS or shorter in KEYWORD_LOW_SIGNAL_TOKENS:
+            continue
+        if len(shorter) < 5:
+            continue
+        if (longer.startswith(shorter) or longer.endswith(shorter)) and len(shorter) * 2 >= len(longer):
+            return True
+        if (
+            len(normalized) >= 8
+            and len(candidate) >= 8
+            and normalized[:3] == candidate[:3]
+            and not any(
+                normalized.startswith(prefix) or candidate.startswith(prefix)
+                for prefix in (PAIR_FIT_AUDIENCE_TOKENS | INTERNAL_LINK_GENERIC_TOKENS)
+                if len(prefix) >= 4
+            )
+        ):
             return True
     return False
 
@@ -3233,6 +3274,8 @@ def _build_topic_signature(
             | _filter_topic_signature_tokens(_keyword_focus_tokens(" ".join(overlap_terms)))
         )
     }
+    seed_specific_tokens = set(base_specific_tokens)
+    seed_all_tokens = seed_specific_tokens | _filter_topic_signature_tokens(_keyword_focus_tokens(" ".join(secondary_keywords)))
     ranked_base_tokens = sorted(token_weights.items(), key=lambda item: (-item[1], item[0]))
     specific_tokens = {
         token
@@ -3242,13 +3285,15 @@ def _build_topic_signature(
     if not specific_tokens:
         specific_tokens = {token for token, _weight in ranked_base_tokens[:6]}
 
+    # Keep the topic signature independent from the publishing-site inventory.
+    # Feeding candidate internal titles back into the signature creates a
+    # circular bias where one weak match can dominate future ranking.
     high_confidence_internal_titles = _select_high_confidence_internal_titles(
         internal_link_inventory or [],
-        specific_tokens=specific_tokens,
+        specific_tokens=base_specific_tokens,
         topic=subject_phrase or topic,
         primary_keyword=primary_keyword,
     )
-    _add_signature_values(high_confidence_internal_titles, 2.8)
 
     ranked_tokens = sorted(token_weights.items(), key=lambda item: (-item[1], item[0]))
     all_tokens = [token for token, _weight in ranked_tokens[:16]]
@@ -3266,7 +3311,6 @@ def _build_topic_signature(
         + target_support_phrases
         + cluster_support_phrases
         + filtered_trend_candidates[:6]
-        + _extract_candidate_phrases_from_topics(high_confidence_internal_titles, max_phrases=6)
     )
     support_scored: List[tuple[float, str]] = []
     all_tokens_set = set(all_tokens)
@@ -3301,6 +3345,8 @@ def _build_topic_signature(
         "target_support_phrases": target_support_phrases[:4],
         "support_phrases": support_phrases,
         "core_tokens": sorted(core_tokens),
+        "seed_specific_tokens": sorted(seed_specific_tokens),
+        "seed_all_tokens": sorted(seed_all_tokens),
         "specific_tokens": sorted(specific_tokens),
         "all_tokens": all_tokens,
         "high_confidence_internal_titles": high_confidence_internal_titles,
@@ -3323,12 +3369,18 @@ def _topic_signature_candidate_stats(candidate: str, topic_signature: Optional[D
     candidate_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(candidate))
     specific_tokens, all_tokens = _topic_signature_token_sets(topic_signature)
     non_generic_tokens = set(candidate_tokens)
+    specific_family_overlap = {
+        token for token in non_generic_tokens if _token_matches_reference_family(token, specific_tokens, allow_prefix_match=False)
+    }
+    broad_family_overlap = {
+        token for token in non_generic_tokens if _token_matches_reference_family(token, all_tokens, allow_prefix_match=False)
+    }
     return {
         "candidate_tokens": candidate_tokens,
         "non_generic_tokens": non_generic_tokens,
-        "specific_overlap": non_generic_tokens & specific_tokens,
-        "broad_overlap": non_generic_tokens & all_tokens,
-        "drift": non_generic_tokens - all_tokens,
+        "specific_overlap": (non_generic_tokens & specific_tokens) | specific_family_overlap,
+        "broad_overlap": (non_generic_tokens & all_tokens) | broad_family_overlap,
+        "drift": non_generic_tokens - (all_tokens | broad_family_overlap),
     }
 
 
@@ -3503,7 +3555,7 @@ def _build_secondary_keyword_fallbacks(
         target_support_phrases[1] if len(target_support_phrases) > 1 else "",
         f"warnzeichen fuer {signature_support}" if signature_support and question_phrase else "",
         f"warnzeichen fuer {cluster_support_phrases[0]}" if cluster_support_phrases else "",
-        f"naechste schritte bei {subject_phrase}" if subject_phrase else "",
+        f"nächste Schritte bei {subject_phrase}" if subject_phrase else "",
         f"ursachen rund um {subject_phrase}",
         f"tipps zu {subject_phrase}",
         f"unterstuetzung bei {_to_keyword_dative_phrase(subject_phrase)}" if subject_phrase else "",
@@ -3997,8 +4049,37 @@ def _score_internal_link_inventory_item(
     stats = _topic_signature_candidate_stats(combined_text, signature)
     item_focus = _filter_keyword_focus_tokens(combined)
     core_tokens = {str(item).strip() for item in (signature.get("core_tokens") or []) if str(item).strip()}
+    seed_specific_tokens = {
+        str(item).strip() for item in (signature.get("seed_specific_tokens") or signature.get("specific_tokens") or []) if str(item).strip()
+    }
+    seed_all_tokens = {
+        str(item).strip() for item in (signature.get("seed_all_tokens") or signature.get("all_tokens") or []) if str(item).strip()
+    }
+    if not seed_all_tokens:
+        seed_all_tokens = set(seed_specific_tokens)
     core_overlap = item_focus & core_tokens
-    if not stats["non_generic_tokens"] or not stats["specific_overlap"]:
+    title_focus = _filter_keyword_focus_tokens(title_tokens | slug_tokens)
+    core_family_overlap = {
+        token for token in title_focus if token not in core_overlap and _token_matches_internal_link_reference(token, core_tokens)
+    }
+    seed_specific_overlap = item_focus & seed_specific_tokens
+    seed_specific_family_overlap = {
+        token
+        for token in title_focus
+        if token not in seed_specific_overlap and _token_matches_internal_link_reference(token, seed_specific_tokens)
+    }
+    seed_broad_overlap = item_focus & seed_all_tokens
+    seed_broad_family_overlap = {
+        token
+        for token in title_focus
+        if token not in seed_broad_overlap and _token_matches_internal_link_reference(token, seed_all_tokens)
+    }
+    title_seed_overlap = title_focus & seed_specific_tokens
+    title_broad_overlap = title_focus & seed_all_tokens
+    seed_drift = item_focus - (seed_all_tokens | seed_broad_family_overlap)
+    secondary_similarity = max((_keyword_similarity(combined_text, keyword) for keyword in secondary_keywords), default=0.0)
+    title_secondary_similarity = max((_keyword_similarity(str(item.get("title") or ""), keyword) for keyword in secondary_keywords), default=0.0)
+    if not stats["non_generic_tokens"] or (not seed_specific_overlap and not seed_specific_family_overlap):
         return 0.0
 
     title_similarity = max(
@@ -4009,23 +4090,39 @@ def _score_internal_link_inventory_item(
         _keyword_similarity(combined_text, primary_keyword),
         _keyword_similarity(combined_text, topic),
     )
-    if not core_overlap and len(stats["specific_overlap"]) < 2 and max(title_similarity, combined_similarity) < 0.32:
+    if (
+        len(core_overlap | core_family_overlap) <= 1
+        and len(seed_specific_overlap | seed_specific_family_overlap) < 2
+        and max(title_similarity, combined_similarity, secondary_similarity) < 0.28
+        and not title_broad_overlap
+    ):
         return 0.0
-    if len(core_overlap) == 1 and len(stats["specific_overlap"]) < 2 and max(title_similarity, combined_similarity) < 0.28:
+    if (
+        len(seed_specific_overlap | seed_specific_family_overlap) == 1
+        and not (title_seed_overlap or title_broad_overlap or core_overlap or core_family_overlap)
+        and secondary_similarity < 0.12
+    ):
         return 0.0
 
     score = 0.0
-    score += 3.2 * len(core_overlap)
-    score += 5.0 * len(stats["specific_overlap"])
-    score += 2.0 * len(stats["broad_overlap"])
+    score += 3.6 * len(core_overlap)
+    score += 2.2 * len(core_family_overlap)
+    score += 5.4 * len(seed_specific_overlap)
+    score += 2.8 * len(seed_specific_family_overlap)
+    score += 2.4 * len(title_seed_overlap)
+    score += 1.2 * len(title_broad_overlap - title_seed_overlap)
+    score += 1.8 * len(seed_broad_overlap)
+    score += 1.0 * len(seed_broad_family_overlap)
     score += 2.5 * len(item_focus & primary_tokens)
     score += 1.5 * len(item_focus & secondary_tokens)
+    score += 2.0 * secondary_similarity
+    score += 1.0 * title_secondary_similarity
     score += 1.0 * title_similarity
     score += 0.8 * _keyword_similarity(str(item.get("title") or ""), topic)
     score += 0.5 * combined_similarity
     score += min(1.0, len(title_tokens) * 0.2)
-    score -= 1.2 * len(stats["drift"])
-    score -= 0.4 * len({token for token in item_focus if token in INTERNAL_LINK_GENERIC_TOKENS and token not in stats["specific_overlap"]})
+    score -= min(3.0, 0.2 * len(seed_drift))
+    score -= 0.4 * len({token for token in item_focus if token in INTERNAL_LINK_GENERIC_TOKENS and token not in seed_specific_overlap})
     if str(item.get("published_at") or "").strip():
         score += 0.3
     return score
@@ -4064,7 +4161,7 @@ def _rank_internal_link_inventory(
     if not ranked:
         return []
     top_score = ranked[0][0]
-    minimum_score = max(6.0, top_score - 6.5)
+    minimum_score = max(3.5, top_score - 12.0)
     return [item for score, item in ranked if score >= minimum_score][:max_items]
 
 
@@ -4497,7 +4594,7 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
         questions = [
             direct_question,
             f"Woran erkennt man fruehzeitig Hinweise auf {support_question_focus or _format_sentence_start(subject_phrase)}?",
-            "Welche naechsten Schritte helfen dann im Alltag?",
+            "Welche nächsten Schritte helfen dann im Alltag?",
         ]
         if raw_target_term:
             questions[-1] = f"Worauf sollte man bei {raw_target_term} achten?"
@@ -4505,7 +4602,7 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
     questions = [
         f"Was ist bei {subject_phrase} wichtig?",
         f"Worauf sollte man bei {target_question_focus or support_question_focus or 'der Auswahl'} achten?",
-        "Welche naechsten Schritte helfen dann im Alltag?",
+        "Welche nächsten Schritte helfen dann im Alltag?",
     ]
     return questions
 
@@ -4841,15 +4938,15 @@ def _build_question_topic_outline_headings(
     elif structured_mode == "list":
         first_heading = f"{subject_heading}: Checkliste und wichtigste Schritte"
     elif structured_mode == "table":
-        first_heading = f"{subject_heading}: Vergleich und Ueberblick"
+        first_heading = f"{subject_heading}: Vergleich und Überblick"
     else:
-        first_heading = f"{subject_heading}: Das Wichtigste im Ueberblick"
+        first_heading = f"{subject_heading}: Das Wichtigste im Überblick"
 
     if outline_mode == "decision":
         headings = [
             first_heading,
-            f"Wichtige Kriterien, Unterschiede und Qualitaetsmerkmale bei {heading_focus}",
-            "Welche Fehler bei Auswahl und Nutzung haeufig sind und wie die Entscheidung leichter faellt",
+            f"Wichtige Kriterien, Unterschiede und Qualitätsmerkmale bei {heading_focus}",
+            "Welche Fehler bei Auswahl und Nutzung häufig sind und wie die Entscheidung leichter fällt",
         ]
     elif outline_mode == "problem":
         headings = [
@@ -4899,7 +4996,7 @@ def _build_deterministic_outline(
             if structured_mode == "table" or any(
                 token in reference_heading for token in {"vergleich", "kriterien", "qualitaetsmerkmale", "unterschiede"}
             ):
-                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Qualitaetsmerkmale"
+                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Qualitätsmerkmale"
             elif any(token in reference_heading for token in {"anzeichen", "ursachen", "warnzeichen", "hilfe"}):
                 raw_headings[target_index] = f"{primary_title}: Warnzeichen, Ursachen und Einordnung"
             elif structured_mode == "list":
@@ -4972,9 +5069,9 @@ def _section_goal_from_heading(heading: str, *, section_kind: str, topic: str) -
     normalized = _normalize_keyword_phrase(heading)
     topic_phrase = _format_title_case(topic or heading or "das Thema")
     if section_kind == "fazit":
-        return f"Verdichte die wichtigsten Entscheidungen und naechsten Schritte zu {topic_phrase} in einer klaren, konkreten Einordnung."
+        return f"Verdichte die wichtigsten Entscheidungen und nächsten Schritte zu {topic_phrase} in einer klaren, konkreten Einordnung."
     if section_kind == "faq":
-        return f"Beantworte die haeufigsten Rueckfragen zu {topic_phrase} knapp, konkret und ohne Wiederholungen."
+        return f"Beantworte die häufigsten Rückfragen zu {topic_phrase} knapp, konkret und ohne Wiederholungen."
     if any(term in normalized for term in {"ueberblick", "wichtigste", "vergleich", "checkliste"}):
         return f"Gib einen konkreten Einstieg in {topic_phrase} und leite die wichtigsten Kriterien fuer Leserinnen und Leser her."
     if any(term in normalized for term in {"ursachen", "hintergruende", "ausloeser"}):

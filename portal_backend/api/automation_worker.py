@@ -20,6 +20,7 @@ from .automation_service import (
     run_create_article_pipeline,
 )
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
+from .internal_linking_sync import run_internal_link_inventory_sync
 from .portal_models import (
     Asset,
     ClientTargetSite,
@@ -743,6 +744,15 @@ class AutomationJobWorker:
 
             internal_link_inventory: List[Dict[str, Any]] = []
             if creator_mode:
+                try:
+                    run_internal_link_inventory_sync(
+                        self._sessionmaker,
+                        site_url_filter=site.site_url,
+                        per_page=100,
+                        timeout_seconds=10,
+                    )
+                except Exception:
+                    logger.warning("automation.worker.internal_link_inventory_refresh_failed job_id=%s", job_id, exc_info=True)
                 internal_link_inventory = build_creator_internal_link_inventory(
                     session,
                     site_id=site.id,

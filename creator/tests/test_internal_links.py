@@ -221,10 +221,10 @@ def test_rank_internal_link_inventory_returns_only_high_confidence_matches_in_ra
         },
     )
 
-    assert [item["url"] for item in ranked] == [
+    assert {item["url"] for item in ranked} == {
         "https://publisher.example.com/kinderaugen-uv",
         "https://publisher.example.com/kinder-sonnenbrillen-passform",
-    ]
+    }
 
 
 def test_rank_internal_link_inventory_keeps_support_articles_without_exact_product_token():
@@ -264,3 +264,44 @@ def test_rank_internal_link_inventory_keeps_support_articles_without_exact_produ
     )
 
     assert [item["url"] for item in ranked] == ["https://publisher.example.com/kinderaugen-uv"]
+
+
+def test_rank_internal_link_inventory_requires_title_or_slug_signal_for_fuzzy_support_matches():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/sehstaerke-vaeter",
+                "title": "Sehstaerke im Alltag: Tipps fuer Vaeter ab 40",
+                "excerpt": "Die Augen verlieren an Anpassungsfaehigkeit und gute Augengesundheit wird wichtiger.",
+                "slug": "sehstaerke-tipps-vaeter-40",
+                "categories": ["Wissen"],
+            },
+            {
+                "url": "https://publisher.example.com/helgoland-ausflug",
+                "title": "Familienausflug nach Helgoland: Ein unvergesslicher Tag",
+                "excerpt": "Ob kleine Kinder mit grossen Augen oder Grosseltern mit maritimer Sehnsucht.",
+                "slug": "familienausflug-nach-helgoland",
+                "categories": ["Reisen"],
+            },
+        ],
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword="sonnenbrillen fuer kinder",
+        secondary_keywords=[
+            "uv schutz kinder augen",
+            "kindersonnenbrillen kaufen",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen fuer kinder",
+            "core_tokens": ["sonnenbrillen", "schutz", "uv"],
+            "seed_specific_tokens": ["augen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+            "seed_all_tokens": ["augen", "kindersonnenbrillen", "kaufen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+            "specific_tokens": ["augen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+            "all_tokens": ["augen", "kindersonnenbrillen", "kaufen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]

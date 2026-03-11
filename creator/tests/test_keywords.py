@@ -720,6 +720,47 @@ def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
     assert "wissen amp ideen" not in result["secondary_keywords"]
 
 
+def test_select_keywords_filters_internal_support_titles_from_secondary_keywords():
+    result = _select_keywords(
+        topic="Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+        llm_primary="immobilie verkaufen",
+        llm_secondary=[
+            "immobilienmakler weiterbildung als erfolgsfaktor",
+            "immobilien kaufen oder mieten was lohnt sich",
+        ],
+        keyword_cluster=[
+            "immobilie verkaufen",
+            "verkaufspreis immobilie",
+            "energieausweis hausverkauf",
+            "unterlagen hausverkauf",
+            "makler oder selbst verkaufen",
+        ],
+        allowed_topics=[
+            "Photovoltaik beim Immobilienkauf richtig pruefen",
+            "Sauberkeit steigert den Immobilienwert",
+            "Immobilie verkaufen: So gelingt der Abschluss",
+        ],
+        trend_candidates=[],
+        faq_candidates=[
+            "Was ist bei immobilie verkaufen wichtig?",
+            "Welche Unterlagen braucht man beim Hausverkauf?",
+            "Wann lohnt sich ein Makler?",
+        ],
+        target_terms=[
+            "Steinhaus Immobilien",
+            "Immobilienmakler Hamburg Steinhaus Immobilien",
+        ],
+        overlap_terms=["immobilien", "hausverkauf"],
+    )
+
+    joined_secondaries = " | ".join(result["secondary_keywords"]).lower()
+    assert "erfolgsfaktor" not in joined_secondaries
+    assert "was lohnt sich" not in joined_secondaries
+    assert "sauberkeit steigert" not in joined_secondaries
+    assert "photovoltaik" not in joined_secondaries
+    assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
+
+
 def test_sanitize_editorial_phrase_rejects_catalog_chrome_phrases():
     assert _sanitize_editorial_phrase("Neu im Sortiment") == ""
     assert _sanitize_editorial_phrase("Unsere Bestseller") == ""
@@ -1050,6 +1091,61 @@ def test_build_deterministic_article_plan_assigns_structure_and_keyword_coverage
     assert len(plan["faq_questions"]) == 3
 
 
+def test_build_deterministic_article_plan_uses_topic_terms_not_target_identity_terms():
+    plan = _build_deterministic_article_plan(
+        phase1={
+            "brand_name": "Steinhaus Immobilien",
+            "anchor_type": "brand",
+            "keyword_cluster": ["immobilie", "verkaufen", "hausverkauf"],
+        },
+        phase3={
+            "final_article_topic": "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+            "primary_keyword": "immobilie verkaufen",
+            "secondary_keywords": [
+                "verkaufspreis immobilie",
+                "energieausweis hausverkauf",
+                "makler oder selbst verkaufen",
+            ],
+            "faq_candidates": [
+                "Was ist bei immobilie verkaufen wichtig?",
+                "Welche Unterlagen braucht man beim Hausverkauf?",
+                "Wann lohnt sich ein Makler?",
+            ],
+            "structured_content_mode": "table",
+            "search_intent_type": "informational",
+            "article_angle": "process_and_decision_factors",
+            "topic_class": "real_estate",
+            "target_brand_name": "Steinhaus Immobilien",
+            "title_package": {"h1": "Immobilie verkaufen: Checkliste fuer Hausverkaeufer"},
+            "content_brief": {
+                "audience": "Haushalte",
+                "target_signals": ["Immobilienmakler Hamburg Steinhaus Immobilien"],
+                "publishing_signals": ["Immobilienmarkt"],
+                "overlap_terms": ["hausverkauf", "verkaufsprozess"],
+            },
+            "topic_signature": {
+                "subject_phrase": "immobilie verkaufen",
+                "primary_keyword": "immobilie verkaufen",
+                "target_terms": ["Steinhaus Immobilien"],
+                "target_support_phrases": [],
+                "support_phrases": ["immobilie verkaufen", "hausverkauf", "verkaufsprozess"],
+                "specific_tokens": ["immobilie", "verkaufen", "hausverkauf", "verkaufsprozess"],
+                "all_tokens": ["immobilie", "verkaufen", "hausverkauf", "verkaufsprozess", "makler"],
+            },
+        },
+        anchor="",
+        anchor_safe=False,
+    )
+
+    body_sections = [section for section in plan["sections"] if section["kind"] == "body"]
+    assert body_sections
+    assert all("steinhaus" not in " ".join(section["required_terms"]).lower() for section in plan["sections"])
+    assert any(
+        {"hausverkauf", "verkaufsprozess"} & set(" ".join(section["required_terms"]).lower().split())
+        for section in body_sections
+    )
+
+
 def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(monkeypatch):
     monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
 
@@ -1242,6 +1338,27 @@ def test_ensure_prompt_trace_in_creator_output_backfills_missing_trace():
     assert prompt_trace["planner"]["attempts"][0]["input_packet"]["topic"] == "Kinder Sonnenbrillen"
     assert prompt_trace["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
+
+
+def test_ensure_faq_candidates_filters_target_identity_questions():
+    questions = _ensure_faq_candidates(
+        "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+        [
+            "Was ist bei immobilie verkaufen wichtig?",
+            "Worauf sollte man bei Immobilienmakler Hamburg Steinhaus Immobilien achten?",
+            "Welche Unterlagen braucht man beim Hausverkauf?",
+        ],
+        topic_signature={
+            "subject_phrase": "immobilie verkaufen",
+            "primary_keyword": "immobilie verkaufen",
+            "specific_tokens": ["immobilie", "verkaufen", "hausverkauf"],
+            "all_tokens": ["immobilie", "verkaufen", "hausverkauf", "makler", "unterlagen"],
+        },
+        brand_name="Steinhaus Immobilien",
+    )
+
+    assert all("steinhaus" not in question.lower() for question in questions)
+    assert len(questions) == 3
 
 
 def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_no_relevant_matches(monkeypatch):

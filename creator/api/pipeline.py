@@ -338,7 +338,8 @@ GENERIC_UI_CHROME_TOKENS = {
     "sortierung", "suche", "warenkorb", "wunschliste",
 }
 EDITORIAL_ACTION_TOKENS = {
-    "achten", "auswaehlen", "erkennen", "kaufen", "nutzen", "reagieren", "vergleichen", "verstehen",
+    "achten", "auswaehlen", "erkennen", "gelingt", "hilft", "kaufen", "lohnt", "nutzen", "pruefen",
+    "reagieren", "steigert", "vergleichen", "verstehen", "zaehlt",
 }
 EDITORIAL_NOISE_TOKENS = {"amp"}
 EDITORIAL_GREETING_PREFIXES = (
@@ -821,6 +822,9 @@ def _evaluate_heading_quality(
         if _phrase_has_editorial_noise(heading):
             score -= 18
             errors.append(f"heading_invalid:{heading}")
+        if _keyword_candidate_is_support_topic_noise(heading, topic_signature) and not _heading_is_natural_core_question(heading):
+            score -= 18
+            errors.append(f"heading_support_topic_noise:{heading}")
         if not _topic_signature_candidate_has_relevance(heading, topic_signature) and not _heading_is_natural_core_question(heading):
             score -= 22
             errors.append(f"heading_topic_drift:{heading}")
@@ -2712,6 +2716,24 @@ def _sanitize_editorial_phrase(value: str, *, allow_single_token: bool = False) 
     return normalized if _is_valid_keyword_phrase(normalized) else ""
 
 
+def _is_brand_identity_phrase(value: str, brand_name: str) -> bool:
+    normalized_value = _sanitize_editorial_phrase(value, allow_single_token=True)
+    normalized_brand = _normalize_brand_name(brand_name) or _sanitize_editorial_phrase(brand_name, allow_single_token=True)
+    if not normalized_value or not normalized_brand:
+        return False
+    brand_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(normalized_brand))
+    value_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(normalized_value))
+    if not brand_tokens or not value_tokens:
+        return False
+    if not (brand_tokens & value_tokens):
+        return False
+    if _keyword_similarity(normalized_value, normalized_brand) >= 0.72:
+        return True
+    if brand_tokens <= value_tokens and len(value_tokens - brand_tokens) <= 2:
+        return True
+    return False
+
+
 def _keyword_similarity(a: str, b: str) -> float:
     ta = _keyword_token_set(a)
     tb = _keyword_token_set(b)
@@ -2940,6 +2962,7 @@ def _build_content_brief(
     pair_fit: Dict[str, Any],
     target_profile: Dict[str, Any],
     publishing_profile: Dict[str, Any],
+    brand_name: str = "",
 ) -> Dict[str, Any]:
     overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()][:4]
     publishing_terms = _pair_fit_ranked_terms(publishing_profile, site_kind="publishing")
@@ -2970,6 +2993,7 @@ def _build_content_brief(
             max_items=4,
         )
         if _keyword_similarity(signal, topic) < 0.85
+        and not _is_brand_identity_phrase(signal, brand_name)
     ]
     style_cues = _merge_string_lists(
         phase2.get("content_style_constraints") or [],
@@ -2997,6 +3021,7 @@ def _select_signature_target_terms(
     target_profile: Dict[str, Any],
     content_brief: Optional[Dict[str, Any]],
     overlap_terms: List[str],
+    brand_name: str = "",
     max_items: int = 8,
 ) -> List[str]:
     relevant_profile_terms = _select_topic_relevant_signals(
@@ -3009,11 +3034,16 @@ def _select_signature_target_terms(
         overlap_terms=overlap_terms,
         max_items=max_items,
     )
-    return _merge_string_lists(
-        [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
-        relevant_profile_terms,
-        max_items=max_items,
-    )
+    filtered_terms = [
+        term
+        for term in _merge_string_lists(
+            [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
+            relevant_profile_terms,
+            max_items=max_items * 2,
+        )
+        if not _is_brand_identity_phrase(term, brand_name)
+    ]
+    return _merge_string_lists(filtered_terms, max_items=max_items)
 
 
 def _format_content_brief_prompt_text(content_brief: Dict[str, Any]) -> str:
@@ -3969,16 +3999,43 @@ def _topic_signature_candidate_score(candidate: str, topic_signature: Optional[D
     )
 
 
-def _keyword_candidate_has_editorial_quality(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> bool:
-    if not _sanitize_editorial_phrase(candidate):
+def _keyword_candidate_is_support_topic_noise(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate)
+    if not normalized:
+        return True
+    stats = _topic_signature_candidate_stats(normalized, topic_signature)
+    words = normalized.split()
+    if len(words) < 4:
         return False
-    stats = _topic_signature_candidate_stats(candidate, topic_signature)
+    reference_phrase = ""
+    if isinstance(topic_signature, dict):
+        reference_phrase = str(topic_signature.get("subject_phrase") or topic_signature.get("primary_keyword") or "").strip()
+    reference_similarity = _keyword_similarity(normalized, reference_phrase)
+    specific_overlap = len(stats["specific_overlap"])
+    broad_overlap = len(stats["broad_overlap"])
+    drift = len(stats["drift"])
+    if any(word in EDITORIAL_ACTION_TOKENS for word in words) and specific_overlap < 2 and reference_similarity < 0.55:
+        return True
+    if len(words) >= 5 and drift >= (specific_overlap + broad_overlap + 2):
+        return True
+    if " als " in f" {normalized} " and specific_overlap < 2 and reference_similarity < 0.5:
+        return True
+    return False
+
+
+def _keyword_candidate_has_editorial_quality(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate)
+    if not normalized:
+        return False
+    if _keyword_candidate_is_support_topic_noise(normalized, topic_signature):
+        return False
+    stats = _topic_signature_candidate_stats(normalized, topic_signature)
     if len(stats["non_generic_tokens"]) >= 2:
         return True
     reference_phrase = ""
     if isinstance(topic_signature, dict):
         reference_phrase = str(topic_signature.get("subject_phrase") or topic_signature.get("primary_keyword") or "").strip()
-    return _keyword_similarity(candidate, reference_phrase) >= 0.55
+    return _keyword_similarity(normalized, reference_phrase) >= 0.55
 
 
 def _keyword_candidate_has_question_noise(candidate: str) -> bool:
@@ -4143,6 +4200,7 @@ def _finalize_secondary_keywords(
         for candidate in _dedupe_keyword_phrases(secondary_keywords)
         if _keyword_similarity(candidate, primary_keyword) < 0.75
         and not _keyword_redundant_with_topic(candidate, topic)
+        and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
     ]
     if len(finalized) >= KEYWORD_MIN_SECONDARY:
         return finalized[:KEYWORD_MAX_SECONDARY]
@@ -4160,10 +4218,39 @@ def _finalize_secondary_keywords(
             continue
         if _keyword_redundant_with_topic(candidate, topic):
             continue
+        if not _keyword_candidate_has_editorial_quality(candidate, topic_signature):
+            continue
         if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
             continue
         finalized.append(candidate)
     return finalized[:KEYWORD_MAX_SECONDARY]
+
+
+def _faq_candidate_has_planning_noise(
+    question: str,
+    *,
+    topic_signature: Optional[Dict[str, Any]],
+    brand_name: str = "",
+) -> bool:
+    normalized = _normalize_keyword_phrase(question)
+    if not normalized:
+        return True
+    focus_phrase = re.sub(
+        r"^(?:was ist|wie|wann|warum|welche|welcher|welches|wo|woran|worauf|kann|darf)\s+",
+        "",
+        normalized,
+    )
+    focus_phrase = re.sub(
+        r"\b(?:bei|fuer|für|im|alltag|wichtig|achten|hilft|helfen|naechsten|nächsten|schritte|sollte|sollten|man|dann)\b",
+        " ",
+        focus_phrase,
+    )
+    focus_phrase = re.sub(r"\s+", " ", focus_phrase).strip()
+    if not focus_phrase:
+        return False
+    if _is_brand_identity_phrase(focus_phrase, brand_name):
+        return True
+    return _keyword_candidate_is_support_topic_noise(focus_phrase, topic_signature)
 
 
 def _topic_head_keyword(topic: str) -> str:
@@ -5311,8 +5398,20 @@ def _ensure_faq_candidates(
     faq_candidates: List[str],
     *,
     topic_signature: Optional[Dict[str, Any]] = None,
+    brand_name: str = "",
 ) -> List[str]:
-    normalized_faqs = _dedupe_faq_questions(faq_candidates, max_items=FAQ_MIN_QUESTIONS)
+    normalized_faqs = _dedupe_faq_questions(
+        [
+            question
+            for question in faq_candidates
+            if not _faq_candidate_has_planning_noise(
+                question,
+                topic_signature=topic_signature,
+                brand_name=brand_name,
+            )
+        ],
+        max_items=FAQ_MIN_QUESTIONS,
+    )
     if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
         return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
@@ -5764,6 +5863,7 @@ def _build_deterministic_article_plan(
         topic,
         phase3.get("faq_candidates") or [],
         topic_signature=topic_signature,
+        brand_name=str(phase3.get("target_brand_name") or "").strip(),
     )
     structured_mode = str(phase3.get("structured_content_mode") or "none").strip().lower()
     content_brief = phase3.get("content_brief") or {}
@@ -5788,16 +5888,15 @@ def _build_deterministic_article_plan(
         topic_signature=topic_signature,
     )
     outline_items = outline_package["outline"]
-    target_signals = _merge_string_lists(
-        [str(item).strip() for item in (content_brief.get("target_signals") or []) if str(item).strip()],
+    topic_focus_terms = _topic_focus_terms(topic, max_terms=2)
+    semantic_support_terms = _merge_string_lists(
+        topic_focus_terms,
         [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
         max_items=6,
     )
-    topic_focus_terms = _topic_focus_terms(topic, max_terms=2)
     publishing_signals = _merge_string_lists(
-        [str(content_brief.get("audience") or "").strip()],
         [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
-        max_items=5,
+        max_items=4,
     )
     core_positions = [
         index
@@ -5808,9 +5907,9 @@ def _build_deterministic_article_plan(
     secondary_assignments: List[List[str]] = [[] for _ in range(core_count)]
     for index, keyword in enumerate(secondary_keywords):
         secondary_assignments[index % core_count].append(keyword)
-    target_assignments: List[List[str]] = [[] for _ in range(core_count)]
-    for index, term in enumerate(target_signals):
-        target_assignments[index % core_count].append(term)
+    semantic_assignments: List[List[str]] = [[] for _ in range(core_count)]
+    for index, term in enumerate(semantic_support_terms):
+        semantic_assignments[index % core_count].append(term)
     publishing_assignments: List[List[str]] = [[] for _ in range(core_count)]
     for index, term in enumerate(publishing_signals):
         publishing_assignments[index % core_count].append(term)
@@ -5863,7 +5962,7 @@ def _build_deterministic_article_plan(
                     "h3": [],
                     "goal": _section_goal_from_heading(h2, section_kind="fazit", topic=topic),
                     "required_keywords": [],
-                    "required_terms": _merge_string_lists(topic_focus_terms, target_signals[:1], publishing_signals[:1], max_items=3),
+                    "required_terms": _merge_string_lists(topic_focus_terms, semantic_support_terms[:1], max_items=3),
                     "required_elements": [],
                     "target_words": {"min": 65, "max": 95},
                 }
@@ -5871,10 +5970,10 @@ def _build_deterministic_article_plan(
             continue
 
         assigned_secondaries = secondary_assignments[core_cursor] if core_cursor < len(secondary_assignments) else []
-        assigned_targets = target_assignments[core_cursor][:1] if core_cursor < len(target_assignments) else []
+        assigned_semantic = semantic_assignments[core_cursor][:2] if core_cursor < len(semantic_assignments) else []
         assigned_publishing = publishing_assignments[core_cursor][:1] if core_cursor < len(publishing_assignments) else []
         required_keywords = _dedupe_keyword_phrases(assigned_secondaries)
-        required_terms = _merge_string_lists(assigned_targets, assigned_publishing, max_items=3)
+        required_terms = _merge_string_lists(assigned_semantic, assigned_publishing, max_items=3)
         required_elements: List[str] = []
         if core_cursor == 0 and structured_mode == "list":
             required_elements.append("list")
@@ -7950,6 +8049,7 @@ def run_creator_pipeline(
         "primary_keyword": requested_topic or resolved_topic,
         "secondary_keywords": keyword_cluster[1:3] if len(keyword_cluster) > 1 else [],
         "pair_fit": pair_fit,
+        "target_brand_name": str(phase1.get("brand_name") or "").strip(),
     }
 
     keyword_discovery: Dict[str, Any] = {"query_variants": [], "trend_candidates": [], "faq_candidates": []}
@@ -7969,6 +8069,7 @@ def run_creator_pipeline(
         pair_fit=pair_fit,
         target_profile=target_profile,
         publishing_profile=publishing_profile,
+        brand_name=phase3.get("target_brand_name", ""),
     )
     signature_overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()]
     signature_target_terms = _select_signature_target_terms(
@@ -7976,6 +8077,7 @@ def run_creator_pipeline(
         target_profile=target_profile,
         content_brief=phase3.get("content_brief") or {},
         overlap_terms=signature_overlap_terms,
+        brand_name=phase3.get("target_brand_name", ""),
         max_items=8,
     )
     keyword_selection = _select_keywords(
@@ -8030,6 +8132,7 @@ def run_creator_pipeline(
         phase3.get("final_article_topic", ""),
         keyword_selection.get("faq_candidates") or [],
         topic_signature=phase3.get("topic_signature"),
+        brand_name=str(phase3.get("target_brand_name") or "").strip(),
     )
     phase3["structured_content_mode"] = _structured_content_mode(
         phase3.get("final_article_topic", ""),

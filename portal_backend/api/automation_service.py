@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from creator.api.pipeline import ensure_prompt_trace_in_creator_output
+from .creator_prompt_trace import ensure_prompt_trace_in_creator_output
 
 
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"

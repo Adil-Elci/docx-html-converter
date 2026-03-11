@@ -178,6 +178,123 @@ GENERIC_BODY_PHRASES = (
     "abschliessend laesst sich sagen",
 )
 
+TITLE_FILLER_PHRASES = {
+    "vergleich und orientierung",
+    "tipps und orientierung",
+    "wichtige hinweise und orientierung",
+    "vergleich kosten und tipps",
+    "checkliste und tipps",
+}
+TITLE_WEAK_TAIL_PHRASES = {
+    "wichtige hinweise",
+    "erste orientierung",
+    "mehr orientierung",
+    "kompakte orientierung",
+}
+HEADING_FILLER_PHRASES = {
+    "wichtige kriterien unterschiede und qualitaetsmerkmale",
+    "wichtige hintergruende kriterien und einordnung",
+    "praktische tipps und alltagsnahe orientierung",
+    "vergleich und ueberblick",
+}
+PROMOTIONAL_BACKLINK_PHRASES = (
+    "ist der richtige partner",
+    "ist ihr partner",
+    "bietet genau das",
+    "bietet genau diese",
+    "ist ihr anbieter",
+    "vereinbaren sie jetzt",
+    "jetzt vereinbaren",
+    "onlineshop",
+    "shop fuer",
+    "ihr onlineshop",
+)
+COMMERCIAL_INVESTIGATION_CUES = {
+    "auswahl",
+    "bewertung",
+    "checkliste",
+    "kriterien",
+    "kosten",
+    "lohnt",
+    "preis",
+    "preise",
+    "vergleich",
+    "unterschiede",
+}
+TRANSACTIONAL_CUES = {
+    "anfrage",
+    "beantragen",
+    "beauftragen",
+    "bestellen",
+    "buchen",
+    "kauf",
+    "kaufen",
+    "kuendigen",
+    "mieten",
+    "reservieren",
+    "verkauf",
+    "verkaufen",
+}
+NAVIGATIONAL_CUES = {
+    "adresse",
+    "anfahrt",
+    "kontakt",
+    "login",
+    "oeffnungszeiten",
+    "portal",
+    "standort",
+}
+PROCESS_ACTION_TOKENS = {
+    "beantragen",
+    "beauftragen",
+    "checkliste",
+    "kuendigen",
+    "organisieren",
+    "planen",
+    "pruefen",
+    "schritte",
+    "umbauen",
+    "umsetzen",
+    "verkaufen",
+    "vorbereiten",
+}
+TOPIC_CLASS_KEYWORDS = {
+    "real_estate": {"immobilie", "immobilien", "haus", "makler", "miete", "mieten", "verkauf", "verkaufen", "wohnung"},
+    "health_parenting": {"arzt", "augen", "baby", "eltern", "familie", "familien", "gesundheit", "kinder", "schutz", "vorsorge"},
+    "product_service": {"auswahl", "kategorie", "material", "modell", "modelle", "produkt", "produkte", "qualitaet", "vergleich"},
+    "finance_legal": {"finanzierung", "frist", "gesetz", "kosten", "provision", "recht", "steuer", "vertrag", "zins"},
+}
+SPECIFICITY_SIGNAL_BUCKETS = {
+    "real_estate": {
+        "market_context": {"lage", "markt", "marktwert", "nachfrage", "preis", "preise", "stadtteil", "zins"},
+        "documents_process": {"besichtigung", "energieausweis", "expose", "grundbuch", "notar", "unterlagen", "vertrag", "wertermittlung"},
+        "buyer_context": {"familien", "interessenten", "kaeufer", "kapitalanleger", "verkaeufer"},
+    },
+    "health_parenting": {
+        "standards_safety": {"ce", "iso", "kategorie", "klasse", "norm", "risiko", "schutzklasse", "uv", "uv400"},
+        "age_use_case": {"alltag", "babys", "gebirge", "kinder", "kleinkinder", "schulkinder", "sommer", "strand", "urlaub"},
+        "decision_criteria": {"bruchsicher", "groesse", "komfort", "material", "passform", "sitz", "schutz", "gewicht"},
+    },
+    "product_service": {
+        "criteria_specs": {"kategorie", "klasse", "material", "modell", "passform", "preis", "preise", "qualitaet", "schutz"},
+        "use_cases": {"alltag", "einsatz", "ferien", "praxis", "sport", "strand", "urlaub", "vergleich"},
+        "standards_rules": {"ce", "iso", "klasse", "norm", "prozent", "uv", "uv400"},
+    },
+    "finance_legal": {
+        "rules_terms": {"frist", "gesetz", "laufzeit", "nachweis", "regel", "steuer", "vertrag"},
+        "costs_conditions": {"finanzierung", "kosten", "preis", "preise", "provision", "zins"},
+        "scenarios": {"alltag", "familien", "haushalte", "kaeufer", "verkaeufer"},
+    },
+    "general": {
+        "criteria": {"auswahl", "entscheidung", "kriterien", "pruefen", "vergleich"},
+        "use_cases": {"alltag", "beispiel", "einsatz", "praxis", "situation"},
+        "next_steps": {"hilfe", "naechste", "schritte", "umsetzen", "vorbereiten"},
+    },
+}
+PLAN_QUALITY_MIN_SCORE = 72
+ARTICLE_QUALITY_MIN_SCORE = 70
+ARTICLE_MAX_SPAM_RISK_SCORE = 35
+
 KEYWORD_MIN_SECONDARY = 3
 KEYWORD_MAX_SECONDARY = 6
 KEYWORD_MIN_WORDS = 2
@@ -420,7 +537,7 @@ def _build_inventory_topic_insights(items: List[Dict[str, Any]]) -> Dict[str, An
 def _structured_content_mode(topic: str, primary_keyword: str, search_intent_type: str) -> str:
     normalized = _normalize_keyword_phrase(f"{topic} {primary_keyword}")
     tokens = set(normalized.split())
-    if tokens & STRUCTURED_TABLE_HINTS or (search_intent_type or "").strip().lower() == "commercial":
+    if tokens & STRUCTURED_TABLE_HINTS or (search_intent_type or "").strip().lower() == "commercial_investigation":
         return "table"
     if tokens & STRUCTURED_LIST_HINTS:
         return "list"
@@ -454,12 +571,337 @@ def _infer_search_intent_type(*, topic: str, target_profile: Dict[str, Any]) -> 
     )
     if _looks_like_question_phrase(normalized_topic) or _tokens_have_problem_signal(tokens):
         return "informational"
-    business_intent = _normalize_keyword_phrase(str(target_profile.get("business_intent") or ""))
-    if business_intent in {"commercial", "transactional"}:
-        return "commercial"
-    if _tokens_have_decision_signal(tokens):
-        return "commercial"
+    navigational_score = len(tokens & NAVIGATIONAL_CUES)
+    transactional_score = len(tokens & TRANSACTIONAL_CUES)
+    commercial_score = len(tokens & COMMERCIAL_INVESTIGATION_CUES)
+    if navigational_score >= 2:
+        return "navigational"
+    if transactional_score >= 2 and commercial_score == 0:
+        return "transactional"
+    if _tokens_have_decision_signal(tokens) or commercial_score >= 2:
+        return "commercial_investigation"
     return "informational"
+
+
+def _infer_topic_class(
+    *,
+    topic: str,
+    target_profile: Optional[Dict[str, Any]] = None,
+    publishing_profile: Optional[Dict[str, Any]] = None,
+    content_brief: Optional[Dict[str, Any]] = None,
+) -> str:
+    combined = " ".join(
+        [
+            str(topic or "").strip(),
+            " ".join(str(item).strip() for item in ((target_profile or {}).get("topics") or []) if str(item).strip()),
+            " ".join(str(item).strip() for item in ((target_profile or {}).get("services_or_products") or []) if str(item).strip()),
+            " ".join(str(item).strip() for item in ((publishing_profile or {}).get("topics") or []) if str(item).strip()),
+            " ".join(str(item).strip() for item in ((content_brief or {}).get("publishing_signals") or []) if str(item).strip()),
+        ]
+    )
+    tokens = _keyword_focus_tokens(combined)
+    scored = sorted(
+        (
+            len(tokens & keywords),
+            topic_class,
+        )
+        for topic_class, keywords in TOPIC_CLASS_KEYWORDS.items()
+    )
+    best_score, best_class = max(scored, key=lambda item: (item[0], item[1])) if scored else (0, "general")
+    return best_class if best_score > 0 else "general"
+
+
+def _infer_article_angle(
+    *,
+    topic: str,
+    intent_type: str,
+    structured_mode: str,
+    topic_class: str,
+    topic_signature: Optional[Dict[str, Any]] = None,
+) -> str:
+    tokens = _keyword_focus_tokens(
+        " ".join(
+            [
+                str(topic or "").strip(),
+                " ".join(str(item).strip() for item in ((topic_signature or {}).get("support_phrases") or []) if str(item).strip()),
+                " ".join(str(item).strip() for item in ((topic_signature or {}).get("target_terms") or []) if str(item).strip()),
+            ]
+        )
+    )
+    if intent_type == "navigational":
+        return "resource_navigation"
+    if intent_type == "transactional" or tokens & PROCESS_ACTION_TOKENS:
+        return "process_and_next_steps" if topic_class != "real_estate" else "process_and_decision_factors"
+    if _tokens_have_problem_signal(tokens) or _looks_like_question_phrase(topic):
+        return "recognition_and_next_steps"
+    if structured_mode == "table" or intent_type == "commercial_investigation" or _tokens_have_decision_signal(tokens):
+        return "decision_criteria"
+    return "practical_guidance"
+
+
+def _build_style_profile(
+    *,
+    topic_class: str,
+    intent_type: str,
+    article_angle: str,
+    content_brief: Optional[Dict[str, Any]] = None,
+    publishing_profile: Optional[Dict[str, Any]] = None,
+    target_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    audience = str((content_brief or {}).get("audience") or "").strip()
+    tone = str((publishing_profile or {}).get("content_tone") or "").strip() or "sachlich"
+    style_cues = _merge_string_lists(
+        [str(item).strip() for item in ((content_brief or {}).get("style_cues") or []) if str(item).strip()],
+        [str(item).strip() for item in ((publishing_profile or {}).get("content_style") or []) if str(item).strip()],
+        max_items=4,
+    )
+    target_context = _merge_string_lists(
+        [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in ((target_profile or {}).get("topics") or []) if str(item).strip()],
+        max_items=4,
+    )
+    return {
+        "topic_class": topic_class,
+        "intent_type": intent_type,
+        "article_angle": article_angle,
+        "audience": audience,
+        "tone": tone,
+        "style_cues": style_cues,
+        "target_context": target_context,
+    }
+
+
+def _build_specificity_profile(
+    *,
+    topic: str,
+    topic_class: str,
+    intent_type: str,
+) -> Dict[str, Any]:
+    raw_buckets = SPECIFICITY_SIGNAL_BUCKETS.get(topic_class) or SPECIFICITY_SIGNAL_BUCKETS["general"]
+    buckets = {
+        str(bucket_name): sorted(str(token).strip() for token in bucket_tokens if str(token).strip())
+        for bucket_name, bucket_tokens in raw_buckets.items()
+    }
+    min_specifics = 3 if topic_class in {"real_estate", "health_parenting", "product_service", "finance_legal"} else 2
+    if intent_type in {"transactional", "commercial_investigation"}:
+        min_specifics = max(min_specifics, 3)
+    return {
+        "topic": topic,
+        "topic_class": topic_class,
+        "intent_type": intent_type,
+        "min_specifics": min(4, max(2, min_specifics)),
+        "buckets": buckets,
+    }
+
+
+def _count_repeated_two_word_fragments(value: str) -> int:
+    tokens = _normalize_keyword_phrase(value).split()
+    counts: Dict[str, int] = {}
+    for index in range(len(tokens) - 1):
+        fragment = f"{tokens[index]} {tokens[index + 1]}".strip()
+        if not fragment:
+            continue
+        counts[fragment] = counts.get(fragment, 0) + 1
+    return max(counts.values(), default=0)
+
+
+def _derive_title_support_clause(
+    *,
+    topic: str,
+    intent_type: str,
+    article_angle: str,
+    topic_class: str,
+    structured_mode: str,
+) -> str:
+    normalized_topic = _normalize_keyword_phrase(topic)
+    if _looks_like_question_phrase(normalized_topic):
+        return ""
+    if article_angle == "recognition_and_next_steps":
+        return "Woran man erste Hinweise erkennt"
+    if article_angle in {"process_and_decision_factors", "process_and_next_steps"}:
+        return "Welche Schritte und Fehler wirklich zählen"
+    if article_angle == "decision_criteria":
+        if topic_class in {"product_service", "real_estate"} or structured_mode == "table":
+            return "Welche Kriterien bei der Auswahl wirklich zählen"
+        return "Welche Kriterien wirklich zählen"
+    if intent_type == "navigational":
+        return "Die wichtigsten Informationen auf einen Blick"
+    return "Welche Kriterien und nächsten Schritte wirklich zählen"
+
+
+def _evaluate_title_quality(
+    *,
+    title: str,
+    primary_keyword: str,
+    topic: str,
+) -> Dict[str, Any]:
+    normalized_title = _normalize_keyword_phrase(title)
+    normalized_primary = _normalize_keyword_phrase(primary_keyword)
+    normalized_topic = _normalize_keyword_phrase(topic)
+    errors: List[str] = []
+    score = 100
+    if not normalized_title:
+        return {"score": 0, "errors": ["title_missing"]}
+    if len(title.strip()) < SEO_TITLE_MIN_CHARS or len(title.strip()) > SEO_TITLE_MAX_CHARS:
+        score -= 12
+        errors.append("title_length_invalid")
+    if any(phrase in normalized_title for phrase in TITLE_FILLER_PHRASES):
+        score -= 28
+        errors.append("title_filler_detected")
+    if any(normalized_title.endswith(phrase) for phrase in TITLE_WEAK_TAIL_PHRASES):
+        score -= 14
+        errors.append("title_weak_tail")
+    if normalized_primary and _count_keyword_occurrences(normalized_title, normalized_primary) > 1:
+        score -= 24
+        errors.append("title_keyword_stuffed")
+    if _count_repeated_two_word_fragments(normalized_title) > 1:
+        score -= 18
+        errors.append("title_fragment_repeated")
+    if normalized_primary and normalized_topic and _keyword_similarity(normalized_title, normalized_primary) >= 0.92 and len(normalized_title.split()) > 5:
+        score -= 14
+        errors.append("title_too_close_to_primary_keyword")
+    if re.search(r"\b(?:und|oder)\b.*\b(?:und|oder)\b", normalized_title):
+        score -= 6
+    return {"score": max(0, score), "errors": _dedupe_string_values(errors)}
+
+
+def _heading_generic_penalty(heading: str) -> int:
+    normalized = _normalize_keyword_phrase(heading)
+    penalty = 0
+    if any(phrase in normalized for phrase in HEADING_FILLER_PHRASES):
+        penalty += 24
+    if normalized.startswith("worauf es bei ") and normalized.endswith(" im alltag ankommt"):
+        penalty += 12
+    if normalized.startswith("praktische tipps ") or normalized.startswith("wichtige kriterien "):
+        penalty += 10
+    if normalized.count(" und ") >= 2:
+        penalty += 8
+    return penalty
+
+
+def _heading_is_natural_core_question(heading: str) -> bool:
+    normalized = _normalize_keyword_phrase(heading)
+    return any(
+        normalized.startswith(prefix)
+        for prefix in (
+            "welche kriterien",
+            "welche unterlagen",
+            "welche unterschiede",
+            "welche fehler",
+            "welche ursachen",
+            "welche schritte",
+            "welche naechsten schritte",
+            "welche weiteren aspekte",
+            "woran erkennt man",
+            "wann ist fachlicher rat",
+            "wann lohnt sich",
+            "wie laesst sich",
+            "worauf kommt es",
+        )
+    )
+
+
+def _evaluate_heading_quality(
+    *,
+    headings: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    errors: List[str] = []
+    score = 100
+    normalized_headings = [
+        _normalize_keyword_phrase(heading)
+        for heading in headings
+        if _normalize_keyword_phrase(heading) not in {"fazit", "faq"}
+    ]
+    for heading in normalized_headings:
+        penalty = _heading_generic_penalty(heading)
+        if penalty:
+            score -= penalty
+            errors.append(f"heading_generic:{heading}")
+        if _phrase_has_editorial_noise(heading):
+            score -= 18
+            errors.append(f"heading_invalid:{heading}")
+        if not _topic_signature_candidate_has_relevance(heading, topic_signature) and not _heading_is_natural_core_question(heading):
+            score -= 22
+            errors.append(f"heading_topic_drift:{heading}")
+    for index, heading in enumerate(normalized_headings):
+        repeated = sum(
+            1
+            for other in normalized_headings[index + 1 :]
+            if _keyword_similarity(heading, other) >= 0.82
+        )
+        if repeated:
+            score -= 14 * repeated
+            errors.append(f"heading_repetition:{heading}")
+    return {"score": max(0, score), "errors": _dedupe_string_values(errors)}
+
+
+def _evaluate_plan_intent_consistency(
+    *,
+    headings: List[str],
+    intent_type: str,
+    article_angle: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    errors: List[str] = []
+    score = 100
+    intent_family_map = {
+        "navigational": NAVIGATIONAL_CUES,
+        "transactional": TRANSACTIONAL_CUES,
+        "commercial_investigation": COMMERCIAL_INVESTIGATION_CUES,
+    }
+    dominant_tokens = intent_family_map.get(intent_type, set())
+    conflicting_hits = 0
+    for heading in headings:
+        normalized = _normalize_keyword_phrase(heading)
+        if normalized in {"fazit", "faq"}:
+            continue
+        if dominant_tokens and not (set(normalized.split()) & dominant_tokens) and intent_type != "informational":
+            if not _topic_signature_candidate_has_relevance(normalized, topic_signature):
+                conflicting_hits += 1
+        if article_angle == "process_and_decision_factors" and len(_keyword_token_set(normalized) & {"mieten", "miete"}) >= 1:
+            if len(_keyword_token_set(normalized) & {"verkaufen", "verkauf"}) == 0:
+                conflicting_hits += 1
+    if conflicting_hits:
+        score -= conflicting_hits * 18
+        errors.append("outline_mixed_intent_or_angle")
+    return {"score": max(0, score), "errors": _dedupe_string_values(errors)}
+
+
+def _evaluate_plan_quality(
+    *,
+    title: str,
+    headings: List[str],
+    primary_keyword: str,
+    topic: str,
+    intent_type: str,
+    article_angle: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    title_eval = _evaluate_title_quality(title=title, primary_keyword=primary_keyword, topic=topic)
+    heading_eval = _evaluate_heading_quality(headings=headings, topic_signature=topic_signature)
+    intent_eval = _evaluate_plan_intent_consistency(
+        headings=headings,
+        intent_type=intent_type,
+        article_angle=article_angle,
+        topic_signature=topic_signature,
+    )
+    coherence_score = max(
+        0,
+        int(round((title_eval["score"] * 0.25) + (heading_eval["score"] * 0.45) + (intent_eval["score"] * 0.30))),
+    )
+    errors = _dedupe_string_values(
+        list(title_eval["errors"]) + list(heading_eval["errors"]) + list(intent_eval["errors"])
+    )
+    if coherence_score < PLAN_QUALITY_MIN_SCORE:
+        errors.append("plan_quality_below_threshold")
+    return {
+        "title_quality_score": title_eval["score"],
+        "heading_quality_score": heading_eval["score"],
+        "intent_consistency_score": intent_eval["score"],
+        "coherence_score": coherence_score,
+        "errors": _dedupe_string_values(errors),
+    }
 
 
 def _format_title_case(value: str) -> str:
@@ -661,6 +1103,8 @@ def _build_deterministic_title_package(
     search_intent_type: str,
     structured_mode: str,
     current_year: int,
+    article_angle: str = "",
+    topic_class: str = "general",
 ) -> Dict[str, str]:
     subject_title = _extract_topic_subject_phrase(topic)
     question_title = _extract_topic_question_phrase(topic)
@@ -685,31 +1129,25 @@ def _build_deterministic_title_package(
                 break
     normalized_topic = _normalize_keyword_phrase(topic)
     include_year = "checkliste" in normalized_topic or "trend" in normalized_topic
-    if structured_mode == "table":
-        suffix = "Vergleich und Orientierung"
-    elif structured_mode == "list":
-        suffix = "Checkliste und Tipps" if "checkliste" in normalized_topic else "Tipps und Orientierung"
-    elif (search_intent_type or "").strip().lower() == "commercial":
-        suffix = "Vergleich, Kosten und Tipps"
-    else:
-        suffix = "Wichtige Hinweise und Orientierung"
+    suffix = _derive_title_support_clause(
+        topic=topic,
+        intent_type=search_intent_type,
+        article_angle=article_angle,
+        topic_class=topic_class,
+        structured_mode=structured_mode,
+    )
     if question_title:
-        for candidate in (
-            f"{topic_title} Warnsignale fuer Eltern",
-            f"{topic_title} Warnsignale",
-            topic_title,
-        ):
-            if len(candidate) <= SEO_TITLE_MAX_CHARS:
-                h1 = candidate
-                break
-        else:
-            h1 = _truncate_title(topic_title)
+        h1 = _truncate_title(topic_title)
     else:
         h1 = _truncate_title(topic_title)
-    if ":" not in h1 and len(h1) < SEO_TITLE_MIN_CHARS:
+    if suffix and ":" not in h1 and len(h1) < SEO_TITLE_MIN_CHARS:
         h1 = _truncate_title(f"{h1}: {suffix}")
     if len(h1) < SEO_TITLE_MIN_CHARS:
-        h1 = _truncate_title(f"{h1} fuer Betroffene und Familien")
+        fallback_suffix = "Worauf es in der Praxis ankommt"
+        if suffix and _keyword_similarity(suffix, fallback_suffix) < 0.6:
+            h1 = _truncate_title(f"{h1}: {fallback_suffix}")
+        else:
+            h1 = _truncate_title(f"{h1}: Wichtige Fragen und naechste Schritte")
     h1 = _ensure_primary_keyword_in_title(
         title=h1,
         primary_title=primary_title,
@@ -717,6 +1155,18 @@ def _build_deterministic_title_package(
         subject_title=subject_title or topic or primary_keyword,
         suffix=suffix,
     )
+    title_quality = _evaluate_title_quality(title=h1, primary_keyword=primary_keyword, topic=topic)
+    if title_quality["errors"]:
+        natural_fallback = _truncate_title(
+            f"{_format_title_case(subject_title or primary_keyword or topic)}: {_derive_title_support_clause(topic=topic, intent_type=search_intent_type, article_angle=article_angle or 'practical_guidance', topic_class=topic_class, structured_mode=structured_mode) or 'Worauf es wirklich ankommt'}"
+        )
+        fallback_quality = _evaluate_title_quality(
+            title=natural_fallback,
+            primary_keyword=primary_keyword,
+            topic=topic,
+        )
+        if fallback_quality["score"] >= title_quality["score"]:
+            h1 = natural_fallback
     if include_year and str(current_year) not in h1:
         h1 = _truncate_title(f"{h1} {current_year}")
     meta_title = _truncate_title(h1)
@@ -2326,6 +2776,18 @@ def _dedupe_preserve_order(values: List[str]) -> List[str]:
             continue
         seen.add(normalized)
         out.append(normalized)
+    return out
+
+
+def _dedupe_string_values(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in values:
+        cleaned = str(item).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
     return out
 
 
@@ -4549,6 +5011,10 @@ def _score_seo_output(
     max_internal_links: int,
     topic: str,
     content_brief: Optional[Dict[str, Any]] = None,
+    intent_type: str = "informational",
+    article_angle: str = "practical_guidance",
+    topic_signature: Optional[Dict[str, Any]] = None,
+    specificity_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     checks = {
         "keyword_coverage": _validate_keyword_coverage(article_html, primary_keyword, secondary_keywords),
@@ -4578,9 +5044,65 @@ def _score_seo_output(
             structured_mode=structured_mode,
         ),
     }
+    title_eval = _evaluate_title_quality(title=meta_title or required_h1, primary_keyword=primary_keyword, topic=topic)
+    heading_eval = _evaluate_heading_quality(headings=_extract_h2_headings(article_html), topic_signature=topic_signature)
+    backlink_eval = _evaluate_backlink_naturalness(
+        article_html=article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        topic_signature=topic_signature,
+    )
+    specificity_eval = _evaluate_specificity(
+        article_html=article_html,
+        specificity_profile=specificity_profile,
+    )
+    spam_eval = _evaluate_spam_risk(
+        article_html=article_html,
+        primary_keyword=primary_keyword,
+        backlink_url=backlink_url,
+    )
+    coherence_eval = _evaluate_article_coherence(
+        article_html=article_html,
+        topic_signature=topic_signature,
+        intent_type=intent_type,
+        article_angle=article_angle,
+    )
     error_count = sum(len(value) for value in checks.values())
-    score = max(0, 100 - (error_count * 8))
-    return {"score": score, "checks": checks}
+    overall = max(
+        0,
+        int(
+            round(
+                (
+                    title_eval["score"] * 0.14
+                    + heading_eval["score"] * 0.18
+                    + backlink_eval["score"] * 0.18
+                    + specificity_eval["score"] * 0.20
+                    + coherence_eval["score"] * 0.20
+                    + max(0, 100 - spam_eval["score"]) * 0.10
+                )
+            )
+        )
+        - (error_count * 2)
+    )
+    return {
+        "score": overall,
+        "checks": checks,
+        "title_quality_score": title_eval["score"],
+        "heading_quality_score": heading_eval["score"],
+        "intent_type": intent_type,
+        "backlink_naturalness_score": backlink_eval["score"],
+        "specificity_score": specificity_eval["score"],
+        "spam_risk_score": spam_eval["score"],
+        "coherence_score": coherence_eval["score"],
+        "quality_errors": _dedupe_string_values(
+            title_eval["errors"]
+            + heading_eval["errors"]
+            + backlink_eval["errors"]
+            + specificity_eval["errors"]
+            + spam_eval["errors"]
+            + coherence_eval["errors"]
+        ),
+    }
 
 
 def _collect_article_validation_errors(
@@ -4600,6 +5122,10 @@ def _collect_article_validation_errors(
     min_internal_links: int,
     max_internal_links: int,
     content_brief: Optional[Dict[str, Any]] = None,
+    intent_type: str = "informational",
+    article_angle: str = "practical_guidance",
+    topic_signature: Optional[Dict[str, Any]] = None,
+    specificity_profile: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     errors: List[str] = []
     for check in (
@@ -4631,6 +5157,41 @@ def _collect_article_validation_errors(
     errors.extend(_validate_phrase_integrity(article_html))
     errors.extend(_validate_contextual_alignment(article_html, content_brief))
     errors.extend(_validate_keyword_coverage(article_html, primary_keyword, secondary_keywords))
+    title_eval = _evaluate_title_quality(title=meta_title or required_h1, primary_keyword=primary_keyword, topic=topic)
+    if title_eval["score"] < 70:
+        errors.extend(title_eval["errors"] or ["title_quality_low"])
+    heading_eval = _evaluate_heading_quality(headings=_extract_h2_headings(article_html), topic_signature=topic_signature)
+    if heading_eval["score"] < 70:
+        errors.extend(heading_eval["errors"] or ["heading_quality_low"])
+    backlink_eval = _evaluate_backlink_naturalness(
+        article_html=article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        topic_signature=topic_signature,
+    )
+    if backlink_eval["score"] < 65:
+        errors.extend(backlink_eval["errors"] or ["backlink_naturalness_low"])
+    specificity_eval = _evaluate_specificity(
+        article_html=article_html,
+        specificity_profile=specificity_profile,
+    )
+    if specificity_eval["score"] < 65:
+        errors.extend(specificity_eval["errors"] or ["specificity_low"])
+    spam_eval = _evaluate_spam_risk(
+        article_html=article_html,
+        primary_keyword=primary_keyword,
+        backlink_url=backlink_url,
+    )
+    if spam_eval["score"] > ARTICLE_MAX_SPAM_RISK_SCORE:
+        errors.extend(spam_eval["errors"] or ["spam_risk_high"])
+    coherence_eval = _evaluate_article_coherence(
+        article_html=article_html,
+        topic_signature=topic_signature,
+        intent_type=intent_type,
+        article_angle=article_angle,
+    )
+    if coherence_eval["score"] < ARTICLE_QUALITY_MIN_SCORE:
+        errors.extend(coherence_eval["errors"] or ["coherence_low"])
     errors.extend(
         _validate_seo_metadata(
             article_html=article_html,
@@ -5008,6 +5569,9 @@ def _build_question_topic_outline_headings(
     primary_keyword: str,
     secondary_keywords: List[str],
     structured_mode: str,
+    intent_type: str = "informational",
+    article_angle: str = "",
+    topic_class: str = "general",
     topic_signature: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     signature = topic_signature or _build_topic_signature(
@@ -5021,88 +5585,52 @@ def _build_question_topic_outline_headings(
         internal_link_inventory=[],
     )
     question_phrase = _format_sentence_start(str(signature.get("question_phrase") or _extract_topic_question_phrase(topic)).strip())
-    subject_phrase = str(signature.get("subject_phrase") or _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses thema").strip()
+    subject_phrase = str(
+        signature.get("subject_phrase") or _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses thema"
+    ).strip()
     subject_heading = _format_outline_heading(subject_phrase)
-    outline_mode = _determine_outline_heading_mode(
+    resolved_angle = article_angle or _infer_article_angle(
         topic=topic,
-        primary_keyword=primary_keyword,
+        intent_type=intent_type,
         structured_mode=structured_mode,
+        topic_class=topic_class,
         topic_signature=signature,
     )
-    support_phrase = _pick_topic_signature_support_phrase(
-        signature,
-        exclude_phrases=[subject_phrase, primary_keyword],
-    ) or subject_phrase
-    problem_focus_phrase = ""
-    for candidate in _dedupe_keyword_phrases(
-        secondary_keywords
-        + list(signature.get("support_phrases") or [])
-        + list(signature.get("target_support_phrases") or [])
-        + list(signature.get("keyword_cluster_phrases") or [])
-    ):
-        if candidate in {subject_phrase, primary_keyword, support_phrase}:
-            continue
-        if not _is_heading_support_phrase_usable(candidate):
-            continue
-        if _tokens_have_problem_signal(_keyword_token_set(candidate)):
-            problem_focus_phrase = candidate
-            break
-    target_focus_phrase = _pick_outline_target_focus_phrase(
-        signature,
-        exclude_phrases=[subject_phrase, primary_keyword, support_phrase],
-    )
-    primary_focus_phrase = _sanitize_editorial_phrase(primary_keyword)
-    decision_focus_phrase = target_focus_phrase or support_phrase
-    target_reference_phrases = _dedupe_keyword_phrases(
-        [str(item).strip() for item in (signature.get("target_terms") or []) if str(item).strip()]
-        + [str(item).strip() for item in (signature.get("target_support_phrases") or []) if str(item).strip()]
-    )
-    if primary_focus_phrase and _keyword_similarity(primary_focus_phrase, subject_phrase) < 0.78:
-        decision_focus_phrase = primary_focus_phrase
-    elif support_phrase and any(
-        _keyword_similarity(support_phrase, reference) >= 0.76 for reference in target_reference_phrases
-    ):
-        decision_focus_phrase = support_phrase
-    heading_focus_source = support_phrase
-    if outline_mode == "problem" and problem_focus_phrase:
-        heading_focus_source = problem_focus_phrase
-    elif outline_mode == "decision" and decision_focus_phrase:
-        heading_focus_source = decision_focus_phrase
-    heading_focus = _format_sentence_start(heading_focus_source or subject_phrase)
-    target_focus_heading = _format_sentence_start(target_focus_phrase or support_phrase or subject_phrase)
 
-    if question_phrase:
-        first_heading = f"{question_phrase} Einordnung und erste Schritte"
-    elif structured_mode == "list":
-        first_heading = f"{subject_heading}: Checkliste und wichtigste Schritte"
-    elif structured_mode == "table":
-        first_heading = f"{subject_heading}: Vergleich und Überblick"
-    else:
-        first_heading = f"{subject_heading}: Das Wichtigste im Überblick"
-
-    if outline_mode == "decision":
-        headings = [
-            first_heading,
-            f"Wichtige Kriterien, Unterschiede und Qualitätsmerkmale bei {heading_focus}",
-            "Welche Fehler bei Auswahl und Nutzung häufig sind und wie die Entscheidung leichter fällt",
+    if resolved_angle == "recognition_and_next_steps":
+        return [
+            f"Woran erkennt man erste Hinweise auf {subject_heading}?",
+            "Welche Ursachen oder Ausloeser sind haeufig?",
+            "Welche Schritte helfen im Alltag zuerst?",
+            f"Wann ist fachlicher Rat bei {subject_heading} sinnvoll?",
         ]
-    elif outline_mode == "problem":
-        headings = [
-            first_heading,
-            f"Wichtige Anzeichen, Ursachen und Einordnung rund um {heading_focus}",
-            "Wann fachlicher Rat sinnvoll ist und welche Schritte als Naechstes helfen",
+    if resolved_angle in {"process_and_decision_factors", "process_and_next_steps"}:
+        return [
+            "Welche Unterlagen und Kennzahlen zaehlen zuerst?",
+            "Welche Fehler kosten dabei Zeit oder Geld?",
+            "Wann lohnt sich professionelle Unterstuetzung?",
+            "Wie laesst sich der Ablauf realistisch vorbereiten?",
         ]
-    else:
-        headings = [
-            first_heading,
-            f"Wichtige Hintergruende, Kriterien und Einordnung rund um {heading_focus}",
-            "Welche Schritte im Alltag wirklich helfen und worauf Eltern achten sollten",
+    if resolved_angle == "decision_criteria":
+        return [
+            f"Welche Kriterien entscheiden bei {subject_heading}?",
+            "Welche Unterschiede sind in der Praxis relevant?",
+            "Welche Fehler sind bei der Auswahl haeufig?",
+            f"Wie laesst sich {subject_heading} im Alltag sinnvoll pruefen?",
         ]
-    if target_focus_phrase:
-        headings.append(f"Worauf es bei {target_focus_heading} im Alltag ankommt")
-    else:
-        headings.append(f"Praktische Tipps und alltagsnahe Orientierung zu {subject_heading}")
-    return headings
+    if intent_type == "navigational":
+        return [
+            f"Welche Informationen zu {subject_heading} braucht man zuerst?",
+            "Welche Unterlagen oder Angaben sollte man bereithalten?",
+            "Welche Fehler fuehren am haeufigsten zu Rueckfragen?",
+            "Wie findet man die wichtigsten Naechsten Schritte schnell?",
+        ]
+    return [
+        f"Worauf kommt es bei {subject_heading} wirklich an?",
+        "Welche Fehler sind im Alltag haeufig?",
+        f"Welche Kriterien helfen bei {subject_heading} weiter?",
+        "Welche naechsten Schritte bringen in der Praxis am meisten?",
+    ]
 
 
 def _build_deterministic_outline(
@@ -5113,6 +5641,9 @@ def _build_deterministic_outline(
     faq_candidates: List[str],
     structured_mode: str,
     anchor_text_final: str,
+    intent_type: str = "informational",
+    article_angle: str = "",
+    topic_class: str = "general",
     topic_signature: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     topic_phrase = _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses Thema"
@@ -5121,26 +5652,23 @@ def _build_deterministic_outline(
         primary_keyword=primary_keyword,
         secondary_keywords=secondary_keywords,
         structured_mode=structured_mode,
+        intent_type=intent_type,
+        article_angle=article_angle,
+        topic_class=topic_class,
         topic_signature=topic_signature,
     )
     if primary_keyword and not any(
         _keyword_present(heading, primary_keyword) or _keyword_similarity(heading, primary_keyword) >= 0.78
         for heading in raw_headings
     ):
-        primary_title = _format_sentence_start(_sanitize_editorial_phrase(primary_keyword) or primary_keyword)
-        if primary_title:
-            target_index = 1 if len(raw_headings) > 1 else 0
-            reference_heading = _normalize_keyword_phrase(raw_headings[target_index] if raw_headings else "")
-            if structured_mode == "table" or any(
-                token in reference_heading for token in {"vergleich", "kriterien", "qualitaetsmerkmale", "unterschiede"}
-            ):
-                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Qualitätsmerkmale"
-            elif any(token in reference_heading for token in {"anzeichen", "ursachen", "warnzeichen", "hilfe"}):
-                raw_headings[target_index] = f"{primary_title}: Warnzeichen, Ursachen und Einordnung"
-            elif structured_mode == "list":
-                raw_headings[target_index] = f"{primary_title}: Checkliste und wichtige Schritte"
+        primary_focus = _format_outline_heading(_sanitize_editorial_phrase(primary_keyword) or primary_keyword)
+        if primary_focus:
+            if article_angle == "recognition_and_next_steps":
+                raw_headings[0] = f"Woran erkennt man erste Hinweise auf {primary_focus}?"
+            elif article_angle in {"process_and_decision_factors", "process_and_next_steps"}:
+                raw_headings[0] = f"Welche Schritte sind bei {primary_focus} zuerst wichtig?"
             else:
-                raw_headings[target_index] = f"{primary_title}: wichtige Kriterien und Einordnung"
+                raw_headings[0] = f"Welche Kriterien entscheiden bei {primary_focus}?"
     core_sections: List[Dict[str, Any]] = []
     for heading in raw_headings:
         if len(core_sections) >= ARTICLE_MAX_H2 - 2:
@@ -5151,7 +5679,7 @@ def _build_deterministic_outline(
         core_sections.append({"h2": heading, "h3": []})
 
     while len(core_sections) < ARTICLE_MIN_H2 - 2:
-        core_sections.append({"h2": f"Weitere wichtige Aspekte zu {topic_phrase}", "h3": []})
+        core_sections.append({"h2": f"Welche weiteren Aspekte sind bei {topic_phrase} relevant?", "h3": []})
 
     outline_items = _inject_faq_section(
         core_sections,
@@ -5239,6 +5767,9 @@ def _build_deterministic_article_plan(
     )
     structured_mode = str(phase3.get("structured_content_mode") or "none").strip().lower()
     content_brief = phase3.get("content_brief") or {}
+    intent_type = str(phase3.get("search_intent_type") or "informational").strip() or "informational"
+    article_angle = str(phase3.get("article_angle") or "practical_guidance").strip() or "practical_guidance"
+    topic_class = str(phase3.get("topic_class") or "general").strip() or "general"
     anchor_text_final = anchor if anchor_safe else _build_anchor_text(
         str(phase1.get("anchor_type") or "").strip(),
         str(phase1.get("brand_name") or "").strip(),
@@ -5251,6 +5782,9 @@ def _build_deterministic_article_plan(
         faq_candidates=faq_questions,
         structured_mode=structured_mode,
         anchor_text_final=anchor_text_final,
+        intent_type=intent_type,
+        article_angle=article_angle,
+        topic_class=topic_class,
         topic_signature=topic_signature,
     )
     outline_items = outline_package["outline"]
@@ -5309,6 +5843,7 @@ def _build_deterministic_article_plan(
                     "section_id": section_id,
                     "kind": "faq",
                     "h2": "FAQ",
+                    "subquestion": "Welche Rueckfragen bleiben offen?",
                     "h3": faq_questions[:FAQ_MIN_QUESTIONS],
                     "goal": _section_goal_from_heading(h2, section_kind="faq", topic=topic),
                     "required_keywords": [],
@@ -5324,6 +5859,7 @@ def _build_deterministic_article_plan(
                     "section_id": section_id,
                     "kind": "fazit",
                     "h2": "Fazit",
+                    "subquestion": "Was sind die wichtigsten Entscheidungen und naechsten Schritte?",
                     "h3": [],
                     "goal": _section_goal_from_heading(h2, section_kind="fazit", topic=topic),
                     "required_keywords": [],
@@ -5349,6 +5885,7 @@ def _build_deterministic_article_plan(
                 "section_id": section_id,
                 "kind": "body",
                 "h2": h2,
+                "subquestion": h2,
                 "h3": h3_items,
                 "goal": _section_goal_from_heading(h2, section_kind="body", topic=topic),
                 "required_keywords": required_keywords,
@@ -5360,7 +5897,7 @@ def _build_deterministic_article_plan(
         core_cursor += 1
 
     return {
-        "plan_version": "deterministic_v2",
+        "plan_version": "deterministic_v3",
         "h1": str(phase3.get("title_package", {}).get("h1") or "").strip(),
         "outline": outline_items,
         "sections": sections,
@@ -5368,6 +5905,11 @@ def _build_deterministic_article_plan(
         "backlink_placement": backlink_placement,
         "anchor_text_final": anchor_text_final,
         "structured_mode": structured_mode,
+        "intent_type": intent_type,
+        "article_angle": article_angle,
+        "topic_class": topic_class,
+        "style_profile": phase3.get("style_profile") or {},
+        "specificity_profile": phase3.get("specificity_profile") or {},
     }
 
 
@@ -5594,8 +6136,13 @@ def _generate_article_from_plan(
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
+    style_profile = phase3.get("style_profile") or {}
+    specificity_profile = phase3.get("specificity_profile") or {}
     plan_payload = {
         "h1": article_plan.get("h1"),
+        "intent_type": article_plan.get("intent_type") or phase3.get("search_intent_type"),
+        "article_angle": article_plan.get("article_angle") or phase3.get("article_angle"),
+        "topic_class": article_plan.get("topic_class") or phase3.get("topic_class"),
         "structured_mode": article_plan.get("structured_mode"),
         "keyword_guardrails": {
             "intro_exact_primary_required": True,
@@ -5604,6 +6151,8 @@ def _generate_article_from_plan(
             "faq_exact_secondary_allowed": False,
             "fazit_must_use_required_terms": True,
         },
+        "style_profile": style_profile,
+        "specificity_profile": specificity_profile,
         "sections": article_plan.get("sections"),
         "faq_questions": article_plan.get("faq_questions"),
     }
@@ -5652,6 +6201,9 @@ def _generate_article_from_plan(
         f"Topic: {phase3.get('final_article_topic', '')}\n"
         f"Primary keyword: {phase3.get('primary_keyword', '')}\n"
         f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
+        f"Intent type: {phase3.get('search_intent_type', 'informational')}\n"
+        f"Article angle: {phase3.get('article_angle', 'practical_guidance')}\n"
+        f"Specificity minimum: {(specificity_profile or {}).get('min_specifics', 2)} concrete specifics in the body.\n"
         f"Editorial brief: {content_brief_text}\n"
         f"Plan:\n{json.dumps(plan_payload, ensure_ascii=False, sort_keys=True, indent=2)}\n\n"
         "Output format:\n"
@@ -5660,11 +6212,15 @@ def _generate_article_from_plan(
         "- Return every slot exactly once using the same markers and section ids.\n"
         "- INTRO_HTML: exactly one opening paragraph, 80-120 words, include the primary keyword naturally.\n"
         "- For each SECTION block, return only body HTML with 1-2 substantial paragraphs and any required list/table.\n"
-        "- For each section, naturally include its required_keywords and required_terms.\n"
+        "- For each section, answer its subquestion directly and naturally include its required_keywords and required_terms.\n"
+        "- Keep one clear search intent and one article angle across the full article. Do not introduce adjacent but different intents.\n"
         "- After INTRO_HTML, avoid repeating the exact primary keyword across multiple sections; use natural variants instead.\n"
         "- Use each exact secondary keyword in at most one non-FAQ section, and do not force exact secondary keywords into FAQ answers.\n"
-        "- Use concrete criteria, examples, risks, comparisons, or next steps. Avoid generic filler.\n"
+        "- Use concrete criteria, examples, risks, comparisons, process details, or next steps. Avoid generic filler.\n"
+        "- Add at least the required amount of concrete specificity for the topic class and intent. Prefer norms, ranges, examples, use cases, process details, age groups, standards, or market/process facts where relevant.\n"
         "- Do not use greeting-style intros or stock openers such as 'Herzlich willkommen'.\n"
+        "- Do not write advertorial copy, sales copy, or partner claims.\n"
+        "- Never place brands in headings. A backlink sentence must read like a supporting resource, not a promotion.\n"
         "- The Fazit section body must be topic-specific, concrete, non-generic, and explicitly use at least one of its required_terms.\n"
         "- FAQ answers must answer the question directly without repeating the same keyword phrase across multiple answers.\n"
         "- Each FAQ_n block must answer FAQ question n directly, 35-55 words, with no links.\n"
@@ -5846,6 +6402,185 @@ def _validate_contextual_alignment(article_html: str, content_brief: Optional[Di
     if filler_hits >= 3:
         errors.append(f"generic_filler_excessive:{filler_hits}")
     return errors
+
+
+def _extract_backlink_context(
+    article_html: str,
+    *,
+    backlink_url: str,
+    publishing_site_url: str,
+) -> Dict[str, str]:
+    soup = BeautifulSoup(article_html or "", "html.parser")
+    backlink_norm = _normalize_url(backlink_url)
+    for anchor in soup.find_all("a", href=True):
+        href = _absolutize_url(str(anchor.get("href") or "").strip(), publishing_site_url)
+        if _normalize_url(href) != backlink_norm:
+            continue
+        container = anchor.find_parent(["p", "li"]) or anchor
+        sentence = re.sub(r"\s+", " ", container.get_text(" ")).strip()
+        section_heading = ""
+        previous_h2 = container.find_previous("h2")
+        if previous_h2 is not None:
+            section_heading = re.sub(r"\s+", " ", previous_h2.get_text(" ")).strip()
+        return {
+            "sentence": sentence,
+            "section_heading": section_heading,
+            "anchor_text": re.sub(r"\s+", " ", anchor.get_text(" ")).strip(),
+        }
+    return {"sentence": "", "section_heading": "", "anchor_text": ""}
+
+
+def _evaluate_backlink_naturalness(
+    *,
+    article_html: str,
+    backlink_url: str,
+    publishing_site_url: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    context = _extract_backlink_context(
+        article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+    )
+    sentence = str(context.get("sentence") or "").strip()
+    anchor_text = str(context.get("anchor_text") or "").strip()
+    errors: List[str] = []
+    if not sentence:
+        return {"score": 0, "errors": ["backlink_context_missing"], "context": context}
+    normalized_sentence = _normalize_keyword_phrase(sentence)
+    score = 100
+    if any(phrase in normalized_sentence for phrase in PROMOTIONAL_BACKLINK_PHRASES):
+        score -= 40
+        errors.append("backlink_promotional")
+    if any(
+        phrase in normalized_sentence
+        for phrase in (
+            "weitere informationen bietet",
+            "wer sich weiter informieren moechte",
+            "wer sich zu",
+            "findet beispielsweise bei",
+        )
+    ):
+        score -= 20
+        errors.append("backlink_sentence_templated")
+    if len(sentence.split()) < 8:
+        score -= 14
+        errors.append("backlink_sentence_too_thin")
+    if anchor_text and normalized_sentence.count(_normalize_keyword_phrase(anchor_text)) > 1:
+        score -= 10
+        errors.append("backlink_anchor_repeated")
+    section_context = " ".join(filter(None, [context.get("section_heading") or "", sentence]))
+    if not _topic_signature_candidate_has_relevance(section_context, topic_signature):
+        score -= 22
+        errors.append("backlink_context_misaligned")
+    heading_text = " ".join(_extract_h2_headings(article_html))
+    if anchor_text and _keyword_present_relaxed(heading_text, anchor_text):
+        score -= 18
+        errors.append("backlink_brand_in_heading")
+    return {"score": max(0, score), "errors": _dedupe_string_values(errors), "context": context}
+
+
+def _evaluate_specificity(
+    *,
+    article_html: str,
+    specificity_profile: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    profile = specificity_profile or {}
+    buckets = profile.get("buckets") if isinstance(profile.get("buckets"), dict) else {}
+    min_specifics = max(2, int(profile.get("min_specifics") or 2))
+    plain_text = _strip_html_tags(article_html)
+    normalized_text = _normalize_keyword_phrase(plain_text)
+    tokens = set(normalized_text.split())
+    hits: List[str] = []
+    for bucket_name, bucket_tokens in buckets.items():
+        bucket_token_set = {str(token).strip() for token in bucket_tokens if str(token).strip()}
+        overlap = tokens & bucket_token_set
+        if len(overlap) >= 2 or (overlap and re.search(r"\d", plain_text)):
+            hits.append(str(bucket_name))
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*(?:%|prozent|euro|eur|jahre|jahr|tage|tage|wochen|monate|qm)\b", normalized_text):
+        hits.append("numeric_detail")
+    if re.search(r"\b(?:uv ?400|ce|en iso|iso|din|kategorie \d|klasse \d)\b", normalized_text):
+        hits.append("standard_detail")
+    if re.search(r"\b(?:zum beispiel|beispielsweise|etwa|unter drei|zwischen \d+ und \d+)\b", normalized_text):
+        hits.append("example_or_segment")
+    unique_hits = _dedupe_preserve_order(hits)
+    ratio = min(1.0, len(unique_hits) / float(max(1, min_specifics)))
+    score = min(100, int(round((ratio * 70) + min(30, len(unique_hits) * 7))))
+    errors: List[str] = []
+    if len(unique_hits) < min_specifics:
+        errors.append(f"specificity_too_low:{len(unique_hits)}")
+    return {"score": score, "errors": errors, "hits": unique_hits}
+
+
+def _extract_domain_label_from_url(value: str) -> str:
+    try:
+        netloc = urlparse(value or "").netloc.lower()
+    except Exception:
+        netloc = ""
+    netloc = netloc.replace("www.", "")
+    return netloc.split(":", 1)[0]
+
+
+def _evaluate_spam_risk(
+    *,
+    article_html: str,
+    primary_keyword: str,
+    backlink_url: str,
+) -> Dict[str, Any]:
+    plain_text = _strip_html_tags(article_html)
+    normalized_text = _normalize_keyword_phrase(plain_text)
+    risk = 0
+    errors: List[str] = []
+    filler_hits = sum(1 for phrase in GENERIC_BODY_PHRASES if phrase in normalized_text)
+    risk += filler_hits * 8
+    if filler_hits >= 3:
+        errors.append("spam_generic_filler")
+    promo_hits = sum(1 for phrase in PROMOTIONAL_BACKLINK_PHRASES if phrase in normalized_text)
+    risk += promo_hits * 16
+    if promo_hits:
+        errors.append("spam_promotional_language")
+    exact_primary_occurrences = _count_keyword_occurrences(normalized_text, primary_keyword)
+    primary_soft_cap = max(6, int(word_count_from_html(article_html) / 120))
+    if exact_primary_occurrences > primary_soft_cap:
+        risk += min(32, (exact_primary_occurrences - primary_soft_cap) * 6)
+        errors.append("spam_primary_repetition")
+    domain_label = _extract_domain_label_from_url(backlink_url)
+    if domain_label:
+        bare_mentions = normalized_text.count(_normalize_keyword_phrase(domain_label))
+        if bare_mentions > 1:
+            risk += min(20, (bare_mentions - 1) * 10)
+            errors.append("spam_brand_repetition")
+    return {"score": min(100, risk), "errors": _dedupe_string_values(errors)}
+
+
+def _evaluate_article_coherence(
+    *,
+    article_html: str,
+    topic_signature: Optional[Dict[str, Any]],
+    intent_type: str,
+    article_angle: str,
+) -> Dict[str, Any]:
+    score = 100
+    errors: List[str] = []
+    headings = _extract_h2_headings(article_html)
+    for heading in headings:
+        normalized = _normalize_keyword_phrase(heading)
+        if normalized in {"fazit", "faq"}:
+            continue
+        section_text = _extract_h2_section_text(article_html, heading)
+        if not _topic_signature_candidate_has_relevance(f"{heading} {section_text}", topic_signature):
+            score -= 20
+            errors.append(f"section_topic_drift:{normalized}")
+    plan_intent = _evaluate_plan_intent_consistency(
+        headings=headings,
+        intent_type=intent_type,
+        article_angle=article_angle,
+        topic_signature=topic_signature,
+    )
+    if plan_intent["errors"]:
+        score -= max(12, 100 - plan_intent["score"])
+        errors.extend(plan_intent["errors"])
+    return {"score": max(0, score), "errors": _dedupe_string_values(errors)}
 
 
 def _parse_missing_secondary_keywords(errors: List[str]) -> List[str]:
@@ -6272,15 +7007,27 @@ def _backlink_focus_phrase(required_h1: str, primary_keyword: str) -> str:
     return ""
 
 
-def _build_backlink_sentence(*, backlink_url: str, anchor_text: str, focus_phrase: str = "") -> str:
+def _build_backlink_sentence(
+    *,
+    backlink_url: str,
+    anchor_text: str,
+    focus_phrase: str = "",
+    context_text: str = "",
+) -> str:
     anchor_html = f'<a href="{backlink_url}">{anchor_text}</a>'
     cleaned_focus = re.sub(r"\s+", " ", str(focus_phrase or "").strip())
+    context_tokens = _keyword_focus_tokens(context_text)
+    if {"auswahl", "kriterien", "vergleich", "modell", "modelle", "preis", "preise"} & context_tokens:
+        if cleaned_focus:
+            return f"Konkrete Beispiele und Auswahlkriterien zu {cleaned_focus} lassen sich beispielsweise bei {anchor_html} einsehen."
+        return f"Konkrete Beispiele und Auswahlkriterien lassen sich beispielsweise bei {anchor_html} einsehen."
+    if {"ablauf", "unterlagen", "vertrag", "schritte", "vorbereiten", "prozess"} & context_tokens:
+        if cleaned_focus:
+            return f"Weiterfuehrende Informationen zu {cleaned_focus} und den naechsten Schritten lassen sich beispielsweise ueber {anchor_html} einholen."
+        return f"Weiterfuehrende Informationen zu den naechsten Schritten lassen sich beispielsweise ueber {anchor_html} einholen."
     if cleaned_focus:
-        return (
-            f"Wer sich zu {cleaned_focus} weiter informieren moechte, "
-            f"findet beispielsweise bei {anchor_html} eine passende Anlaufstelle."
-        )
-    return f"Wer sich weiter informieren moechte, findet beispielsweise bei {anchor_html} eine passende Anlaufstelle."
+        return f"Ergaenzende Informationen und praktische Beispiele zu {cleaned_focus} finden sich beispielsweise bei {anchor_html}."
+    return f"Ergaenzende Informationen und praktische Beispiele finden sich beispielsweise bei {anchor_html}."
 
 
 def _insert_backlink(
@@ -6291,15 +7038,23 @@ def _insert_backlink(
     *,
     focus_phrase: str = "",
 ) -> str:
-    backlink_html = _build_backlink_sentence(
-        backlink_url=backlink_url,
-        anchor_text=anchor_text,
-        focus_phrase=focus_phrase,
-    )
     if placement == "intro":
         match = re.search(r"</p>", html, flags=re.IGNORECASE)
         if match:
+            paragraph_html = html[:match.end()]
+            backlink_html = _build_backlink_sentence(
+                backlink_url=backlink_url,
+                anchor_text=anchor_text,
+                focus_phrase=focus_phrase,
+                context_text=_strip_html_tags(paragraph_html),
+            )
             return html[:match.start()] + f" {backlink_html}" + html[match.start():]
+        backlink_html = _build_backlink_sentence(
+            backlink_url=backlink_url,
+            anchor_text=anchor_text,
+            focus_phrase=focus_phrase,
+            context_text=_strip_html_tags(html[:240]),
+        )
         return f"<p>{backlink_html}</p>" + html
 
     index = 0
@@ -6310,6 +7065,12 @@ def _insert_backlink(
 
     matches = list(re.finditer(r"<h2[^>]*>", html, flags=re.IGNORECASE))
     if not matches:
+        backlink_html = _build_backlink_sentence(
+            backlink_url=backlink_url,
+            anchor_text=anchor_text,
+            focus_phrase=focus_phrase,
+            context_text=_strip_html_tags(html[-240:]),
+        )
         return html + f"<p>{backlink_html}</p>"
 
     if index >= len(matches):
@@ -6320,7 +7081,19 @@ def _insert_backlink(
     p_match = re.search(r"</p>", after, flags=re.IGNORECASE)
     if p_match:
         insert_at = start + p_match.start()
+        backlink_html = _build_backlink_sentence(
+            backlink_url=backlink_url,
+            anchor_text=anchor_text,
+            focus_phrase=focus_phrase,
+            context_text=_strip_html_tags(after[: p_match.end()]),
+        )
         return html[:insert_at] + f" {backlink_html}" + html[insert_at:]
+    backlink_html = _build_backlink_sentence(
+        backlink_url=backlink_url,
+        anchor_text=anchor_text,
+        focus_phrase=focus_phrase,
+        context_text=_strip_html_tags(after[:240]),
+    )
     return html[:start] + f"<p>{backlink_html}</p>" + html[start:]
 
 
@@ -7130,6 +7903,32 @@ def run_creator_pipeline(
         phase3.get("primary_keyword", ""),
         phase3.get("search_intent_type", ""),
     )
+    phase3["topic_class"] = _infer_topic_class(
+        topic=phase3.get("final_article_topic", ""),
+        target_profile=target_profile,
+        publishing_profile=publishing_profile,
+        content_brief=phase3.get("content_brief") or {},
+    )
+    phase3["article_angle"] = _infer_article_angle(
+        topic=phase3.get("final_article_topic", ""),
+        intent_type=phase3.get("search_intent_type", ""),
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        topic_class=phase3.get("topic_class", "general"),
+        topic_signature=phase3.get("topic_signature"),
+    )
+    phase3["style_profile"] = _build_style_profile(
+        topic_class=phase3.get("topic_class", "general"),
+        intent_type=phase3.get("search_intent_type", ""),
+        article_angle=phase3.get("article_angle", "practical_guidance"),
+        content_brief=phase3.get("content_brief") or {},
+        publishing_profile=publishing_profile,
+        target_profile=target_profile,
+    )
+    phase3["specificity_profile"] = _build_specificity_profile(
+        topic=phase3.get("final_article_topic", ""),
+        topic_class=phase3.get("topic_class", "general"),
+        intent_type=phase3.get("search_intent_type", ""),
+    )
     title_package = _build_deterministic_title_package(
         topic=phase3.get("final_article_topic", ""),
         primary_keyword=phase3.get("primary_keyword", ""),
@@ -7137,6 +7936,8 @@ def run_creator_pipeline(
         search_intent_type=phase3.get("search_intent_type", ""),
         structured_mode=phase3.get("structured_content_mode", "none"),
         current_year=current_year,
+        article_angle=phase3.get("article_angle", ""),
+        topic_class=phase3.get("topic_class", "general"),
     )
     phase3["title_package"] = title_package
     ranked_internal_link_inventory = _rank_internal_link_inventory(
@@ -7188,6 +7989,11 @@ def run_creator_pipeline(
         "pair_fit": pair_fit,
         "content_brief": phase3.get("content_brief") or {},
         "topic_signature": phase3.get("topic_signature") or {},
+        "intent_type": phase3.get("search_intent_type", ""),
+        "article_angle": phase3.get("article_angle", ""),
+        "topic_class": phase3.get("topic_class", ""),
+        "style_profile": phase3.get("style_profile") or {},
+        "specificity_profile": phase3.get("specificity_profile") or {},
     }
     debug["internal_linking"] = {
         "configured_min": internal_link_min,
@@ -7212,6 +8018,45 @@ def run_creator_pipeline(
         anchor=anchor or "",
         anchor_safe=anchor_safe,
     )
+    plan_quality = _evaluate_plan_quality(
+        title=str(phase4.get("h1") or "").strip(),
+        headings=[str(item.get("h2") or "").strip() for item in (phase4.get("outline") or []) if str(item.get("h2") or "").strip()],
+        primary_keyword=phase3.get("primary_keyword", ""),
+        topic=phase3.get("final_article_topic", ""),
+        intent_type=phase3.get("search_intent_type", ""),
+        article_angle=phase3.get("article_angle", ""),
+        topic_signature=phase3.get("topic_signature"),
+    )
+    if plan_quality["errors"]:
+        warnings.append("phase4_plan_regenerated")
+        debug["rejection_reason"] = plan_quality["errors"]
+        phase3["title_package"] = _build_deterministic_title_package(
+            topic=phase3.get("final_article_topic", ""),
+            primary_keyword=phase3.get("primary_keyword", ""),
+            secondary_keywords=phase3.get("secondary_keywords") or [],
+            search_intent_type=phase3.get("search_intent_type", ""),
+            structured_mode=phase3.get("structured_content_mode", "none"),
+            current_year=current_year,
+            article_angle=phase3.get("article_angle", "practical_guidance"),
+            topic_class=phase3.get("topic_class", "general"),
+        )
+        phase4 = _build_deterministic_article_plan(
+            phase1=phase1,
+            phase3=phase3,
+            anchor=anchor or "",
+            anchor_safe=anchor_safe,
+        )
+        plan_quality = _evaluate_plan_quality(
+            title=str(phase4.get("h1") or "").strip(),
+            headings=[str(item.get("h2") or "").strip() for item in (phase4.get("outline") or []) if str(item.get("h2") or "").strip()],
+            primary_keyword=phase3.get("primary_keyword", ""),
+            topic=phase3.get("final_article_topic", ""),
+            intent_type=phase3.get("search_intent_type", ""),
+            article_angle=phase3.get("article_angle", ""),
+            topic_signature=phase3.get("topic_signature"),
+        )
+    if plan_quality["errors"]:
+        raise CreatorError(f"Phase 4 plan invalid: {plan_quality['errors']}")
     faq_candidates = phase4.get("faq_questions") or []
     debug["faq_generation"] = {
         "faq_enabled": True,
@@ -7220,6 +8065,7 @@ def run_creator_pipeline(
         "generation_mode": "deterministic_plan",
     }
     debug["article_plan"] = phase4
+    debug["planning_quality"] = plan_quality
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
     progress(4, PHASE_LABELS[4], 56)
 
@@ -7284,6 +8130,10 @@ def run_creator_pipeline(
             min_internal_links=effective_internal_min,
             max_internal_links=effective_internal_max,
             content_brief=phase3.get("content_brief") or {},
+            intent_type=phase3.get("search_intent_type", ""),
+            article_angle=phase3.get("article_angle", ""),
+            topic_signature=phase3.get("topic_signature"),
+            specificity_profile=phase3.get("specificity_profile"),
         )
 
         if validation_errors:
@@ -7298,7 +8148,7 @@ def run_creator_pipeline(
         break
 
     if not article_payload:
-        raise CreatorError(f"Phase 5 writer failed: {_dedupe_preserve_order(errors)}")
+        raise CreatorError(f"Phase 5 writer failed: {_dedupe_string_values(errors)}")
 
     art_html = (article_payload.get("article_html") or "").strip()
     art_html = _strip_empty_blocks(art_html)
@@ -7442,12 +8292,16 @@ def run_creator_pipeline(
         min_internal_links=effective_internal_min,
         max_internal_links=effective_internal_max,
         content_brief=phase3.get("content_brief") or {},
+        intent_type=phase3.get("search_intent_type", ""),
+        article_angle=phase3.get("article_angle", ""),
+        topic_signature=phase3.get("topic_signature"),
+        specificity_profile=phase3.get("specificity_profile"),
     )
 
     if phase7_errors:
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
-        phase7_errors = _dedupe_preserve_order(phase7_errors)
+        phase7_errors = _dedupe_string_values(phase7_errors)
 
     if phase7_errors:
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")
@@ -7467,8 +8321,22 @@ def run_creator_pipeline(
         max_internal_links=effective_internal_max,
         topic=phase3["final_article_topic"],
         content_brief=phase3.get("content_brief") or {},
+        intent_type=phase3.get("search_intent_type", ""),
+        article_angle=phase3.get("article_angle", ""),
+        topic_signature=phase3.get("topic_signature"),
+        specificity_profile=phase3.get("specificity_profile"),
     )
     debug["seo_evaluation"] = seo_evaluation
+    debug["quality_scores"] = {
+        "title_quality_score": seo_evaluation.get("title_quality_score", 0),
+        "heading_quality_score": seo_evaluation.get("heading_quality_score", 0),
+        "intent_type": seo_evaluation.get("intent_type") or phase3.get("search_intent_type", ""),
+        "backlink_naturalness_score": seo_evaluation.get("backlink_naturalness_score", 0),
+        "specificity_score": seo_evaluation.get("specificity_score", 0),
+        "spam_risk_score": seo_evaluation.get("spam_risk_score", 0),
+        "coherence_score": seo_evaluation.get("coherence_score", 0),
+        "rejection_reason": debug.get("rejection_reason") or [],
+    }
 
     debug["timings_ms"]["phase7"] = int((time.time() - phase_start) * 1000)
     progress(7, PHASE_LABELS[7], 100)
@@ -7510,6 +8378,14 @@ def run_creator_pipeline(
         "phase5": phase5,
         "phase6": phase6,
         "seo_evaluation": seo_evaluation,
+        "title_quality_score": seo_evaluation.get("title_quality_score", 0),
+        "heading_quality_score": seo_evaluation.get("heading_quality_score", 0),
+        "intent_type": seo_evaluation.get("intent_type") or phase3.get("search_intent_type", ""),
+        "backlink_naturalness_score": seo_evaluation.get("backlink_naturalness_score", 0),
+        "specificity_score": seo_evaluation.get("specificity_score", 0),
+        "spam_risk_score": seo_evaluation.get("spam_risk_score", 0),
+        "coherence_score": seo_evaluation.get("coherence_score", 0),
+        "rejection_reason": debug.get("rejection_reason") or [],
         "images": images,
         "warnings": warnings,
         "debug": debug,

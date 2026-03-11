@@ -24,6 +24,10 @@ from creator.api.pipeline import (
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
+    _evaluate_backlink_naturalness,
+    _evaluate_plan_quality,
+    _evaluate_specificity,
+    _evaluate_title_quality,
     _extract_keywords,
     _fetch_google_de_suggestions,
     _generate_search_informed_faqs,
@@ -477,10 +481,10 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
         "Woran erkennt man fruehzeitig Hinweise auf Sehprobleme bei kindern?",
         "Worauf sollte man bei Kinderbrillen achten?",
     ]
-    assert outline["outline"][0]["h2"] == "Wann braucht mein Kind eine Brille? Einordnung und erste Schritte"
+    assert outline["outline"][0]["h2"] == "Woran erkennt man erste Hinweise auf Sehstärke bei kindern?"
     assert any("sehstärke bei kindern" in item["h2"].lower() for item in outline["outline"])
     assert any(
-        any(token in item["h2"].lower() for token in ("warnzeichen", "anzeichen"))
+        any(token in item["h2"].lower() for token in ("woran erkennt man", "fachlicher rat"))
         for item in outline["outline"]
     )
     assert outline["outline"][-2]["h2"] == "Fazit"
@@ -521,6 +525,91 @@ def test_normalize_writer_html_fragment_strips_greeting_filler():
 
     assert "Herzlich willkommen" not in normalized
     assert "Kinder brauchen alltagstaugliche Sonnenbrillen" in normalized
+
+
+def test_evaluate_title_quality_rejects_filler_suffixes():
+    evaluation = _evaluate_title_quality(
+        title="Sonnenbrillen fuer Kinder: Vergleich und Orientierung",
+        primary_keyword="sonnenbrillen fuer kinder",
+        topic="Sonnenbrillen fuer Kinder",
+    )
+
+    assert evaluation["score"] < 75
+    assert "title_filler_detected" in evaluation["errors"]
+
+
+def test_evaluate_backlink_naturalness_rejects_templated_promo_sentence():
+    article_html = (
+        '<h1>Titel</h1><p>Weitere Informationen bietet <a href="https://target.example.com">Brillenhaus24</a>.</p>'
+        "<h2>Fazit</h2><p>Konkreter Abschluss.</p><h2>FAQ</h2>"
+        "<h3>Was ist wichtig?</h3><p>Antwort mit genug Woertern fuer eine valide FAQ Struktur und klare Hinweise fuer Eltern.</p>"
+        "<h3>Worauf sollte man achten?</h3><p>Eine weitere Antwort mit ausreichend Woertern und ohne Stoergeraesche.</p>"
+        "<h3>Welche Schritte helfen?</h3><p>Noch eine laengere Antwort mit konkreten Hinweisen und genuegend Substanz.</p>"
+    )
+
+    evaluation = _evaluate_backlink_naturalness(
+        article_html=article_html,
+        backlink_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen fuer kinder",
+            "specific_tokens": ["sonnenbrillen", "kinder"],
+            "all_tokens": ["sonnenbrillen", "kinder", "uv", "schutz"],
+        },
+    )
+
+    assert evaluation["score"] < 65
+    assert "backlink_sentence_templated" in evaluation["errors"]
+
+
+def test_evaluate_specificity_requires_multiple_concrete_signals():
+    evaluation = _evaluate_specificity(
+        article_html=(
+            "<h1>Titel</h1><p>UV 400, CE Kennzeichnung und Kategorie 3 sind fuer Kinder am Strand relevant. "
+            "Fuer Kleinkinder unter drei Jahren zaehlen ausserdem Passform, geringes Gewicht und flexible Materialien.</p>"
+        ),
+        specificity_profile={
+            "topic_class": "health_parenting",
+            "intent_type": "informational",
+            "min_specifics": 3,
+            "buckets": {
+                "standards_safety": ["uv400", "ce", "kategorie"],
+                "age_use_case": ["kleinkinder", "strand", "alltag"],
+                "decision_criteria": ["passform", "gewicht", "material"],
+            },
+        },
+    )
+
+    assert evaluation["score"] >= 70
+    assert evaluation["errors"] == []
+
+
+def test_evaluate_plan_quality_rejects_generic_heading_mix():
+    evaluation = _evaluate_plan_quality(
+        title="Immobilie verkaufen: Vergleich und Orientierung",
+        headings=[
+            "Immobilie verkaufen: Vergleich und Orientierung",
+            "Wichtige Kriterien, Unterschiede und Qualitaetsmerkmale",
+            "Immobilien kaufen oder mieten was lohnt sich im Alltag",
+            "Praktische Tipps und alltagsnahe Orientierung",
+            "Fazit",
+            "FAQ",
+        ],
+        primary_keyword="immobilie verkaufen",
+        topic="Immobilie verkaufen",
+        intent_type="informational",
+        article_angle="process_and_decision_factors",
+        topic_signature={
+            "subject_phrase": "immobilie verkaufen",
+            "primary_keyword": "immobilie verkaufen",
+            "specific_tokens": ["immobilie", "verkaufen"],
+            "all_tokens": ["immobilie", "verkaufen", "unterlagen", "makler", "preis"],
+        },
+    )
+
+    assert evaluation["coherence_score"] < 72
+    assert "plan_quality_below_threshold" in evaluation["errors"]
 
 
 def test_render_article_from_plan_formats_faq_questions_as_questions():
@@ -845,7 +934,8 @@ def test_build_deterministic_outline_produces_valid_structure():
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
-    assert "wie eltern-sucht die schwangerschaft und familienbeziehungen beeinflusst" in outline["outline"][0]["h2"].lower()
+    assert outline["outline"][0]["h2"] == "Welche Kriterien entscheiden bei Eltern sucht schwangerschaft?"
+    assert any("ursachen" in item["h2"].lower() for item in outline["outline"])
 
 
 def test_build_phase4_fallback_outline_recovers_invalid_llm_outline():
@@ -1022,11 +1112,13 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
                 f"<p>Dieser Abschnitt gibt Eltern zu {required_keywords} konkrete Kriterien, "
                 f"alltagsnahe Beobachtungen und klare Unterschiede. Gerade {section_focus} hilft dabei, "
                 "nicht bei allgemeinen Aussagen zu bleiben, sondern belastbare Orientierung fuer die naechsten "
-                "Schritte im Familienalltag zu gewinnen.</p>"
+                "Schritte im Familienalltag zu gewinnen. Wichtige Hinweise sind CE Kennzeichnung, ein Termin beim "
+                "Augenarzt und konkrete Unterschiede zwischen Vorschulkindern und Schulkindern.</p>"
                 "<p>Darueber hinaus zeigt der Abschnitt, welche Signale wirklich wichtig sind, wie sich "
                 "das Thema praktisch einordnen laesst und warum "
                 "eine klare fachliche Einordnung fuer eine "
-                "sichere Entscheidung im Alltag relevant bleibt.</p>"
+                "sichere Entscheidung im Alltag relevant bleibt. Eltern koennen Beobachtungen ueber zwei bis vier "
+                "Wochen notieren und typische Ausloeser fuer unscharfes Sehen gezielt festhalten.</p>"
             )
             if "list" in (section.get("required_elements") or []):
                 body_html += "<ul><li>Signal beobachten</li><li>Alltag dokumentieren</li></ul>"
@@ -1360,7 +1452,7 @@ def test_insert_backlink_maps_section_placement_correctly():
     first_section, second_section = updated.split("<h2>Zweiter Abschnitt</h2>")
     assert 'href="https://target.example.com"' not in first_section
     assert 'href="https://target.example.com"' in second_section
-    assert "Wer sich zu Kinderbrillen weiter informieren moechte" in updated
+    assert "Ergaenzende Informationen und praktische Beispiele zu Kinderbrillen" in updated
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):
@@ -1602,7 +1694,8 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     headings = [item["h2"] for item in outline["outline"]]
     assert all("Warenkorb" not in heading for heading in headings)
     assert all("Onlineshop" not in heading for heading in headings)
-    assert any("Qualitätsmerkmale" in heading for heading in headings)
+    assert headings[0] == "Welche Kriterien entscheiden bei Kinder sonnenbrillen?"
+    assert any("unterschiede" in heading.lower() for heading in headings)
     assert any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 
@@ -1623,7 +1716,7 @@ def test_build_deterministic_outline_forces_primary_keyword_into_heading_when_ne
 
 def test_structured_content_mode_detects_list_and_table_topics():
     assert _structured_content_mode("Baby vorbereiten Checkliste", "baby vorbereiten checkliste", "informational") == "list"
-    assert _structured_content_mode("Geburtskosten Vergleich", "geburtskosten vergleich", "commercial") == "table"
+    assert _structured_content_mode("Geburtskosten Vergleich", "geburtskosten vergleich", "commercial_investigation") == "table"
 
 
 def test_validate_seo_metadata_requires_exact_h1_and_metadata_quality():

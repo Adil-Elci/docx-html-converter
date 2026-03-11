@@ -297,8 +297,11 @@ ARTICLE_MAX_SPAM_RISK_SCORE = 35
 
 KEYWORD_MIN_SECONDARY = 3
 KEYWORD_MAX_SECONDARY = 6
+KEYWORD_MAX_SEMANTIC_ENTITIES = 8
+KEYWORD_MAX_SUPPORT_TOPICS = 6
 KEYWORD_MIN_WORDS = 2
 KEYWORD_MAX_WORDS = 8
+KEYWORD_QUERY_MAX_WORDS = 6
 KEYWORD_OVERUSE_MIN_OCCURRENCES = 12
 DEFAULT_INTERNAL_LINK_MIN = 2
 DEFAULT_INTERNAL_LINK_MAX = 4
@@ -2760,6 +2763,222 @@ def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
     return out
 
 
+def _sanitize_semantic_term(value: str, *, allow_single_token: bool = True) -> str:
+    normalized = _sanitize_editorial_phrase(value, allow_single_token=allow_single_token)
+    if not normalized or _looks_like_question_phrase(normalized):
+        return ""
+    words = normalized.split()
+    if len(words) > 4:
+        return ""
+    if sum(1 for word in words if word in INTERNAL_LINK_GENERIC_TOKENS) >= len(words):
+        return ""
+    return normalized
+
+
+def _dedupe_semantic_terms(values: List[str], *, max_items: int = KEYWORD_MAX_SEMANTIC_ENTITIES) -> List[str]:
+    out: List[str] = []
+    for item in values:
+        normalized = _sanitize_semantic_term(item, allow_single_token=True)
+        if not normalized:
+            continue
+        if any(
+            normalized == existing
+            or _keyword_similarity(normalized, existing) >= 0.75
+            for existing in out
+        ):
+            continue
+        out.append(normalized)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _keyword_candidate_is_query_like(
+    candidate: str,
+    *,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]] = None,
+) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate)
+    if not normalized or _keyword_candidate_has_question_noise(normalized):
+        return False
+    words = normalized.split()
+    if not (KEYWORD_MIN_WORDS <= len(words) <= KEYWORD_QUERY_MAX_WORDS):
+        return False
+    reference_phrase = str((topic_signature or {}).get("subject_phrase") or primary_keyword or topic).strip()
+    similarity = max(
+        _keyword_similarity(normalized, topic),
+        _keyword_similarity(normalized, primary_keyword),
+        _keyword_similarity(normalized, reference_phrase),
+    )
+    stats = _topic_signature_candidate_stats(normalized, topic_signature)
+    reference_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(f"{topic} {primary_keyword} {reference_phrase}"))
+    off_topic_action_hits = {
+        word for word in words
+        if word in EDITORIAL_ACTION_TOKENS and word not in reference_tokens
+    }
+    if _keyword_candidate_is_support_topic_noise(normalized, topic_signature) and similarity < 0.62:
+        return False
+    if " als " in f" {normalized} " and similarity < 0.68:
+        return False
+    if len(words) >= 4 and off_topic_action_hits and similarity < 0.68:
+        return False
+    if len(words) >= 5 and similarity < 0.72:
+        return False
+    if not stats["specific_overlap"] and not stats["broad_overlap"] and similarity < 0.55:
+        return False
+    return True
+
+
+def _select_semantic_entities(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    keyword_cluster: List[str],
+    trend_candidates: List[str],
+    target_terms: List[str],
+    overlap_terms: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+    max_items: int = KEYWORD_MAX_SEMANTIC_ENTITIES,
+) -> List[str]:
+    secondary_pool = _dedupe_keyword_phrases(secondary_keywords)
+    primary_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(primary_keyword))
+    phrase_scores: Dict[str, float] = {}
+    token_scores: Dict[str, float] = {}
+
+    def _add_candidates(values: List[str], *, weight: float) -> None:
+        for raw_value in values:
+            normalized = _sanitize_semantic_term(raw_value, allow_single_token=True)
+            if not normalized:
+                continue
+            if _keyword_similarity(normalized, primary_keyword) >= 0.82:
+                continue
+            if any(_keyword_similarity(normalized, existing) >= 0.82 for existing in secondary_pool):
+                continue
+            stats = _topic_signature_candidate_stats(normalized, topic_signature)
+            if (
+                not stats["specific_overlap"]
+                and len(stats["broad_overlap"]) < 1
+                and _keyword_similarity(normalized, topic) < 0.35
+            ):
+                continue
+            if len(normalized.split()) >= 4 and _keyword_candidate_is_support_topic_noise(normalized, topic_signature):
+                continue
+            score = (
+                weight
+                + (2.8 * len(stats["specific_overlap"]))
+                + (1.3 * len(stats["broad_overlap"]))
+                + _keyword_similarity(normalized, primary_keyword)
+            )
+            if len(normalized.split()) <= 3:
+                phrase_scores[normalized] = max(phrase_scores.get(normalized, 0.0), score)
+            for token in _filter_topic_signature_tokens(_keyword_focus_tokens(normalized)):
+                if len(token) < 6 or token in primary_tokens:
+                    continue
+                token_scores[token] = max(token_scores.get(token, 0.0), score - 0.4)
+
+    _add_candidates(overlap_terms, weight=4.6)
+    _add_candidates(keyword_cluster, weight=4.2)
+    _add_candidates(trend_candidates, weight=3.2)
+    _add_candidates(target_terms, weight=2.6)
+    _add_candidates(secondary_keywords, weight=2.4)
+
+    ranked_terms = [
+        term
+        for term, _score in sorted(phrase_scores.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    ranked_tokens = [
+        token
+        for token, _score in sorted(token_scores.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return _dedupe_semantic_terms(ranked_terms + ranked_tokens, max_items=max_items)
+
+
+def _select_support_topic_candidates(
+    *,
+    topic: str,
+    primary_keyword: str,
+    candidates: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+    max_items: int = KEYWORD_MAX_SUPPORT_TOPICS,
+) -> List[str]:
+    out: List[str] = []
+    for raw_value in candidates:
+        normalized = _sanitize_editorial_phrase(raw_value)
+        if not normalized:
+            continue
+        if _keyword_candidate_is_query_like(
+            normalized,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=topic_signature,
+        ):
+            continue
+        if not _topic_signature_candidate_has_relevance(normalized, topic_signature):
+            continue
+        if any(
+            normalized == existing
+            or _keyword_similarity(normalized, existing) >= 0.78
+            for existing in out
+        ):
+            continue
+        out.append(normalized)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _build_keyword_buckets(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    keyword_cluster: List[str],
+    trend_candidates: List[str],
+    allowed_topics: List[str],
+    target_terms: List[str],
+    overlap_terms: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    relevant_allowed_topics = [
+        candidate
+        for candidate in _extract_candidate_phrases_from_topics(allowed_topics, max_phrases=10)
+        if _sanitize_editorial_phrase(candidate)
+        and _topic_signature_candidate_has_relevance(candidate, topic_signature)
+    ]
+    internal_support_titles = [
+        str(item).strip()
+        for item in ((topic_signature or {}).get("high_confidence_internal_titles") or [])
+        if str(item).strip()
+    ]
+    semantic_entities = _select_semantic_entities(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=secondary_keywords,
+        keyword_cluster=keyword_cluster,
+        trend_candidates=trend_candidates,
+        target_terms=target_terms,
+        overlap_terms=overlap_terms,
+        topic_signature=topic_signature,
+        max_items=KEYWORD_MAX_SEMANTIC_ENTITIES,
+    )
+    support_topics = _select_support_topic_candidates(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        candidates=relevant_allowed_topics + internal_support_titles,
+        topic_signature=topic_signature,
+        max_items=KEYWORD_MAX_SUPPORT_TOPICS,
+    )
+    return {
+        "primary_query": _normalize_keyword_phrase(primary_keyword),
+        "secondary_queries": _dedupe_keyword_phrases(secondary_keywords)[:KEYWORD_MAX_SECONDARY],
+        "semantic_entities": semantic_entities,
+        "support_topics_for_internal_links": support_topics,
+    }
+
+
 def _build_topic_phrase(topic: str) -> str:
     preferred = (
         _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
@@ -4136,30 +4355,24 @@ def _build_secondary_keyword_fallbacks(
     signature_support = _pick_topic_signature_support_phrase(signature, exclude_phrases=[primary_keyword, subject_phrase])
     target_support_phrases = [str(item).strip() for item in (signature.get("target_support_phrases") or []) if str(item).strip()]
     cluster_support_phrases = [str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()]
-    topic_reference_tokens = _filter_topic_signature_tokens(
-        _keyword_focus_tokens(f"{topic} {subject_phrase} {primary_keyword}")
-    )
-    cluster_reference_tokens = _filter_topic_signature_tokens(
-        _keyword_focus_tokens(
-            " ".join(keyword_cluster + target_support_phrases + cluster_support_phrases + [signature_support])
-        )
-    )
     allowed_support_phrases = [
         candidate
         for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(allowed_topics, max_phrases=8))
         if _keyword_similarity(candidate, primary_keyword) < 0.7
         and not _keyword_is_strict_token_subset(candidate, primary_keyword)
-        and _topic_signature_candidate_has_relevance(candidate, signature)
-        and _keyword_candidate_has_relevance(
+        and _keyword_candidate_is_query_like(
             candidate,
-            topic_tokens=topic_reference_tokens,
-            cluster_tokens=cluster_reference_tokens,
-            trend_tokens=set(),
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
         )
-        and _topic_signature_candidate_score(candidate, signature) >= 2.0
     ][:2]
     support_phrase = allowed_support_phrases[0] if allowed_support_phrases else ""
     question_phrase = _normalize_keyword_phrase(str(signature.get("question_phrase") or ""))
+    topic_signal_tokens = _keyword_focus_tokens(f"{topic} {primary_keyword} {subject_phrase}")
+    decision_like_topic = _tokens_have_decision_signal(topic_signal_tokens)
+    problem_like_topic = bool(question_phrase) or _tokens_have_problem_signal(_keyword_token_set(subject_phrase))
+    process_like_topic = bool(topic_signal_tokens & PROCESS_ACTION_TOKENS)
     subject_focus_tokens = [
         token
         for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(subject_phrase))
@@ -4173,15 +4386,14 @@ def _build_secondary_keyword_fallbacks(
         cluster_support_phrases[2] if len(cluster_support_phrases) > 2 else "",
         target_support_phrases[0] if target_support_phrases else "",
         target_support_phrases[1] if len(target_support_phrases) > 1 else "",
-        f"warnzeichen fuer {signature_support}" if signature_support and question_phrase else "",
-        f"warnzeichen fuer {cluster_support_phrases[0]}" if cluster_support_phrases else "",
-        f"nächste Schritte bei {subject_phrase}" if subject_phrase else "",
-        f"ursachen rund um {subject_phrase}",
-        f"tipps zu {subject_phrase}",
-        f"unterstuetzung bei {_to_keyword_dative_phrase(subject_phrase)}" if subject_phrase else "",
-        f"{support_phrase} im alltag" if support_phrase else "",
-        f"{subject_focus_tokens[0]} erkennen" if subject_focus_tokens and (question_phrase or _tokens_have_problem_signal(_keyword_token_set(subject_phrase))) else "",
-        f"{subject_focus_tokens[0]} verstehen" if subject_focus_tokens and _tokens_have_problem_signal(_keyword_token_set(subject_phrase)) else "",
+        support_phrase,
+        f"warnzeichen {signature_support}" if signature_support and problem_like_topic else "",
+        f"warnzeichen {cluster_support_phrases[0]}" if cluster_support_phrases and problem_like_topic else "",
+        f"{subject_phrase} checkliste" if subject_phrase and process_like_topic else "",
+        f"{subject_phrase} kriterien" if subject_phrase and decision_like_topic else "",
+        f"{subject_phrase} unterlagen" if subject_phrase and process_like_topic else "",
+        f"{subject_focus_tokens[0]} erkennen" if subject_focus_tokens and problem_like_topic else "",
+        f"{subject_focus_tokens[0]} ursachen" if subject_focus_tokens and problem_like_topic else "",
     ]
     return _dedupe_keyword_phrases(candidates)
 
@@ -4200,7 +4412,12 @@ def _finalize_secondary_keywords(
         for candidate in _dedupe_keyword_phrases(secondary_keywords)
         if _keyword_similarity(candidate, primary_keyword) < 0.75
         and not _keyword_redundant_with_topic(candidate, topic)
-        and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
+        and _keyword_candidate_is_query_like(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=topic_signature,
+        )
     ]
     if len(finalized) >= KEYWORD_MIN_SECONDARY:
         return finalized[:KEYWORD_MAX_SECONDARY]
@@ -4218,7 +4435,12 @@ def _finalize_secondary_keywords(
             continue
         if _keyword_redundant_with_topic(candidate, topic):
             continue
-        if not _keyword_candidate_has_editorial_quality(candidate, topic_signature):
+        if not _keyword_candidate_is_query_like(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=topic_signature,
+        ):
             continue
         if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
             continue
@@ -4417,7 +4639,6 @@ def _select_keywords(
         + target_term_candidates
         + target_support_candidates
         + trend_candidates
-        + _extract_candidate_phrases_from_topics(relevant_allowed_topics, max_phrases=4)
     )
     primary_pool = [
         candidate
@@ -4488,9 +4709,12 @@ def _select_keywords(
         llm_secondary
         + trend_candidates
         + _extract_candidate_phrases_from_topics(relevant_keyword_cluster)
-        + _extract_candidate_phrases_from_topics(relevant_allowed_topics)
         + [_topic_head_keyword(topic)]
         + [topic_phrase]
+    )
+    support_topic_pool = _dedupe_keyword_phrases(
+        _extract_candidate_phrases_from_topics(relevant_allowed_topics, max_phrases=8)
+        + [str(item).strip() for item in (topic_signature.get("high_confidence_internal_titles") or []) if str(item).strip()]
     )
     ranked_secondary = sorted(
         [
@@ -4500,7 +4724,12 @@ def _select_keywords(
             and not _keyword_redundant_with_topic(candidate, topic)
             and not _keyword_is_strict_token_subset(candidate, primary_keyword)
             and not _keyword_candidate_has_question_noise(candidate)
-            and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
+            and _keyword_candidate_is_query_like(
+                candidate,
+                topic=topic,
+                primary_keyword=primary_keyword,
+                topic_signature=topic_signature,
+            )
             and (
                 _keyword_candidate_has_relevance(
                     candidate,
@@ -4532,7 +4761,12 @@ def _select_keywords(
             and not _keyword_redundant_with_topic(candidate, topic)
             and not _keyword_is_strict_token_subset(candidate, primary_keyword)
             and not _keyword_candidate_has_question_noise(candidate)
-            and _keyword_candidate_has_editorial_quality(candidate, topic_signature)
+            and _keyword_candidate_is_query_like(
+                candidate,
+                topic=topic,
+                primary_keyword=primary_keyword,
+                topic_signature=topic_signature,
+            )
             and (
                 _keyword_candidate_has_relevance(
                     candidate,
@@ -4584,6 +4818,13 @@ def _select_keywords(
                 continue
             if _keyword_is_strict_token_subset(candidate, primary_keyword):
                 continue
+            if not _keyword_candidate_is_query_like(
+                candidate,
+                topic=topic,
+                primary_keyword=primary_keyword,
+                topic_signature=topic_signature,
+            ):
+                continue
             secondary_keywords.append(candidate)
     secondary_keywords = [candidate for candidate in secondary_keywords if not _keyword_candidate_has_question_noise(candidate)]
     if len(secondary_keywords) < KEYWORD_MIN_SECONDARY:
@@ -4604,6 +4845,13 @@ def _select_keywords(
                 continue
             if _keyword_redundant_with_topic(candidate, topic):
                 continue
+            if not _keyword_candidate_is_query_like(
+                candidate,
+                topic=topic,
+                primary_keyword=primary_keyword,
+                topic_signature=topic_signature,
+            ):
+                continue
             secondary_keywords.append(candidate)
 
     final_signature = _build_topic_signature(
@@ -4616,12 +4864,24 @@ def _select_keywords(
         keyword_cluster=keyword_cluster,
         internal_link_inventory=internal_link_inventory or [],
     )
+    keyword_buckets = _build_keyword_buckets(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=secondary_keywords,
+        keyword_cluster=relevant_keyword_cluster,
+        trend_candidates=trend_candidates,
+        allowed_topics=support_topic_pool,
+        target_terms=target_term_candidates,
+        overlap_terms=[str(item).strip() for item in (overlap_terms or []) if str(item).strip()],
+        topic_signature=final_signature,
+    )
 
     return {
         "primary_keyword": primary_keyword,
         "secondary_keywords": secondary_keywords[:KEYWORD_MAX_SECONDARY],
         "trend_candidates": trend_candidates,
         "topic_signature": final_signature,
+        "keyword_buckets": keyword_buckets,
         "faq_candidates": _rank_keyword_candidates(
             faq_candidates,
             topic_tokens=topic_tokens,
@@ -5870,6 +6130,7 @@ def _build_deterministic_article_plan(
     intent_type = str(phase3.get("search_intent_type") or "informational").strip() or "informational"
     article_angle = str(phase3.get("article_angle") or "practical_guidance").strip() or "practical_guidance"
     topic_class = str(phase3.get("topic_class") or "general").strip() or "general"
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
     anchor_text_final = anchor if anchor_safe else _build_anchor_text(
         str(phase1.get("anchor_type") or "").strip(),
         str(phase1.get("brand_name") or "").strip(),
@@ -5890,9 +6151,10 @@ def _build_deterministic_article_plan(
     outline_items = outline_package["outline"]
     topic_focus_terms = _topic_focus_terms(topic, max_terms=2)
     semantic_support_terms = _merge_string_lists(
+        [str(item).strip() for item in (keyword_buckets.get("semantic_entities") or []) if str(item).strip()],
         topic_focus_terms,
         [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
-        max_items=6,
+        max_items=8,
     )
     publishing_signals = _merge_string_lists(
         [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
@@ -6227,6 +6489,7 @@ def _build_writer_prompt_request(
     content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
     style_profile = phase3.get("style_profile") or {}
     specificity_profile = phase3.get("specificity_profile") or {}
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
     plan_payload = {
         "h1": article_plan.get("h1"),
         "intent_type": article_plan.get("intent_type") or phase3.get("search_intent_type"),
@@ -6240,6 +6503,7 @@ def _build_writer_prompt_request(
             "faq_exact_secondary_allowed": False,
             "fazit_must_use_required_terms": True,
         },
+        "keyword_buckets": keyword_buckets,
         "style_profile": style_profile,
         "specificity_profile": specificity_profile,
         "sections": article_plan.get("sections"),
@@ -6288,8 +6552,9 @@ def _build_writer_prompt_request(
     )
     user_prompt = (
         f"Topic: {phase3.get('final_article_topic', '')}\n"
-        f"Primary keyword: {phase3.get('primary_keyword', '')}\n"
-        f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
+        f"Primary query: {phase3.get('primary_keyword', '')}\n"
+        f"Secondary queries: {(keyword_buckets.get('secondary_queries') or phase3.get('secondary_keywords') or [])}\n"
+        f"Semantic entities: {(keyword_buckets.get('semantic_entities') or [])}\n"
         f"Intent type: {phase3.get('search_intent_type', 'informational')}\n"
         f"Article angle: {phase3.get('article_angle', 'practical_guidance')}\n"
         f"Specificity minimum: {(specificity_profile or {}).get('min_specifics', 2)} concrete specifics in the body.\n"
@@ -6344,6 +6609,7 @@ def _build_planner_prompt_trace_entry(
             "topic": phase3.get("final_article_topic", ""),
             "primary_keyword": phase3.get("primary_keyword", ""),
             "secondary_keywords": phase3.get("secondary_keywords") or [],
+            "keyword_buckets": phase3.get("keyword_buckets") or {},
             "intent_type": phase3.get("search_intent_type", ""),
             "article_angle": phase3.get("article_angle", ""),
             "topic_class": phase3.get("topic_class", ""),
@@ -8176,6 +8442,30 @@ def run_creator_pipeline(
         topic_class=phase3.get("topic_class", "general"),
     )
     phase3["title_package"] = title_package
+    phase3["keyword_buckets"] = _build_keyword_buckets(
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        keyword_cluster=keyword_cluster,
+        trend_candidates=keyword_discovery.get("trend_candidates") or [],
+        allowed_topics=phase2.get("allowed_topics") or [],
+        target_terms=signature_target_terms,
+        overlap_terms=signature_overlap_terms,
+        topic_signature=phase3.get("topic_signature"),
+    )
+    phase3["secondary_keywords"] = (
+        phase3.get("keyword_buckets", {}).get("secondary_queries")
+        or phase3.get("secondary_keywords")
+        or []
+    )
+    if isinstance(phase3.get("topic_signature"), dict):
+        phase3["topic_signature"] = {
+            **phase3["topic_signature"],
+            "semantic_entities": phase3.get("keyword_buckets", {}).get("semantic_entities") or [],
+            "support_topics_for_internal_links": (
+                phase3.get("keyword_buckets", {}).get("support_topics_for_internal_links") or []
+            ),
+        }
     ranked_internal_link_inventory = _rank_internal_link_inventory(
         provided_internal_link_inventory,
         topic=phase3.get("final_article_topic", ""),
@@ -8216,6 +8506,7 @@ def run_creator_pipeline(
     debug["keyword_selection"] = {
         "primary_keyword": phase3["primary_keyword"],
         "secondary_keywords": phase3["secondary_keywords"],
+        "keyword_buckets": phase3.get("keyword_buckets") or {},
         "trend_candidates": keyword_selection.get("trend_candidates") or [],
         "faq_candidates": keyword_selection.get("faq_candidates") or [],
         "query_variants": keyword_discovery.get("query_variants") or [],
@@ -8278,6 +8569,7 @@ def run_creator_pipeline(
                         "topic": phase3.get("final_article_topic", ""),
                         "primary_keyword": phase3.get("primary_keyword", ""),
                         "secondary_keywords": phase3.get("secondary_keywords") or [],
+                        "keyword_buckets": phase3.get("keyword_buckets") or {},
                         "intent_type": phase3.get("search_intent_type", ""),
                         "article_angle": phase3.get("article_angle", ""),
                         "topic_class": phase3.get("topic_class", ""),
@@ -8330,6 +8622,7 @@ def run_creator_pipeline(
                             "topic": phase3.get("final_article_topic", ""),
                             "primary_keyword": phase3.get("primary_keyword", ""),
                             "secondary_keywords": phase3.get("secondary_keywords") or [],
+                            "keyword_buckets": phase3.get("keyword_buckets") or {},
                             "intent_type": phase3.get("search_intent_type", ""),
                             "article_angle": phase3.get("article_angle", ""),
                             "topic_class": phase3.get("topic_class", ""),

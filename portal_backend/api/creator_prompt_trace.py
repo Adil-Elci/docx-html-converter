@@ -39,6 +39,7 @@ def _build_writer_prompt_request(
     content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
     style_profile = phase3.get("style_profile") or {}
     specificity_profile = phase3.get("specificity_profile") or {}
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
     plan_payload = {
         "h1": article_plan.get("h1"),
         "intent_type": article_plan.get("intent_type") or phase3.get("search_intent_type"),
@@ -52,6 +53,7 @@ def _build_writer_prompt_request(
             "faq_exact_secondary_allowed": False,
             "fazit_must_use_required_terms": True,
         },
+        "keyword_buckets": keyword_buckets,
         "style_profile": style_profile,
         "specificity_profile": specificity_profile,
         "sections": article_plan.get("sections"),
@@ -100,8 +102,9 @@ def _build_writer_prompt_request(
     )
     user_prompt = (
         f"Topic: {phase3.get('final_article_topic', '')}\n"
-        f"Primary keyword: {phase3.get('primary_keyword', '')}\n"
-        f"Secondary keywords: {phase3.get('secondary_keywords') or []}\n"
+        f"Primary query: {phase3.get('primary_keyword', '')}\n"
+        f"Secondary queries: {(keyword_buckets.get('secondary_queries') or phase3.get('secondary_keywords') or [])}\n"
+        f"Semantic entities: {(keyword_buckets.get('semantic_entities') or [])}\n"
         f"Intent type: {phase3.get('search_intent_type', 'informational')}\n"
         f"Article angle: {phase3.get('article_angle', 'practical_guidance')}\n"
         f"Specificity minimum: {(specificity_profile or {}).get('min_specifics', 2)} concrete specifics in the body.\n"
@@ -156,6 +159,7 @@ def _build_planner_prompt_trace_entry(
             "topic": phase3.get("final_article_topic", ""),
             "primary_keyword": phase3.get("primary_keyword", ""),
             "secondary_keywords": phase3.get("secondary_keywords") or [],
+            "keyword_buckets": phase3.get("keyword_buckets") or {},
             "intent_type": phase3.get("search_intent_type", ""),
             "article_angle": phase3.get("article_angle", ""),
             "topic_class": phase3.get("topic_class", ""),

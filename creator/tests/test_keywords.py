@@ -761,6 +761,50 @@ def test_select_keywords_filters_internal_support_titles_from_secondary_keywords
     assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
 
 
+def test_select_keywords_builds_separate_keyword_buckets_for_queries_and_semantics():
+    result = _select_keywords(
+        topic="Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+        llm_primary="immobilie verkaufen",
+        llm_secondary=[
+            "immobilienmakler weiterbildung als erfolgsfaktor",
+            "makler oder selbst verkaufen",
+        ],
+        keyword_cluster=[
+            "immobilie verkaufen",
+            "verkaufspreis immobilie",
+            "energieausweis hausverkauf",
+            "unterlagen hausverkauf",
+            "makler oder selbst verkaufen",
+        ],
+        allowed_topics=[
+            "Photovoltaik beim Immobilienkauf richtig pruefen",
+            "Sauberkeit steigert den Immobilienwert",
+            "Immobilie verkaufen: So gelingt der Abschluss",
+        ],
+        trend_candidates=[],
+        faq_candidates=[
+            "Was ist bei immobilie verkaufen wichtig?",
+            "Welche Unterlagen braucht man beim Hausverkauf?",
+            "Wann lohnt sich ein Makler?",
+        ],
+        target_terms=["Steinhaus Immobilien"],
+        overlap_terms=["hausverkauf", "verkaufsprozess"],
+    )
+
+    buckets = result["keyword_buckets"]
+    assert buckets["secondary_queries"] == result["secondary_keywords"]
+    assert "immobilienmakler weiterbildung als erfolgsfaktor" not in buckets["secondary_queries"]
+    assert any("makler oder selbst verkaufen" == item for item in buckets["secondary_queries"])
+    assert any(
+        "verkaufspreis" in item or "energieausweis" in item or "hausverkauf" in item
+        for item in buckets["semantic_entities"]
+    )
+    assert all(
+        item not in buckets["secondary_queries"]
+        for item in buckets["support_topics_for_internal_links"]
+    )
+
+
 def test_sanitize_editorial_phrase_rejects_catalog_chrome_phrases():
     assert _sanitize_editorial_phrase("Neu im Sortiment") == ""
     assert _sanitize_editorial_phrase("Unsere Bestseller") == ""
@@ -1132,6 +1176,16 @@ def test_build_deterministic_article_plan_uses_topic_terms_not_target_identity_t
                 "specific_tokens": ["immobilie", "verkaufen", "hausverkauf", "verkaufsprozess"],
                 "all_tokens": ["immobilie", "verkaufen", "hausverkauf", "verkaufsprozess", "makler"],
             },
+            "keyword_buckets": {
+                "primary_query": "immobilie verkaufen",
+                "secondary_queries": [
+                    "verkaufspreis immobilie",
+                    "energieausweis hausverkauf",
+                    "makler oder selbst verkaufen",
+                ],
+                "semantic_entities": ["verkaufspreis", "energieausweis", "hausverkauf", "verkaufsprozess"],
+                "support_topics_for_internal_links": ["Immobilie verkaufen: So gelingt der Abschluss"],
+            },
         },
         anchor="",
         anchor_safe=False,
@@ -1141,7 +1195,7 @@ def test_build_deterministic_article_plan_uses_topic_terms_not_target_identity_t
     assert body_sections
     assert all("steinhaus" not in " ".join(section["required_terms"]).lower() for section in plan["sections"])
     assert any(
-        {"hausverkauf", "verkaufsprozess"} & set(" ".join(section["required_terms"]).lower().split())
+        {"hausverkauf", "verkaufsprozess", "verkaufspreis", "energieausweis"} & set(" ".join(section["required_terms"]).lower().split())
         for section in body_sections
     )
 

@@ -741,6 +741,11 @@ def _insert_in_content_image(html: str, image_url: str, alt_text: str) -> str:
     return f"{html}{img_tag}"
 
 
+def _strip_leading_h1_from_article_html(html: str) -> str:
+    cleaned = str(html or "").strip()
+    return re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", cleaned, count=1, flags=re.IGNORECASE | re.DOTALL)
+
+
 def call_creator_service(
     *,
     creator_endpoint: str,
@@ -1018,6 +1023,7 @@ def run_create_article_pipeline(
     article_html = str(phase5.get("article_html") or "").strip()
     if not article_html:
         raise AutomationError("Creator output missing article_html.")
+    article_html = _strip_leading_h1_from_article_html(article_html)
 
     selected_category_ids = list(category_ids or [])
     if category_llm_enabled and category_candidates:

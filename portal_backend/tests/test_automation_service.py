@@ -169,3 +169,79 @@ def test_run_create_article_pipeline_clears_existing_featured_media_when_creator
     assert result["media_payload"] == {}
     assert result["media_url"] is None
     assert calls["update_post"]["featured_media_id"] == 0
+
+
+def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_service",
+        lambda **_kwargs: {
+            "phase5": {
+                "meta_title": "Immobilie verkaufen",
+                "excerpt": "Kurzbeschreibung",
+                "slug": "immobilie-verkaufen",
+                "article_html": "<h1>Immobilie verkaufen</h1><p>Einleitung.</p><h2>Abschnitt</h2><p>Text.</p>",
+            },
+            "phase6": {"featured_image": {"prompt": "x", "alt_text": "x"}},
+            "images": [],
+        },
+    )
+
+    def fake_create_post(**kwargs):
+        calls["create_post"] = kwargs
+        return {"id": 321, "link": "https://publisher.example.com/draft"}
+
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create_post)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_media_item",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected media upload")),
+    )
+
+    automation_service.run_create_article_pipeline(
+        creator_endpoint="http://creator.test",
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        publishing_site_id="site-id",
+        client_target_site_id="target-id",
+        anchor="Immobilie verkaufen",
+        topic=None,
+        exclude_topics=[],
+        internal_link_inventory=[],
+        phase1_cache_payload=None,
+        phase1_cache_content_hash="",
+        phase2_cache_payload=None,
+        phase2_cache_content_hash="",
+        target_profile_payload=None,
+        target_profile_content_hash="",
+        publishing_profile_payload=None,
+        publishing_profile_content_hash="",
+        site_url="https://publisher.example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="user",
+        wp_app_password="pass",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=7,
+        category_ids=[9],
+        category_candidates=[],
+        timeout_seconds=5,
+        creator_timeout_seconds=5,
+        poll_timeout_seconds=5,
+        poll_interval_seconds=1,
+        image_width=1024,
+        image_height=576,
+        leonardo_api_key="",
+        leonardo_base_url="https://leonardo.example.com",
+        leonardo_model_id="model-id",
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="",
+        category_llm_model="",
+        category_llm_max_categories=1,
+        category_llm_confidence_threshold=0.5,
+    )
+
+    assert calls["create_post"]["clean_html"] == "<p>Einleitung.</p><h2>Abschnitt</h2><p>Text.</p>"

@@ -2357,6 +2357,71 @@ def _select_topic_relevant_signals(
     return [_format_sentence_start(value) for _score, value in ranked[:max_items]]
 
 
+def _token_matches_reference_family(token: str, reference_tokens: set[str]) -> bool:
+    normalized = str(token).strip()
+    if len(normalized) < 4:
+        return False
+    for reference in reference_tokens:
+        reference = str(reference).strip()
+        if len(reference) < 4:
+            continue
+        if normalized == reference:
+            return True
+        if normalized in reference or reference in normalized:
+            return True
+        if len(normalized) >= 6 and len(reference) >= 6 and normalized[:3] == reference[:3]:
+            return True
+    return False
+
+
+def _select_relevant_keyword_cluster_terms(
+    *,
+    topic: str,
+    keyword_cluster: List[str],
+    target_terms: Optional[List[str]] = None,
+    overlap_terms: Optional[List[str]] = None,
+    max_items: int = 8,
+) -> List[str]:
+    subject_phrase = _build_topic_phrase(topic) or _normalize_keyword_phrase(topic)
+    reference_tokens = _filter_topic_signature_tokens(
+        _keyword_focus_tokens(
+            " ".join(
+                [
+                    subject_phrase,
+                    " ".join(str(item).strip() for item in (target_terms or []) if str(item).strip()),
+                    " ".join(str(item).strip() for item in (overlap_terms or []) if str(item).strip()),
+                ]
+            )
+        )
+    )
+    scored: List[tuple[float, str]] = []
+    candidates = _dedupe_preserve_order(
+        [
+            cleaned
+            for cleaned in (_sanitize_editorial_phrase(item, allow_single_token=True) for item in keyword_cluster)
+            if cleaned
+        ]
+    )[: max_items * 4]
+    for candidate in candidates:
+        candidate_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(candidate))
+        if not candidate_tokens:
+            continue
+        family_overlap = {token for token in candidate_tokens if _token_matches_reference_family(token, reference_tokens)}
+        overlap = (candidate_tokens & reference_tokens) | family_overlap
+        similarity = max(_keyword_similarity(candidate, subject_phrase), _keyword_similarity(candidate, topic))
+        drift = candidate_tokens - (reference_tokens | family_overlap)
+        if not overlap and similarity < 0.28:
+            continue
+        if len(overlap) < 1 and drift and len(drift) >= len(overlap) + 1 and similarity < 0.45:
+            continue
+        if len(overlap) < 2 and drift and len(drift) > len(overlap) + 1 and similarity < 0.4:
+            continue
+        score = 4.0 * len(overlap) + 1.2 * similarity - 1.6 * len(drift)
+        scored.append((score, candidate))
+    ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
+    return [candidate for _score, candidate in ranked[:max_items]]
+
+
 def _build_content_brief(
     *,
     topic: str,
@@ -2367,7 +2432,6 @@ def _build_content_brief(
 ) -> Dict[str, Any]:
     overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()][:4]
     publishing_terms = _pair_fit_ranked_terms(publishing_profile, site_kind="publishing")
-    target_terms = _pair_fit_ranked_terms(target_profile, site_kind="target")
     publishing_contexts = [str(item).strip() for item in (pair_fit.get("publishing_site_contexts") or []) if str(item).strip()]
     audience = _pair_fit_audience_term(publishing_terms, publishing_contexts)
     publishing_signals = _select_topic_relevant_signals(
@@ -2375,7 +2439,8 @@ def _build_content_brief(
         values=_merge_string_lists(
             phase2.get("allowed_topics") or [],
             phase2.get("site_categories") or [],
-            publishing_terms,
+            publishing_profile.get("topics") or [],
+            publishing_profile.get("topic_clusters") or [],
             max_items=18,
         ),
         overlap_terms=overlap_terms,
@@ -2388,7 +2453,6 @@ def _build_content_brief(
             values=_merge_string_lists(
                 target_profile.get("topics") or [],
                 target_profile.get("services_or_products") or [],
-                target_terms,
                 max_items=18,
             ),
             overlap_terms=overlap_terms,
@@ -2993,19 +3057,42 @@ def _build_target_term_support_phrases(target_terms: List[str]) -> List[str]:
     return _dedupe_keyword_phrases(candidates)
 
 
-def _build_keyword_cluster_support_phrases(keyword_cluster: List[str], *, audience_term: str) -> List[str]:
+def _build_keyword_cluster_support_phrases(keyword_cluster: List[str], *, audience_term: str, subject_phrase: str = "") -> List[str]:
     candidates: List[str] = []
-    for candidate in _dedupe_keyword_phrases(_extract_candidate_phrases_from_topics(keyword_cluster, max_phrases=8)):
-        if len(_keyword_focus_tokens(candidate)) < 2:
+    subject_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(subject_phrase))
+    normalized_subject = _normalize_keyword_phrase(subject_phrase)
+    if audience_term and normalized_subject.startswith(f"{audience_term} "):
+        normalized_subject = normalized_subject[len(audience_term) + 1 :].strip()
+    for raw_candidate in _dedupe_preserve_order(
+        [
+            cleaned
+            for cleaned in (_sanitize_editorial_phrase(item, allow_single_token=True) for item in keyword_cluster)
+            if cleaned
+        ]
+    )[:8]:
+        focus_tokens = _keyword_focus_tokens(raw_candidate)
+        if len(focus_tokens) >= 2:
+            candidates.append(raw_candidate)
+            if len(candidates) >= 4:
+                break
             continue
-        candidates.append(candidate)
-        if len(candidates) >= 4:
-            break
+        if len(focus_tokens) == 1 and normalized_subject:
+            token = next(iter(focus_tokens))
+            if (
+                token in _filter_keyword_focus_tokens(_keyword_focus_tokens(normalized_subject))
+                and normalized_subject != token
+                and _is_valid_keyword_phrase(normalized_subject)
+            ):
+                candidates.append(normalized_subject)
+                if len(candidates) >= 4:
+                    break
     audience_dative = _audience_dative_term(audience_term) if audience_term else ""
     if audience_dative and audience_term not in {"eltern", "familie", "familien"}:
         seen: set[str] = set(_normalize_keyword_phrase(item) for item in candidates)
         for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(" ".join(keyword_cluster))):
             if len(token) < 7 or audience_term in token:
+                continue
+            if token in subject_tokens:
                 continue
             candidate = f"{token} bei {audience_dative}"
             normalized = _normalize_keyword_phrase(candidate)
@@ -3078,6 +3165,13 @@ def _build_topic_signature(
         for cleaned in (_sanitize_editorial_phrase(item, allow_single_token=True) for item in target_terms)
         if cleaned
     ]
+    relevant_keyword_cluster = _select_relevant_keyword_cluster_terms(
+        topic=topic,
+        keyword_cluster=keyword_cluster,
+        target_terms=target_terms,
+        overlap_terms=overlap_terms,
+        max_items=8,
+    )
     audience_term = _detect_topic_audience_term(
         subject_phrase,
         primary_keyword,
@@ -3085,7 +3179,11 @@ def _build_topic_signature(
         " ".join(overlap_terms),
     )
     target_support_phrases = _build_target_term_support_phrases(target_terms)
-    cluster_support_phrases = _build_keyword_cluster_support_phrases(keyword_cluster, audience_term=audience_term)
+    cluster_support_phrases = _build_keyword_cluster_support_phrases(
+        relevant_keyword_cluster,
+        audience_term=audience_term,
+        subject_phrase=subject_phrase,
+    )
     base_reference_tokens = _filter_topic_signature_tokens(
         _keyword_focus_tokens(
             f"{subject_phrase} {primary_keyword} {' '.join(target_terms)} {' '.join(overlap_terms)} {' '.join(cluster_support_phrases)}"
@@ -3562,7 +3660,14 @@ def _select_keywords(
 ) -> Dict[str, Any]:
     topic_phrase = _build_topic_phrase(topic)
     topic_tokens = _keyword_token_set(topic_phrase)
-    cluster_tokens = _keyword_token_set(" ".join(keyword_cluster))
+    relevant_keyword_cluster = _select_relevant_keyword_cluster_terms(
+        topic=topic,
+        keyword_cluster=keyword_cluster,
+        target_terms=[str(item).strip() for item in (target_terms or []) if str(item).strip()],
+        overlap_terms=[str(item).strip() for item in (overlap_terms or []) if str(item).strip()],
+        max_items=8,
+    )
+    cluster_tokens = _keyword_token_set(" ".join(relevant_keyword_cluster))
     allowed_tokens = _keyword_token_set(" ".join(allowed_topics))
     trend_tokens = _derive_repeated_trend_tokens(
         trend_candidates,
@@ -3597,6 +3702,13 @@ def _select_keywords(
     target_support_candidates = [
         str(item).strip() for item in (topic_signature.get("target_support_phrases") or []) if str(item).strip()
     ]
+    relevant_keyword_cluster = _select_relevant_keyword_cluster_terms(
+        topic=topic,
+        keyword_cluster=_merge_string_lists(relevant_keyword_cluster, keyword_cluster, max_items=12),
+        target_terms=target_term_candidates,
+        overlap_terms=[str(item).strip() for item in (overlap_terms or []) if str(item).strip()],
+        max_items=8,
+    )
 
     primary_pool = _dedupe_keyword_phrases(
         [llm_primary, topic_phrase]
@@ -3673,7 +3785,7 @@ def _select_keywords(
     secondary_pool = _dedupe_keyword_phrases(
         llm_secondary
         + trend_candidates
-        + _extract_candidate_phrases_from_topics(keyword_cluster)
+        + _extract_candidate_phrases_from_topics(relevant_keyword_cluster)
         + _extract_candidate_phrases_from_topics(relevant_allowed_topics)
         + [_topic_head_keyword(topic)]
         + [topic_phrase]
@@ -3888,8 +4000,6 @@ def _score_internal_link_inventory_item(
     core_overlap = item_focus & core_tokens
     if not stats["non_generic_tokens"] or not stats["specific_overlap"]:
         return 0.0
-    if not core_overlap:
-        return 0.0
 
     title_similarity = max(
         _keyword_similarity(str(item.get("title") or ""), primary_keyword),
@@ -3899,6 +4009,8 @@ def _score_internal_link_inventory_item(
         _keyword_similarity(combined_text, primary_keyword),
         _keyword_similarity(combined_text, topic),
     )
+    if not core_overlap and len(stats["specific_overlap"]) < 2 and max(title_similarity, combined_similarity) < 0.32:
+        return 0.0
     if len(core_overlap) == 1 and len(stats["specific_overlap"]) < 2 and max(title_similarity, combined_similarity) < 0.28:
         return 0.0
 
@@ -5914,11 +6026,12 @@ def _strip_disallowed_links(html: str, *, backlink_url: str, publishing_site_url
 
 def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: str) -> str:
     anchor_html = f'<a href="{backlink_url}">{anchor_text}</a>'
+    backlink_html = f"Weitere Informationen bietet {anchor_html}."
     if placement == "intro":
         match = re.search(r"</p>", html, flags=re.IGNORECASE)
         if match:
-            return html[:match.start()] + f" {anchor_html}" + html[match.start():]
-        return anchor_html + html
+            return html[:match.start()] + f" {backlink_html}" + html[match.start():]
+        return f"<p>{backlink_html}</p>" + html
 
     index = 0
     try:
@@ -5928,7 +6041,7 @@ def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: 
 
     matches = list(re.finditer(r"<h2[^>]*>", html, flags=re.IGNORECASE))
     if not matches:
-        return html + anchor_html
+        return html + f"<p>{backlink_html}</p>"
 
     if index >= len(matches):
         index = len(matches) - 1
@@ -5938,8 +6051,8 @@ def _insert_backlink(html: str, backlink_url: str, anchor_text: str, placement: 
     p_match = re.search(r"</p>", after, flags=re.IGNORECASE)
     if p_match:
         insert_at = start + p_match.start()
-        return html[:insert_at] + f" {anchor_html}" + html[insert_at:]
-    return html[:start] + anchor_html + html[start:]
+        return html[:insert_at] + f" {backlink_html}" + html[insert_at:]
+    return html[:start] + f"<p>{backlink_html}</p>" + html[start:]
 
 
 def _insert_internal_links(

@@ -225,3 +225,42 @@ def test_rank_internal_link_inventory_returns_only_high_confidence_matches_in_ra
         "https://publisher.example.com/kinderaugen-uv",
         "https://publisher.example.com/kinder-sonnenbrillen-passform",
     ]
+
+
+def test_rank_internal_link_inventory_keeps_support_articles_without_exact_product_token():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/kinderaugen-uv",
+                "title": "Kinderaugen im Sommer: UV-Schutz richtig einordnen",
+                "excerpt": "Warum Kinderaugen Schutz brauchen und worauf Eltern achten sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            },
+            {
+                "url": "https://publisher.example.com/familienurlaub-inseln",
+                "title": "Familienurlaub auf Inseln: Tipps und Ideen",
+                "excerpt": "Inspiration fuer sonnige Ferientage",
+                "categories": ["Familie", "Reisen"],
+            },
+        ],
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword="sonnenbrillen kinder",
+        secondary_keywords=[
+            "uv schutz fuer kinderaugen",
+            "passform fuer kindersonnenbrillen",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen kinder",
+            "target_terms": ["Sonnenbrillen fuer Kinder", "UV Schutz fuer Kinderaugen"],
+            "target_support_phrases": ["sonnenbrillen fuer kinder", "uv schutz fuer kinderaugen"],
+            "core_tokens": ["sonnenbrillen"],
+            "specific_tokens": ["sonnenbrillen", "uv", "schutz", "kinderaugen"],
+            "all_tokens": ["sonnenbrillen", "uv", "schutz", "kinderaugen", "passform"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/kinderaugen-uv"]

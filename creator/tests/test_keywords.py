@@ -208,6 +208,41 @@ def test_select_keywords_does_not_reuse_irrelevant_allowed_topics_as_support_phr
     assert not any("psychologie" in item for item in result["secondary_keywords"])
 
 
+def test_select_keywords_and_outline_ignore_irrelevant_sibling_product_terms():
+    result = _select_keywords(
+        topic="Sonnenbrillen fuer Kinder",
+        llm_primary="sonnenbrillen fuer kinder",
+        llm_secondary=[],
+        keyword_cluster=[
+            "Sonnenbrillen fuer Kinder",
+            "Kinderbrillen",
+            "Hoerhilfe bei Kindern",
+            "UV Schutz fuer Kinderaugen",
+        ],
+        allowed_topics=["Familienalltag", "Kindergesundheit"],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=["Sonnenbrillen fuer Kinder", "UV Schutz fuer Kinderaugen"],
+        overlap_terms=["kinder", "schutz", "augen"],
+        internal_link_inventory=[],
+    )
+
+    outline = _build_deterministic_outline(
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword=result["primary_keyword"],
+        secondary_keywords=result["secondary_keywords"],
+        faq_candidates=result["faq_candidates"],
+        structured_mode="table",
+        anchor_text_final="Mehr erfahren",
+        topic_signature=result["topic_signature"],
+    )
+
+    assert not any("hoerhilfe" in item.lower() for item in result["secondary_keywords"])
+    assert not any("hoerhilfe" in item.lower() for item in (result["topic_signature"].get("support_phrases") or []))
+    assert not any("hoerhilfe" in item["h2"].lower() for item in outline["outline"])
+    assert not any("sonnenbrillen bei kindern" in item["h2"].lower() for item in outline["outline"])
+
+
 def test_select_keywords_filters_unrelated_secondary_topics():
     result = _select_keywords(
         topic="Kinder Sonnenbrillen im Sommer",
@@ -1323,6 +1358,7 @@ def test_insert_backlink_maps_section_placement_correctly():
     first_section, second_section = updated.split("<h2>Zweiter Abschnitt</h2>")
     assert 'href="https://target.example.com"' not in first_section
     assert 'href="https://target.example.com"' in second_section
+    assert "Weitere Informationen bietet" in updated
 
 
 def test_fetch_google_de_suggestions_uses_cache(monkeypatch):

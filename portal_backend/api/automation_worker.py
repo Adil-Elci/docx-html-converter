@@ -994,6 +994,10 @@ class AutomationJobWorker:
                     },
                 )
             )
+            creator_debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
+            prompt_trace = creator_debug.get("prompt_trace") if isinstance(creator_debug.get("prompt_trace"), dict) else {}
+            planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
+            writer_prompt_trace = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
             session.add(
                 CreatorOutput(
                     submission_id=submission.id,
@@ -1002,6 +1006,8 @@ class AutomationJobWorker:
                     site_id=submission.site_id,
                     target_site_url=str(creator_output.get("target_site_url") or ""),
                     host_site_url=str(creator_output.get("host_site_url") or ""),
+                    planner_trace=planner_trace,
+                    writer_prompt_trace=writer_prompt_trace,
                     payload=creator_output,
                 )
             )

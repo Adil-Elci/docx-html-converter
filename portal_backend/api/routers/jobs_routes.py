@@ -88,15 +88,26 @@ def _job_to_out(job: Job) -> JobOut:
 
 def _get_latest_creator_output_payload(db: Session, job_id: UUID) -> Dict[str, Any]:
     row = (
-        db.query(CreatorOutput.payload)
+        db.query(CreatorOutput.payload, CreatorOutput.planner_trace, CreatorOutput.writer_prompt_trace)
         .filter(CreatorOutput.job_id == job_id)
         .order_by(CreatorOutput.created_at.desc())
         .first()
     )
     if not row:
         return {}
-    payload = row[0]
-    return payload if isinstance(payload, dict) else {}
+    payload = row[0] if isinstance(row[0], dict) else {}
+    planner_trace = row[1] if isinstance(row[1], dict) else {}
+    writer_prompt_trace = row[2] if isinstance(row[2], list) else []
+    debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else {}
+    prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
+    if planner_trace:
+        prompt_trace["planner"] = planner_trace
+    if writer_prompt_trace:
+        prompt_trace["writer_attempts"] = writer_prompt_trace
+    if prompt_trace:
+        debug["prompt_trace"] = prompt_trace
+        payload["debug"] = debug
+    return payload
 
 
 def _build_creator_debug_payload(job: Job, creator_output: Dict[str, Any]) -> Dict[str, Any]:

@@ -71,3 +71,29 @@ def test_build_creator_debug_payload_falls_back_to_deterministic_planner_packet(
     assert payload["planner"]["attempts"][0]["input_packet"]["internal_link_candidates"] == ["https://site.example.com/verkauf"]
     assert payload["writer_attempts"] == []
     assert payload["writer_prompt_recorded"] is False
+
+
+def test_get_latest_creator_output_payload_merges_normalized_prompt_trace_columns() -> None:
+    job_id = uuid4()
+
+    class FakeQuery:
+        def query(self, *_args, **_kwargs):
+            return self
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def order_by(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return (
+                {"debug": {}},
+                {"mode": "deterministic", "attempts": [{"attempt": 1}]},
+                [{"attempt": 1, "request_label": "phase5_writer_attempt_1"}],
+            )
+
+    payload = jobs_routes._get_latest_creator_output_payload(FakeQuery(), job_id)
+
+    assert payload["debug"]["prompt_trace"]["planner"]["mode"] == "deterministic"
+    assert payload["debug"]["prompt_trace"]["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"

@@ -305,3 +305,44 @@ def test_rank_internal_link_inventory_requires_title_or_slug_signal_for_fuzzy_su
     )
 
     assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]
+
+
+def test_rank_internal_link_inventory_rejects_generic_support_token_matches_without_domain_alignment():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/sehstaerke-vaeter",
+                "title": "Sehstaerke im Alltag: Tipps fuer Vaeter ab 40",
+                "excerpt": "Die Augen verlieren an Anpassungsfaehigkeit und gute Augengesundheit wird wichtiger.",
+                "slug": "sehstaerke-tipps-vaeter-40",
+                "categories": ["Wissen"],
+            },
+            {
+                "url": "https://publisher.example.com/keller-schutz",
+                "title": "Hochwertige Strategien fuer Feuchtigkeitsschutz im Keller",
+                "excerpt": "Ohne wirksame Vorbeugung entstehen erhebliche Schaeden an Gebaeuden.",
+                "slug": "keller-schutz-massnahmen",
+                "categories": ["Wohnen"],
+            },
+        ],
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword="sonnenbrillen fuer kinder",
+        secondary_keywords=[
+            "uv schutz kinder augen",
+            "kindersonnenbrillen kaufen",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen fuer kinder",
+            "core_tokens": ["sonnenbrillen", "schutz", "uv"],
+            "seed_specific_tokens": ["augen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+            "seed_all_tokens": ["augen", "kindersonnenbrillen", "kaufen", "schutz", "sehgesundheit", "sonnenbrillen", "uv"],
+            "specific_tokens": ["augen", "augenschutz", "kaufen", "kindersonnenbrillen", "schutz", "sehgesundheit", "sonnenbrillen", "strand", "uv"],
+            "all_tokens": ["augen", "augenschutz", "kaufen", "kindersonnenbrillen", "schutz", "sehgesundheit", "sonnenbrillen", "strand", "uv"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]

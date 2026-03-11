@@ -271,6 +271,11 @@ INTERNAL_LINK_GENERIC_TOKENS = {
     "alltag", "eltern", "familie", "familien", "gesundheit", "ideen", "kind", "kinder", "kindern", "leben",
     "ratgeber", "tipps", "zuhause", "familien4leben", "glueck", "teilen",
 }
+INTERNAL_LINK_WEAK_MATCH_TOKENS = {
+    "alltag", "auswahl", "beratung", "checkliste", "familie", "familien", "finden", "gesundheit", "hilfe",
+    "ideen", "kauf", "kaufen", "kosten", "online", "praxis", "ratgeber", "schritte", "schutz", "service",
+    "sommer", "strand", "tipps", "urlaub", "vergleich", "wahl",
+}
 
 
 class CreatorError(RuntimeError):
@@ -2367,6 +2372,9 @@ def _token_matches_reference_family(token: str, reference_tokens: set[str], *, a
             continue
         if normalized == reference:
             return True
+        shorter, longer = (normalized, reference) if len(normalized) <= len(reference) else (reference, normalized)
+        if shorter in INTERNAL_LINK_WEAK_MATCH_TOKENS:
+            continue
         if normalized in reference or reference in normalized:
             return True
         if (
@@ -2395,7 +2403,7 @@ def _token_matches_internal_link_reference(token: str, reference_tokens: set[str
         if normalized == candidate:
             return True
         shorter, longer = (normalized, candidate) if len(normalized) <= len(candidate) else (candidate, normalized)
-        if shorter in INTERNAL_LINK_GENERIC_TOKENS or shorter in KEYWORD_LOW_SIGNAL_TOKENS:
+        if shorter in INTERNAL_LINK_GENERIC_TOKENS or shorter in KEYWORD_LOW_SIGNAL_TOKENS or shorter in INTERNAL_LINK_WEAK_MATCH_TOKENS:
             continue
         if len(shorter) < 5:
             continue
@@ -3365,6 +3373,29 @@ def _topic_signature_token_sets(signature: Optional[Dict[str, Any]]) -> tuple[se
     return specific_tokens, all_tokens
 
 
+def _internal_link_domain_gate_tokens(signature: Optional[Dict[str, Any]]) -> set[str]:
+    if not isinstance(signature, dict):
+        return set()
+    candidates = {
+        str(item).strip()
+        for item in (
+            (signature.get("seed_specific_tokens") or [])
+            + (signature.get("specific_tokens") or [])
+            + (signature.get("core_tokens") or [])
+        )
+        if str(item).strip()
+    }
+    return {
+        token
+        for token in candidates
+        if len(token) >= 4
+        and token not in INTERNAL_LINK_GENERIC_TOKENS
+        and token not in KEYWORD_LOW_SIGNAL_TOKENS
+        and token not in GERMAN_KEYWORD_MODIFIERS
+        and token not in INTERNAL_LINK_WEAK_MATCH_TOKENS
+    }
+
+
 def _topic_signature_candidate_stats(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> Dict[str, set[str]]:
     candidate_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(candidate))
     specific_tokens, all_tokens = _topic_signature_token_sets(topic_signature)
@@ -4059,6 +4090,7 @@ def _score_internal_link_inventory_item(
         seed_all_tokens = set(seed_specific_tokens)
     core_overlap = item_focus & core_tokens
     title_focus = _filter_keyword_focus_tokens(title_tokens | slug_tokens)
+    domain_gate_tokens = _internal_link_domain_gate_tokens(signature)
     core_family_overlap = {
         token for token in title_focus if token not in core_overlap and _token_matches_internal_link_reference(token, core_tokens)
     }
@@ -4076,6 +4108,12 @@ def _score_internal_link_inventory_item(
     }
     title_seed_overlap = title_focus & seed_specific_tokens
     title_broad_overlap = title_focus & seed_all_tokens
+    title_domain_overlap = title_focus & domain_gate_tokens
+    title_domain_family_overlap = {
+        token
+        for token in title_focus
+        if token not in title_domain_overlap and _token_matches_internal_link_reference(token, domain_gate_tokens)
+    }
     seed_drift = item_focus - (seed_all_tokens | seed_broad_family_overlap)
     secondary_similarity = max((_keyword_similarity(combined_text, keyword) for keyword in secondary_keywords), default=0.0)
     title_secondary_similarity = max((_keyword_similarity(str(item.get("title") or ""), keyword) for keyword in secondary_keywords), default=0.0)
@@ -4090,6 +4128,12 @@ def _score_internal_link_inventory_item(
         _keyword_similarity(combined_text, primary_keyword),
         _keyword_similarity(combined_text, topic),
     )
+    if (
+        domain_gate_tokens
+        and not (title_domain_overlap or title_domain_family_overlap)
+        and max(title_similarity, title_secondary_similarity, secondary_similarity) < 0.2
+    ):
+        return 0.0
     if (
         len(core_overlap | core_family_overlap) <= 1
         and len(seed_specific_overlap | seed_specific_family_overlap) < 2

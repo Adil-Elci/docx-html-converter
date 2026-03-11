@@ -27,7 +27,7 @@ from ..automation_service import (
 )
 from ..db import get_db
 from ..internal_linking import upsert_publishing_site_article
-from ..publish_notifications import send_client_publish_notification
+from ..publish_notification_hook import send_client_publish_notification
 from ..portal_models import Asset, Client, CreatorOutput, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
     AssetCreate,

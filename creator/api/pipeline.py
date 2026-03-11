@@ -1988,7 +1988,8 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _strip_html_tags(value: str) -> str:
-    return re.sub(r"<[^>]+>", " ", value or "", flags=re.IGNORECASE | re.DOTALL)
+    stripped = re.sub(r"<[^>]+>", " ", value or "", flags=re.IGNORECASE | re.DOTALL)
+    return html.unescape(stripped).replace("\xa0", " ")
 
 
 def _tokenize_words(text: str) -> List[str]:

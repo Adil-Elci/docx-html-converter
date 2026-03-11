@@ -506,6 +506,24 @@ def test_validate_phrase_integrity_rejects_greeting_entity_and_self_assessment_n
     assert any(error.startswith("faq_question_integrity_invalid:") for error in errors)
 
 
+def test_validate_phrase_integrity_allows_html_entities_in_structural_text():
+    html = (
+        "<h1>Augenschutz &amp; Orientierung fuer Familien</h1>"
+        "<p>Einleitung mit ausreichend Woertern fuer Familien und Kinder im Sommerurlaub ohne weitere Stoerung.</p>"
+        "<h2>UV &amp; Schutz fuer Kinderaugen</h2>"
+        "<p>Eltern achten auf UV Schutz, Passform und klare Kriterien im Alltag und im Urlaub.</p>"
+        "<h2>Fazit</h2><p>Konkreter Abschluss zum Augenschutz im Sommerurlaub.</p>"
+        "<h2>FAQ</h2>"
+        "<h3>Was ist bei UV &amp; Schutz wichtig?</h3><p>Antwort mit ausreichend Woertern fuer eine stabile Validierung im FAQ Bereich und mehr Kontext.</p>"
+        "<h3>Worauf sollte man achten?</h3><p>Noch eine laengere Antwort mit ausreichend Woertern und ohne weitere Stoerung.</p>"
+        "<h3>Welche Ursachen sind haeufig?</h3><p>Eine weitere laengere Antwort mit ausreichend Woertern fuer die FAQ Validierung.</p>"
+    )
+
+    errors = _validate_phrase_integrity(html)
+
+    assert "entity_noise_detected" not in errors
+
+
 def test_select_keywords_rejects_noisy_trend_and_allowed_topic_pollution():
     result = _select_keywords(
         topic="Kinder Sehprobleme erkennen und richtig reagieren",

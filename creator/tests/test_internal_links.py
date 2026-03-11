@@ -346,3 +346,103 @@ def test_rank_internal_link_inventory_rejects_generic_support_token_matches_with
     )
 
     assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]
+
+
+def test_rank_internal_link_inventory_keeps_support_articles_with_excerpt_level_domain_signal():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/sehstaerke-vaeter",
+                "title": "Sehstaerke im Alltag: Tipps fuer Vaeter ab 40",
+                "excerpt": (
+                    "Die Augen verlieren an Anpassungsfaehigkeit und kleine Schrift wird anstrengender. "
+                    "Mit dem richtigen Wissen laesst sich die Augengesundheit gezielt unterstuetzen."
+                ),
+                "slug": "sehstaerke-tipps-vaeter-40",
+                "categories": ["Wissen"],
+            },
+            {
+                "url": "https://publisher.example.com/helgoland-ausflug",
+                "title": "Familienausflug nach Helgoland: Ein unvergesslicher Tag",
+                "excerpt": "Ob kleine Kinder mit grossen Augen oder Grosseltern mit maritimer Sehnsucht.",
+                "slug": "familienausflug-nach-helgoland",
+                "categories": ["Reisen"],
+            },
+        ],
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword="sonnenbrillen fuer kinder",
+        secondary_keywords=[
+            "kindersonnenbrillen kaufen",
+            "uv schutz kinder augen",
+            "ce kennzeichen sonnenbrille kinder",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen fuer kinder",
+            "core_tokens": ["sonnenbrillen"],
+            "seed_specific_tokens": ["sonnenbrillen"],
+            "seed_all_tokens": ["augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "sonnenbrillen", "uv"],
+            "specific_tokens": ["augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "sonnenbrillen", "uv"],
+            "all_tokens": ["sonnenbrillen", "augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "uv"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]
+
+
+def test_rank_internal_link_inventory_rejects_visual_mentions_and_generic_buying_posts():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/sehstaerke-vaeter",
+                "title": "Sehstaerke im Alltag: Tipps fuer Vaeter ab 40",
+                "excerpt": (
+                    "Die Augen verlieren an Anpassungsfaehigkeit und kleine Schrift wird anstrengender. "
+                    "Mit dem richtigen Wissen laesst sich die Augengesundheit gezielt unterstuetzen."
+                ),
+                "slug": "sehstaerke-tipps-vaeter-40",
+                "categories": ["Wissen"],
+            },
+            {
+                "url": "https://publisher.example.com/babyfotos-bindung",
+                "title": "Mit Papa auf dem Arm, mit Mama im Blick: Wie emotionale Bindungen auf Babyfotos sichtbar werden",
+                "excerpt": (
+                    "Die Augen des Neugeborenen suchen den vertrauten Ausdruck, waehrend die Mutter laechelt. "
+                    "Genau diese Augenblicke machen Babyfotos so besonders."
+                ),
+                "slug": "emotionale-bindungen-auf-babyfotos",
+                "categories": ["Familie"],
+            },
+            {
+                "url": "https://publisher.example.com/iphone-kaufen",
+                "title": "iPhone mieten oder kaufen - Was lohnt sich?",
+                "excerpt": "Viele Verbraucher stehen vor der Frage, ob sie kaufen oder mieten sollen.",
+                "slug": "iphone-mieten-oder-kaufen",
+                "categories": ["Technik"],
+            },
+        ],
+        topic="Sonnenbrillen fuer Kinder",
+        primary_keyword="sonnenbrillen fuer kinder",
+        secondary_keywords=[
+            "kindersonnenbrillen kaufen",
+            "uv schutz kinder augen",
+            "ce kennzeichen sonnenbrille kinder",
+        ],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "sonnenbrillen fuer kinder",
+            "primary_keyword": "sonnenbrillen fuer kinder",
+            "core_tokens": ["sonnenbrillen"],
+            "seed_specific_tokens": ["sonnenbrillen"],
+            "seed_all_tokens": ["augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "sonnenbrillen", "uv"],
+            "specific_tokens": ["augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "sonnenbrillen", "uv"],
+            "all_tokens": ["sonnenbrillen", "augen", "ce", "kaufen", "kennzeichen", "kindersonnenbrillen", "schutz", "sonnenbrille", "uv"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]

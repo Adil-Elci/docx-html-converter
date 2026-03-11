@@ -3396,6 +3396,76 @@ def _internal_link_domain_gate_tokens(signature: Optional[Dict[str, Any]]) -> se
     }
 
 
+def _internal_link_context_gate_tokens(signature: Optional[Dict[str, Any]]) -> set[str]:
+    if not isinstance(signature, dict):
+        return set()
+    domain_tokens = _internal_link_domain_gate_tokens(signature)
+    signature_tokens = set(domain_tokens)
+    if not signature_tokens:
+        signature_tokens = {
+            token
+            for token in (
+                set(str(item).strip() for item in (signature.get("seed_all_tokens") or []) if str(item).strip())
+                | set(str(item).strip() for item in (signature.get("all_tokens") or []) if str(item).strip())
+            )
+            if token
+            and token not in INTERNAL_LINK_GENERIC_TOKENS
+            and token not in KEYWORD_LOW_SIGNAL_TOKENS
+            and token not in INTERNAL_LINK_WEAK_MATCH_TOKENS
+        }
+    scored_contexts = sorted(
+        (
+            len(signature_tokens & keywords),
+            label,
+        )
+        for label, keywords in PAIR_FIT_CONTEXT_KEYWORDS.items()
+    )
+    selected_labels = [
+        label
+        for score, label in sorted(scored_contexts, key=lambda item: (-item[0], item[1]))
+        if score > 0
+    ][:2]
+    if not selected_labels:
+        return set()
+    return set().union(*(PAIR_FIT_CONTEXT_KEYWORDS[label] for label in selected_labels)) - domain_tokens
+
+
+def _token_matches_context_gate_token(token: str, context_tokens: set[str]) -> bool:
+    normalized = str(token).strip()
+    if len(normalized) < 6:
+        return False
+    for reference in context_tokens:
+        reference = str(reference).strip()
+        if len(reference) < 4:
+            continue
+        if normalized == reference:
+            return True
+        shorter, longer = (normalized, reference) if len(normalized) <= len(reference) else (reference, normalized)
+        if len(shorter) < 5:
+            continue
+        if shorter in longer and len(longer) - len(shorter) >= 3:
+            return True
+    return False
+
+
+def _token_matches_domain_support_token(token: str, domain_tokens: set[str]) -> bool:
+    normalized = str(token).strip()
+    if len(normalized) < 6:
+        return False
+    for reference in domain_tokens:
+        reference = str(reference).strip()
+        if len(reference) < 4:
+            continue
+        if normalized == reference:
+            return True
+        shorter, longer = (normalized, reference) if len(normalized) <= len(reference) else (reference, normalized)
+        if len(shorter) < 5:
+            continue
+        if shorter in longer and len(longer) - len(shorter) >= 3:
+            return True
+    return False
+
+
 def _topic_signature_candidate_stats(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> Dict[str, set[str]]:
     candidate_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(candidate))
     specific_tokens, all_tokens = _topic_signature_token_sets(topic_signature)
@@ -4078,6 +4148,8 @@ def _score_internal_link_inventory_item(
         ]
     )
     stats = _topic_signature_candidate_stats(combined_text, signature)
+    candidate_specific_overlap = set(stats["specific_overlap"])
+    candidate_broad_overlap = set(stats["broad_overlap"])
     item_focus = _filter_keyword_focus_tokens(combined)
     core_tokens = {str(item).strip() for item in (signature.get("core_tokens") or []) if str(item).strip()}
     seed_specific_tokens = {
@@ -4109,6 +4181,21 @@ def _score_internal_link_inventory_item(
     title_seed_overlap = title_focus & seed_specific_tokens
     title_broad_overlap = title_focus & seed_all_tokens
     title_domain_overlap = title_focus & domain_gate_tokens
+    context_gate_tokens = _internal_link_context_gate_tokens(signature)
+    support_focus = item_focus - title_focus
+    candidate_domain_overlap = {
+        token
+        for token in stats["candidate_tokens"]
+        if domain_gate_tokens and _token_matches_domain_support_token(token, domain_gate_tokens)
+    }
+    candidate_context_overlap = {
+        token
+        for token in support_focus
+        if context_gate_tokens
+        and domain_gate_tokens
+        and _token_matches_domain_support_token(token, domain_gate_tokens)
+        and _token_matches_context_gate_token(token, context_gate_tokens)
+    }
     title_domain_family_overlap = {
         token
         for token in title_focus
@@ -4117,7 +4204,7 @@ def _score_internal_link_inventory_item(
     seed_drift = item_focus - (seed_all_tokens | seed_broad_family_overlap)
     secondary_similarity = max((_keyword_similarity(combined_text, keyword) for keyword in secondary_keywords), default=0.0)
     title_secondary_similarity = max((_keyword_similarity(str(item.get("title") or ""), keyword) for keyword in secondary_keywords), default=0.0)
-    if not stats["non_generic_tokens"] or (not seed_specific_overlap and not seed_specific_family_overlap):
+    if not stats["non_generic_tokens"] or not candidate_specific_overlap:
         return 0.0
 
     title_similarity = max(
@@ -4131,32 +4218,39 @@ def _score_internal_link_inventory_item(
     if (
         domain_gate_tokens
         and not (title_domain_overlap or title_domain_family_overlap)
-        and max(title_similarity, title_secondary_similarity, secondary_similarity) < 0.2
+        and (
+            not candidate_domain_overlap
+            or (context_gate_tokens and not candidate_context_overlap and max(title_similarity, title_secondary_similarity, secondary_similarity) < 0.2)
+        )
     ):
         return 0.0
     if (
         len(core_overlap | core_family_overlap) <= 1
-        and len(seed_specific_overlap | seed_specific_family_overlap) < 2
+        and len(candidate_specific_overlap) < 2
         and max(title_similarity, combined_similarity, secondary_similarity) < 0.28
-        and not title_broad_overlap
+        and not (title_broad_overlap or len(candidate_broad_overlap) >= 2)
     ):
         return 0.0
     if (
-        len(seed_specific_overlap | seed_specific_family_overlap) == 1
+        len(candidate_specific_overlap) == 1
         and not (title_seed_overlap or title_broad_overlap or core_overlap or core_family_overlap)
         and secondary_similarity < 0.12
     ):
         return 0.0
 
+    candidate_specific_support_overlap = candidate_specific_overlap - seed_specific_overlap - seed_specific_family_overlap
+    candidate_broad_support_overlap = candidate_broad_overlap - seed_broad_overlap - seed_broad_family_overlap
     score = 0.0
     score += 3.6 * len(core_overlap)
     score += 2.2 * len(core_family_overlap)
     score += 5.4 * len(seed_specific_overlap)
     score += 2.8 * len(seed_specific_family_overlap)
+    score += 2.6 * len(candidate_specific_support_overlap)
     score += 2.4 * len(title_seed_overlap)
     score += 1.2 * len(title_broad_overlap - title_seed_overlap)
     score += 1.8 * len(seed_broad_overlap)
     score += 1.0 * len(seed_broad_family_overlap)
+    score += 0.9 * len(candidate_broad_support_overlap - candidate_specific_support_overlap)
     score += 2.5 * len(item_focus & primary_tokens)
     score += 1.5 * len(item_focus & secondary_tokens)
     score += 2.0 * secondary_similarity

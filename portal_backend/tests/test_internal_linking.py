@@ -35,3 +35,22 @@ def test_derive_inventory_excerpt_keeps_real_excerpt():
     )
 
     assert excerpt == "Eltern achten auf UV400-Schutz, robuste Materialien und eine kindgerechte Passform."
+
+
+def test_derive_inventory_excerpt_collects_multiple_paragraphs_for_topic_signal():
+    excerpt = _derive_inventory_excerpt(
+        {
+            "excerpt": {
+                "rendered": "<p>Meta-Beschreibung:</p><p>Option 1</p>",
+            },
+            "content": {
+                "rendered": (
+                    "<p>Die Augen verlieren an Anpassungsfaehigkeit und kleine Schrift wird anstrengender.</p>"
+                    "<p>Mit dem richtigen Wissen laesst sich die Augengesundheit gezielt unterstuetzen.</p>"
+                ),
+            },
+        }
+    )
+
+    assert "Die Augen verlieren" in excerpt
+    assert "Augengesundheit" in excerpt

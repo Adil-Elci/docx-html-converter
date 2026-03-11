@@ -87,12 +87,13 @@ def _derive_inventory_excerpt(post_payload: Dict[str, Any], *, max_chars: int = 
     if content_html:
         paragraphs = re.findall(r"<p[^>]*>(.*?)</p>", content_html, flags=re.IGNORECASE | re.DOTALL)
         collected: List[str] = []
+        target_chars = min(max_chars, 420)
         for paragraph in paragraphs:
             candidate = _strip_rendered_html(paragraph)
             if not candidate or _excerpt_is_low_signal(candidate):
                 continue
             collected.append(candidate)
-            if len(" ".join(collected)) >= min(260, max_chars):
+            if len(collected) >= 2 and len(" ".join(collected)) >= target_chars:
                 break
         if collected:
             return " ".join(collected)[:max_chars]

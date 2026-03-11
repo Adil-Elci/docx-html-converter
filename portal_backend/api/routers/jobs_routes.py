@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+import logging
 import os
 import re
 from typing import List, Optional
@@ -26,6 +27,7 @@ from ..automation_service import (
 )
 from ..db import get_db
 from ..internal_linking import upsert_publishing_site_article
+from ..publish_notifications import send_client_publish_notification
 from ..portal_models import Asset, Client, CreatorOutput, Job, JobEvent, Site, SiteCredential, Submission, User
 from ..portal_schemas import (
     AssetCreate,
@@ -45,6 +47,7 @@ from ..portal_schemas import (
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+logger = logging.getLogger("portal_backend.jobs")
 
 REJECTION_REASON_LABELS = {
     "quality_below_standard": "Content quality below publishing standard",
@@ -605,6 +608,10 @@ def publish_pending_job(
     )
     db.commit()
     db.refresh(job)
+    try:
+        send_client_publish_notification(db, job_id=job.id, post_payload=post_payload)
+    except Exception:
+        logger.exception("jobs.publish_notification_failed job_id=%s", job.id)
     return PendingJobPublishOut(job=_job_to_out(job))
 
 
@@ -959,6 +966,36 @@ def preview_pending_job_draft(
       border-radius: 6px;
       padding: 1px 6px;
     }}
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin: 0 0 18px;
+    }}
+    .copy-btn {{
+      appearance: none;
+      border: 1px solid #2563eb;
+      background: #2563eb;
+      color: #fff;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .copy-btn.secondary {{
+      background: #fff;
+      color: #2563eb;
+    }}
+    .copy-btn:hover {{
+      opacity: 0.94;
+    }}
+    .copy-status {{
+      color: #475569;
+      font-size: 14px;
+      min-height: 20px;
+    }}
     h1 {{
       margin-top: 0;
       margin-bottom: 12px;
@@ -991,6 +1028,11 @@ def preview_pending_job_draft(
       <div>Status: <code>{escape(status_value)}</code></div>
       <div>Slug: <code>{escape(slug_value)}</code></div>
     </div>
+    <div class="actions">
+      <button id="copy-rich-draft" class="copy-btn" type="button">Copy draft with links</button>
+      <button id="copy-html-draft" class="copy-btn secondary" type="button">Copy HTML</button>
+      <span id="copy-status" class="copy-status" role="status" aria-live="polite"></span>
+    </div>
     <h1>{escape(title)}</h1>
     {"<div class='featured-image'><img src='" + escape(featured_image_url) + "' alt='Featured image' /></div>" if featured_image_url else ""}
     {"<div class='excerpt'>" + excerpt_html + "</div>" if excerpt_html else ""}
@@ -998,8 +1040,125 @@ def preview_pending_job_draft(
   </div>
   <script>
     (function () {{
+      const copyRichButton = document.getElementById("copy-rich-draft");
+      const copyHtmlButton = document.getElementById("copy-html-draft");
+      const copyStatus = document.getElementById("copy-status");
+      const titleNode = document.querySelector(".wrap > h1");
+      const excerptNode = document.querySelector(".wrap > .excerpt");
       const article = document.getElementById("draft-article");
       if (!article) return;
+
+      const getDraftHtml = () => {{
+        const parts = [];
+        if (titleNode) {{
+          parts.push(titleNode.outerHTML);
+        }}
+        if (excerptNode) {{
+          parts.push(excerptNode.outerHTML);
+        }}
+        parts.push(article.innerHTML);
+        return parts.join("\\n");
+      }};
+
+      const getDraftPlainText = () => {{
+        const lines = [];
+        if (titleNode && titleNode.textContent) {{
+          lines.push(titleNode.textContent.trim());
+        }}
+        if (excerptNode && excerptNode.textContent) {{
+          lines.push(excerptNode.textContent.trim());
+        }}
+        if (article.textContent) {{
+          lines.push(article.textContent.trim());
+        }}
+        return lines.filter(Boolean).join("\\n\\n");
+      }};
+
+      const setCopyStatus = (message, isError = false) => {{
+        if (!copyStatus) return;
+        copyStatus.textContent = message;
+        copyStatus.style.color = isError ? "#b91c1c" : "#475569";
+      }};
+
+      const fallbackCopyRichText = (html, plainText) => {{
+        const container = document.createElement("div");
+        container.setAttribute("contenteditable", "true");
+        container.style.position = "fixed";
+        container.style.left = "-9999px";
+        container.style.top = "0";
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(container);
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        let copied = false;
+        try {{
+          copied = document.execCommand("copy");
+        }} catch {{
+          copied = false;
+        }}
+
+        selection.removeAllRanges();
+        document.body.removeChild(container);
+
+        if (copied) {{
+          return true;
+        }}
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          return navigator.clipboard.writeText(plainText).then(() => false);
+        }}
+        return false;
+      }};
+
+      const copyDraftRichText = async () => {{
+        const html = getDraftHtml();
+        const plainText = getDraftPlainText();
+        try {{
+          if (navigator.clipboard && window.ClipboardItem && navigator.clipboard.write) {{
+            await navigator.clipboard.write([
+              new ClipboardItem({{
+                "text/html": new Blob([html], {{ type: "text/html" }}),
+                "text/plain": new Blob([plainText], {{ type: "text/plain" }}),
+              }}),
+            ]);
+            setCopyStatus("Draft copied with links.");
+            return;
+          }}
+          const fallbackResult = await fallbackCopyRichText(html, plainText);
+          setCopyStatus(
+            fallbackResult ? "Draft copied with links." : "Copied plain text only. Use Copy HTML to preserve exact links.",
+            !fallbackResult
+          );
+        }} catch {{
+          setCopyStatus("Copy failed. Use Copy HTML as a fallback.", true);
+        }}
+      }};
+
+      const copyDraftHtml = async () => {{
+        try {{
+          const html = getDraftHtml();
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            await navigator.clipboard.writeText(html);
+            setCopyStatus("Draft HTML copied.");
+            return;
+          }}
+          setCopyStatus("Clipboard API unavailable in this browser.", true);
+        }} catch {{
+          setCopyStatus("Copy failed. Select the preview and copy manually.", true);
+        }}
+      }};
+
+      if (copyRichButton) {{
+        copyRichButton.addEventListener("click", copyDraftRichText);
+      }}
+      if (copyHtmlButton) {{
+        copyHtmlButton.addEventListener("click", copyDraftHtml);
+      }}
 
       const slugify = (value) => (value || "")
         .toLowerCase()

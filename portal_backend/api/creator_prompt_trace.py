@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _format_content_brief_prompt_text(content_brief: Dict[str, Any]) -> str:
@@ -223,3 +224,15 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
         ]
 
     return creator_output
+
+
+def normalize_prompt_trace_payload(
+    creator_output: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+    working_payload = copy.deepcopy(creator_output) if isinstance(creator_output, dict) else {}
+    normalized_payload = ensure_prompt_trace_in_creator_output(working_payload)
+    debug = normalized_payload.get("debug") if isinstance(normalized_payload.get("debug"), dict) else {}
+    prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
+    planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
+    writer_prompt_trace = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
+    return normalized_payload, planner_trace, writer_prompt_trace

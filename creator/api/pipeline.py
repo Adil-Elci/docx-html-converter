@@ -1082,7 +1082,7 @@ def _compact_pair_fit_profile(profile: Dict[str, Any], *, site_kind: str) -> Dic
 
 
 def _phase1_from_target_profile(profile: Dict[str, Any], *, target_site_url: str) -> Dict[str, Any]:
-    brand_name = str(profile.get("page_title") or "").strip()
+    brand_name = _normalize_brand_name(str(profile.get("page_title") or "").strip())
     if not brand_name:
         brand_name = _guess_brand_name(target_site_url, "")
     keyword_cluster = _merge_string_lists(
@@ -1944,6 +1944,20 @@ def _guess_brand_name(target_url: str, html: str) -> str:
     return host.replace("www.", "").split(".")[0].replace("-", " ").title()
 
 
+def _normalize_brand_name(value: str) -> str:
+    cleaned = html.unescape(str(value or "")).strip()
+    if not cleaned:
+        return ""
+    domain_match = re.search(r"\b([\w-]+(?:\.[\w-]+)+)\b", cleaned)
+    if domain_match:
+        return domain_match.group(1).strip()
+    for sep in ("|", "–", ":", " - "):
+        if sep in cleaned:
+            cleaned = cleaned.split(sep, 1)[0].strip()
+            break
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _pick_backlink_url(target_url: str, html: str) -> str:
     canonical = extract_canonical_link(html)
     if canonical:
@@ -1960,10 +1974,12 @@ def _pick_backlink_url(target_url: str, html: str) -> str:
 def _is_anchor_safe(anchor: Optional[str]) -> bool:
     if not anchor:
         return False
-    cleaned = anchor.strip()
+    cleaned = _normalize_brand_name(anchor) or anchor.strip()
     if len(cleaned) < 2 or len(cleaned) > 80:
         return False
     if re.search(r"https?://", cleaned):
+        return False
+    if _anchor_text_has_promotional_noise(cleaned):
         return False
     lowered = cleaned.lower()
     if any(term in lowered for term in ["visit our", "buy now", "click here", "limited time"]):
@@ -1971,9 +1987,24 @@ def _is_anchor_safe(anchor: Optional[str]) -> bool:
     return True
 
 
+def _anchor_text_has_promotional_noise(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(html.unescape(str(value or "")).strip())
+    if not normalized:
+        return True
+    tokens = set(normalized.split())
+    promo_hits = tokens & PAIR_FIT_PROMO_TOKENS
+    ui_hits = tokens & GENERIC_UI_CHROME_TOKENS
+    if promo_hits or {"onlineshop", "shop"} & tokens:
+        return True
+    if ui_hits and len(tokens) <= len(ui_hits) + 1:
+        return True
+    return False
+
+
 def _build_anchor_text(anchor_type: str, brand_name: str, keyword_cluster: List[str]) -> str:
-    if anchor_type == "brand" and brand_name:
-        return brand_name
+    normalized_brand = _normalize_brand_name(brand_name)
+    if anchor_type == "brand" and normalized_brand and not _anchor_text_has_promotional_noise(normalized_brand):
+        return normalized_brand
     if anchor_type == "partial_match" and keyword_cluster:
         return " ".join(keyword_cluster[:3]).title()
     return "Weitere Informationen"
@@ -2383,6 +2414,31 @@ def _build_content_brief(
         "style_cues": style_cues,
         "fit_reason": fit_reason,
     }
+
+
+def _select_signature_target_terms(
+    *,
+    topic: str,
+    target_profile: Dict[str, Any],
+    content_brief: Optional[Dict[str, Any]],
+    overlap_terms: List[str],
+    max_items: int = 8,
+) -> List[str]:
+    relevant_profile_terms = _select_topic_relevant_signals(
+        topic=topic,
+        values=_merge_string_lists(
+            target_profile.get("services_or_products") or [],
+            target_profile.get("topics") or [],
+            max_items=20,
+        ),
+        overlap_terms=overlap_terms,
+        max_items=max_items,
+    )
+    return _merge_string_lists(
+        [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
+        relevant_profile_terms,
+        max_items=max_items,
+    )
 
 
 def _format_content_brief_prompt_text(content_brief: Dict[str, Any]) -> str:
@@ -6618,12 +6674,14 @@ def run_creator_pipeline(
         target_profile=target_profile,
         publishing_profile=publishing_profile,
     )
-    signature_target_terms = _merge_string_lists(
-        [str(item).strip() for item in (target_profile.get("services_or_products") or []) if str(item).strip()],
-        [str(item).strip() for item in ((phase3.get("content_brief") or {}).get("target_signals") or []) if str(item).strip()],
+    signature_overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()]
+    signature_target_terms = _select_signature_target_terms(
+        topic=phase3.get("final_article_topic", ""),
+        target_profile=target_profile,
+        content_brief=phase3.get("content_brief") or {},
+        overlap_terms=signature_overlap_terms,
         max_items=8,
     )
-    signature_overlap_terms = [str(item).strip() for item in (pair_fit.get("overlap_terms") or []) if str(item).strip()]
     keyword_selection = _select_keywords(
         topic=phase3.get("final_article_topic", ""),
         llm_primary=phase3.get("primary_keyword", ""),

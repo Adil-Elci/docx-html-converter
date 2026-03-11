@@ -38,7 +38,9 @@ from creator.api.pipeline import (
     _repair_keyword_context_gaps,
     _render_article_from_plan,
     _run_pair_fit_reasoning,
+    _select_signature_target_terms,
     _sanitize_editorial_phrase,
+    _phase1_from_target_profile,
     _normalize_faq_section_questions,
     run_creator_pipeline,
     _select_keywords,
@@ -146,6 +148,41 @@ def test_extract_keywords_filters_ui_chrome_tokens():
     assert "menu" not in keywords
     assert "suche" not in keywords
     assert "augenschutz" in keywords
+
+
+def test_phase1_from_target_profile_normalizes_brand_name_from_promotional_page_title():
+    phase1 = _phase1_from_target_profile(
+        {
+            "page_title": "Brillenhaus24.de – Ihr Onlineshop fuer guenstige Brillen & Komplettbrillen",
+            "repeated_keywords": ["sonnenbrillen", "kinder", "uv schutz"],
+            "topics": ["Sonnenbrillen fuer Kinder"],
+            "services_or_products": ["Sonnenbrillen fuer Kinder"],
+        },
+        target_site_url="https://www.brillenhaus24.de/sonnenbrillen-kinder",
+    )
+
+    assert phase1["brand_name"] == "Brillenhaus24.de"
+
+
+def test_select_signature_target_terms_keeps_relevant_target_terms_only():
+    terms = _select_signature_target_terms(
+        topic="Sonnenbrillen fuer Kinder",
+        target_profile={
+            "services_or_products": [
+                "Sonnenbrillen fuer Kinder",
+                "Kinderbrillen",
+                "Hoerhilfe bei Kindern",
+            ],
+            "topics": ["Augenschutz fuer Kinderaugen", "Sehhilfen im Alltag"],
+        },
+        content_brief={
+            "target_signals": ["Sonnenbrillen fuer Kinder", "UV Schutz fuer Kinderaugen"],
+        },
+        overlap_terms=["kinder", "schutz"],
+    )
+
+    assert any("sonnenbrillen" in item.lower() for item in terms)
+    assert not any("hoerhilfe" in item.lower() for item in terms)
 
 
 def test_select_keywords_does_not_reuse_irrelevant_allowed_topics_as_support_phrases():

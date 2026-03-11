@@ -5,7 +5,7 @@ from html import escape
 import logging
 import os
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -84,6 +84,69 @@ def _job_to_out(job: Job) -> JobOut:
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+def _get_latest_creator_output_payload(db: Session, job_id: UUID) -> Dict[str, Any]:
+    row = (
+        db.query(CreatorOutput.payload)
+        .filter(CreatorOutput.job_id == job_id)
+        .order_by(CreatorOutput.created_at.desc())
+        .first()
+    )
+    if not row:
+        return {}
+    payload = row[0]
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_creator_debug_payload(job: Job, creator_output: Dict[str, Any]) -> Dict[str, Any]:
+    debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
+    phase3 = creator_output.get("phase3") if isinstance(creator_output.get("phase3"), dict) else {}
+    phase4 = creator_output.get("phase4") if isinstance(creator_output.get("phase4"), dict) else {}
+    prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
+    planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
+    writer_attempts = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
+    planning_quality = debug.get("planning_quality") if isinstance(debug.get("planning_quality"), dict) else {}
+    keyword_selection = debug.get("keyword_selection") if isinstance(debug.get("keyword_selection"), dict) else {}
+    internal_linking = debug.get("internal_linking") if isinstance(debug.get("internal_linking"), dict) else {}
+    quality_scores = debug.get("quality_scores") if isinstance(debug.get("quality_scores"), dict) else {}
+
+    if not planner_trace:
+        planner_trace = {
+            "mode": "deterministic",
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "input_packet": {
+                        "topic": str(phase3.get("final_article_topic") or "").strip(),
+                        "primary_keyword": str(phase3.get("primary_keyword") or "").strip(),
+                        "secondary_keywords": phase3.get("secondary_keywords") or [],
+                        "intent_type": str(phase3.get("search_intent_type") or keyword_selection.get("intent_type") or "").strip(),
+                        "article_angle": str(phase3.get("article_angle") or keyword_selection.get("article_angle") or "").strip(),
+                        "topic_class": str(phase3.get("topic_class") or keyword_selection.get("topic_class") or "").strip(),
+                        "style_profile": phase3.get("style_profile") or keyword_selection.get("style_profile") or {},
+                        "specificity_profile": phase3.get("specificity_profile") or keyword_selection.get("specificity_profile") or {},
+                        "title_package": phase3.get("title_package") or keyword_selection.get("title_package") or {},
+                        "content_brief": phase3.get("content_brief") or keyword_selection.get("content_brief") or {},
+                        "faq_candidates": phase3.get("faq_candidates") or keyword_selection.get("faq_candidates") or [],
+                        "internal_link_candidates": internal_linking.get("candidates") or [],
+                    },
+                    "plan": phase4,
+                    "planning_quality": planning_quality,
+                }
+            ],
+        }
+
+    return {
+        "job_id": job.id,
+        "job_status": job.job_status,
+        "planner": planner_trace,
+        "writer_attempts": writer_attempts,
+        "quality_scores": quality_scores,
+        "planning_quality": planning_quality,
+        "internal_linking": internal_linking,
+        "writer_prompt_recorded": bool(writer_attempts),
+    }
 
 
 def _event_to_out(event: JobEvent) -> JobEventOut:
@@ -496,6 +559,24 @@ def get_job(
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
     return _job_to_out(job)
+
+
+@router.get("/{job_id}/creator-debug")
+def get_job_creator_debug(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    job = _get_job_or_404(db, job_id)
+    if current_user.role != "admin":
+        ensure_client_access(db, current_user, job.client_id)
+        ensure_site_access(db, current_user, job.site_id)
+
+    creator_output = _get_latest_creator_output_payload(db, job.id)
+    if not creator_output:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No creator output found for this job.")
+
+    return _build_creator_debug_payload(job, creator_output)
 
 
 @router.patch("/{job_id}", response_model=JobOut)

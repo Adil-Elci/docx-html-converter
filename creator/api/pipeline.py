@@ -6133,6 +6133,7 @@ def _generate_article_from_plan(
     http_timeout: int,
     max_tokens: int,
     validation_feedback: Optional[List[str]] = None,
+    prompt_trace: Optional[List[Dict[str, Any]]] = None,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
@@ -6231,6 +6232,20 @@ def _generate_article_from_plan(
     if validation_feedback:
         user_prompt += f"\nPrevious validation issues to fix exactly: {validation_feedback}"
 
+    request_label = "phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry"
+    if prompt_trace is not None:
+        prompt_trace.append(
+            {
+                "attempt": len(prompt_trace) + 1,
+                "request_label": request_label,
+                "model": llm_model,
+                "max_tokens": max_tokens,
+                "validation_feedback": list(validation_feedback or []),
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+
     raw_text = call_llm_text(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
@@ -6240,7 +6255,7 @@ def _generate_article_from_plan(
         timeout_seconds=http_timeout,
         max_tokens=max_tokens,
         temperature=0.2,
-        request_label="phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry",
+        request_label=request_label,
         usage_collector=usage_collector,
     )
     llm_out = _parse_writer_tagged_response(raw_text=raw_text, article_plan=article_plan)
@@ -7558,6 +7573,13 @@ def run_creator_pipeline(
         "fetched_pages": [],
         "tokens_by_phase": tokens_by_phase,
         "tokens_by_label": tokens_by_label,
+        "prompt_trace": {
+            "planner": {
+                "mode": "deterministic",
+                "attempts": [],
+            },
+            "writer_attempts": [],
+        },
     }
     current_year = datetime.datetime.now().year
 
@@ -8027,6 +8049,35 @@ def run_creator_pipeline(
         article_angle=phase3.get("article_angle", ""),
         topic_signature=phase3.get("topic_signature"),
     )
+    planner_prompt_trace = (
+        (debug.get("prompt_trace") or {}).get("planner")
+        if isinstance(debug.get("prompt_trace"), dict)
+        else None
+    )
+    if isinstance(planner_prompt_trace, dict):
+        planner_attempts = planner_prompt_trace.setdefault("attempts", [])
+        if isinstance(planner_attempts, list):
+            planner_attempts.append(
+                {
+                    "attempt": len(planner_attempts) + 1,
+                    "input_packet": {
+                        "topic": phase3.get("final_article_topic", ""),
+                        "primary_keyword": phase3.get("primary_keyword", ""),
+                        "secondary_keywords": phase3.get("secondary_keywords") or [],
+                        "intent_type": phase3.get("search_intent_type", ""),
+                        "article_angle": phase3.get("article_angle", ""),
+                        "topic_class": phase3.get("topic_class", ""),
+                        "style_profile": phase3.get("style_profile") or {},
+                        "specificity_profile": phase3.get("specificity_profile") or {},
+                        "title_package": phase3.get("title_package") or {},
+                        "content_brief": phase3.get("content_brief") or {},
+                        "faq_candidates": phase3.get("faq_candidates") or [],
+                        "internal_link_candidates": internal_links_prompt_entries[:8],
+                    },
+                    "plan": phase4,
+                    "planning_quality": plan_quality,
+                }
+            )
     if plan_quality["errors"]:
         warnings.append("phase4_plan_regenerated")
         debug["rejection_reason"] = plan_quality["errors"]
@@ -8055,6 +8106,30 @@ def run_creator_pipeline(
             article_angle=phase3.get("article_angle", ""),
             topic_signature=phase3.get("topic_signature"),
         )
+        if isinstance(planner_prompt_trace, dict):
+            planner_attempts = planner_prompt_trace.setdefault("attempts", [])
+            if isinstance(planner_attempts, list):
+                planner_attempts.append(
+                    {
+                        "attempt": len(planner_attempts) + 1,
+                        "input_packet": {
+                            "topic": phase3.get("final_article_topic", ""),
+                            "primary_keyword": phase3.get("primary_keyword", ""),
+                            "secondary_keywords": phase3.get("secondary_keywords") or [],
+                            "intent_type": phase3.get("search_intent_type", ""),
+                            "article_angle": phase3.get("article_angle", ""),
+                            "topic_class": phase3.get("topic_class", ""),
+                            "style_profile": phase3.get("style_profile") or {},
+                            "specificity_profile": phase3.get("specificity_profile") or {},
+                            "title_package": phase3.get("title_package") or {},
+                            "content_brief": phase3.get("content_brief") or {},
+                            "faq_candidates": phase3.get("faq_candidates") or [],
+                            "internal_link_candidates": internal_links_prompt_entries[:8],
+                        },
+                        "plan": phase4,
+                        "planning_quality": plan_quality,
+                    }
+                )
     if plan_quality["errors"]:
         raise CreatorError(f"Phase 4 plan invalid: {plan_quality['errors']}")
     faq_candidates = phase4.get("faq_questions") or []
@@ -8098,6 +8173,7 @@ def run_creator_pipeline(
                 http_timeout=http_timeout,
                 max_tokens=writer_max_tokens,
                 validation_feedback=writer_feedback if writer_feedback else None,
+                prompt_trace=((debug.get("prompt_trace") or {}).get("writer_attempts") if isinstance(debug.get("prompt_trace"), dict) else None),
                 usage_collector=_collect_llm_usage,
             )
         except LLMError as exc:

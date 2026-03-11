@@ -1191,6 +1191,11 @@ def test_run_creator_pipeline_uses_deterministic_plan_and_single_writer_call(mon
     assert "<h2>FAQ</h2>" in result["phase5"]["article_html"]
     assert "<h2>Fazit</h2>" in result["phase5"]["article_html"]
     assert 'href="https://www.brillenhaus24.de/"' in result["phase5"]["article_html"]
+    prompt_trace = result["debug"]["prompt_trace"]
+    assert prompt_trace["planner"]["mode"] == "deterministic"
+    assert prompt_trace["planner"]["attempts"][0]["input_packet"]["intent_type"] == "informational"
+    assert prompt_trace["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"
+    assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["system_prompt"] or "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
 def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_no_relevant_matches(monkeypatch):

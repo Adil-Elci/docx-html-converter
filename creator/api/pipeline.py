@@ -7759,6 +7759,47 @@ def _build_planner_prompt_trace_entry(
     }
 
 
+def _build_execution_trace_event(
+    *,
+    level: str,
+    phase: str,
+    event: str,
+    message: str = "",
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "level": str(level or "info").strip().lower() or "info",
+        "phase": str(phase or "unknown").strip() or "unknown",
+        "event": str(event or "unknown").strip() or "unknown",
+    }
+    if str(message or "").strip():
+        payload["message"] = str(message).strip()
+    if isinstance(details, dict) and details:
+        payload["details"] = details
+    return payload
+
+
+def _append_execution_trace_event(
+    trace: List[Dict[str, Any]],
+    *,
+    level: str,
+    phase: str,
+    event: str,
+    message: str = "",
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    trace.append(
+        _build_execution_trace_event(
+            level=level,
+            phase=phase,
+            event=event,
+            message=message,
+            details=details,
+        )
+    )
+
+
 def _build_partial_creator_output(
     *,
     target_site_url: str,
@@ -7806,6 +7847,8 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
     if not debug:
         debug = {}
         creator_output["debug"] = debug
+    if not isinstance(debug.get("creator_trace"), list):
+        debug["creator_trace"] = []
 
     prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
     if not prompt_trace:
@@ -9468,6 +9511,7 @@ def run_creator_pipeline(
         "dry_run": dry_run,
         "timings_ms": {},
         "fetched_pages": [],
+        "creator_trace": [],
         "tokens_by_phase": tokens_by_phase,
         "tokens_by_label": tokens_by_label,
         "prompt_trace": {
@@ -9479,6 +9523,19 @@ def run_creator_pipeline(
             "repair_attempts": [],
         },
     }
+    creator_trace: List[Dict[str, Any]] = debug["creator_trace"]
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="pipeline",
+        event="start",
+        message="Creator pipeline started.",
+        details={
+            "target_site_url": target_site_url,
+            "publishing_site_url": publishing_site_url,
+            "dry_run": bool(dry_run),
+        },
+    )
     current_year = datetime.datetime.now().year
 
     execution_policy = _build_pipeline_execution_policy()
@@ -9571,6 +9628,14 @@ def run_creator_pipeline(
     progress(1, PHASE_LABELS[1], 0)
     phase_start = time.time()
     logger.info("creator.phase1.start target=%s", target_site_url)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase1",
+        event="start",
+        message="Target profile analysis started.",
+        details={"target_site_url": target_site_url},
+    )
     normalized_target_url = _normalize_url(target_site_url)
     target_content_hash = (target_profile_content_hash or "").strip() or _hash_text(
         json.dumps(target_profile, sort_keys=True, ensure_ascii=False)
@@ -9627,11 +9692,31 @@ def run_creator_pipeline(
         "cache_fallback_used": phase1_cache_warm,
     }
     debug["timings_ms"]["phase1"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase1",
+        event="complete",
+        message="Target profile analysis completed.",
+        details={
+            "brand_name": brand_name,
+            "keyword_cluster_count": len(keyword_cluster),
+            "timing_ms": debug["timings_ms"]["phase1"],
+        },
+    )
     progress(1, PHASE_LABELS[1], 14)
 
     progress(2, PHASE_LABELS[2], 14)
     phase_start = time.time()
     logger.info("creator.phase2.start publishing=%s", publishing_site_url)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase2",
+        event="start",
+        message="Publishing profile analysis started.",
+        details={"publishing_site_url": publishing_site_url},
+    )
     normalized_publishing_url = _normalize_url(publishing_site_url)
     inventory_topic_insights = _build_inventory_topic_insights(provided_internal_link_inventory)
     publishing_content_hash = (publishing_profile_content_hash or "").strip() or _hash_text(
@@ -9681,11 +9766,31 @@ def run_creator_pipeline(
         "cache_fallback_used": phase2_cache_warm,
     }
     debug["timings_ms"]["phase2"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase2",
+        event="complete",
+        message="Publishing profile analysis completed.",
+        details={
+            "allowed_topics_count": len(phase2.get("allowed_topics") or []),
+            "inventory_category_count": len(phase2.get("site_categories") or []),
+            "timing_ms": debug["timings_ms"]["phase2"],
+        },
+    )
     progress(2, PHASE_LABELS[2], 28)
 
     progress(3, PHASE_LABELS[3], 28)
     phase_start = time.time()
     logger.info("creator.phase3.start")
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase3",
+        event="start",
+        message="Topic and keyword planning started.",
+        details={"requested_topic": str(topic or "").strip()},
+    )
     safe_exclude = list(exclude_topics or [])
     requested_topic = (topic or "").strip()
     target_profile_for_fit = target_profile
@@ -9725,8 +9830,27 @@ def run_creator_pipeline(
             or "no_natural_semantic_fit"
         ).strip()
         if not allow_rejected_pairs_for_testing:
+            _append_execution_trace_event(
+                creator_trace,
+                level="error",
+                phase="phase3",
+                event="pair_fit_rejected",
+                message="Pair fit rejected the target and publishing site combination.",
+                details={"rejection_reason": rejection_reason},
+            )
             raise CreatorError(f"Pair fit rejected: {rejection_reason}")
         warnings.append(f"pair_fit_override_enabled:{final_match_decision}")
+        _append_execution_trace_event(
+            creator_trace,
+            level="warning",
+            phase="phase3",
+            event="pair_fit_override_enabled",
+            message="Pair fit rejection was overridden for testing.",
+            details={
+                "final_match_decision": final_match_decision,
+                "rejection_reason": rejection_reason,
+            },
+        )
     elif final_match_decision == "accepted":
         pair_fit["backlink_fit_ok"] = True
 
@@ -9966,11 +10090,32 @@ def run_creator_pipeline(
         "inventory_matches": ranked_internal_link_inventory[:5],
     }
     debug["timings_ms"]["phase3"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase3",
+        event="complete",
+        message="Topic and keyword planning completed.",
+        details={
+            "final_article_topic": phase3.get("final_article_topic", ""),
+            "intent_type": phase3.get("search_intent_type", ""),
+            "topic_class": phase3.get("topic_class", ""),
+            "internal_link_candidate_count": len(internal_link_candidates),
+            "timing_ms": debug["timings_ms"]["phase3"],
+        },
+    )
     progress(3, PHASE_LABELS[3], 42)
 
     progress(4, PHASE_LABELS[4], 42)
     phase_start = time.time()
     logger.info("creator.phase4.start")
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase4",
+        event="start",
+        message="Deterministic article planning started.",
+    )
     anchor_safe = _is_anchor_safe(anchor)
     phase4 = _build_deterministic_article_plan(
         phase1=phase1,
@@ -10023,6 +10168,14 @@ def run_creator_pipeline(
             )
     if plan_quality["errors"]:
         warnings.append("phase4_plan_regenerated")
+        _append_execution_trace_event(
+            creator_trace,
+            level="warning",
+            phase="phase4",
+            event="plan_regenerated",
+            message="The first outline failed validation and was regenerated.",
+            details={"errors": plan_quality["errors"]},
+        )
         debug["rejection_reason"] = plan_quality["errors"]
         repaired_topic = _select_phase4_repair_topic(
             requested_topic=topic or "",
@@ -10143,6 +10296,14 @@ def run_creator_pipeline(
                     }
                 )
     if plan_quality["errors"]:
+        _append_execution_trace_event(
+            creator_trace,
+            level="error",
+            phase="phase4",
+            event="plan_invalid",
+            message="Deterministic article plan failed validation.",
+            details={"errors": plan_quality["errors"]},
+        )
         partial_output = _build_partial_creator_output(
             target_site_url=target_site_url,
             publishing_site_url=publishing_site_url,
@@ -10173,11 +10334,30 @@ def run_creator_pipeline(
     debug["article_plan"] = phase4
     debug["planning_quality"] = plan_quality
     debug["timings_ms"]["phase4"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase4",
+        event="complete",
+        message="Deterministic article plan completed.",
+        details={
+            "h1": phase4.get("h1", ""),
+            "section_count": len(phase4.get("sections") or []),
+            "timing_ms": debug["timings_ms"]["phase4"],
+        },
+    )
     progress(4, PHASE_LABELS[4], 56)
 
     progress(5, PHASE_LABELS[5], 56)
     phase_start = time.time()
     logger.info("creator.phase5.start")
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase5",
+        event="start",
+        message="Article writing started.",
+    )
     article_payload = None
     last_phase5_candidate: Optional[Dict[str, Any]] = None
     errors: List[str] = []
@@ -10190,6 +10370,14 @@ def run_creator_pipeline(
         else None
     )
     for attempt in range(1, phase5_max_attempts + 1):
+        _append_execution_trace_event(
+            creator_trace,
+            level="info",
+            phase="phase5",
+            event="writer_attempt_start",
+            message="Writer attempt started.",
+            details={"attempt": attempt},
+        )
         try:
             writer_max_tokens = max(
                 phase5_max_tokens_attempt1 if attempt == 1 else phase5_max_tokens_retry,
@@ -10215,6 +10403,14 @@ def run_creator_pipeline(
             )
         except LLMError as exc:
             if strict_failure_mode:
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="error",
+                    phase="phase5",
+                    event="writer_call_failed",
+                    message="Writer call failed in strict mode.",
+                    details={"attempt": attempt, "error": str(exc)},
+                )
                 partial_output = _build_partial_creator_output(
                     target_site_url=target_site_url,
                     publishing_site_url=publishing_site_url,
@@ -10236,6 +10432,14 @@ def run_creator_pipeline(
                     f"Phase 5 writer attempt {attempt} failed: {exc}",
                     details={"creator_output": partial_output},
                 ) from exc
+            _append_execution_trace_event(
+                creator_trace,
+                level="warning",
+                phase="phase5",
+                event="writer_call_failed",
+                message="Writer call failed and will be retried.",
+                details={"attempt": attempt, "error": str(exc)},
+            )
             errors.append(str(exc))
             continue
 
@@ -10247,6 +10451,14 @@ def run_creator_pipeline(
         last_phase5_candidate = dict(phase5_candidate)
         wc = word_count_from_html(phase5_candidate["article_html"])
         logger.info("creator.phase5.attempt attempt=%s mode=planned word_count=%s", attempt, wc)
+        _append_execution_trace_event(
+            creator_trace,
+            level="info",
+            phase="phase5",
+            event="writer_attempt_complete",
+            message="Writer attempt returned an article draft.",
+            details={"attempt": attempt, "word_count": wc},
+        )
 
         validation_errors = _collect_article_validation_errors(
             article_html=phase5_candidate["article_html"],
@@ -10271,6 +10483,14 @@ def run_creator_pipeline(
         )
 
         if validation_errors:
+            _append_execution_trace_event(
+                creator_trace,
+                level="warning",
+                phase="phase5",
+                event="validation_failed",
+                message="Writer draft failed deterministic validation.",
+                details={"attempt": attempt, "errors": validation_errors},
+            )
             repaired_html = phase5_candidate["article_html"]
             if any(_is_keyword_context_repairable_error(error) for error in validation_errors):
                 repaired_html = _repair_keyword_context_gaps(
@@ -10332,6 +10552,18 @@ def run_creator_pipeline(
                 latest_errors = list(validation_errors)
                 repaired_success_payload: Optional[Dict[str, Any]] = None
                 for repair_attempt in range(1, phase7_repair_attempts + 1):
+                    _append_execution_trace_event(
+                        creator_trace,
+                        level="info",
+                        phase="phase5",
+                        event="repair_attempt_start",
+                        message="LLM repair attempt started.",
+                        details={
+                            "writer_attempt": attempt,
+                            "repair_attempt": repair_attempt,
+                            "errors": repairable_errors,
+                        },
+                    )
                     try:
                         repaired_payload = _repair_article_with_llm(
                             article_html=phase5_candidate["article_html"],
@@ -10354,6 +10586,18 @@ def run_creator_pipeline(
                             usage_collector=_collect_llm_usage,
                         )
                     except LLMError as exc:
+                        _append_execution_trace_event(
+                            creator_trace,
+                            level="warning",
+                            phase="phase5",
+                            event="repair_call_failed",
+                            message="LLM repair attempt failed.",
+                            details={
+                                "writer_attempt": attempt,
+                                "repair_attempt": repair_attempt,
+                                "error": str(exc),
+                            },
+                        )
                         latest_errors = _dedupe_string_values(latest_errors + [f"repair_call_failed:{exc}"])
                         continue
                     repaired_candidate = _apply_deterministic_article_metadata(
@@ -10383,8 +10627,28 @@ def run_creator_pipeline(
                         specificity_profile=phase3.get("specificity_profile"),
                     )
                     if not latest_errors:
+                        _append_execution_trace_event(
+                            creator_trace,
+                            level="info",
+                            phase="phase5",
+                            event="repair_attempt_complete",
+                            message="LLM repair attempt fixed the draft.",
+                            details={"writer_attempt": attempt, "repair_attempt": repair_attempt},
+                        )
                         repaired_success_payload = repaired_candidate
                         break
+                    _append_execution_trace_event(
+                        creator_trace,
+                        level="warning",
+                        phase="phase5",
+                        event="repair_attempt_incomplete",
+                        message="LLM repair attempt still left validation issues.",
+                        details={
+                            "writer_attempt": attempt,
+                            "repair_attempt": repair_attempt,
+                            "errors": latest_errors,
+                        },
+                    )
                     repairable_errors = _dedupe_string_values(
                         [error for error in latest_errors if _is_editorial_llm_repairable_error(error)]
                     )
@@ -10396,6 +10660,14 @@ def run_creator_pipeline(
                 article_payload = phase5_candidate
                 break
             if strict_failure_mode:
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="error",
+                    phase="phase5",
+                    event="validation_failed_strict",
+                    message="Writer validation failed in strict mode.",
+                    details={"attempt": attempt, "errors": validation_errors},
+                )
                 partial_output = _build_partial_creator_output(
                     target_site_url=target_site_url,
                     publishing_site_url=publishing_site_url,
@@ -10427,6 +10699,14 @@ def run_creator_pipeline(
 
     if not article_payload:
         phase5_errors = _dedupe_string_values(errors)
+        _append_execution_trace_event(
+            creator_trace,
+            level="error",
+            phase="phase5",
+            event="writer_failed",
+            message="Article writing failed after all attempts.",
+            details={"errors": phase5_errors},
+        )
         partial_output = _build_partial_creator_output(
             target_site_url=target_site_url,
             publishing_site_url=publishing_site_url,
@@ -10461,11 +10741,29 @@ def run_creator_pipeline(
     phase5 = article_payload
     debug["faq_enrichment"] = {"enabled": False, "applied": False, "generation_mode": "writer_inline"}
     debug["timings_ms"]["phase5"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase5",
+        event="complete",
+        message="Article writing completed.",
+        details={
+            "word_count": word_count_from_html(phase5["article_html"]),
+            "timing_ms": debug["timings_ms"]["phase5"],
+        },
+    )
     progress(5, PHASE_LABELS[5], 70)
 
     progress(6, PHASE_LABELS[6], 70)
     phase_start = time.time()
     logger.info("creator.phase6.start")
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase6",
+        event="start",
+        message="Image generation started.",
+    )
     phase6 = {
         "image_model": "Leonardo Flux Schnell",
         "featured_image": {},
@@ -10498,6 +10796,13 @@ def run_creator_pipeline(
     in_content_image_url = ""
     if not image_generation_enabled:
         warnings.append("phase6_image_generation_disabled")
+        _append_execution_trace_event(
+            creator_trace,
+            level="warning",
+            phase="phase6",
+            event="image_generation_disabled",
+            message="Image generation is disabled.",
+        )
         logger.info("creator.phase6.skip reason=image_generation_disabled")
         include_in_content = False
     elif not dry_run:
@@ -10515,8 +10820,24 @@ def run_creator_pipeline(
             )
         except CreatorError as exc:
             if not execution_policy["phase6_image_soft_fail"]:
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="error",
+                    phase="phase6",
+                    event="featured_image_failed",
+                    message="Featured image generation failed in strict mode.",
+                    details={"error": str(exc)},
+                )
                 raise CreatorError(f"Phase 6 featured image generation failed: {exc}") from exc
             warnings.append(f"phase6_featured_image_failed:{exc}")
+            _append_execution_trace_event(
+                creator_trace,
+                level="warning",
+                phase="phase6",
+                event="featured_image_failed",
+                message="Featured image generation failed but the pipeline continued.",
+                details={"error": str(exc)},
+            )
             featured_image_url = ""
             include_in_content = False
 
@@ -10535,11 +10856,34 @@ def run_creator_pipeline(
                 )
             except CreatorError as exc:
                 if not execution_policy["phase6_image_soft_fail"]:
+                    _append_execution_trace_event(
+                        creator_trace,
+                        level="error",
+                        phase="phase6",
+                        event="in_content_image_failed",
+                        message="In-content image generation failed in strict mode.",
+                        details={"error": str(exc)},
+                    )
                     raise CreatorError(f"Phase 6 in-content image generation failed: {exc}") from exc
                 warnings.append(f"phase6_in_content_image_failed:{exc}")
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="warning",
+                    phase="phase6",
+                    event="in_content_image_failed",
+                    message="In-content image generation failed but the pipeline continued.",
+                    details={"error": str(exc)},
+                )
                 in_content_image_url = ""
 
     if image_required and image_generation_enabled and not featured_image_url and not dry_run:
+        _append_execution_trace_event(
+            creator_trace,
+            level="error",
+            phase="phase6",
+            event="featured_image_required_missing",
+            message="Featured image generation was required but no image was produced.",
+        )
         raise CreatorError("Featured image generation failed.")
 
     phase6["featured_image"] = {
@@ -10553,12 +10897,32 @@ def run_creator_pipeline(
         "alt_text": in_content_alt,
     }
     debug["timings_ms"]["phase6"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase6",
+        event="complete",
+        message="Image generation completed.",
+        details={
+            "featured_image_generated": bool(featured_image_url),
+            "in_content_image_generated": bool(in_content_image_url),
+            "timing_ms": debug["timings_ms"]["phase6"],
+        },
+    )
     progress(6, PHASE_LABELS[6], 85)
 
     progress(7, PHASE_LABELS[7], 85)
     phase_start = time.time()
     p7_wc = word_count_from_html(phase5["article_html"])
     logger.info("creator.phase7.start word_count=%s", p7_wc)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase7",
+        event="start",
+        message="Final SEO validation started.",
+        details={"word_count": p7_wc},
+    )
     phase7_errors: List[str] = []
     phase5 = _apply_deterministic_article_metadata(
         phase5,
@@ -10570,6 +10934,13 @@ def run_creator_pipeline(
         topic_lower = (phase3["final_article_topic"] or "").lower()
         if not any(topic in topic_lower for topic in allowed_topics):
             warnings.append("topic_not_in_allowed_topics")
+            _append_execution_trace_event(
+                creator_trace,
+                level="warning",
+                phase="phase7",
+                event="topic_not_in_allowed_topics",
+                message="The selected topic is outside the strongest publishing-site topic list.",
+            )
     phase7_errors = _collect_article_validation_errors(
         article_html=phase5["article_html"],
         meta_title=phase5.get("meta_title") or phase3["title_package"]["meta_title"],
@@ -10601,8 +10972,24 @@ def run_creator_pipeline(
         current_wc = word_count_from_html(phase5["article_html"])
         logger.info("creator.phase7.issues errors=%s word_count=%s", phase7_errors, current_wc)
         phase7_errors = _dedupe_string_values(phase7_errors)
+        _append_execution_trace_event(
+            creator_trace,
+            level="warning",
+            phase="phase7",
+            event="validation_issues",
+            message="Final SEO validation found issues.",
+            details={"errors": phase7_errors, "word_count": current_wc},
+        )
 
     if phase7_errors:
+        _append_execution_trace_event(
+            creator_trace,
+            level="error",
+            phase="phase7",
+            event="validation_failed",
+            message="Final SEO validation failed.",
+            details={"errors": phase7_errors},
+        )
         raise CreatorError(f"Final SEO checks failed: {phase7_errors}")
 
     seo_evaluation = _score_seo_output(
@@ -10638,6 +11025,18 @@ def run_creator_pipeline(
     }
 
     debug["timings_ms"]["phase7"] = int((time.time() - phase_start) * 1000)
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="phase7",
+        event="complete",
+        message="Final SEO validation completed.",
+        details={
+            "coherence_score": seo_evaluation.get("coherence_score", 0),
+            "spam_risk_score": seo_evaluation.get("spam_risk_score", 0),
+            "timing_ms": debug["timings_ms"]["phase7"],
+        },
+    )
     progress(7, PHASE_LABELS[7], 100)
 
     images: List[Dict[str, str]] = []
@@ -10663,6 +11062,14 @@ def run_creator_pipeline(
         "cache_creation_input_tokens": sum(bucket.get("cache_creation_input_tokens", 0) for bucket in tokens_by_phase.values()),
         "cache_read_input_tokens": sum(bucket.get("cache_read_input_tokens", 0) for bucket in tokens_by_phase.values()),
     }
+    _append_execution_trace_event(
+        creator_trace,
+        level="info",
+        phase="pipeline",
+        event="complete",
+        message="Creator pipeline completed successfully.",
+        details={"warnings_count": len(warnings)},
+    )
 
     return ensure_prompt_trace_in_creator_output(
         {

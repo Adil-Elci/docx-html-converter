@@ -322,6 +322,8 @@ class CreatorOutput(Base):
     draft_article_html = Column(Text, nullable=False, default="")
     planner_trace = Column(JSONB, nullable=False, default=dict)
     writer_prompt_trace = Column(JSONB, nullable=False, default=list)
+    creator_trace = Column(JSONB, nullable=False, default=list)
+    backend_trace = Column(JSONB, nullable=False, default=list)
     payload = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

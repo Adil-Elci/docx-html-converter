@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from portal_backend.api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
+from portal_backend.api.creator_prompt_trace import (
+    append_execution_trace_event,
+    extract_draft_article_html,
+    normalize_execution_trace_payload,
+    normalize_prompt_trace_payload,
+)
 from portal_backend.scripts.backfill_creator_prompt_traces import backfill_creator_prompt_trace_columns
 
 
@@ -66,6 +71,40 @@ def test_extract_draft_article_html_reads_phase5_article_html() -> None:
     assert extract_draft_article_html(_legacy_creator_output()) == "<p>Artikelinhalt</p>"
 
 
+def test_normalize_execution_trace_payload_reads_debug_traces() -> None:
+    payload = _legacy_creator_output()
+    payload["debug"]["creator_trace"] = [{"phase": "phase4", "event": "complete"}]
+    payload["debug"]["backend_trace"] = [{"phase": "worker", "event": "payload_loaded"}]
+
+    normalized_payload, creator_trace, backend_trace = normalize_execution_trace_payload(payload)
+
+    assert creator_trace == [{"phase": "phase4", "event": "complete"}]
+    assert backend_trace == [{"phase": "worker", "event": "payload_loaded"}]
+    assert normalized_payload["debug"]["creator_trace"] == creator_trace
+    assert normalized_payload["debug"]["backend_trace"] == backend_trace
+
+
+def test_append_execution_trace_event_builds_structured_event() -> None:
+    trace: list[dict[str, object]] = []
+
+    append_execution_trace_event(
+        trace,
+        level="warning",
+        phase="internal_links",
+        event="inventory_live_fetch_failed",
+        message="Live fetch failed.",
+        details={"count": 0},
+    )
+
+    assert len(trace) == 1
+    assert trace[0]["level"] == "warning"
+    assert trace[0]["phase"] == "internal_links"
+    assert trace[0]["event"] == "inventory_live_fetch_failed"
+    assert trace[0]["message"] == "Live fetch failed."
+    assert trace[0]["details"] == {"count": 0}
+    assert "ts" in trace[0]
+
+
 class _FakeQuery:
     def __init__(self, rows: list[SimpleNamespace]) -> None:
         self._rows = rows
@@ -101,6 +140,8 @@ def test_backfill_creator_prompt_trace_columns_updates_empty_rows() -> None:
         draft_article_html="",
         planner_trace={},
         writer_prompt_trace=[],
+        creator_trace=[],
+        backend_trace=[],
     )
     session = _FakeSession([row])
 
@@ -110,6 +151,8 @@ def test_backfill_creator_prompt_trace_columns_updates_empty_rows() -> None:
     assert summary["updated"] == 1
     assert summary["payload_synced"] == 1
     assert summary["draft_backfilled"] == 1
+    assert summary["creator_trace_backfilled"] == 0
+    assert summary["backend_trace_backfilled"] == 0
     assert row.planner_trace["mode"] == "deterministic"
     assert row.writer_prompt_trace[0]["request_label"] == "phase5_writer_attempt_1"
     assert row.draft_article_html == "<p>Artikelinhalt</p>"

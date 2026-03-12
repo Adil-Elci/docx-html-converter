@@ -221,6 +221,83 @@ def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
+def test_run_create_article_pipeline_emits_structured_trace_events(monkeypatch) -> None:
+    trace_events: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_service",
+        lambda **_kwargs: _creator_output_without_images(),
+    )
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **_kwargs: {"id": 321, "status": "draft", "link": "https://publisher.example.com/draft"},
+    )
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_media_item",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected media upload")),
+    )
+
+    automation_service.run_create_article_pipeline(
+        creator_endpoint="http://creator.test",
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        publishing_site_id="site-id",
+        client_target_site_id="target-id",
+        anchor="Kinderbrille",
+        topic=None,
+        exclude_topics=[],
+        internal_link_inventory=[],
+        phase1_cache_payload=None,
+        phase1_cache_content_hash="",
+        phase2_cache_payload=None,
+        phase2_cache_content_hash="",
+        target_profile_payload=None,
+        target_profile_content_hash="",
+        publishing_profile_payload=None,
+        publishing_profile_content_hash="",
+        site_url="https://publisher.example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="user",
+        wp_app_password="pass",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=7,
+        category_ids=[9],
+        category_candidates=[],
+        timeout_seconds=5,
+        creator_timeout_seconds=5,
+        poll_timeout_seconds=5,
+        poll_interval_seconds=1,
+        image_width=1024,
+        image_height=576,
+        leonardo_api_key="",
+        leonardo_base_url="https://leonardo.example.com",
+        leonardo_model_id="model-id",
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="",
+        category_llm_model="",
+        category_llm_max_categories=1,
+        category_llm_confidence_threshold=0.5,
+        trace_event=lambda level, phase, event, message, details=None: trace_events.append(
+            {
+                "level": level,
+                "phase": phase,
+                "event": event,
+                "message": message,
+                "details": details or {},
+            }
+        ),
+    )
+
+    assert trace_events[0]["event"] == "request_started"
+    assert trace_events[1]["event"] == "response_received"
+    assert trace_events[-1]["event"] == "wp_post_created"
+
+
 def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

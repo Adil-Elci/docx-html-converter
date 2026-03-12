@@ -997,8 +997,26 @@ def run_create_article_pipeline(
     category_llm_model: str,
     category_llm_max_categories: int,
     category_llm_confidence_threshold: float,
+    trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
+    def _trace(
+        level: str,
+        phase: str,
+        event: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if trace_event is not None:
+            trace_event(level, phase, event, message, details)
+
+    _trace(
+        "info",
+        "creator",
+        "request_started",
+        "Calling creator service.",
+        {"target_site_url": target_site_url, "publishing_site_url": publishing_site_url},
+    )
     creator_output = call_creator_service(
         creator_endpoint=creator_endpoint,
         target_site_url=target_site_url,
@@ -1022,6 +1040,7 @@ def run_create_article_pipeline(
         on_phase=on_phase,
         should_cancel=should_cancel,
     )
+    _trace("info", "creator", "response_received", "Creator service returned a response.")
     creator_output = ensure_prompt_trace_in_creator_output(creator_output)
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}
@@ -1034,6 +1053,7 @@ def run_create_article_pipeline(
     slug = str(phase5.get("slug") or "").strip()
     article_html = str(phase5.get("article_html") or "").strip()
     if not article_html:
+        _trace("error", "creator", "article_html_missing", "Creator output missing article_html.")
         raise AutomationError("Creator output missing article_html.")
     article_html = _strip_leading_h1_from_article_html(article_html)
 
@@ -1060,10 +1080,24 @@ def run_create_article_pipeline(
                     str(exc),
                     len(selected_category_ids),
                 )
+                _trace(
+                    "warning",
+                    "categories",
+                    "llm_fallback",
+                    "Category LLM selection failed; using default categories.",
+                    {"error": str(exc), "defaults_count": len(selected_category_ids)},
+                )
         else:
             logger.warning(
                 "automation.creator.category_llm.fallback reason=missing_api_key defaults_count=%s",
                 len(selected_category_ids),
+            )
+            _trace(
+                "warning",
+                "categories",
+                "llm_missing_api_key",
+                "Category LLM selection skipped because the API key is missing.",
+                {"defaults_count": len(selected_category_ids)},
             )
 
     featured_url = _pick_creator_image(images, "featured")
@@ -1117,6 +1151,12 @@ def run_create_article_pipeline(
                 article_html = _insert_in_content_image(article_html, in_media_url.strip(), in_alt)
         except AutomationError:
             logger.warning("automation.creator.in_content_upload_failed")
+            _trace(
+                "warning",
+                "media",
+                "in_content_upload_failed",
+                "Uploading the in-content image failed; continuing without it.",
+            )
 
     featured_media_id: Optional[int] = None
     raw_featured_media_id = media_payload.get("id")
@@ -1160,6 +1200,13 @@ def run_create_article_pipeline(
             timeout_seconds=timeout_seconds,
         )
         post_event_type = "wp_post_created"
+    _trace(
+        "info",
+        "publish",
+        post_event_type,
+        "WordPress draft/post persisted.",
+        {"post_id": post_payload.get("id"), "post_status": post_payload.get("status") or post_status},
+    )
 
     guid_value = media_payload.get("guid")
     media_url = media_payload.get("source_url")

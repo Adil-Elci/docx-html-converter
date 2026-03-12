@@ -9,11 +9,19 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
-    from portal_backend.api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
+    from portal_backend.api.creator_prompt_trace import (
+        extract_draft_article_html,
+        normalize_execution_trace_payload,
+        normalize_prompt_trace_payload,
+    )
     from portal_backend.api.db import get_sessionmaker
     from portal_backend.api.portal_models import CreatorOutput
 except ModuleNotFoundError:
-    from api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
+    from api.creator_prompt_trace import (
+        extract_draft_article_html,
+        normalize_execution_trace_payload,
+        normalize_prompt_trace_payload,
+    )
     from api.db import get_sessionmaker
     from api.portal_models import CreatorOutput
 
@@ -42,7 +50,9 @@ def backfill_creator_prompt_trace_columns(
             "("
             "planner_trace = '{}'::jsonb "
             "OR writer_prompt_trace = '[]'::jsonb "
-            "OR COALESCE(draft_article_html, '') = ''"
+            "OR COALESCE(draft_article_html, '') = '' "
+            "OR creator_trace = '[]'::jsonb "
+            "OR backend_trace = '[]'::jsonb"
             ")"
         )
     )
@@ -54,6 +64,8 @@ def backfill_creator_prompt_trace_columns(
     updated = 0
     payload_synced = 0
     draft_backfilled = 0
+    creator_trace_backfilled = 0
+    backend_trace_backfilled = 0
     skipped = 0
 
     for row in query.yield_per(batch_size):
@@ -63,6 +75,7 @@ def backfill_creator_prompt_trace_columns(
 
         current_payload = row.payload if isinstance(row.payload, dict) else {}
         normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(current_payload)
+        normalized_payload, creator_trace, backend_trace = normalize_execution_trace_payload(normalized_payload)
         draft_article_html = extract_draft_article_html(normalized_payload)
 
         payload_changed = sync_payload and normalized_payload != current_payload
@@ -71,8 +84,21 @@ def backfill_creator_prompt_trace_columns(
             row.writer_prompt_trace if isinstance(row.writer_prompt_trace, list) else []
         )
         draft_changed = draft_article_html != str(getattr(row, "draft_article_html", "") or "")
+        creator_trace_changed = creator_trace != (
+            row.creator_trace if isinstance(getattr(row, "creator_trace", []), list) else []
+        )
+        backend_trace_changed = backend_trace != (
+            row.backend_trace if isinstance(getattr(row, "backend_trace", []), list) else []
+        )
 
-        if not payload_changed and not planner_changed and not writer_changed and not draft_changed:
+        if (
+            not payload_changed
+            and not planner_changed
+            and not writer_changed
+            and not draft_changed
+            and not creator_trace_changed
+            and not backend_trace_changed
+        ):
             skipped += 1
             continue
 
@@ -81,12 +107,18 @@ def backfill_creator_prompt_trace_columns(
             payload_synced += 1
         if draft_changed:
             draft_backfilled += 1
+        if creator_trace_changed:
+            creator_trace_backfilled += 1
+        if backend_trace_changed:
+            backend_trace_backfilled += 1
         if dry_run:
             continue
 
         row.planner_trace = planner_trace
         row.writer_prompt_trace = writer_prompt_trace
         row.draft_article_html = draft_article_html
+        row.creator_trace = creator_trace
+        row.backend_trace = backend_trace
         if payload_changed:
             row.payload = normalized_payload
 
@@ -101,6 +133,8 @@ def backfill_creator_prompt_trace_columns(
         "updated": updated,
         "payload_synced": payload_synced,
         "draft_backfilled": draft_backfilled,
+        "creator_trace_backfilled": creator_trace_backfilled,
+        "backend_trace_backfilled": backend_trace_backfilled,
         "skipped": skipped,
         "dry_run": dry_run,
         "job_id": str(job_id) if job_id else "",
@@ -110,7 +144,7 @@ def backfill_creator_prompt_trace_columns(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Backfill creator_outputs planner_trace and writer_prompt_trace from stored payloads."
+        description="Backfill normalized creator_outputs columns from stored payloads."
     )
     parser.add_argument("--job-id", dest="job_id", default="", help="Only backfill one job UUID.")
     parser.add_argument("--batch-size", dest="batch_size", type=int, default=200)

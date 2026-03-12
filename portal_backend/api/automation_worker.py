@@ -20,7 +20,12 @@ from .automation_service import (
     run_create_article_pipeline,
 )
 from .creator_history import load_recent_creator_history
-from .creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
+from .creator_prompt_trace import (
+    append_execution_trace_event,
+    extract_draft_article_html,
+    normalize_execution_trace_payload,
+    normalize_prompt_trace_payload,
+)
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .internal_linking_sync import fetch_creator_internal_link_inventory_for_site, run_internal_link_inventory_sync
 from .publish_notification_hook import send_client_publish_notification
@@ -240,10 +245,25 @@ class AutomationJobWorker:
         except Exception:
             logger.exception("automation.worker.job_wrapper_error job_id=%s", job_id)
 
-    def _persist_failed_creator_output(self, job_id: UUID, creator_output: Dict[str, Any], error_message: str) -> None:
+    def _persist_failed_creator_output(
+        self,
+        job_id: UUID,
+        creator_output: Dict[str, Any],
+        error_message: str,
+        *,
+        backend_trace: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         if not isinstance(creator_output, dict) or not creator_output:
             return
         normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(creator_output)
+        normalized_payload, creator_trace, existing_backend_trace = normalize_execution_trace_payload(normalized_payload)
+        effective_backend_trace = list(existing_backend_trace or [])
+        if backend_trace:
+            effective_backend_trace.extend(backend_trace)
+        if effective_backend_trace:
+            debug = normalized_payload.get("debug") if isinstance(normalized_payload.get("debug"), dict) else {}
+            debug["backend_trace"] = effective_backend_trace
+            normalized_payload["debug"] = debug
         draft_article_html = extract_draft_article_html(normalized_payload)
         with self._sessionmaker() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -266,6 +286,8 @@ class AutomationJobWorker:
                     draft_article_html=draft_article_html,
                     planner_trace=planner_trace,
                     writer_prompt_trace=writer_prompt_trace,
+                    creator_trace=creator_trace,
+                    backend_trace=effective_backend_trace,
                     payload=payload_copy,
                 )
             )
@@ -382,6 +404,7 @@ class AutomationJobWorker:
     def _process_claimed_job(self, job_id: UUID) -> None:
         max_attempts = _read_int_env("AUTOMATION_JOB_MAX_ATTEMPTS", 3)
         payload: Dict[str, Any] = {}
+        backend_trace: List[Dict[str, Any]] = []
         try:
             run_config = get_runtime_config()
         except AutomationError as exc:
@@ -389,14 +412,33 @@ class AutomationJobWorker:
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
             return
         try:
+            append_execution_trace_event(
+                backend_trace,
+                level="info",
+                phase="worker",
+                event="job_start",
+                message="Automation worker started processing the job.",
+                details={"job_id": str(job_id)},
+            )
             if self._is_job_canceled(job_id):
                 logger.info("automation.worker.canceled_before_start job_id=%s", job_id)
                 return
-            payload = self._load_job_payload(job_id)
+            payload = self._load_job_payload(job_id, backend_trace=backend_trace)
             if self._is_job_canceled(job_id):
                 logger.info("automation.worker.canceled_before_run job_id=%s", job_id)
                 return
             if payload.get("creator_mode"):
+                append_execution_trace_event(
+                    backend_trace,
+                    level="info",
+                    phase="creator",
+                    event="start",
+                    message="Creator article pipeline started.",
+                    details={
+                        "target_site_url": payload.get("target_site_url"),
+                        "publishing_site_url": payload.get("site_url"),
+                    },
+                )
                 if not (payload.get("target_site_url") or "").strip():
                     raise AutomationError("Article creation requests require target_site_url.")
                 if not run_config.get("creator_endpoint"):
@@ -468,11 +510,26 @@ class AutomationJobWorker:
                     category_llm_model=run_config["category_llm_model"],
                     category_llm_max_categories=run_config["category_llm_max_categories"],
                     category_llm_confidence_threshold=run_config["category_llm_confidence_threshold"],
+                    trace_event=lambda level, phase, event, message="", details=None: append_execution_trace_event(
+                        backend_trace,
+                        level=level,
+                        phase=phase,
+                        event=event,
+                        message=message,
+                        details=details,
+                    ),
                     should_cancel=_should_cancel,
                 )
                 if self._is_job_canceled(job_id):
                     logger.info("automation.worker.canceled_after_creator job_id=%s", job_id)
                     return
+                append_execution_trace_event(
+                    backend_trace,
+                    level="info",
+                    phase="creator",
+                    event="complete",
+                    message="Creator article pipeline completed successfully.",
+                )
                 self._mark_creator_success(
                     job_id,
                     creator_output=pipeline_result["creator_output"],
@@ -482,6 +539,7 @@ class AutomationJobWorker:
                     post_event_type=pipeline_result["post_event_type"],
                     selected_category_ids=pipeline_result["selected_category_ids"],
                     leonardo_model_id=run_config["leonardo_model_id"],
+                    backend_trace=backend_trace,
                 )
                 logger.info("automation.worker.creator_succeeded job_id=%s", job_id)
                 return
@@ -545,10 +603,23 @@ class AutomationJobWorker:
             logger.info("automation.worker.succeeded job_id=%s", job_id)
         except (AutomationError, RuntimeError) as exc:
             logger.warning("automation.worker.failed job_id=%s error=%s", job_id, str(exc))
+            append_execution_trace_event(
+                backend_trace,
+                level="error",
+                phase="worker",
+                event="job_failed",
+                message="Automation worker failed the job.",
+                details={"error": str(exc)},
+            )
             creator_output = exc.details.get("creator_output") if isinstance(getattr(exc, "details", None), dict) else None
             if payload.get("creator_mode") and isinstance(creator_output, dict):
                 try:
-                    self._persist_failed_creator_output(job_id, creator_output, str(exc))
+                    self._persist_failed_creator_output(
+                        job_id,
+                        creator_output,
+                        str(exc),
+                        backend_trace=backend_trace,
+                    )
                 except Exception:
                     logger.exception("automation.worker.persist_failed_creator_output_failed job_id=%s", job_id)
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
@@ -567,7 +638,13 @@ class AutomationJobWorker:
                 return False
             return job[0] == "canceled"
 
-    def _load_job_payload(self, job_id: UUID) -> Dict[str, Any]:
+    def _load_job_payload(
+        self,
+        job_id: UUID,
+        *,
+        backend_trace: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        trace = backend_trace if isinstance(backend_trace, list) else []
         with self._sessionmaker() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
@@ -698,6 +775,17 @@ class AutomationJobWorker:
                 )
                 exclude_topics = list(history.get("exclude_topics") or [])
                 recent_article_titles = list(history.get("recent_article_titles") or [])
+                append_execution_trace_event(
+                    trace,
+                    level="info",
+                    phase="history",
+                    event="loaded",
+                    message="Loaded recent creator history for the target site.",
+                    details={
+                        "exclude_topics_count": len(exclude_topics),
+                        "recent_article_titles_count": len(recent_article_titles),
+                    },
+                )
 
             phase1_cache_payload: Optional[Dict[str, Any]] = None
             phase1_cache_content_hash = ""
@@ -737,10 +825,26 @@ class AutomationJobWorker:
                         )
                     except Exception:
                         logger.warning("automation.worker.target_profile_ensure_failed job_id=%s", job_id, exc_info=True)
+                        append_execution_trace_event(
+                            trace,
+                            level="warning",
+                            phase="target_profile",
+                            event="ensure_failed",
+                            message="Target site profile refresh failed; continuing with cached data if present.",
+                            details={"target_site_url": target_site_url},
+                        )
                 elif creator_mode:
                     raise RuntimeError("Target site profile is required before running Creator.")
                 if not target_profile_payload:
                     raise RuntimeError("Target site profile is required before running Creator.")
+                append_execution_trace_event(
+                    trace,
+                    level="info",
+                    phase="target_profile",
+                    event="loaded",
+                    message="Target site profile loaded for creator mode.",
+                    details={"target_site_url": target_site_url},
+                )
 
                 normalized_site_url = normalize_site_analysis_url(site.site_url)
                 latest_phase2_cache = get_latest_site_analysis_cache(
@@ -762,6 +866,14 @@ class AutomationJobWorker:
                     )
                 except Exception:
                     logger.warning("automation.worker.publishing_profile_ensure_failed job_id=%s", job_id, exc_info=True)
+                    append_execution_trace_event(
+                        trace,
+                        level="warning",
+                        phase="publishing_profile",
+                        event="ensure_failed",
+                        message="Publishing site profile refresh failed; continuing with cached data if present.",
+                        details={"publishing_site_url": site.site_url},
+                    )
                 latest_publishing_profile = get_latest_site_profile(
                     session,
                     profile_kind="publishing_site",
@@ -773,6 +885,14 @@ class AutomationJobWorker:
                     publishing_profile_content_hash = str(latest_publishing_profile.content_hash or "").strip()
                 elif creator_mode:
                     raise RuntimeError("Publishing site profile is required before running Creator.")
+                append_execution_trace_event(
+                    trace,
+                    level="info",
+                    phase="publishing_profile",
+                    event="loaded",
+                    message="Publishing site profile loaded for creator mode.",
+                    details={"publishing_site_url": site.site_url},
+                )
 
             internal_link_inventory: List[Dict[str, Any]] = []
             if creator_mode:
@@ -785,10 +905,26 @@ class AutomationJobWorker:
                     )
                 except Exception:
                     logger.warning("automation.worker.internal_link_inventory_refresh_failed job_id=%s", job_id, exc_info=True)
+                    append_execution_trace_event(
+                        trace,
+                        level="warning",
+                        phase="internal_links",
+                        event="inventory_refresh_failed",
+                        message="Background internal-link inventory refresh failed.",
+                        details={"publishing_site_url": site.site_url},
+                    )
                 internal_link_inventory = build_creator_internal_link_inventory(
                     session,
                     site_id=site.id,
                     limit=max(50, _read_int_env("INTERNAL_LINK_INVENTORY_LIMIT", 250)),
+                )
+                append_execution_trace_event(
+                    trace,
+                    level="info",
+                    phase="internal_links",
+                    event="inventory_loaded_from_db",
+                    message="Loaded internal-link inventory from the database snapshot.",
+                    details={"count": len(internal_link_inventory)},
                 )
                 try:
                     live_internal_link_inventory = fetch_creator_internal_link_inventory_for_site(
@@ -801,8 +937,37 @@ class AutomationJobWorker:
                     )
                     if live_internal_link_inventory:
                         internal_link_inventory = live_internal_link_inventory
+                        append_execution_trace_event(
+                            trace,
+                            level="info",
+                            phase="internal_links",
+                            event="inventory_loaded_live",
+                            message="Loaded internal-link inventory from the live site.",
+                            details={"count": len(internal_link_inventory)},
+                        )
                 except Exception:
                     logger.warning("automation.worker.internal_link_inventory_live_fetch_failed job_id=%s", job_id, exc_info=True)
+                    append_execution_trace_event(
+                        trace,
+                        level="warning",
+                        phase="internal_links",
+                        event="inventory_live_fetch_failed",
+                        message="Live internal-link inventory fetch failed; using the DB snapshot instead.",
+                        details={"publishing_site_url": site.site_url},
+                    )
+
+            append_execution_trace_event(
+                trace,
+                level="info",
+                phase="worker",
+                event="payload_loaded",
+                message="Worker payload prepared for job execution.",
+                details={
+                    "creator_mode": bool(creator_mode),
+                    "publishing_site_url": site.site_url,
+                    "target_site_url": target_site_url,
+                },
+            )
 
             return {
                 "source_url": source_url,
@@ -942,6 +1107,7 @@ class AutomationJobWorker:
         post_event_type: str,
         selected_category_ids: List[int],
         leonardo_model_id: str,
+        backend_trace: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         with self._sessionmaker() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -1031,23 +1197,30 @@ class AutomationJobWorker:
                     },
                     )
                 )
-            creator_debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
-            prompt_trace = creator_debug.get("prompt_trace") if isinstance(creator_debug.get("prompt_trace"), dict) else {}
-            planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
-            writer_prompt_trace = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
-            draft_article_html = extract_draft_article_html(creator_output)
+            normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(creator_output)
+            normalized_payload, creator_trace, existing_backend_trace = normalize_execution_trace_payload(normalized_payload)
+            effective_backend_trace = list(existing_backend_trace or [])
+            if backend_trace:
+                effective_backend_trace.extend(backend_trace)
+            if effective_backend_trace:
+                debug = normalized_payload.get("debug") if isinstance(normalized_payload.get("debug"), dict) else {}
+                debug["backend_trace"] = effective_backend_trace
+                normalized_payload["debug"] = debug
+            draft_article_html = extract_draft_article_html(normalized_payload)
             session.add(
                 CreatorOutput(
                     submission_id=submission.id,
                     job_id=job.id,
                     client_id=submission.client_id,
                     site_id=submission.site_id,
-                    target_site_url=str(creator_output.get("target_site_url") or ""),
-                    host_site_url=str(creator_output.get("host_site_url") or ""),
+                    target_site_url=str(normalized_payload.get("target_site_url") or ""),
+                    host_site_url=str(normalized_payload.get("host_site_url") or ""),
                     draft_article_html=draft_article_html,
                     planner_trace=planner_trace,
                     writer_prompt_trace=writer_prompt_trace,
-                    payload=creator_output,
+                    creator_trace=creator_trace,
+                    backend_trace=effective_backend_trace,
+                    payload=normalized_payload,
                 )
             )
             parsed_notes = _parse_notes(submission.notes)

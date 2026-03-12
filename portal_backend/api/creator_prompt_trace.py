@@ -1,8 +1,60 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def build_execution_trace_event(
+    *,
+    level: str,
+    phase: str,
+    event: str,
+    message: str = "",
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "level": str(level or "info").strip().lower() or "info",
+        "phase": str(phase or "unknown").strip() or "unknown",
+        "event": str(event or "unknown").strip() or "unknown",
+    }
+    if str(message or "").strip():
+        payload["message"] = str(message).strip()
+    if isinstance(details, dict) and details:
+        payload["details"] = details
+    return payload
+
+
+def append_execution_trace_event(
+    trace: List[Dict[str, Any]],
+    *,
+    level: str,
+    phase: str,
+    event: str,
+    message: str = "",
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    trace.append(
+        build_execution_trace_event(
+            level=level,
+            phase=phase,
+            event=event,
+            message=message,
+            details=details,
+        )
+    )
+
+
+def _coerce_trace_events(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    events: List[Dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            events.append(copy.deepcopy(item))
+    return events
 
 
 def _format_content_brief_prompt_text(content_brief: Dict[str, Any]) -> str:
@@ -251,3 +303,20 @@ def extract_draft_article_html(creator_output: Dict[str, Any]) -> str:
     if article_html:
         return article_html
     return str(creator_output.get("article_html") or "").strip()
+
+
+def normalize_execution_trace_payload(
+    creator_output: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    working_payload = copy.deepcopy(creator_output) if isinstance(creator_output, dict) else {}
+    normalized_payload = ensure_prompt_trace_in_creator_output(working_payload)
+    debug = normalized_payload.get("debug") if isinstance(normalized_payload.get("debug"), dict) else {}
+    creator_trace = _coerce_trace_events(debug.get("creator_trace"))
+    backend_trace = _coerce_trace_events(debug.get("backend_trace"))
+    if creator_trace:
+        debug["creator_trace"] = creator_trace
+    if backend_trace:
+        debug["backend_trace"] = backend_trace
+    if debug:
+        normalized_payload["debug"] = debug
+    return normalized_payload, creator_trace, backend_trace

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from portal_backend.api import automation_service
 
 
@@ -290,6 +294,32 @@ def test_run_create_article_pipeline_clears_existing_featured_media_when_creator
     assert result["media_payload"] == {}
     assert result["media_url"] is None
     assert calls["update_post"]["featured_media_id"] == 0
+
+
+def test_call_creator_stream_preserves_error_details(monkeypatch) -> None:
+    class _FakeResponse:
+        status_code = 200
+
+        def iter_lines(self, decode_unicode=True):
+            yield 'event: error'
+            yield f'data: {json.dumps({"error": "Phase 4 plan invalid: [\'outline_mixed_intent_or_angle\']", "details": {"creator_output": {"phase3": {"final_article_topic": "Immobilie verkaufen"}, "phase4": {"h1": "Immobilie verkaufen"}, "debug": {"prompt_trace": {"planner": {"mode": "deterministic", "attempts": []}}}}}})}'
+            yield ""
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(automation_service.requests, "post", lambda *args, **kwargs: _FakeResponse())
+
+    with pytest.raises(automation_service.AutomationError) as exc_info:
+        automation_service._call_creator_stream(
+            "https://creator.example.com",
+            {"target_site_url": "https://target.example.com", "publishing_site_url": "https://publisher.example.com"},
+            5,
+            lambda *_args: None,
+        )
+
+    assert "Creator pipeline failed: Phase 4 plan invalid" in str(exc_info.value)
+    assert exc_info.value.details["creator_output"]["phase3"]["final_article_topic"] == "Immobilie verkaufen"
 
 
 def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatch) -> None:

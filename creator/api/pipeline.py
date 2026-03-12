@@ -400,7 +400,9 @@ INTERNAL_LINK_WEAK_MATCH_TOKENS = {
 
 
 class CreatorError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = details or {}
 
 
 def _read_int_env(name: str, default: int) -> int:
@@ -6661,6 +6663,28 @@ def _build_deterministic_article_plan(
     }
 
 
+def _select_phase4_repair_topic(
+    *,
+    requested_topic: str,
+    current_topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> str:
+    candidates = [
+        _sanitize_editorial_phrase(requested_topic),
+        str((topic_signature or {}).get("subject_phrase") or "").strip(),
+        _sanitize_editorial_phrase(primary_keyword),
+        _sanitize_editorial_phrase(current_topic),
+    ]
+    for candidate in candidates:
+        cleaned = str(candidate or "").strip()
+        if not cleaned:
+            continue
+        if not _keyword_candidate_is_support_topic_noise(cleaned, topic_signature):
+            return cleaned
+    return str(primary_keyword or current_topic or requested_topic or "").strip()
+
+
 def _looks_like_promotional_text_block(value: str) -> bool:
     raw = str(value or "").strip()
     normalized = _normalize_keyword_phrase(_strip_html_tags(raw))
@@ -9197,6 +9221,68 @@ def run_creator_pipeline(
     if plan_quality["errors"]:
         warnings.append("phase4_plan_regenerated")
         debug["rejection_reason"] = plan_quality["errors"]
+        repaired_topic = _select_phase4_repair_topic(
+            requested_topic=topic or "",
+            current_topic=phase3.get("final_article_topic", ""),
+            primary_keyword=phase3.get("primary_keyword", ""),
+            topic_signature=phase3.get("topic_signature"),
+        )
+        if repaired_topic and repaired_topic != str(phase3.get("final_article_topic") or "").strip():
+            phase3["final_article_topic"] = repaired_topic
+            repaired_topic_signature = _build_topic_signature(
+                topic=phase3.get("final_article_topic", ""),
+                primary_keyword=phase3.get("primary_keyword", ""),
+                secondary_keywords=phase3.get("secondary_keywords") or [],
+                target_terms=[str(item).strip() for item in ((phase3.get("topic_signature") or {}).get("target_terms") or []) if str(item).strip()],
+                overlap_terms=[str(item).strip() for item in ((phase3.get("content_brief") or {}).get("overlap_terms") or []) if str(item).strip()],
+                trend_candidates=keyword_discovery.get("trend_candidates") or [],
+                keyword_cluster=keyword_cluster,
+                internal_link_inventory=provided_internal_link_inventory,
+            )
+            if isinstance(phase3.get("topic_signature"), dict):
+                repaired_topic_signature = {
+                    **repaired_topic_signature,
+                    "semantic_entities": phase3.get("keyword_buckets", {}).get("semantic_entities") or [],
+                    "support_topics_for_internal_links": (
+                        phase3.get("keyword_buckets", {}).get("support_topics_for_internal_links") or []
+                    ),
+                }
+            phase3["topic_signature"] = repaired_topic_signature
+            phase3["faq_candidates"] = _ensure_faq_candidates(
+                phase3.get("final_article_topic", ""),
+                phase3.get("faq_candidates") or [],
+                topic_signature=phase3.get("topic_signature"),
+                brand_name=str(phase3.get("target_brand_name") or "").strip(),
+            )
+            phase3["search_intent_type"] = _infer_search_intent_type(
+                topic=phase3.get("final_article_topic", ""),
+                target_profile=target_profile,
+            )
+            phase3["structured_content_mode"] = _structured_content_mode(
+                phase3.get("final_article_topic", ""),
+                phase3.get("primary_keyword", ""),
+                phase3.get("search_intent_type", ""),
+            )
+            phase3["article_angle"] = _infer_article_angle(
+                topic=phase3.get("final_article_topic", ""),
+                intent_type=phase3.get("search_intent_type", ""),
+                structured_mode=phase3.get("structured_content_mode", "none"),
+                topic_class=phase3.get("topic_class", "general"),
+                topic_signature=phase3.get("topic_signature"),
+            )
+            phase3["style_profile"] = _build_style_profile(
+                topic_class=phase3.get("topic_class", "general"),
+                intent_type=phase3.get("search_intent_type", ""),
+                article_angle=phase3.get("article_angle", "practical_guidance"),
+                content_brief=phase3.get("content_brief") or {},
+                publishing_profile=publishing_profile,
+                target_profile=target_profile,
+            )
+            phase3["specificity_profile"] = _build_specificity_profile(
+                topic=phase3.get("final_article_topic", ""),
+                topic_class=phase3.get("topic_class", "general"),
+                intent_type=phase3.get("search_intent_type", ""),
+            )
         phase3["title_package"] = _build_deterministic_title_package(
             topic=phase3.get("final_article_topic", ""),
             primary_keyword=phase3.get("primary_keyword", ""),
@@ -9250,7 +9336,30 @@ def run_creator_pipeline(
                     }
                 )
     if plan_quality["errors"]:
-        raise CreatorError(f"Phase 4 plan invalid: {plan_quality['errors']}")
+        partial_output = ensure_prompt_trace_in_creator_output(
+            {
+                "ok": False,
+                "target_site_url": target_site_url,
+                "host_site_url": publishing_site_url,
+                "phase1": phase1,
+                "phase1_cache_meta": phase1_cache_meta,
+                "phase2": phase2,
+                "phase2_cache_meta": phase2_cache_meta,
+                "phase3": phase3,
+                "phase4": phase4,
+                "warnings": warnings,
+                "rejection_reason": plan_quality["errors"],
+                "debug": {
+                    **debug,
+                    "planning_quality": plan_quality,
+                    "rejection_reason": plan_quality["errors"],
+                },
+            }
+        )
+        raise CreatorError(
+            f"Phase 4 plan invalid: {plan_quality['errors']}",
+            details={"creator_output": partial_output},
+        )
     faq_candidates = phase4.get("faq_questions") or []
     debug["faq_generation"] = {
         "faq_enabled": True,

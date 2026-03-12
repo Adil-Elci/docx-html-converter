@@ -41,6 +41,7 @@ from creator.api.pipeline import (
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
+    _select_phase4_repair_topic,
     _render_article_from_plan,
     _run_pair_fit_reasoning,
     _select_signature_target_terms,
@@ -646,6 +647,22 @@ def test_evaluate_plan_quality_allows_process_headings_with_specificity_support(
 
     assert "outline_mixed_intent_or_angle" not in evaluation["errors"]
     assert evaluation["intent_consistency_score"] >= 80
+
+
+def test_select_phase4_repair_topic_prefers_clean_core_topic():
+    repaired = _select_phase4_repair_topic(
+        requested_topic="",
+        current_topic="Immobilien kaufen oder mieten: Was lohnt sich im Alltag?",
+        primary_keyword="immobilie verkaufen",
+        topic_signature={
+            "subject_phrase": "immobilie verkaufen",
+            "primary_keyword": "immobilie verkaufen",
+            "specific_tokens": ["immobilie", "verkaufen"],
+            "all_tokens": ["immobilie", "verkaufen", "unterlagen", "preis"],
+        },
+    )
+
+    assert repaired == "immobilie verkaufen"
 
 
 def test_render_article_from_plan_formats_faq_questions_as_questions():

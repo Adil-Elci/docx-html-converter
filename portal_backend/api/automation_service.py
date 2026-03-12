@@ -43,7 +43,9 @@ logger = logging.getLogger("portal_backend.automation")
 
 
 class AutomationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = details or {}
 
 
 def _normalize_http_url(value: str, field_name: str) -> str:
@@ -895,6 +897,7 @@ def _call_creator_stream(
 
     result: Optional[Dict[str, Any]] = None
     error_msg: Optional[str] = None
+    error_details: Optional[Dict[str, Any]] = None
     current_event = "message"
     current_data_lines: List[str] = []
 
@@ -932,12 +935,13 @@ def _call_creator_stream(
                 result = data.get("data") if isinstance(data.get("data"), dict) else data
             elif current_event == "error":
                 error_msg = data.get("error", "creator_stream_error")
+                error_details = data.get("details") if isinstance(data.get("details"), dict) else None
             current_event = "message"
 
     resp.close()
 
     if error_msg:
-        raise AutomationError(f"Creator pipeline failed: {error_msg}")
+        raise AutomationError(f"Creator pipeline failed: {error_msg}", details=error_details)
     if result is None:
         raise AutomationError("Creator stream ended without a result.")
     if not isinstance(result, dict):

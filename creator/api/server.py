@@ -104,7 +104,10 @@ async def create(request: Request) -> JSONResponse:
         )
     except (CreatorError, LLMError) as exc:
         logger.warning("creator.pipeline_failed error=%s", str(exc))
-        response = ErrorResponse(error="pipeline_failed", details={"message": str(exc)})
+        error_details = {"message": str(exc)}
+        if isinstance(exc, CreatorError) and exc.details:
+            error_details["details"] = exc.details
+        response = ErrorResponse(error="pipeline_failed", details=error_details)
         return JSONResponse(status_code=422, content=response.dict())
 
     return JSONResponse(status_code=200, content=result)
@@ -150,7 +153,10 @@ async def create_stream(request: Request) -> EventSourceResponse:
             progress_queue.put({"event": "complete", "data": result})
         except (CreatorError, LLMError) as exc:
             logger.warning("creator.pipeline_failed error=%s", str(exc))
-            progress_queue.put({"event": "error", "error": str(exc)})
+            error_payload = {"error": str(exc)}
+            if isinstance(exc, CreatorError) and exc.details:
+                error_payload["details"] = exc.details
+            progress_queue.put({"event": "error", **error_payload})
         except Exception as exc:
             logger.exception("creator.stream.unhandled_error")
             progress_queue.put({"event": "error", "error": "internal_error"})

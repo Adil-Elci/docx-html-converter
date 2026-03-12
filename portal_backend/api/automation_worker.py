@@ -19,8 +19,10 @@ from .automation_service import (
     run_submit_article_pipeline,
     run_create_article_pipeline,
 )
+from .creator_prompt_trace import normalize_prompt_trace_payload
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .internal_linking_sync import fetch_creator_internal_link_inventory_for_site, run_internal_link_inventory_sync
+from .publish_notification_hook import send_client_publish_notification
 from .portal_models import (
     Asset,
     ClientTargetSite,
@@ -237,6 +239,35 @@ class AutomationJobWorker:
         except Exception:
             logger.exception("automation.worker.job_wrapper_error job_id=%s", job_id)
 
+    def _persist_failed_creator_output(self, job_id: UUID, creator_output: Dict[str, Any], error_message: str) -> None:
+        if not isinstance(creator_output, dict) or not creator_output:
+            return
+        normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(creator_output)
+        with self._sessionmaker() as session:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                return
+            submission = session.query(Submission).filter(Submission.id == job.submission_id).first()
+            if not submission:
+                return
+            payload_copy = dict(normalized_payload)
+            payload_copy.setdefault("ok", False)
+            payload_copy["error"] = error_message
+            session.add(
+                CreatorOutput(
+                    submission_id=submission.id,
+                    job_id=job.id,
+                    client_id=submission.client_id,
+                    site_id=submission.site_id,
+                    target_site_url=str(payload_copy.get("target_site_url") or ""),
+                    host_site_url=str(payload_copy.get("host_site_url") or ""),
+                    planner_trace=planner_trace,
+                    writer_prompt_trace=writer_prompt_trace,
+                    payload=payload_copy,
+                )
+            )
+            session.commit()
+
     def _on_job_done(self, job_id: UUID, future: Future) -> None:  # type: ignore[type-arg]
         """Callback executed when a job future completes — updates counters."""
         with self._in_flight_lock:
@@ -347,6 +378,7 @@ class AutomationJobWorker:
 
     def _process_claimed_job(self, job_id: UUID) -> None:
         max_attempts = _read_int_env("AUTOMATION_JOB_MAX_ATTEMPTS", 3)
+        payload: Dict[str, Any] = {}
         try:
             run_config = get_runtime_config()
         except AutomationError as exc:
@@ -509,6 +541,12 @@ class AutomationJobWorker:
             logger.info("automation.worker.succeeded job_id=%s", job_id)
         except (AutomationError, RuntimeError) as exc:
             logger.warning("automation.worker.failed job_id=%s error=%s", job_id, str(exc))
+            creator_output = exc.details.get("creator_output") if isinstance(getattr(exc, "details", None), dict) else None
+            if payload.get("creator_mode") and isinstance(creator_output, dict):
+                try:
+                    self._persist_failed_creator_output(job_id, creator_output, str(exc))
+                except Exception:
+                    logger.exception("automation.worker.persist_failed_creator_output_failed job_id=%s", job_id)
             self._mark_failed_or_retry(job_id, max_attempts=max_attempts, error_message=str(exc))
         except Exception as exc:
             logger.exception("automation.worker.unexpected_error job_id=%s", job_id)
@@ -893,6 +931,10 @@ class AutomationJobWorker:
                 )
             )
             session.commit()
+            try:
+                send_client_publish_notification(session, job_id=job_id, post_payload=post_payload)
+            except Exception:
+                logger.exception("automation.worker.publish_notification_failed job_id=%s", job_id)
 
     def _mark_creator_success(
         self,
@@ -992,8 +1034,8 @@ class AutomationJobWorker:
                         "pending_admin_approval": bool(job.requires_admin_approval),
                         "source": "creator",
                     },
+                    )
                 )
-            )
             creator_debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
             prompt_trace = creator_debug.get("prompt_trace") if isinstance(creator_debug.get("prompt_trace"), dict) else {}
             planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
@@ -1065,6 +1107,10 @@ class AutomationJobWorker:
                         publishing_site_id=submission.site_id,
                     )
             session.commit()
+            try:
+                send_client_publish_notification(session, job_id=job_id, post_payload=post_payload)
+            except Exception:
+                logger.exception("automation.worker.publish_notification_failed job_id=%s", job_id)
 
     def _mark_failed_or_retry(self, job_id: UUID, *, max_attempts: int, error_message: str) -> None:
         with self._sessionmaker() as session:

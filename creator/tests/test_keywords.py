@@ -85,6 +85,19 @@ def test_build_keyword_query_variants_contract():
     assert any(item.startswith("was ist ") for item in queries)
 
 
+def test_build_keyword_query_variants_prefers_compact_topic_phrase_for_contextual_topics():
+    queries = _build_keyword_query_variants(
+        topic="Grüne Pulver im Nährwertvergleich: Inhaltsstoffe und Wirkung von Greens-Produkten",
+        primary_hint="inhaltsstoffe und wirkung von greens produkten",
+        allowed_topics=["Nährwerte und Supplements im Überblick"],
+        max_queries=8,
+    )
+
+    assert queries
+    assert queries[0] == "inhaltsstoffe und wirkung von greens produkten"
+    assert all(len(item.split()) <= 8 for item in queries)
+
+
 def test_select_keywords_contract():
     result = _select_keywords(
         topic="Eltern-Sucht in der Schwangerschaft",
@@ -417,6 +430,30 @@ def test_select_keywords_prefers_specific_supplement_cost_phrase_over_wellness_c
     assert result["primary_keyword"] == "hochwertige greens kollagenpräparate kosten"
     assert result["primary_keyword"] != "nahrungsergänzungsmittel und wellness produkte"
     assert any("greens" in item or "kollagen" in item for item in result["secondary_keywords"])
+
+
+def test_select_keywords_builds_supplement_secondaries_from_semantic_signals_when_trends_are_thin():
+    topic = "Grüne Pulver im Nährwertvergleich: Inhaltsstoffe und Wirkung von Greens-Produkten"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="inhaltsstoffe und wirkung von greens produkten",
+        llm_secondary=[],
+        keyword_cluster=["greens", "supplements", "dosierung", "qualität", "portion"],
+        allowed_topics=["Nährwerte", "Ernährung", "Gesundheit"],
+        trend_candidates=["nährwertvergleich lebensmittel nährwerte einfach prüfen"],
+        faq_candidates=[
+            "worauf sollte man bei greens produkten achten",
+            "welche inhaltsstoffe sind bei greens wichtig",
+        ],
+        target_terms=["Greens"],
+        overlap_terms=[],
+        internal_link_inventory=[],
+    )
+
+    assert result["primary_keyword"] == "inhaltsstoffe und wirkung von greens produkten"
+    assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
+    assert any(item == "greens inhaltsstoffe" for item in result["secondary_keywords"])
+    assert any("greens" in item for item in result["secondary_keywords"])
 
 
 def test_infer_topic_class_detects_nutrition_supplements_topics():
@@ -2481,8 +2518,8 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     headings = [item["h2"] for item in outline["outline"]]
     assert all("Warenkorb" not in heading for heading in headings)
     assert all("Onlineshop" not in heading for heading in headings)
-    assert headings[0] == "Welche Kriterien entscheiden bei Kinder sonnenbrillen?"
-    assert any("unterschiede" in heading.lower() for heading in headings)
+    assert headings[0] == "Worauf sollte man bei Kinder sonnenbrillen achten?"
+    assert any("qualitaetsunterschiede" in heading.lower() for heading in headings)
     assert any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 

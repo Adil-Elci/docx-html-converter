@@ -1,4 +1,5 @@
 from creator.api.pipeline import (
+    _internal_anchor_text,
     _normalize_section_html,
     _rank_internal_link_inventory,
     _repair_link_constraints,
@@ -446,3 +447,65 @@ def test_rank_internal_link_inventory_rejects_visual_mentions_and_generic_buying
     )
 
     assert [item["url"] for item in ranked] == ["https://publisher.example.com/sehstaerke-vaeter"]
+
+
+def test_rank_internal_link_inventory_keeps_same_context_nutrition_support_articles():
+    ranked = _rank_internal_link_inventory(
+        [
+            {
+                "url": "https://publisher.example.com/anti-aging-supplements",
+                "title": "Anti-Aging Supplements ab 40 – Was ist wirklich sinnvoll?",
+                "excerpt": "Worauf es bei Dosierung, Qualität und Laborstandards ankommt.",
+                "slug": "anti-aging-supplements-ab-40",
+                "categories": ["Ernährung"],
+            },
+            {
+                "url": "https://publisher.example.com/vitamin-d3-nahrung",
+                "title": "Vitamin D3 durch die Nahrung aufnehmen – so geht's richtig",
+                "excerpt": "Welche Quellen, Portionsgrößen und Hinweise im Alltag helfen.",
+                "slug": "vitamin-d3-durch-die-nahrung-aufnehmen",
+                "categories": ["Gesundheit"],
+            },
+            {
+                "url": "https://publisher.example.com/heissluftfritteuse",
+                "title": "Heißluftfritteuse: Eine kluge Investition für Ihre Küche?",
+                "excerpt": "Tipps für die Küchenausstattung im Vergleich.",
+                "slug": "heissluftfritteuse",
+                "categories": ["Küche"],
+            },
+        ],
+        topic="Grüne Pulver im Nährwertvergleich: Inhaltsstoffe und Wirkung von Greens-Produkten",
+        primary_keyword="inhaltsstoffe und wirkung von greens produkten",
+        secondary_keywords=["greens inhaltsstoffe", "greens dosierung", "greens qualitaet"],
+        publishing_site_url="https://publisher.example.com",
+        backlink_url="https://target.example.com",
+        max_items=4,
+        topic_signature={
+            "subject_phrase": "inhaltsstoffe und wirkung von greens produkten",
+            "primary_keyword": "inhaltsstoffe und wirkung von greens produkten",
+            "core_tokens": ["greens", "inhaltsstoffe", "wirkung"],
+            "seed_specific_tokens": ["greens", "inhaltsstoffe", "wirkung"],
+            "seed_all_tokens": ["greens", "inhaltsstoffe", "wirkung", "dosierung", "qualitaet"],
+            "specific_tokens": ["greens", "inhaltsstoffe", "wirkung"],
+            "all_tokens": ["greens", "inhaltsstoffe", "wirkung", "dosierung", "qualitaet"],
+            "semantic_entities": ["greens", "supplements"],
+        },
+    )
+
+    assert [item["url"] for item in ranked] == [
+        "https://publisher.example.com/anti-aging-supplements",
+        "https://publisher.example.com/vitamin-d3-nahrung",
+    ]
+
+
+def test_internal_anchor_text_prefers_natural_prefix_before_colon():
+    anchor = _internal_anchor_text(
+        "https://publisher.example.com/vorteile-natuerlicher-produkte/",
+        anchor_map={
+            "https://publisher.example.com/vorteile-natuerlicher-produkte": [
+                "Vielseitige Vorteile natürlicher Produkte: Anwendung und Wirkung im Überblick",
+            ]
+        },
+    )
+
+    assert anchor == "Vielseitige Vorteile natürlicher Produkte"

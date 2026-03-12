@@ -6889,6 +6889,241 @@ def _render_article_from_plan(
     return "".join(parts)
 
 
+def _split_plain_text_sentences(value: str) -> List[str]:
+    return [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", str(value or "")).strip())
+        if part.strip()
+    ]
+
+
+def _build_article_context_text(
+    *,
+    article_plan: Dict[str, Any],
+    intro_html: str,
+    section_bodies: Dict[str, str],
+) -> str:
+    parts: List[str] = []
+    intro_text = _strip_html_tags(intro_html).strip()
+    if intro_text:
+        parts.append(intro_text)
+    for section in article_plan.get("sections") or []:
+        if str(section.get("kind") or "body").strip() == "faq":
+            continue
+        heading = str(section.get("h2") or "").strip()
+        if heading:
+            parts.append(heading)
+        section_id = str(section.get("section_id") or "").strip()
+        if not section_id:
+            continue
+        body_text = _strip_html_tags(section_bodies.get(section_id, "")).strip()
+        if body_text:
+            parts.append(body_text)
+    return " ".join(parts).strip()
+
+
+def _select_faq_support_sentences(
+    *,
+    context_text: str,
+    question: str,
+    topic: str,
+    semantic_terms: List[str],
+    max_sentences: int = 2,
+) -> List[str]:
+    reference_tokens = _keyword_focus_tokens(
+        " ".join(
+            [
+                str(question or "").strip(),
+                str(topic or "").strip(),
+                " ".join(str(item).strip() for item in semantic_terms if str(item).strip()),
+            ]
+        )
+    )
+    scored: List[tuple[float, str]] = []
+    for sentence in _split_plain_text_sentences(context_text):
+        sentence_tokens = _keyword_focus_tokens(sentence)
+        if not sentence_tokens:
+            continue
+        overlap = len(sentence_tokens & reference_tokens)
+        family_overlap = sum(
+            1 for token in sentence_tokens
+            if token not in reference_tokens and _token_matches_reference_family(token, reference_tokens)
+        )
+        score = (overlap * 4.0) + (family_overlap * 1.4) + (_keyword_similarity(sentence, question) * 2.0)
+        if score <= 0:
+            continue
+        scored.append((score, sentence))
+    ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
+    selected: List[str] = []
+    for _score, sentence in ranked:
+        if any(_keyword_similarity(sentence, existing) >= 0.88 for existing in selected):
+            continue
+        selected.append(sentence)
+        if len(selected) >= max_sentences:
+            break
+    return selected
+
+
+def _build_faq_support_sentence(
+    *,
+    question: str,
+    topic: str,
+    primary_keyword: str,
+    semantic_terms: List[str],
+) -> str:
+    normalized_question = _normalize_keyword_phrase(question)
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    support_terms = [_format_title_case(term) for term in semantic_terms if str(term).strip()]
+    if len(support_terms) >= 2:
+        support_text = f"{support_terms[0]} und {support_terms[1]}"
+    elif support_terms:
+        support_text = support_terms[0]
+    else:
+        support_text = topic_phrase
+    if normalized_question.startswith("was ist"):
+        return (
+            f"Entscheidend ist dabei vor allem {support_text}, weil sich daran Nutzen, Risiken "
+            "und sinnvolle Entscheidungen im konkreten Kontext besser einordnen lassen."
+        )
+    if normalized_question.startswith("worauf"):
+        return (
+            f"Wichtig sind vor allem {support_text}, weil diese Punkte Qualität, Relevanz, "
+            "Aufwand oder Alltagstauglichkeit belastbarer bewertbar machen."
+        )
+    if "naechsten schritte" in normalized_question or "nächsten schritte" in normalized_question:
+        return (
+            f"Sinnvoll sind klare nächste Schritte rund um {topic_phrase}, etwa die Prüfung von "
+            f"{support_text}, damit Entscheidungen nicht nur schnell, sondern auch tragfähig ausfallen."
+        )
+    return (
+        f"Für {topic_phrase} helfen konkrete Kriterien wie {support_text}, weil sich daraus "
+        "praktische Unterschiede und sinnvolle nächste Schritte ableiten lassen."
+    )
+
+
+def _build_deterministic_faq_answer_html(
+    *,
+    question: str,
+    topic: str,
+    primary_keyword: str,
+    context_text: str,
+    semantic_terms: List[str],
+    min_words: int,
+) -> str:
+    answer_parts = _select_faq_support_sentences(
+        context_text=context_text,
+        question=question,
+        topic=topic,
+        semantic_terms=semantic_terms,
+        max_sentences=2,
+    )
+    fallback_sentence = _build_faq_support_sentence(
+        question=question,
+        topic=topic,
+        primary_keyword=primary_keyword,
+        semantic_terms=semantic_terms,
+    )
+    if not answer_parts:
+        answer_parts.append(fallback_sentence)
+    joined = " ".join(answer_parts).strip()
+    if fallback_sentence and word_count_from_html(f"<p>{joined}</p>") < min_words:
+        joined = f"{joined} {fallback_sentence}".strip()
+    if word_count_from_html(f"<p>{joined}</p>") < min_words:
+        topic_sentence = (
+            f"Gerade bei {_format_title_case(_build_topic_phrase(topic) or primary_keyword or 'diesem Thema')} "
+            "kommt es deshalb auf eine konkrete, alltagsnahe Einordnung an."
+        )
+        joined = f"{joined} {topic_sentence}".strip()
+    joined = re.sub(r"\s+", " ", joined).strip()
+    if joined and joined[-1] not in ".!?":
+        joined += "."
+    return _wrap_paragraphs(joined) or "<p></p>"
+
+
+def _ensure_faq_items_complete(
+    *,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    intro_html: str,
+    section_bodies: Dict[str, str],
+    faq_items: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    faq_questions = [str(item).strip() for item in (article_plan.get("faq_questions") or []) if str(item).strip()]
+    if not faq_questions:
+        return faq_items
+    context_text = _build_article_context_text(
+        article_plan=article_plan,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+    )
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
+    content_brief = phase3.get("content_brief") if isinstance(phase3.get("content_brief"), dict) else {}
+    semantic_terms = _merge_string_lists(
+        [str(item).strip() for item in (keyword_buckets.get("semantic_entities") or []) if str(item).strip()],
+        [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in ((content_brief or {}).get("publishing_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in ((content_brief or {}).get("overlap_terms") or []) if str(item).strip()],
+        _topic_focus_terms(str(phase3.get("final_article_topic") or ""), max_terms=2),
+        max_items=8,
+    )
+    faq_target_words = article_plan.get("sections") or []
+    faq_section = next(
+        (section for section in faq_target_words if str(section.get("kind") or "").strip() == "faq"),
+        {},
+    )
+    per_answer_min = int(((faq_section or {}).get("target_words") or {}).get("per_answer_min") or 35)
+    ensured: List[Dict[str, str]] = []
+    used_indexes: set[int] = set()
+    for index, question in enumerate(faq_questions, start=1):
+        formatted_question = _format_faq_question(question) or question
+        matched_answer_html = ""
+        for item_index, item in enumerate(faq_items):
+            if item_index in used_indexes:
+                continue
+            if _keyword_similarity(str(item.get("question") or ""), formatted_question) >= 0.75:
+                matched_answer_html = str(item.get("answer_html") or "").strip()
+                used_indexes.add(item_index)
+                break
+        if not matched_answer_html and index - 1 < len(faq_items):
+            candidate = faq_items[index - 1]
+            matched_answer_html = str(candidate.get("answer_html") or "").strip()
+            if matched_answer_html:
+                used_indexes.add(index - 1)
+        if not matched_answer_html or word_count_from_html(matched_answer_html) < per_answer_min:
+            matched_answer_html = _build_deterministic_faq_answer_html(
+                question=formatted_question,
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                context_text=context_text,
+                semantic_terms=semantic_terms,
+                min_words=per_answer_min,
+            )
+        ensured.append(
+            {
+                "question": formatted_question,
+                "answer_html": matched_answer_html,
+            }
+        )
+    while ensured and word_count_from_html(_render_faq_section_html(ensured)) < FAQ_MIN_WORDS:
+        for item in ensured:
+            answer_html = str(item.get("answer_html") or "").strip()
+            expanded = _build_deterministic_faq_answer_html(
+                question=str(item.get("question") or ""),
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                context_text=context_text,
+                semantic_terms=semantic_terms,
+                min_words=max(per_answer_min + 8, 42),
+            )
+            if word_count_from_html(expanded) > word_count_from_html(answer_html):
+                item["answer_html"] = expanded
+            if word_count_from_html(_render_faq_section_html(ensured)) >= FAQ_MIN_WORDS:
+                break
+        else:
+            break
+    return ensured[:KEYWORD_MAX_FAQ]
+
+
 def _build_writer_prompt_request(
     *,
     article_plan: Dict[str, Any],
@@ -7037,6 +7272,43 @@ def _build_planner_prompt_trace_entry(
     }
 
 
+def _build_partial_creator_output(
+    *,
+    target_site_url: str,
+    publishing_site_url: str,
+    phase1: Dict[str, Any],
+    phase1_cache_meta: Dict[str, Any],
+    phase2: Dict[str, Any],
+    phase2_cache_meta: Dict[str, Any],
+    phase3: Dict[str, Any],
+    phase4: Dict[str, Any],
+    warnings: List[str],
+    debug: Dict[str, Any],
+    rejection_reason: List[str],
+    phase5: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "target_site_url": target_site_url,
+        "host_site_url": publishing_site_url,
+        "phase1": phase1,
+        "phase1_cache_meta": phase1_cache_meta,
+        "phase2": phase2,
+        "phase2_cache_meta": phase2_cache_meta,
+        "phase3": phase3,
+        "phase4": phase4,
+        "warnings": warnings,
+        "rejection_reason": rejection_reason,
+        "debug": {
+            **debug,
+            "rejection_reason": rejection_reason,
+        },
+    }
+    if isinstance(phase5, dict) and phase5:
+        payload["phase5"] = phase5
+    return ensure_prompt_trace_in_creator_output(payload)
+
+
 def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(creator_output, dict):
         return creator_output
@@ -7152,7 +7424,13 @@ def _generate_article_from_plan(
     llm_out = _parse_writer_tagged_response(raw_text=raw_text, article_plan=article_plan)
     intro_html = str(llm_out.get("intro_html") or "").strip()
     section_bodies = dict(llm_out.get("section_bodies") or {})
-    faq_items = _coerce_generated_faqs(llm_out.get("faq_items") or [])
+    faq_items = _ensure_faq_items_complete(
+        article_plan=article_plan,
+        phase3=phase3,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=_coerce_generated_faqs(llm_out.get("faq_items") or []),
+    )
     article_html = _render_article_from_plan(
         article_plan=article_plan,
         intro_html=intro_html,
@@ -7492,15 +7770,10 @@ def _validate_phrase_integrity(article_html: str) -> List[str]:
     return errors
 
 
-def _validate_contextual_alignment(article_html: str, content_brief: Optional[Dict[str, Any]]) -> List[str]:
+def _extract_contextual_validation_cues(content_brief: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
     if not isinstance(content_brief, dict) or not content_brief:
-        return []
-    body_html = re.sub(r"<h1[^>]*>.*?</h1>", "", article_html or "", flags=re.IGNORECASE | re.DOTALL)
-    plain_text = _strip_html_tags(body_html)
-    normalized_text = _normalize_keyword_phrase(plain_text)
-    errors: List[str] = []
+        return {"publishing": [], "target": []}
     publishing_cues = _merge_string_lists(
-        [str(content_brief.get("audience") or "").strip()],
         [str(item).strip() for item in (content_brief.get("publishing_signals") or []) if str(item).strip()],
         max_items=4,
     )
@@ -7509,6 +7782,22 @@ def _validate_contextual_alignment(article_html: str, content_brief: Optional[Di
         [str(item).strip() for item in (content_brief.get("overlap_terms") or []) if str(item).strip()],
         max_items=4,
     )
+    return {
+        "publishing": publishing_cues,
+        "target": target_cues,
+    }
+
+
+def _validate_contextual_alignment(article_html: str, content_brief: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(content_brief, dict) or not content_brief:
+        return []
+    body_html = re.sub(r"<h1[^>]*>.*?</h1>", "", article_html or "", flags=re.IGNORECASE | re.DOTALL)
+    plain_text = _strip_html_tags(body_html)
+    normalized_text = _normalize_keyword_phrase(plain_text)
+    errors: List[str] = []
+    contextual_cues = _extract_contextual_validation_cues(content_brief)
+    publishing_cues = contextual_cues["publishing"]
+    target_cues = contextual_cues["target"]
     if publishing_cues and not any(_keyword_present_relaxed(plain_text, cue) for cue in publishing_cues):
         errors.append("publishing_context_missing")
     if target_cues and not any(_keyword_present_relaxed(plain_text, cue) for cue in target_cues):
@@ -7723,20 +8012,27 @@ def _build_keyword_support_paragraph(
     *,
     topic: str,
     primary_keyword: str,
+    publishing_signals: List[str],
     target_signals: List[str],
     secondary_keywords: List[str],
 ) -> str:
     sentences: List[str] = []
-    topic_phrase = _format_title_case(topic or primary_keyword or "dieses Thema")
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
     if primary_keyword:
         sentences.append(
-            f"Bei {_format_title_case(primary_keyword)} helfen Eltern konkrete Alltagssituationen, klare Vergleichskriterien und ein realistischer Blick auf Nutzung und Komfort."
+            f"Bei {_format_title_case(primary_keyword)} helfen konkrete Kriterien, typische Einsatzsituationen und ein realistischer Blick auf Aufwand, Nutzen und Grenzen."
         )
     else:
-        sentences.append(f"Bei {topic_phrase} helfen konkrete Alltagssituationen, klare Vergleichskriterien und ein realistischer Blick auf Nutzung und Komfort.")
+        sentences.append(
+            f"Bei {topic_phrase} helfen konkrete Kriterien, typische Einsatzsituationen und ein realistischer Blick auf Aufwand, Nutzen und Grenzen."
+        )
+    if publishing_signals:
+        sentences.append(
+            f"Gerade {_format_title_case(publishing_signals[0])} zeigt, wie sich das Thema alltagsnah und im passenden redaktionellen Kontext einordnen lässt."
+        )
     if target_signals:
         sentences.append(
-            f"Wichtig ist dabei auch {_format_title_case(target_signals[0])}, weil sich Schutz, Passform und langfristige Alltagstauglichkeit daran besser einordnen lassen."
+            f"Wichtig ist dabei auch {_format_title_case(target_signals[0])}, weil sich Qualität, Nutzen und konkrete Entscheidungskriterien daran besser einordnen lassen."
         )
     if secondary_keywords:
         sentences.append(
@@ -7744,6 +8040,10 @@ def _build_keyword_support_paragraph(
         )
     if len(target_signals) > 1:
         sentences.append(f"Gerade {_format_title_case(target_signals[1])} zeigt, worauf es im konkreten Einsatz wirklich ankommt.")
+    elif len(publishing_signals) > 1:
+        sentences.append(
+            f"Auch {_format_title_case(publishing_signals[1])} hilft dabei, Unterschiede, Risiken und sinnvolle nächste Schritte konkreter zu bewerten."
+        )
     elif len(secondary_keywords) > 1:
         sentences.append(f"Auch {_format_title_case(secondary_keywords[1])} verdient einen kurzen Blick, weil daraus praxisnahe Unterschiede sichtbar werden.")
     return " ".join(sentences[:3]).strip()
@@ -7784,9 +8084,15 @@ def _repair_keyword_context_gaps(
         main_h2.string = f"{_format_title_case(primary_keyword)}: {current_heading}"
 
     plain_text = _strip_html_tags(str(body))
+    contextual_cues = _extract_contextual_validation_cues(content_brief)
+    publishing_signals = [
+        signal
+        for signal in contextual_cues["publishing"]
+        if not _keyword_present_relaxed(plain_text, signal)
+    ]
     target_signals = [
         signal
-        for signal in [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()]
+        for signal in contextual_cues["target"]
         if not _keyword_present_relaxed(plain_text, signal)
     ]
     missing_secondaries = [
@@ -7802,11 +8108,12 @@ def _repair_keyword_context_gaps(
     if not paragraph_targets:
         paragraph_targets.append(main_h2)
 
-    if target_signals or missing_secondaries or thin_sections or "primary_keyword_missing_h2" in errors:
+    if publishing_signals or target_signals or missing_secondaries or thin_sections or "primary_keyword_missing_h2" in errors:
         for target_h2 in paragraph_targets[:2]:
             paragraph_text = _build_keyword_support_paragraph(
                 topic=topic,
                 primary_keyword=primary_keyword,
+                publishing_signals=publishing_signals[:2],
                 target_signals=target_signals[:2],
                 secondary_keywords=missing_secondaries[:2],
             )
@@ -7817,9 +8124,10 @@ def _repair_keyword_context_gaps(
             insert_after = _find_section_end_node(target_h2)
             insert_after.insert_after(new_paragraph)
             plain_text = _strip_html_tags(str(body))
+            publishing_signals = [signal for signal in publishing_signals if not _keyword_present_relaxed(plain_text, signal)]
             target_signals = [signal for signal in target_signals if not _keyword_present_relaxed(plain_text, signal)]
             missing_secondaries = [keyword for keyword in missing_secondaries if not _keyword_present_relaxed(plain_text, keyword)]
-            if not target_signals and not missing_secondaries:
+            if not publishing_signals and not target_signals and not missing_secondaries:
                 break
 
     result = body.decode_contents() if getattr(body, "decode_contents", None) else str(body)
@@ -8308,7 +8616,8 @@ def _is_link_only_error(error: str) -> bool:
 def _is_keyword_context_repairable_error(error: str) -> bool:
     value = (error or "").strip()
     return (
-        value.startswith("target_specificity_missing")
+        value.startswith("publishing_context_missing")
+        or value.startswith("target_specificity_missing")
         or value.startswith("primary_keyword_missing_h2")
         or value.startswith("secondary_keywords_missing:")
         or value.startswith("section_too_thin:")
@@ -9336,25 +9645,21 @@ def run_creator_pipeline(
                     }
                 )
     if plan_quality["errors"]:
-        partial_output = ensure_prompt_trace_in_creator_output(
-            {
-                "ok": False,
-                "target_site_url": target_site_url,
-                "host_site_url": publishing_site_url,
-                "phase1": phase1,
-                "phase1_cache_meta": phase1_cache_meta,
-                "phase2": phase2,
-                "phase2_cache_meta": phase2_cache_meta,
-                "phase3": phase3,
-                "phase4": phase4,
-                "warnings": warnings,
-                "rejection_reason": plan_quality["errors"],
-                "debug": {
-                    **debug,
-                    "planning_quality": plan_quality,
-                    "rejection_reason": plan_quality["errors"],
-                },
-            }
+        partial_output = _build_partial_creator_output(
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            phase1=phase1,
+            phase1_cache_meta=phase1_cache_meta,
+            phase2=phase2,
+            phase2_cache_meta=phase2_cache_meta,
+            phase3=phase3,
+            phase4=phase4,
+            warnings=warnings,
+            debug={
+                **debug,
+                "planning_quality": plan_quality,
+            },
+            rejection_reason=plan_quality["errors"],
         )
         raise CreatorError(
             f"Phase 4 plan invalid: {plan_quality['errors']}",
@@ -9376,6 +9681,7 @@ def run_creator_pipeline(
     phase_start = time.time()
     logger.info("creator.phase5.start")
     article_payload = None
+    last_phase5_candidate: Optional[Dict[str, Any]] = None
     errors: List[str] = []
     backlink_url = phase1["backlink_url"]
     writer_feedback: List[str] = []
@@ -9411,7 +9717,27 @@ def run_creator_pipeline(
             )
         except LLMError as exc:
             if strict_failure_mode:
-                raise CreatorError(f"Phase 5 writer attempt {attempt} failed: {exc}") from exc
+                partial_output = _build_partial_creator_output(
+                    target_site_url=target_site_url,
+                    publishing_site_url=publishing_site_url,
+                    phase1=phase1,
+                    phase1_cache_meta=phase1_cache_meta,
+                    phase2=phase2,
+                    phase2_cache_meta=phase2_cache_meta,
+                    phase3=phase3,
+                    phase4=phase4,
+                    phase5=last_phase5_candidate,
+                    warnings=warnings,
+                    debug={
+                        **debug,
+                        "writer_validation_errors": [str(exc)],
+                    },
+                    rejection_reason=[str(exc)],
+                )
+                raise CreatorError(
+                    f"Phase 5 writer attempt {attempt} failed: {exc}",
+                    details={"creator_output": partial_output},
+                ) from exc
             errors.append(str(exc))
             continue
 
@@ -9420,6 +9746,7 @@ def run_creator_pipeline(
             phase3=phase3,
             phase4=phase4,
         )
+        last_phase5_candidate = dict(phase5_candidate)
         wc = word_count_from_html(phase5_candidate["article_html"])
         logger.info("creator.phase5.attempt attempt=%s mode=planned word_count=%s", attempt, wc)
 
@@ -9478,6 +9805,7 @@ def run_creator_pipeline(
                         "article_html": repaired_html,
                         "excerpt": _extract_first_paragraph_text(repaired_html)[:200] or phase5_candidate.get("excerpt") or "",
                     }
+                    last_phase5_candidate = dict(phase5_candidate)
                     validation_errors = _collect_article_validation_errors(
                         article_html=phase5_candidate["article_html"],
                         meta_title=phase5_candidate.get("meta_title") or phase3["title_package"]["meta_title"],
@@ -9570,7 +9898,27 @@ def run_creator_pipeline(
                 article_payload = phase5_candidate
                 break
             if strict_failure_mode:
-                raise CreatorError(f"Phase 5 writer attempt {attempt} validation failed: {validation_errors}")
+                partial_output = _build_partial_creator_output(
+                    target_site_url=target_site_url,
+                    publishing_site_url=publishing_site_url,
+                    phase1=phase1,
+                    phase1_cache_meta=phase1_cache_meta,
+                    phase2=phase2,
+                    phase2_cache_meta=phase2_cache_meta,
+                    phase3=phase3,
+                    phase4=phase4,
+                    phase5=phase5_candidate,
+                    warnings=warnings,
+                    debug={
+                        **debug,
+                        "writer_validation_errors": validation_errors,
+                    },
+                    rejection_reason=validation_errors,
+                )
+                raise CreatorError(
+                    f"Phase 5 writer attempt {attempt} validation failed: {validation_errors}",
+                    details={"creator_output": partial_output},
+                )
             errors.extend(validation_errors)
             writer_feedback = validation_errors
             article_payload = None
@@ -9580,7 +9928,28 @@ def run_creator_pipeline(
         break
 
     if not article_payload:
-        raise CreatorError(f"Phase 5 writer failed: {_dedupe_string_values(errors)}")
+        phase5_errors = _dedupe_string_values(errors)
+        partial_output = _build_partial_creator_output(
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            phase1=phase1,
+            phase1_cache_meta=phase1_cache_meta,
+            phase2=phase2,
+            phase2_cache_meta=phase2_cache_meta,
+            phase3=phase3,
+            phase4=phase4,
+            phase5=last_phase5_candidate,
+            warnings=warnings,
+            debug={
+                **debug,
+                "writer_validation_errors": phase5_errors,
+            },
+            rejection_reason=phase5_errors,
+        )
+        raise CreatorError(
+            f"Phase 5 writer failed: {phase5_errors}",
+            details={"creator_output": partial_output},
+        )
 
     art_html = (article_payload.get("article_html") or "").strip()
     art_html = _strip_empty_blocks(art_html)

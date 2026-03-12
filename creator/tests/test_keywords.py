@@ -5,6 +5,7 @@ import pytest
 from creator.api.pipeline import (
     CreatorError,
     DEFAULT_KEYWORD_TREND_CACHE_TTL_SECONDS,
+    FAQ_MIN_WORDS,
     GOOGLE_SUGGEST_CACHE,
     KEYWORD_MIN_SECONDARY,
     _align_primary_keyword_to_topic,
@@ -12,6 +13,7 @@ from creator.api.pipeline import (
     _build_deterministic_title_package,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
+    _build_partial_creator_output,
     _build_pipeline_execution_policy,
     _build_phase4_fallback_outline,
     _build_site_snapshot,
@@ -24,6 +26,7 @@ from creator.api.pipeline import (
     _discover_keyword_candidates,
     _derive_trend_query_family,
     _ensure_faq_candidates,
+    _ensure_faq_items_complete,
     ensure_prompt_trace_in_creator_output,
     _evaluate_backlink_naturalness,
     _evaluate_plan_quality,
@@ -2380,6 +2383,28 @@ def test_validate_contextual_alignment_rejects_generic_off_context_copy():
     assert any(error.startswith("generic_filler_excessive") for error in errors)
 
 
+def test_validate_contextual_alignment_ignores_generic_audience_only_cues():
+    html = """
+    <h1>Immobilie verkaufen: Checkliste für Eigentümer</h1>
+    <p>Ein realistischer Angebotspreis, vollständige Unterlagen und eine überzeugende Präsentation sind die Basis für einen strukturierten Verkauf.</p>
+    <h2>Welche Unterlagen sind wichtig?</h2>
+    <p>Zum Start gehören Grundbuchauszug, Energieausweis und belastbare Informationen zum Zustand der Immobilie.</p>
+    """
+
+    errors = _validate_contextual_alignment(
+        html,
+        {
+            "audience": "Haushalte",
+            "publishing_signals": [],
+            "target_signals": ["Grundbuchauszug", "Energieausweis"],
+            "overlap_terms": ["verkauf"],
+        },
+    )
+
+    assert "publishing_context_missing" not in errors
+    assert "target_specificity_missing" not in errors
+
+
 def test_validate_section_substance_flags_thin_main_sections():
     html = """
     <h1>Kinder Sonnenbrillen: worauf Eltern achten sollten</h1>
@@ -2402,6 +2427,83 @@ def test_validate_section_substance_flags_thin_main_sections():
     errors = _validate_section_substance(html)
     assert any(error.startswith("section_too_thin:passform") for error in errors)
     assert any(error.startswith("section_too_thin:material") for error in errors)
+
+
+def test_ensure_faq_items_complete_backfills_missing_and_thin_answers():
+    article_plan = {
+        "faq_questions": [
+            "Was ist bei immobilie verkaufen wichtig?",
+            "Worauf sollte man bei der Preisfindung achten?",
+            "Welche nächsten Schritte helfen dann im Alltag?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Unterlagen braucht man?",
+            },
+            {
+                "section_id": "section_2",
+                "kind": "faq",
+                "h2": "FAQ",
+                "target_words": {"per_answer_min": 35, "per_answer_max": 55},
+            },
+        ],
+    }
+    phase3 = {
+        "final_article_topic": "Immobilie verkaufen: Checkliste und praktische Schritte",
+        "primary_keyword": "immobilie verkaufen",
+        "keyword_buckets": {
+            "semantic_entities": ["Energieausweis", "Grundbuchauszug", "Angebotspreis"],
+        },
+        "content_brief": {
+            "target_signals": ["Makler", "Wertermittlung"],
+            "publishing_signals": ["Wohnen"],
+            "overlap_terms": ["verkauf"],
+        },
+    }
+    faq_items = [
+        {"question": "Was ist bei immobilie verkaufen wichtig?", "answer_html": "<p>Kurz.</p>"},
+        {"question": "Worauf sollte man bei der Preisfindung achten?", "answer_html": "<p>Noch zu kurz.</p>"},
+    ]
+
+    ensured = _ensure_faq_items_complete(
+        article_plan=article_plan,
+        phase3=phase3,
+        intro_html="<p>Ein realistischer Preis, vollständige Unterlagen und eine klare Vermarktung strukturieren den Verkauf.</p>",
+        section_bodies={
+            "section_1": (
+                "<p>Wichtig sind Grundbuchauszug, Energieausweis, Wohnflächenberechnung und ein realistischer Angebotspreis. "
+                "Wer diese Unterlagen früh sammelt, kann Käuferfragen schneller beantworten und die Vermarktung sauber vorbereiten.</p>"
+            )
+        },
+        faq_items=faq_items,
+    )
+
+    assert len(ensured) == 3
+    assert all(item["answer_html"] for item in ensured)
+    assert word_count_from_html("".join(item["answer_html"] for item in ensured)) >= FAQ_MIN_WORDS
+
+
+def test_build_partial_creator_output_preserves_phase5_and_prompt_trace():
+    payload = _build_partial_creator_output(
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        phase1={"backlink_url": "https://target.example.com"},
+        phase1_cache_meta={},
+        phase2={"allowed_topics": ["familie"]},
+        phase2_cache_meta={},
+        phase3={"final_article_topic": "Sonnenbrillen für Kinder", "primary_keyword": "sonnenbrillen für kinder"},
+        phase4={"h1": "Sonnenbrillen für Kinder"},
+        phase5={"article_html": "<h1>Sonnenbrillen für Kinder</h1><p>Entwurf</p>"},
+        warnings=["phase5_failed"],
+        debug={"prompt_trace": {"planner": {"mode": "deterministic", "attempts": []}, "writer_attempts": []}},
+        rejection_reason=["faq_answers_too_thin:72"],
+    )
+
+    assert payload["phase5"]["article_html"].startswith("<h1>")
+    assert payload["debug"]["prompt_trace"]["planner"]["mode"] == "deterministic"
+    assert payload["rejection_reason"] == ["faq_answers_too_thin:72"]
 
 
 def test_generate_article_by_sections_uses_editorial_brief_and_bounded_tokens(monkeypatch):

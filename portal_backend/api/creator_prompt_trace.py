@@ -241,3 +241,13 @@ def normalize_prompt_trace_payload(
     planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
     writer_prompt_trace = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
     return normalized_payload, planner_trace, writer_prompt_trace
+
+
+def extract_draft_article_html(creator_output: Dict[str, Any]) -> str:
+    if not isinstance(creator_output, dict):
+        return ""
+    phase5 = creator_output.get("phase5") if isinstance(creator_output.get("phase5"), dict) else {}
+    article_html = str(phase5.get("article_html") or "").strip()
+    if article_html:
+        return article_html
+    return str(creator_output.get("article_html") or "").strip()

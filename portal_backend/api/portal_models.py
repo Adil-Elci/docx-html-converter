@@ -319,6 +319,7 @@ class CreatorOutput(Base):
     site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id"), nullable=False)
     target_site_url = Column(Text, nullable=False)
     host_site_url = Column(Text, nullable=False)
+    draft_article_html = Column(Text, nullable=False, default="")
     planner_trace = Column(JSONB, nullable=False, default=dict)
     writer_prompt_trace = Column(JSONB, nullable=False, default=list)
     payload = Column(JSONB, nullable=False, default=dict)

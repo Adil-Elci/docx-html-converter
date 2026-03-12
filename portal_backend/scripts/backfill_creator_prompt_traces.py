@@ -9,11 +9,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
-    from portal_backend.api.creator_prompt_trace import normalize_prompt_trace_payload
+    from portal_backend.api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
     from portal_backend.api.db import get_sessionmaker
     from portal_backend.api.portal_models import CreatorOutput
 except ModuleNotFoundError:
-    from api.creator_prompt_trace import normalize_prompt_trace_payload
+    from api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
     from api.db import get_sessionmaker
     from api.portal_models import CreatorOutput
 
@@ -38,7 +38,13 @@ def backfill_creator_prompt_trace_columns(
     sync_payload: bool = True,
 ) -> Dict[str, Any]:
     query = session.query(CreatorOutput).filter(
-        text("(planner_trace = '{}'::jsonb OR writer_prompt_trace = '[]'::jsonb)")
+        text(
+            "("
+            "planner_trace = '{}'::jsonb "
+            "OR writer_prompt_trace = '[]'::jsonb "
+            "OR COALESCE(draft_article_html, '') = ''"
+            ")"
+        )
     )
     if job_id is not None:
         query = query.filter(CreatorOutput.job_id == job_id)
@@ -47,6 +53,7 @@ def backfill_creator_prompt_trace_columns(
     scanned = 0
     updated = 0
     payload_synced = 0
+    draft_backfilled = 0
     skipped = 0
 
     for row in query.yield_per(batch_size):
@@ -56,25 +63,30 @@ def backfill_creator_prompt_trace_columns(
 
         current_payload = row.payload if isinstance(row.payload, dict) else {}
         normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(current_payload)
+        draft_article_html = extract_draft_article_html(normalized_payload)
 
         payload_changed = sync_payload and normalized_payload != current_payload
         planner_changed = planner_trace != (row.planner_trace if isinstance(row.planner_trace, dict) else {})
         writer_changed = writer_prompt_trace != (
             row.writer_prompt_trace if isinstance(row.writer_prompt_trace, list) else []
         )
+        draft_changed = draft_article_html != str(getattr(row, "draft_article_html", "") or "")
 
-        if not payload_changed and not planner_changed and not writer_changed:
+        if not payload_changed and not planner_changed and not writer_changed and not draft_changed:
             skipped += 1
             continue
 
         updated += 1
         if payload_changed:
             payload_synced += 1
+        if draft_changed:
+            draft_backfilled += 1
         if dry_run:
             continue
 
         row.planner_trace = planner_trace
         row.writer_prompt_trace = writer_prompt_trace
+        row.draft_article_html = draft_article_html
         if payload_changed:
             row.payload = normalized_payload
 
@@ -88,6 +100,7 @@ def backfill_creator_prompt_trace_columns(
         "scanned": scanned,
         "updated": updated,
         "payload_synced": payload_synced,
+        "draft_backfilled": draft_backfilled,
         "skipped": skipped,
         "dry_run": dry_run,
         "job_id": str(job_id) if job_id else "",

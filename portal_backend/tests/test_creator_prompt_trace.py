@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from portal_backend.api.creator_prompt_trace import normalize_prompt_trace_payload
+from portal_backend.api.creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
 from portal_backend.scripts.backfill_creator_prompt_traces import backfill_creator_prompt_trace_columns
 
 
@@ -62,6 +62,10 @@ def test_normalize_prompt_trace_payload_backfills_columns_and_payload() -> None:
     assert normalized_payload["debug"]["prompt_trace"]["writer_attempts"] == writer_prompt_trace
 
 
+def test_extract_draft_article_html_reads_phase5_article_html() -> None:
+    assert extract_draft_article_html(_legacy_creator_output()) == "<p>Artikelinhalt</p>"
+
+
 class _FakeQuery:
     def __init__(self, rows: list[SimpleNamespace]) -> None:
         self._rows = rows
@@ -94,6 +98,7 @@ def test_backfill_creator_prompt_trace_columns_updates_empty_rows() -> None:
         job_id=uuid4(),
         created_at=datetime.now(timezone.utc),
         payload=_legacy_creator_output(),
+        draft_article_html="",
         planner_trace={},
         writer_prompt_trace=[],
     )
@@ -104,7 +109,9 @@ def test_backfill_creator_prompt_trace_columns_updates_empty_rows() -> None:
     assert summary["scanned"] == 1
     assert summary["updated"] == 1
     assert summary["payload_synced"] == 1
+    assert summary["draft_backfilled"] == 1
     assert row.planner_trace["mode"] == "deterministic"
     assert row.writer_prompt_trace[0]["request_label"] == "phase5_writer_attempt_1"
+    assert row.draft_article_html == "<p>Artikelinhalt</p>"
     assert row.payload["debug"]["prompt_trace"]["planner"] == row.planner_trace
     assert session.commits == 1

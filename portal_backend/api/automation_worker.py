@@ -20,7 +20,7 @@ from .automation_service import (
     run_create_article_pipeline,
 )
 from .creator_history import load_recent_creator_history
-from .creator_prompt_trace import normalize_prompt_trace_payload
+from .creator_prompt_trace import extract_draft_article_html, normalize_prompt_trace_payload
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .internal_linking_sync import fetch_creator_internal_link_inventory_for_site, run_internal_link_inventory_sync
 from .publish_notification_hook import send_client_publish_notification
@@ -244,6 +244,7 @@ class AutomationJobWorker:
         if not isinstance(creator_output, dict) or not creator_output:
             return
         normalized_payload, planner_trace, writer_prompt_trace = normalize_prompt_trace_payload(creator_output)
+        draft_article_html = extract_draft_article_html(normalized_payload)
         with self._sessionmaker() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
@@ -262,6 +263,7 @@ class AutomationJobWorker:
                     site_id=submission.site_id,
                     target_site_url=str(payload_copy.get("target_site_url") or ""),
                     host_site_url=str(payload_copy.get("host_site_url") or ""),
+                    draft_article_html=draft_article_html,
                     planner_trace=planner_trace,
                     writer_prompt_trace=writer_prompt_trace,
                     payload=payload_copy,
@@ -1033,6 +1035,7 @@ class AutomationJobWorker:
             prompt_trace = creator_debug.get("prompt_trace") if isinstance(creator_debug.get("prompt_trace"), dict) else {}
             planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else {}
             writer_prompt_trace = prompt_trace.get("writer_attempts") if isinstance(prompt_trace.get("writer_attempts"), list) else []
+            draft_article_html = extract_draft_article_html(creator_output)
             session.add(
                 CreatorOutput(
                     submission_id=submission.id,
@@ -1041,6 +1044,7 @@ class AutomationJobWorker:
                     site_id=submission.site_id,
                     target_site_url=str(creator_output.get("target_site_url") or ""),
                     host_site_url=str(creator_output.get("host_site_url") or ""),
+                    draft_article_html=draft_article_html,
                     planner_trace=planner_trace,
                     writer_prompt_trace=writer_prompt_trace,
                     payload=creator_output,

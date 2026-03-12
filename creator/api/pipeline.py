@@ -344,6 +344,10 @@ EDITORIAL_ACTION_TOKENS = {
     "achten", "auswaehlen", "erkennen", "gelingt", "hilft", "kaufen", "lohnt", "nutzen", "pruefen",
     "reagieren", "steigert", "vergleichen", "verstehen", "zaehlt",
 }
+ABSTRACT_QUERY_TOKENS = {
+    "anzeichen", "aspekte", "ausloeser", "chancen", "fehler", "fragen", "hinweise", "kriterien",
+    "orientierung", "signale", "schritte", "ueberblick", "ursachen", "warnzeichen",
+}
 EDITORIAL_NOISE_TOKENS = {"amp"}
 EDITORIAL_GREETING_PREFIXES = (
     "herzlich willkommen",
@@ -647,6 +651,7 @@ def _infer_article_angle(
 
 def _build_style_profile(
     *,
+    topic: str,
     topic_class: str,
     intent_type: str,
     article_angle: str,
@@ -661,11 +666,42 @@ def _build_style_profile(
         [str(item).strip() for item in ((publishing_profile or {}).get("content_style") or []) if str(item).strip()],
         max_items=4,
     )
-    target_context = _merge_string_lists(
+    topic_focus_tokens = _filter_topic_signature_tokens(
+        _keyword_focus_tokens(f"{_build_topic_phrase(topic)} {_extract_topic_question_phrase(topic)}")
+    )
+    target_context: List[str] = []
+    for raw_value in _merge_string_lists(
         [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
         [str(item).strip() for item in ((target_profile or {}).get("topics") or []) if str(item).strip()],
-        max_items=4,
-    )
+        max_items=8,
+    ):
+        normalized = _sanitize_editorial_phrase(raw_value, allow_single_token=True)
+        if not normalized:
+            continue
+        normalized_tokens = _keyword_focus_tokens(normalized)
+        if not normalized_tokens:
+            continue
+        if len(normalized_tokens & (PAIR_FIT_BOILERPLATE_TOKENS | PAIR_FIT_PROMO_TOKENS | GENERIC_UI_CHROME_TOKENS)) >= max(1, len(normalized_tokens) - 1):
+            continue
+        if _phrase_has_same_family_duplicate_tokens(normalized):
+            continue
+        family_topic_overlap = {
+            token
+            for token in normalized_tokens
+            if _token_matches_reference_family(token, topic_focus_tokens, allow_prefix_match=False)
+        }
+        aligned_topic_tokens = (normalized_tokens & topic_focus_tokens) | family_topic_overlap
+        off_topic_tokens = normalized_tokens - aligned_topic_tokens - PAIR_FIT_INFORMATIONAL_CUES
+        if len(normalized_tokens) >= 3 and len(off_topic_tokens) >= max(2, len(normalized_tokens) - 1):
+            continue
+        if topic_focus_tokens and not (
+            aligned_topic_tokens
+            or _keyword_similarity(normalized, topic) >= 0.32
+        ):
+            continue
+        target_context.append(normalized)
+        if len(target_context) >= 4:
+            break
     return {
         "topic_class": topic_class,
         "intent_type": intent_type,
@@ -760,6 +796,9 @@ def _evaluate_title_quality(
     if normalized_primary and _count_keyword_occurrences(normalized_title, normalized_primary) > 1:
         score -= 24
         errors.append("title_keyword_stuffed")
+    if _phrase_has_same_family_duplicate_tokens(normalized_title):
+        score -= 28
+        errors.append("title_family_duplicate_tokens")
     if _count_repeated_two_word_fragments(normalized_title) > 1:
         score -= 18
         errors.append("title_fragment_repeated")
@@ -829,6 +868,9 @@ def _evaluate_heading_quality(
         if penalty:
             score -= penalty
             errors.append(f"heading_generic:{heading}")
+        if _phrase_has_same_family_duplicate_tokens(heading):
+            score -= 22
+            errors.append(f"heading_family_duplicate_tokens:{heading}")
         if _phrase_has_editorial_noise(heading) and not _heading_is_natural_core_question(heading):
             score -= 18
             errors.append(f"heading_invalid:{heading}")
@@ -3001,6 +3043,42 @@ def _keyword_similarity(a: str, b: str) -> float:
     return intersection / union
 
 
+def _tokens_share_same_family_variant(first: str, second: str) -> bool:
+    first_normalized = _normalize_keyword_phrase(first)
+    second_normalized = _normalize_keyword_phrase(second)
+    if not first_normalized or not second_normalized or first_normalized == second_normalized:
+        return first_normalized == second_normalized and bool(first_normalized)
+    shorter, longer = (
+        (first_normalized, second_normalized)
+        if len(first_normalized) <= len(second_normalized)
+        else (second_normalized, first_normalized)
+    )
+    if len(shorter) < 5:
+        return False
+    if shorter in KEYWORD_LOW_SIGNAL_TOKENS or shorter in ABSTRACT_QUERY_TOKENS:
+        return False
+    if len(longer) - len(shorter) > 3:
+        return False
+    return longer.startswith(shorter)
+
+
+def _phrase_has_same_family_duplicate_tokens(value: str) -> bool:
+    focus_tokens = [
+        token
+        for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
+        if token not in ABSTRACT_QUERY_TOKENS
+        and token not in EDITORIAL_ACTION_TOKENS
+    ]
+    if len(focus_tokens) < 2:
+        return False
+    unique_tokens = sorted(set(focus_tokens))
+    for index, token in enumerate(unique_tokens):
+        for other in unique_tokens[index + 1 :]:
+            if _tokens_share_same_family_variant(token, other):
+                return True
+    return False
+
+
 def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
     out: List[str] = []
     for item in values:
@@ -3008,6 +3086,8 @@ def _dedupe_keyword_phrases(values: List[str]) -> List[str]:
         if not normalized:
             continue
         if _is_low_signal_keyword_phrase(normalized):
+            continue
+        if _phrase_has_same_family_duplicate_tokens(normalized):
             continue
         if any(_keyword_similarity(normalized, existing) >= 0.75 for existing in out):
             continue
@@ -3055,6 +3135,8 @@ def _keyword_candidate_is_query_like(
     normalized = _sanitize_editorial_phrase(candidate)
     if not normalized or _keyword_candidate_has_question_noise(normalized):
         return False
+    if _phrase_has_same_family_duplicate_tokens(normalized):
+        return False
     words = normalized.split()
     if not (KEYWORD_MIN_WORDS <= len(words) <= KEYWORD_QUERY_MAX_WORDS):
         return False
@@ -3066,6 +3148,32 @@ def _keyword_candidate_is_query_like(
     )
     stats = _topic_signature_candidate_stats(normalized, topic_signature)
     reference_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(f"{topic} {primary_keyword} {reference_phrase}"))
+    reference_domain_tokens = {
+        token
+        for token in reference_tokens
+        if token not in EDITORIAL_ACTION_TOKENS and token not in ABSTRACT_QUERY_TOKENS
+    }
+    candidate_domain_tokens = {
+        token
+        for token in _filter_topic_signature_tokens(_keyword_focus_tokens(normalized))
+        if token not in EDITORIAL_ACTION_TOKENS and token not in ABSTRACT_QUERY_TOKENS
+    }
+    if not candidate_domain_tokens:
+        return False
+    family_domain_overlap = {
+        token
+        for token in candidate_domain_tokens
+        if _token_matches_reference_family(token, reference_domain_tokens, allow_prefix_match=False)
+    }
+    if (
+        reference_domain_tokens
+        and not (candidate_domain_tokens & reference_domain_tokens)
+        and not family_domain_overlap
+        and not stats["specific_overlap"]
+        and len(stats["broad_overlap"]) < 2
+        and similarity < 0.7
+    ):
+        return False
     off_topic_action_hits = {
         word for word in words
         if word in EDITORIAL_ACTION_TOKENS and word not in reference_tokens
@@ -3401,12 +3509,17 @@ def _build_topic_phrase(topic: str) -> str:
         or _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
         or _normalize_keyword_phrase(topic)
     )
-    words = _strip_trailing_topic_modifiers(preferred.split())
+    words = _strip_query_year_tokens(_strip_trailing_topic_modifiers(preferred.split()))
     if len(words) > KEYWORD_MAX_WORDS:
         normalized = " ".join(words[:KEYWORD_MAX_WORDS])
     else:
         normalized = " ".join(words)
     return normalized.strip()
+
+
+def _strip_query_year_tokens(words: List[str]) -> List[str]:
+    filtered = [word for word in words if not re.fullmatch(r"(?:19|20)\d{2}", str(word).strip())]
+    return filtered if len(filtered) >= KEYWORD_MIN_WORDS else words
 
 
 def _extract_candidate_phrases_from_topics(topics: List[str], *, max_phrases: int = 16) -> List[str]:
@@ -4772,16 +4885,33 @@ def _build_secondary_keyword_fallbacks(
     target_support_phrases = [str(item).strip() for item in (signature.get("target_support_phrases") or []) if str(item).strip()]
     cluster_support_phrases = [str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()]
     question_phrase = _normalize_keyword_phrase(str(signature.get("question_phrase") or ""))
+    question_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(question_phrase))
     topic_signal_tokens = _keyword_focus_tokens(f"{topic} {primary_keyword} {subject_phrase}")
     decision_like_topic = _tokens_have_decision_signal(topic_signal_tokens)
     problem_like_topic = bool(question_phrase) or _tokens_have_problem_signal(_keyword_token_set(subject_phrase))
     process_like_topic = bool(topic_signal_tokens & PROCESS_ACTION_TOKENS)
+    audience_term = str(signature.get("audience_term") or "").strip()
+    audience_dative = _audience_dative_term(audience_term) if audience_term else ""
     subject_focus_tokens = [
         token
         for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(subject_phrase))
         if token not in PAIR_FIT_AUDIENCE_TOKENS
         and token not in EDITORIAL_ACTION_TOKENS
     ]
+    timing_support_token = next(
+        (
+            token
+            for token in [
+                *sorted(_filter_keyword_focus_tokens(_keyword_focus_tokens(" ".join(cluster_support_phrases)))),
+                *sorted(_filter_keyword_focus_tokens(_keyword_focus_tokens(" ".join(keyword_cluster)))),
+            ]
+            if len(token) >= 7
+            and token not in ABSTRACT_QUERY_TOKENS
+            and token not in EDITORIAL_ACTION_TOKENS
+            and token not in subject_focus_tokens
+        ),
+        "",
+    )
     candidates = [
         signature_support,
         cluster_support_phrases[0] if cluster_support_phrases else "",
@@ -4794,10 +4924,21 @@ def _build_secondary_keyword_fallbacks(
         f"{subject_phrase} checkliste" if subject_phrase and process_like_topic else "",
         f"{subject_phrase} kriterien" if subject_phrase and decision_like_topic else "",
         f"{subject_phrase} unterlagen" if subject_phrase and process_like_topic else "",
-        f"{subject_focus_tokens[0]} erkennen" if subject_focus_tokens and problem_like_topic else "",
-        f"{subject_focus_tokens[0]} ursachen" if subject_focus_tokens and problem_like_topic else "",
+        f"{subject_focus_tokens[0]} bei {audience_dative}" if subject_focus_tokens and audience_dative else "",
+        f"{subject_focus_tokens[0]} zeitpunkt" if subject_focus_tokens and "zeitpunkt" in question_tokens else "",
+        f"{timing_support_token} zeitpunkt" if timing_support_token and "zeitpunkt" in question_tokens else "",
+        f"{subject_focus_tokens[0]} kauf oder verkauf" if subject_focus_tokens and {"kauf", "verkauf"} <= question_tokens else "",
     ]
-    return _dedupe_keyword_phrases(candidates)
+    return [
+        candidate
+        for candidate in _dedupe_keyword_phrases(candidates)
+        if _keyword_candidate_is_query_like(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        )
+    ]
 
 
 def _finalize_secondary_keywords(
@@ -4872,6 +5013,8 @@ def _faq_candidate_has_planning_noise(
     focus_phrase = re.sub(r"\s+", " ", focus_phrase).strip()
     if not focus_phrase:
         return False
+    if _phrase_has_same_family_duplicate_tokens(focus_phrase):
+        return True
     if _is_brand_identity_phrase(focus_phrase, brand_name):
         return True
     return _keyword_candidate_is_support_topic_noise(focus_phrase, topic_signature)
@@ -4880,7 +5023,7 @@ def _faq_candidate_has_planning_noise(
 def _topic_head_keyword(topic: str) -> str:
     subject_phrase = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
     normalized = subject_phrase or _build_topic_phrase(topic)
-    words = _strip_trailing_topic_modifiers(normalized.split())
+    words = _strip_query_year_tokens(_strip_trailing_topic_modifiers(normalized.split()))
     compressed_words = [
         word
         for word in words
@@ -4922,6 +5065,21 @@ def _align_primary_keyword_to_topic(
     candidate_pool = _dedupe_keyword_phrases(
         [topic_head, current_primary] + trend_candidates + cluster_candidates + [normalized_topic]
     )
+    candidate_pool = [
+        item
+        for item in candidate_pool
+        if not _phrase_has_same_family_duplicate_tokens(item)
+        and (
+            item == topic_head
+            or item == normalized_topic
+            or _keyword_candidate_is_query_like(
+                item,
+                topic=topic,
+                primary_keyword=current_primary or topic_head or normalized_topic,
+                topic_signature=None,
+            )
+        )
+    ]
     if not candidate_pool:
         return current_primary or topic_head or normalized_topic
 
@@ -5049,7 +5207,8 @@ def _select_keywords(
     primary_pool = [
         candidate
         for candidate in primary_pool
-        if (
+        if not _phrase_has_same_family_duplicate_tokens(candidate)
+        and (
             _keyword_candidate_has_relevance(
                 candidate,
                 topic_tokens=topic_tokens,
@@ -5057,6 +5216,16 @@ def _select_keywords(
                 trend_tokens=trend_tokens,
             )
             or _topic_signature_candidate_has_relevance(candidate, topic_signature)
+        )
+        and (
+            candidate == topic_phrase
+            or candidate == _topic_head_keyword(topic)
+            or _keyword_candidate_is_query_like(
+                candidate,
+                topic=topic,
+                primary_keyword=_sanitize_editorial_phrase(llm_primary) or topic_phrase,
+                topic_signature=topic_signature,
+            )
         )
         and _topic_signature_candidate_score(candidate, topic_signature) >= 0.0
     ]
@@ -6022,14 +6191,25 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
             raw_target_term_value = normalized
             break
     raw_target_term = _format_title_case(raw_target_term_value)
-    support_question_focus = _format_sentence_start(support_phrase) if support_phrase else ""
+    support_question_focus = ""
+    if support_phrase and _keyword_candidate_is_query_like(
+        support_phrase,
+        topic=topic,
+        primary_keyword=str(signature.get("primary_keyword") or subject_phrase or topic),
+        topic_signature=signature,
+    ):
+        support_question_focus = _format_sentence_start(support_phrase)
     target_question_focus = raw_target_term if raw_target_term_value else ""
     if question_phrase:
         direct_question = question_phrase if question_phrase.endswith("?") else f"{question_phrase}?"
         questions = [
             direct_question,
-            f"Woran erkennt man fruehzeitig Hinweise auf {support_question_focus or _format_sentence_start(subject_phrase)}?",
-            "Welche nächsten Schritte helfen dann im Alltag?",
+            (
+                f"Woran erkennt man fruehzeitig Hinweise auf {support_question_focus}?"
+                if support_question_focus
+                else f"Welche Hinweise sind bei {_format_sentence_start(subject_phrase)} besonders wichtig?"
+            ),
+            f"Welche nächsten Schritte helfen bei {_format_sentence_start(subject_phrase)}?",
         ]
         if raw_target_term:
             questions[-1] = f"Worauf sollte man bei {raw_target_term} achten?"
@@ -9353,6 +9533,7 @@ def run_creator_pipeline(
         topic_signature=phase3.get("topic_signature"),
     )
     phase3["style_profile"] = _build_style_profile(
+        topic=phase3.get("final_article_topic", ""),
         topic_class=phase3.get("topic_class", "general"),
         intent_type=phase3.get("search_intent_type", ""),
         article_angle=phase3.get("article_angle", "practical_guidance"),
@@ -9580,6 +9761,7 @@ def run_creator_pipeline(
                 topic_signature=phase3.get("topic_signature"),
             )
             phase3["style_profile"] = _build_style_profile(
+                topic=phase3.get("final_article_topic", ""),
                 topic_class=phase3.get("topic_class", "general"),
                 intent_type=phase3.get("search_intent_type", ""),
                 article_angle=phase3.get("article_angle", "practical_guidance"),

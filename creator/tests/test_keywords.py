@@ -17,6 +17,7 @@ from creator.api.pipeline import (
     _build_pipeline_execution_policy,
     _build_phase4_fallback_outline,
     _build_site_snapshot,
+    _build_style_profile,
     _compact_pair_fit_profile,
     _build_keyword_query_variants,
     _ensure_primary_keyword_in_intro,
@@ -887,6 +888,100 @@ def test_align_primary_keyword_to_topic_prefers_topic_head():
     )
 
     assert aligned == "kinder sonnenbrillen"
+
+
+def test_select_keywords_rejects_family_duplicate_primary_and_abstract_secondary_phrases():
+    result = _select_keywords(
+        topic="Chancen im Immobilienmarkt 2026: Wann ist der richtige Zeitpunkt zum Kauf oder Verkauf?",
+        llm_primary="immobilie immobilien",
+        llm_secondary=[
+            "chancen erkennen",
+            "chancen ursachen",
+            "warnzeichen chancen erkennen",
+        ],
+        keyword_cluster=[
+            "immobilie",
+            "immobilien",
+            "immobilienmakler",
+            "immobilienverkauf",
+            "verkauf",
+            "verkaufen",
+        ],
+        allowed_topics=["Chancen im regionalen Immobilienmarkt nutzen"],
+        trend_candidates=[],
+        faq_candidates=[],
+        target_terms=[],
+        overlap_terms=[],
+        internal_link_inventory=[],
+    )
+
+    assert result["primary_keyword"] != "immobilie immobilien"
+    assert "immobilie immobilien" not in result["primary_keyword"]
+    assert not any(
+        item in {"chancen erkennen", "chancen ursachen", "warnzeichen chancen erkennen"}
+        for item in result["secondary_keywords"]
+    )
+    assert any(
+        any(token in item for token in ("immobil", "verkauf", "markt"))
+        for item in result["secondary_keywords"]
+    )
+
+
+def test_ensure_faq_candidates_rebuilds_noisy_fallback_questions():
+    topic = "Chancen im Immobilienmarkt 2026: Wann ist der richtige Zeitpunkt zum Kauf oder Verkauf?"
+    questions = _ensure_faq_candidates(
+        topic,
+        [
+            "Wann ist der richtige Zeitpunkt zum Kauf oder Verkauf?",
+            "Woran erkennt man fruehzeitig Hinweise auf Warnzeichen chancen erkennen?",
+            "Worauf sollte man bei Immobilie Immobilien achten?",
+        ],
+        topic_signature={
+            "subject_phrase": "chancen im immobilienmarkt 2026",
+            "primary_keyword": "immobilie immobilien",
+            "keyword_cluster_phrases": ["warnzeichen chancen erkennen"],
+            "support_phrases": ["warnzeichen chancen erkennen"],
+            "target_terms": [],
+            "target_support_phrases": [],
+        },
+    )
+
+    assert len(questions) == 3
+    assert not any("warnzeichen chancen erkennen" in question.lower() for question in questions)
+    assert not any("immobilie immobilien" in question.lower() for question in questions)
+    assert any("hinweise" in question.lower() or "signale" in question.lower() for question in questions[1:])
+
+
+def test_evaluate_title_quality_flags_family_duplicate_tokens():
+    quality = _evaluate_title_quality(
+        title="Immobilie Immobilien: Wann ist der richtige Zeitpunkt zum Kauf",
+        primary_keyword="immobilie immobilien",
+        topic="Chancen im Immobilienmarkt 2026: Wann ist der richtige Zeitpunkt zum Kauf oder Verkauf?",
+    )
+
+    assert "title_family_duplicate_tokens" in quality["errors"]
+
+
+def test_build_style_profile_filters_noisy_target_context():
+    profile = _build_style_profile(
+        topic="Chancen im Immobilienmarkt 2026: Wann ist der richtige Zeitpunkt zum Kauf oder Verkauf?",
+        topic_class="real_estate",
+        intent_type="informational",
+        article_angle="recognition_and_next_steps",
+        content_brief={"target_signals": []},
+        publishing_profile={"content_tone": "sachlich", "content_style": ["frage_antwort"]},
+        target_profile={
+            "topics": [
+                "IMMOBILIENMAKLER HAMBURG - STEINHAUS IMMOBILIEN",
+                "IMMOBILIENANGEBOTE",
+                "Hausverkauf in Hamburg",
+            ]
+        },
+    )
+
+    assert "immobilienangebote" not in profile["target_context"]
+    assert "immobilienmakler hamburg steinhaus immobilien" not in profile["target_context"]
+    assert profile["target_context"] == ["hausverkauf in hamburg"]
 
 
 def test_discover_keyword_candidates_extracts_faqs(monkeypatch):

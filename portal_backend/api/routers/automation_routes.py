@@ -55,6 +55,7 @@ from ..portal_schemas import (
 )
 from ..site_profiles import (
     SPECIALIZED_SELECTION_CONTEXTS,
+    candidate_target_context_strength,
     derive_site_root_url,
     normalize_site_profile_url,
     top_ranked_publishing_sites_for_target,
@@ -214,44 +215,17 @@ def _select_best_accepted_pair(
     allow_rejected_pairs = _read_bool_env("ALLOW_REJECTED_PAIRS_FOR_TESTING", False)
     target_primary_context = str(target_profile_payload.get("primary_context") or "").strip()
 
-    def _candidate_matches_specialized_target(item: Dict[str, object]) -> bool:
-        if target_primary_context not in SPECIALIZED_SELECTION_CONTEXTS:
-            return False
-        details = item.get("details") if isinstance(item.get("details"), dict) else {}
-        profile = item.get("profile") if isinstance(item.get("profile"), dict) else {}
-        publishing_primary_context = str(
-            details.get("publishing_primary_context")
-            or profile.get("primary_context")
-            or ""
-        ).strip()
-        publishing_contexts = {
-            str(value).strip()
-            for value in (profile.get("contexts") or [])
-            if str(value).strip()
-        }
-        publishing_contexts.update(
-            {
-                str(value).strip()
-                for value in (profile.get("snapshot_contexts") or [])
-                if str(value).strip()
-            }
-        )
-        publishing_contexts.update(
-            {
-                str(value).strip()
-                for value in (profile.get("inventory_contexts") or [])
-                if str(value).strip()
-            }
-        )
-        return publishing_primary_context == target_primary_context or target_primary_context in publishing_contexts
+    def _candidate_context_strength(item: Dict[str, object]) -> int:
+        return candidate_target_context_strength(item, target_primary_context)
 
     def _sort_accepted_pairs(items: list[Dict[str, object]]) -> list[Dict[str, object]]:
         sorted_items = list(items)
         sorted_items.sort(
             key=lambda item: (
                 bool(item.get("override_selected")),
-                not bool(item.get("specialized_context_match")),
+                not bool(item.get("target_context_strength")),
                 -int(item.get("pair_fit_score") or 0),
+                -int(item.get("target_context_strength") or 0),
                 -int(item.get("score") or 0),
                 -int((item.get("details") or {}).get("semantic_score") or 0),
                 -int((item.get("details") or {}).get("internal_link_support") or 0),
@@ -260,71 +234,54 @@ def _select_best_accepted_pair(
         return sorted_items
 
     evaluated: list[Dict[str, object]] = []
-    matching_candidates = [
-        candidate for candidate in candidate_rankings if _candidate_matches_specialized_target(candidate)
-    ]
-    fallback_candidates = [
-        candidate for candidate in candidate_rankings if not _candidate_matches_specialized_target(candidate)
-    ]
-    evaluation_groups: list[list[Dict[str, object]]] = (
-        [matching_candidates, fallback_candidates]
-        if target_primary_context in SPECIALIZED_SELECTION_CONTEXTS and matching_candidates
-        else [list(candidate_rankings)]
-    )
-
-    for index, candidate_group in enumerate(evaluation_groups):
-        group_results: list[Dict[str, object]] = []
-        for candidate in candidate_group:
-            try:
-                pair_fit_result = call_creator_pair_fit(
-                    creator_endpoint=creator_endpoint,
-                    target_site_url=target_site_url,
-                    publishing_site_url=str(candidate.get("site_url") or ""),
-                    publishing_site_id=str(candidate.get("site_id") or ""),
-                    client_target_site_id=str(client_target_site_id) if client_target_site_id else None,
-                    requested_topic=requested_topic,
-                    exclude_topics=exclude_topics or [],
-                    target_profile_payload=target_profile_payload,
-                    target_profile_content_hash=target_profile_content_hash,
-                    publishing_profile_payload=dict(candidate.get("profile") or {}),
-                    publishing_profile_content_hash=str(candidate.get("content_hash") or ""),
-                    timeout_seconds=timeout_seconds,
-                )
-            except AutomationError as exc:
-                result = {
-                    **candidate,
-                    "pair_fit_error": str(exc),
-                    "accepted": False,
-                    "override_selected": False,
-                    "specialized_context_match": _candidate_matches_specialized_target(candidate),
-                }
-                evaluated.append(result)
-                group_results.append(result)
-                continue
-            pair_fit = dict(pair_fit_result.get("pair_fit") or {})
-            final_match_decision = str(pair_fit.get("final_match_decision") or "").strip().lower()
-            if not final_match_decision:
-                final_match_decision = "accepted" if bool(pair_fit.get("backlink_fit_ok")) else "hard_reject"
-            accepted = final_match_decision == "accepted" and bool(pair_fit.get("backlink_fit_ok"))
-            override_selected = bool(allow_rejected_pairs and final_match_decision in {"weak_fit", "hard_reject"})
-            combined_score = int(candidate.get("score") or 0) + int(pair_fit.get("fit_score") or 0)
+    for candidate in candidate_rankings:
+        try:
+            pair_fit_result = call_creator_pair_fit(
+                creator_endpoint=creator_endpoint,
+                target_site_url=target_site_url,
+                publishing_site_url=str(candidate.get("site_url") or ""),
+                publishing_site_id=str(candidate.get("site_id") or ""),
+                client_target_site_id=str(client_target_site_id) if client_target_site_id else None,
+                requested_topic=requested_topic,
+                exclude_topics=exclude_topics or [],
+                target_profile_payload=target_profile_payload,
+                target_profile_content_hash=target_profile_content_hash,
+                publishing_profile_payload=dict(candidate.get("profile") or {}),
+                publishing_profile_content_hash=str(candidate.get("content_hash") or ""),
+                timeout_seconds=timeout_seconds,
+            )
+        except AutomationError as exc:
             result = {
                 **candidate,
-                "pair_fit": pair_fit,
-                "pair_fit_cached": bool(pair_fit_result.get("cached")),
-                "accepted": accepted or override_selected,
-                "override_selected": override_selected and not accepted,
-                "final_match_decision": final_match_decision,
-                "pair_fit_score": int(pair_fit.get("fit_score") or 0),
-                "combined_score": combined_score,
-                "specialized_context_match": _candidate_matches_specialized_target(candidate),
+                "pair_fit_error": str(exc),
+                "accepted": False,
+                "override_selected": False,
+                "specialized_context_match": _candidate_context_strength(candidate) > 0,
+                "target_context_strength": _candidate_context_strength(candidate),
             }
             evaluated.append(result)
-            group_results.append(result)
-        accepted_group_results = [item for item in group_results if item.get("accepted")]
-        if accepted_group_results and index == 0 and len(evaluation_groups) > 1:
-            sorted_group = _sort_accepted_pairs(accepted_group_results)
-            return sorted_group[0], evaluated
+            continue
+        pair_fit = dict(pair_fit_result.get("pair_fit") or {})
+        final_match_decision = str(pair_fit.get("final_match_decision") or "").strip().lower()
+        if not final_match_decision:
+            final_match_decision = "accepted" if bool(pair_fit.get("backlink_fit_ok")) else "hard_reject"
+        accepted = final_match_decision == "accepted" and bool(pair_fit.get("backlink_fit_ok"))
+        override_selected = bool(allow_rejected_pairs and final_match_decision in {"weak_fit", "hard_reject"})
+        combined_score = int(candidate.get("score") or 0) + int(pair_fit.get("fit_score") or 0)
+        context_strength = _candidate_context_strength(candidate)
+        result = {
+            **candidate,
+            "pair_fit": pair_fit,
+            "pair_fit_cached": bool(pair_fit_result.get("cached")),
+            "accepted": accepted or override_selected,
+            "override_selected": override_selected and not accepted,
+            "final_match_decision": final_match_decision,
+            "pair_fit_score": int(pair_fit.get("fit_score") or 0),
+            "combined_score": combined_score,
+            "specialized_context_match": context_strength > 0,
+            "target_context_strength": context_strength,
+        }
+        evaluated.append(result)
 
     accepted_pairs = _sort_accepted_pairs([item for item in evaluated if item.get("accepted")])
     return (accepted_pairs[0] if accepted_pairs else None), evaluated

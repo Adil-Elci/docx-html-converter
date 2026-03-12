@@ -120,13 +120,18 @@ def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_invent
     assert "real_estate" in payload["contexts"]
 
 
-def test_shortlist_ranked_publishing_candidates_prefers_specialized_context_matches() -> None:
+def test_shortlist_ranked_publishing_candidates_prioritizes_stronger_target_context() -> None:
     ranked = [
         {
             "site_url": "https://broad.example.com",
             "site_name": "Broad",
             "score": 92,
-            "profile": {"primary_context": "lifestyle", "contexts": ["lifestyle", "home"]},
+            "profile": {
+                "primary_context": "lifestyle",
+                "contexts": ["lifestyle", "home", "real_estate"],
+                "snapshot_contexts": ["real_estate"],
+                "inventory_contexts": ["real_estate"],
+            },
             "details": {"publishing_primary_context": "lifestyle", "semantic_score": 42, "internal_link_support": 15},
         },
         {
@@ -152,8 +157,8 @@ def test_shortlist_ranked_publishing_candidates_prefers_specialized_context_matc
     )
 
     assert [item["site_url"] for item in shortlisted] == [
+        "https://broad.example.com",
         "https://specialist-a.example.com",
-        "https://specialist-b.example.com",
     ]
 
 

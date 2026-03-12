@@ -317,6 +317,31 @@ def _candidate_matches_specialized_target_context(candidate: Dict[str, Any], tar
     return publishing_primary_context == target_primary_context or target_primary_context in publishing_contexts
 
 
+def candidate_target_context_strength(candidate: Dict[str, Any], target_primary_context: str) -> int:
+    if target_primary_context not in SPECIALIZED_SELECTION_CONTEXTS:
+        return 0
+    profile = dict(candidate.get("profile") or {})
+    details = dict(candidate.get("details") or {})
+    publishing_primary_context = str(
+        details.get("publishing_primary_context")
+        or profile.get("primary_context")
+        or ""
+    ).strip()
+    snapshot_contexts = set(_coerce_string_list(profile.get("snapshot_contexts")))
+    inventory_contexts = set(_coerce_string_list(profile.get("inventory_contexts")))
+    expanded_contexts = set(_expanded_profile_contexts(profile))
+    strength = 0
+    if publishing_primary_context == target_primary_context:
+        strength += 4
+    if target_primary_context in snapshot_contexts:
+        strength += 3
+    if target_primary_context in inventory_contexts:
+        strength += 2
+    if target_primary_context in expanded_contexts:
+        strength += 1
+    return strength
+
+
 def _shortlist_ranked_publishing_candidates(
     ranked: Sequence[Dict[str, Any]],
     *,
@@ -328,35 +353,25 @@ def _shortlist_ranked_publishing_candidates(
     target_primary_context = str(target_profile.get("primary_context") or "").strip()
     if target_primary_context in SPECIALIZED_SELECTION_CONTEXTS:
         specialized_min_score = max(8, min_score - 10)
-        matching = [
+        shortlisted = [
             item
             for item in shortlisted
-            if _candidate_matches_specialized_target_context(item, target_primary_context)
-            and int(item.get("score") or 0) >= specialized_min_score
+            if int(item.get("score") or 0)
+            >= (
+                specialized_min_score
+                if candidate_target_context_strength(item, target_primary_context) > 0
+                else min_score
+            )
         ]
-        non_matching = [
-            item
-            for item in shortlisted
-            if not _candidate_matches_specialized_target_context(item, target_primary_context)
-            and int(item.get("score") or 0) >= min_score
-        ]
-        matching.sort(
+        shortlisted.sort(
             key=lambda item: (
+                -candidate_target_context_strength(item, target_primary_context),
                 -int(item.get("score") or 0),
                 -int((item.get("details") or {}).get("semantic_score") or 0),
                 -int((item.get("details") or {}).get("internal_link_support") or 0),
                 str(item.get("site_name") or ""),
             )
         )
-        non_matching.sort(
-            key=lambda item: (
-                -int(item.get("score") or 0),
-                -int((item.get("details") or {}).get("semantic_score") or 0),
-                -int((item.get("details") or {}).get("internal_link_support") or 0),
-                str(item.get("site_name") or ""),
-            )
-        )
-        shortlisted = matching + non_matching if matching else non_matching
     else:
         shortlisted = [item for item in shortlisted if int(item.get("score") or 0) >= min_score]
         shortlisted.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))

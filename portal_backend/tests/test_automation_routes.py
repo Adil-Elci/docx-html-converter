@@ -145,19 +145,25 @@ def test_select_best_accepted_pair_prefers_higher_pair_fit_over_higher_site_scor
     assert selected["pair_fit_score"] == 78
 
 
-def test_select_best_accepted_pair_prefers_specialized_context_match_for_specialized_target(monkeypatch) -> None:
+def test_select_best_accepted_pair_allows_broad_site_with_strong_target_cluster(monkeypatch) -> None:
     monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
 
     def _fake_pair_fit(**kwargs):
         publishing_site_url = kwargs.get("publishing_site_url") or ""
-        if "specialist" in publishing_site_url:
-            return _pair_fit_result("accepted", fit_score=74, backlink_fit_ok=True)
-        return _pair_fit_result("accepted", fit_score=88, backlink_fit_ok=True)
+        if "broad" in publishing_site_url:
+            return _pair_fit_result("accepted", fit_score=88, backlink_fit_ok=True)
+        return _pair_fit_result("accepted", fit_score=74, backlink_fit_ok=True)
 
     monkeypatch.setattr(automation_routes, "call_creator_pair_fit", _fake_pair_fit)
 
     broad = _candidate("https://broad.example.com", score=91)
-    broad["profile"] = {"normalized_url": "https://broad.example.com", "primary_context": "lifestyle", "contexts": ["lifestyle", "home"]}
+    broad["profile"] = {
+        "normalized_url": "https://broad.example.com",
+        "primary_context": "lifestyle",
+        "contexts": ["lifestyle", "home", "real_estate"],
+        "snapshot_contexts": ["real_estate"],
+        "inventory_contexts": ["real_estate"],
+    }
     broad["details"] = {"publishing_primary_context": "lifestyle", "semantic_score": 46, "internal_link_support": 15}
 
     specialist = _candidate("https://specialist.example.com", score=62)
@@ -182,12 +188,12 @@ def test_select_best_accepted_pair_prefers_specialized_context_match_for_special
     )
 
     assert selected is not None
-    assert len(evaluated) == 1
-    assert selected["site_url"] == "https://specialist.example.com"
+    assert len(evaluated) == 2
+    assert selected["site_url"] == "https://broad.example.com"
     assert selected["specialized_context_match"] is True
 
 
-def test_select_best_accepted_pair_skips_broad_fallback_when_specialist_is_accepted(monkeypatch) -> None:
+def test_select_best_accepted_pair_prefers_specialist_when_broad_has_no_target_context(monkeypatch) -> None:
     monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
     calls: list[str] = []
 
@@ -227,5 +233,5 @@ def test_select_best_accepted_pair_skips_broad_fallback_when_specialist_is_accep
 
     assert selected is not None
     assert selected["site_url"] == "https://specialist.example.com"
-    assert calls == ["https://specialist.example.com"]
-    assert len(evaluated) == 1
+    assert calls == ["https://specialist.example.com", "https://broad.example.com"]
+    assert len(evaluated) == 2

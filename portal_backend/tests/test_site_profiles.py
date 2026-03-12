@@ -3,6 +3,7 @@ from portal_backend.api.site_profiles import (
     _extract_keywords,
     _extract_page_signals,
     build_combined_target_profile,
+    compute_site_selection_score,
     score_publishing_site_fit,
 )
 
@@ -32,6 +33,59 @@ def test_score_publishing_site_fit_rewards_semantic_overlap() -> None:
     assert score >= 20
     assert "family_life" in details["context_overlap"]
     assert "kinder" in details["topic_overlap_terms"]
+
+
+def test_compute_site_selection_score_prefers_real_estate_specialist_over_broad_magazine() -> None:
+    target_profile = {
+        "topics": ["Immobilie verkaufen", "Hausverkauf Hamburg", "Wertermittlung Immobilie"],
+        "contexts": ["real_estate", "home", "finance"],
+        "repeated_keywords": ["immobilien", "verkauf", "makler", "hausverkauf"],
+        "services_or_products": ["Immobilienverkauf", "Immobilienmakler Hamburg"],
+        "visible_headings": ["Immobilie verkaufen in Hamburg"],
+        "primary_context": "real_estate",
+        "business_intent": "commercial",
+    }
+    specialist_profile = {
+        "topics": ["Immobilie verkaufen", "Hausverkauf Hamburg", "Wertermittlung"],
+        "site_categories": ["Immobilien", "Hausverkauf"],
+        "topic_clusters": ["immobilienverkauf", "wertermittlung", "grundbuch"],
+        "repeated_keywords": ["immobilien", "verkauf", "makler"],
+        "visible_headings": ["Immobilienmakler in Hamburg"],
+        "contexts": ["real_estate", "home", "finance"],
+        "primary_context": "real_estate",
+    }
+    broad_profile = {
+        "topics": ["Lifestyle Trends", "Wohnen", "Einrichten", "Immobilien Tipps"],
+        "site_categories": ["Lifestyle", "Ratgeber"],
+        "topic_clusters": ["ideen", "wohnen", "immobilien"],
+        "repeated_keywords": ["ideen", "alltag", "wohnen", "immobilien"],
+        "visible_headings": ["Tipps fuer den Alltag", "Immobilien kaufen fuer Einsteiger"],
+        "contexts": ["lifestyle", "home"],
+        "primary_context": "lifestyle",
+    }
+
+    specialist_score, specialist_details = compute_site_selection_score(
+        publishing_profile=specialist_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "prominent_titles": ["Immobilie verkaufen in Hamburg", "Wertermittlung vor dem Notartermin"],
+            "site_categories": ["Immobilien", "Hausverkauf"],
+            "topic_clusters": ["immobilienverkauf", "wertermittlung", "notar"],
+        },
+    )
+    broad_score, broad_details = compute_site_selection_score(
+        publishing_profile=broad_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "prominent_titles": ["Immobilie verkaufen Tipps", "Immobilien kaufen fuer Einsteiger", "Wohnideen fuer Familien"],
+            "site_categories": ["Lifestyle", "Immobilien"],
+            "topic_clusters": ["immobilien", "wohnen", "ideen"],
+        },
+    )
+
+    assert specialist_score > broad_score
+    assert specialist_details["primary_context_mismatch"] is False
+    assert broad_details["primary_context_mismatch"] is True
 
 
 def test_build_combined_target_profile_merges_page_and_root_context() -> None:

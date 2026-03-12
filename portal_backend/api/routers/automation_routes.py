@@ -249,6 +249,7 @@ def _select_best_accepted_pair(
                 "accepted": accepted or override_selected,
                 "override_selected": override_selected and not accepted,
                 "final_match_decision": final_match_decision,
+                "pair_fit_score": int(pair_fit.get("fit_score") or 0),
                 "combined_score": combined_score,
             }
         )
@@ -256,8 +257,10 @@ def _select_best_accepted_pair(
     accepted_pairs.sort(
         key=lambda item: (
             bool(item.get("override_selected")),
-            -int(item.get("combined_score") or 0),
+            -int(item.get("pair_fit_score") or 0),
             -int(item.get("score") or 0),
+            -int((item.get("details") or {}).get("semantic_score") or 0),
+            -int((item.get("details") or {}).get("internal_link_support") or 0),
         )
     )
     return (accepted_pairs[0] if accepted_pairs else None), evaluated
@@ -399,10 +402,11 @@ def _resolve_or_auto_select_publishing_site(
     if best_site is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Auto-selected site could not be resolved.")
     logger.info(
-        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s target=%s combined_score=%s",
+        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s pair_fit_score=%s target=%s combined_score=%s",
         client.id,
         best_site.id,
         selected_pair.get("score") or 0,
+        selected_pair.get("pair_fit_score") or 0,
         target_url,
         selected_pair.get("combined_score") or 0,
     )

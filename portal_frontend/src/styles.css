@@ -2610,7 +2610,7 @@ input:disabled {
 .pending-list-header,
 .pending-item-row {
   display: grid;
-  grid-template-columns: 1fr 1.4fr 1.3fr 0.85fr 1fr auto;
+  grid-template-columns: 1fr 1.2fr 1.2fr 1.25fr 0.85fr 1fr auto;
   gap: var(--space-3);
   align-items: center;
 }

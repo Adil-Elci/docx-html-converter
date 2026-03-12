@@ -111,3 +111,35 @@ def test_select_best_accepted_pair_prefers_real_acceptance_over_override(monkeyp
     assert selected["site_url"] == "https://accepted.example.com"
     assert selected["override_selected"] is False
     assert selected["final_match_decision"] == "accepted"
+
+
+def test_select_best_accepted_pair_prefers_higher_pair_fit_over_higher_site_score(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
+
+    def _fake_pair_fit(**kwargs):
+        publishing_site_url = kwargs.get("publishing_site_url") or ""
+        if "specialist" in publishing_site_url:
+            return _pair_fit_result("accepted", fit_score=78, backlink_fit_ok=True)
+        return _pair_fit_result("accepted", fit_score=42, backlink_fit_ok=True)
+
+    monkeypatch.setattr(automation_routes, "call_creator_pair_fit", _fake_pair_fit)
+
+    selected, evaluated = automation_routes._select_best_accepted_pair(
+        creator_endpoint="https://creator.example.com",
+        target_site_url="https://target.example.com",
+        target_profile_payload={"topics": ["Immobilie verkaufen"]},
+        target_profile_content_hash="target-hash",
+        client_target_site_id=None,
+        candidate_rankings=[
+            _candidate("https://broad.example.com", score=86),
+            _candidate("https://specialist.example.com", score=52),
+        ],
+        requested_topic=None,
+        exclude_topics=[],
+        timeout_seconds=5,
+    )
+
+    assert selected is not None
+    assert len(evaluated) == 2
+    assert selected["site_url"] == "https://specialist.example.com"
+    assert selected["pair_fit_score"] == 78

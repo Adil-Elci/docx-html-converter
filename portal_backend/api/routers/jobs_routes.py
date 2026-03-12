@@ -204,6 +204,7 @@ def _pending_job_to_out(
     site: Site,
     *,
     content_title: Optional[str] = None,
+    target_site_url: Optional[str] = None,
 ) -> PendingJobOut:
     return PendingJobOut(
         job_id=job.id,
@@ -214,6 +215,7 @@ def _pending_job_to_out(
         site_id=site.id,
         site_name=(site.name or "").strip(),
         site_url=(site.site_url or "").strip(),
+        target_site_url=(target_site_url or "").strip() or None,
         content_title=(content_title or "").strip() or None,
         job_status=job.job_status,
         wp_post_id=job.wp_post_id,
@@ -221,6 +223,19 @@ def _pending_job_to_out(
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+def _extract_note_map(notes: Optional[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not notes:
+        return out
+    for part in notes.split(";"):
+        item = part.strip()
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        out[key.strip().lower()] = value.strip()
+    return out
 
 
 def _get_enabled_credential_for_site(db: Session, site_id: UUID) -> SiteCredential:
@@ -509,6 +524,7 @@ def list_pending_jobs(
         title_value = title_map.get(job.id)
         if not title_value and isinstance(submission.title, str):
             title_value = submission.title.strip() or None
+        note_map = _extract_note_map(submission.notes)
         out.append(
             _pending_job_to_out(
                 job,
@@ -516,6 +532,7 @@ def list_pending_jobs(
                 client,
                 site,
                 content_title=title_value,
+                target_site_url=note_map.get("client_target_site_url"),
             )
         )
     return out

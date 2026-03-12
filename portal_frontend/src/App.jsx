@@ -3120,7 +3120,8 @@ export default function App() {
               <div className="pending-list-table">
                 <div className="pending-list-header">
                   <span>{t("createdByLabel")}</span>
-                  <span>{t("targetWebsiteLabel")}</span>
+                  <span>{t("publishingSiteLabel")}</span>
+                  <span>{t("targetSiteLabel")}</span>
                   <span>{t("contentTitleLabel")}</span>
                   <span>{t("jobTypeLabel")}</span>
                   <span>{t("createdAtLabel")}</span>
@@ -3133,7 +3134,8 @@ export default function App() {
                     <div key={item.job_id} className="pending-item-wrap" style={{"--i": index}}>
                       <div className="pending-item-row">
                         <span data-label={t("createdByLabel")}>{item.client_name}</span>
-                        <span data-label={t("targetWebsiteLabel")}>{item.site_url || item.site_name}</span>
+                        <span data-label={t("publishingSiteLabel")}>{item.site_url || item.site_name}</span>
+                        <span data-label={t("targetSiteLabel")}>{item.target_site_url || t("contentTitleFallback")}</span>
                         <span data-label={t("contentTitleLabel")}>{item.content_title || t("contentTitleFallback")}</span>
                         <span data-label={t("jobTypeLabel")}>{requestKind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}</span>
                         <span data-label={t("createdAtLabel")}>{formatPublishedAt(item?.created_at)}</span>

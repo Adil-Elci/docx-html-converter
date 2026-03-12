@@ -97,3 +97,27 @@ def test_get_latest_creator_output_payload_merges_normalized_prompt_trace_column
 
     assert payload["debug"]["prompt_trace"]["planner"]["mode"] == "deterministic"
     assert payload["debug"]["prompt_trace"]["writer_attempts"][0]["request_label"] == "phase5_writer_attempt_1"
+
+
+def test_pending_job_to_out_includes_target_site_url() -> None:
+    job_id = uuid4()
+    submission_id = uuid4()
+    client_id = uuid4()
+    site_id = uuid4()
+    out = jobs_routes._pending_job_to_out(
+        SimpleNamespace(
+            id=job_id,
+            job_status="pending_approval",
+            wp_post_id=123,
+            wp_post_url="https://publisher.example.com/draft",
+            created_at="2026-03-12T00:00:00Z",
+            updated_at="2026-03-12T00:00:00Z",
+        ),
+        SimpleNamespace(id=submission_id, request_kind="create_article"),
+        SimpleNamespace(id=client_id, name="Client"),
+        SimpleNamespace(id=site_id, name="Publisher", site_url="https://publisher.example.com"),
+        content_title="Example title",
+        target_site_url="https://target.example.com",
+    )
+
+    assert out.target_site_url == "https://target.example.com"

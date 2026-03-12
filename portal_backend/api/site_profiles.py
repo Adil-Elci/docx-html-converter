@@ -81,6 +81,7 @@ CONTEXT_KEYWORDS = {
     "daily_routine": {"alltag", "routine", "organisation", "planung", "tipps", "haushalt"},
     "finance": {"kosten", "budget", "finanzierung", "sparen", "steuer", "versicherung"},
     "home": {"wohnen", "haus", "wohnung", "garten", "immobilien", "einrichten"},
+    "real_estate": {"immobilie", "immobilien", "makler", "hausverkauf", "immobilienverkauf", "eigentum", "notar", "grundbuch", "wertermittlung", "expose", "miete", "kauf", "verkauf"},
     "productivity": {"produktiv", "effizienz", "planung", "workflow", "management"},
     "wellbeing": {"wohlbefinden", "balance", "stress", "entspannung", "mental"},
     "mobility": {"auto", "fahrt", "mobil", "mobilitaet", "reise", "reisen", "unterwegs", "verkehr"},
@@ -88,6 +89,7 @@ CONTEXT_KEYWORDS = {
     "beauty": {"beauty", "haut", "kosmetik", "pflege", "stil"},
     "shopping": {"kaufen", "shop", "produkt", "preis", "vergleich", "online"},
 }
+SPECIALIZED_SELECTION_CONTEXTS = {"beauty", "education", "finance", "health", "mobility", "productivity", "real_estate", "shopping"}
 GERMAN_STOPWORDS = {
     "aber", "alle", "als", "also", "am", "an", "auch", "auf", "aus", "bei", "bin", "bis", "das", "dass",
     "de", "dem", "den", "der", "des", "die", "doch", "ein", "eine", "einer", "eines", "er", "es", "für",
@@ -576,23 +578,34 @@ def score_publishing_site_fit(
     )
     publishing_contexts = set(_expanded_profile_contexts(publishing_profile))
     target_contexts = set(_expanded_profile_contexts(target_profile))
+    publishing_primary_context = str(publishing_profile.get("primary_context") or "").strip()
+    target_primary_context = str(target_profile.get("primary_context") or "").strip()
     topic_overlap = len(publishing_topics & target_topics)
     context_overlap = len(publishing_contexts & target_contexts)
     score = topic_overlap * 8 + context_overlap * 16
-    if publishing_profile.get("primary_context") and publishing_profile.get("primary_context") == target_profile.get("primary_context"):
+    context_penalty = 0
+    if publishing_primary_context and publishing_primary_context == target_primary_context:
         score += 12
-    if publishing_profile.get("primary_context") in target_contexts:
+    if publishing_primary_context in target_contexts:
         score += 6
+    if (
+        target_primary_context in SPECIALIZED_SELECTION_CONTEXTS
+        and publishing_primary_context
+        and publishing_primary_context != target_primary_context
+    ):
+        context_penalty += 10 if target_primary_context not in publishing_contexts else 4
     if target_profile.get("business_intent") == "commercial" and context_overlap == 0:
         score -= 4
+    score -= context_penalty
     if score < 0:
         score = 0
     score = min(100, score)
     details = {
         "topic_overlap_terms": sorted((publishing_topics & target_topics))[:12],
         "context_overlap": sorted(publishing_contexts & target_contexts),
-        "publishing_primary_context": publishing_profile.get("primary_context") or "",
-        "target_primary_context": target_profile.get("primary_context") or "",
+        "publishing_primary_context": publishing_primary_context,
+        "target_primary_context": target_primary_context,
+        "context_penalty": context_penalty,
         "publishing_topics_count": len(publishing_topics),
         "target_topics_count": len(target_topics),
     }
@@ -611,7 +624,22 @@ def compute_site_selection_score(
     title_count = len(_coerce_string_list(inventory.get("prominent_titles")))
     category_count = len(_coerce_string_list(inventory.get("site_categories")))
     cluster_count = len(_coerce_string_list(inventory.get("topic_clusters")))
-    authority_score = min(20, category_count * 2 + min(10, title_count // 3))
+    target_primary_context = str(target_profile.get("primary_context") or "").strip()
+    publishing_primary_context = str(publishing_profile.get("primary_context") or "").strip()
+    publishing_contexts = set(_expanded_profile_contexts(publishing_profile))
+    primary_context_mismatch = (
+        target_primary_context in SPECIALIZED_SELECTION_CONTEXTS
+        and publishing_primary_context
+        and publishing_primary_context != target_primary_context
+    )
+    support_multiplier = 1.0
+    if semantic_score < 24:
+        support_multiplier = 0.45
+    if primary_context_mismatch and target_primary_context not in publishing_contexts:
+        support_multiplier = min(support_multiplier, 0.25)
+    elif primary_context_mismatch:
+        support_multiplier = min(support_multiplier, 0.65)
+    authority_score = int(round(min(20, category_count * 2 + min(10, title_count // 3)) * max(0.5, support_multiplier)))
     target_terms = _text_set(
         target_profile.get("topics"),
         target_profile.get("services_or_products"),
@@ -622,7 +650,7 @@ def compute_site_selection_score(
         inventory.get("site_categories"),
         inventory.get("topic_clusters"),
     )
-    internal_link_support = min(15, len(target_terms & support_terms) * 3 + min(6, title_count // 5))
+    internal_link_support = int(round(min(15, len(target_terms & support_terms) * 3 + min(6, title_count // 5)) * support_multiplier))
     freshness_activity = min(10, min(6, title_count // 4) + min(4, cluster_count // 3))
     final_score = min(100, semantic_score + authority_score + internal_link_support + freshness_activity + max(0, business_priority_weight))
     details = {
@@ -631,6 +659,8 @@ def compute_site_selection_score(
         "internal_link_support": internal_link_support,
         "freshness_activity": freshness_activity,
         "business_priority_weight": max(0, business_priority_weight),
+        "support_multiplier": support_multiplier,
+        "primary_context_mismatch": primary_context_mismatch,
         "final_site_score": final_score,
         **semantic_details,
     }

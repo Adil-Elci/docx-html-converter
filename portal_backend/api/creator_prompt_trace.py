@@ -160,6 +160,7 @@ def _build_planner_prompt_trace_entry(
             "primary_keyword": phase3.get("primary_keyword", ""),
             "secondary_keywords": phase3.get("secondary_keywords") or [],
             "keyword_buckets": phase3.get("keyword_buckets") or {},
+            "keyword_provenance": phase3.get("keyword_provenance") or {},
             "intent_type": phase3.get("search_intent_type", ""),
             "article_angle": phase3.get("article_angle", ""),
             "topic_class": phase3.get("topic_class", ""),

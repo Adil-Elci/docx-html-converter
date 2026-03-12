@@ -311,7 +311,7 @@ def test_select_keywords_keeps_topic_focused_primary_keyword():
     assert "sonnen" in result["primary_keyword"]
 
 
-def test_select_keywords_prefers_target_product_phrase_for_broad_family_topic():
+def test_select_keywords_keeps_primary_query_topic_led_for_broad_family_topic():
     result = _select_keywords(
         topic="Sonnenschutz fuer die ganze Familie",
         llm_primary="sonnenschutz fuer die ganze familie",
@@ -336,10 +336,9 @@ def test_select_keywords_prefers_target_product_phrase_for_broad_family_topic():
         current_year=2026,
     )
 
-    assert result["primary_keyword"] == "kinder sonnenbrillen"
+    assert result["primary_keyword"] == "sonnenschutz fuer die ganze familie"
     assert "Warenkorb" not in " ".join(result["secondary_keywords"])
-    assert title_package["h1"].startswith("Kinder Sonnenbrillen:")
-    assert "Sonnenschutz Fuer Die Ganze Familie" in title_package["h1"]
+    assert title_package["h1"].startswith("Sonnenschutz Fuer Die Ganze Familie:")
 
 
 def test_select_keywords_rejects_self_assessment_page_labels_as_primary_keyword():
@@ -406,7 +405,7 @@ def test_select_keywords_builds_secondary_fallbacks_without_trends():
     assert any("warnzeichen" in item or "erkennen" in item or "augenarzt" in item for item in result["secondary_keywords"])
 
 
-def test_select_keywords_excludes_topic_phrase_from_secondary_keywords_when_primary_shifts_to_target_term():
+def test_select_keywords_keeps_primary_query_topic_focused_even_with_target_terms():
     result = _select_keywords(
         topic="Augenschutz im Sommerurlaub",
         llm_primary="Augenschutz im Sommerurlaub",
@@ -420,7 +419,7 @@ def test_select_keywords_excludes_topic_phrase_from_secondary_keywords_when_prim
         internal_link_inventory=[],
     )
 
-    assert result["primary_keyword"] == "kinder sonnenbrillen"
+    assert result["primary_keyword"] == "augenschutz im sommerurlaub"
     assert "augenschutz im sommerurlaub" not in result["secondary_keywords"]
 
 
@@ -802,6 +801,15 @@ def test_select_keywords_builds_separate_keyword_buckets_for_queries_and_semanti
     assert all(
         item not in buckets["secondary_queries"]
         for item in buckets["support_topics_for_internal_links"]
+    )
+    provenance = buckets["provenance"]
+    assert provenance["secondary_queries"]
+    assert any(source["source"] == "keyword_cluster" for source in provenance["secondary_queries"][0]["sources"])
+    assert provenance["support_topics_for_internal_links"]
+    assert all(
+        all(source["source"] != "publishing_topics" for source in entry["sources"])
+        or entry["value"] not in buckets["secondary_queries"]
+        for entry in provenance["support_topics_for_internal_links"]
     )
 
 

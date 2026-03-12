@@ -94,7 +94,19 @@ def _fetch_posts_with_mode(
             timeout=timeout_seconds,
         )
         response.raise_for_status()
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            logger.warning(
+                "internal_linking.sync.non_json_response site=%s mode=%s status_code=%s content_type=%s",
+                site_url,
+                mode,
+                response.status_code,
+                response.headers.get("Content-Type", ""),
+            )
+            if mode == "authenticated":
+                raise exc
+            return []
         if not isinstance(payload, list) or not payload:
             break
         if mode == "public":
@@ -130,6 +142,15 @@ def _fetch_posts_for_site(
             mode="authenticated",
             wp_username=wp_username,
             wp_app_password=wp_app_password,
+        )
+    except ValueError:
+        logger.warning("internal_linking.sync.auth_non_json_fallback site=%s", site_url)
+        return _fetch_posts_with_mode(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            per_page=per_page,
+            timeout_seconds=timeout_seconds,
+            mode="public",
         )
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else None

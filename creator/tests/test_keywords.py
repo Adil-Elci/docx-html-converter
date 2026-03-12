@@ -612,6 +612,42 @@ def test_evaluate_plan_quality_rejects_generic_heading_mix():
     assert "plan_quality_below_threshold" in evaluation["errors"]
 
 
+def test_evaluate_plan_quality_allows_process_headings_with_specificity_support():
+    evaluation = _evaluate_plan_quality(
+        title="Immobilie verkaufen: Welche Schritte wirklich zaehlen",
+        headings=[
+            "Welche Unterlagen und Kennzahlen zaehlen zuerst?",
+            "Welche Fehler kosten dabei Zeit oder Geld?",
+            "Wann lohnt sich professionelle Unterstuetzung?",
+            "Wie laesst sich der Ablauf realistisch vorbereiten?",
+            "Fazit",
+            "FAQ",
+        ],
+        primary_keyword="immobilie verkaufen",
+        topic="Immobilie verkaufen",
+        intent_type="commercial_investigation",
+        article_angle="process_and_decision_factors",
+        topic_signature={
+            "subject_phrase": "immobilie verkaufen",
+            "primary_keyword": "immobilie verkaufen",
+            "specific_tokens": ["immobilie", "verkaufen"],
+            "all_tokens": ["immobilie", "verkaufen", "unterlagen", "makler", "preis", "ablauf"],
+        },
+        specificity_profile={
+            "topic_class": "real_estate",
+            "intent_type": "commercial_investigation",
+            "min_specifics": 3,
+            "buckets": {
+                "documents_process": ["unterlagen", "notar", "vertrag", "wertermittlung"],
+                "market_context": ["preis", "preise", "markt"],
+            },
+        },
+    )
+
+    assert "outline_mixed_intent_or_angle" not in evaluation["errors"]
+    assert evaluation["intent_consistency_score"] >= 80
+
+
 def test_render_article_from_plan_formats_faq_questions_as_questions():
     article_html = _render_article_from_plan(
         article_plan={

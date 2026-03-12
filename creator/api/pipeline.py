@@ -854,6 +854,7 @@ def _evaluate_plan_intent_consistency(
     intent_type: str,
     article_angle: str,
     topic_signature: Optional[Dict[str, Any]],
+    specificity_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     errors: List[str] = []
     score = 100
@@ -863,15 +864,34 @@ def _evaluate_plan_intent_consistency(
         "commercial_investigation": COMMERCIAL_INVESTIGATION_CUES,
     }
     dominant_tokens = intent_family_map.get(intent_type, set())
+    specificity_tokens = {
+        token
+        for bucket_tokens in ((specificity_profile or {}).get("buckets") or {}).values()
+        if isinstance(bucket_tokens, (list, tuple, set))
+        for token in bucket_tokens
+        if str(token).strip()
+    }
     conflicting_hits = 0
     for heading in headings:
         normalized = _normalize_keyword_phrase(heading)
         if normalized in {"fazit", "faq"}:
             continue
-        if dominant_tokens and not (set(normalized.split()) & dominant_tokens) and intent_type != "informational":
-            if not _topic_signature_candidate_has_relevance(normalized, topic_signature):
+        heading_tokens = _keyword_token_set(normalized)
+        if dominant_tokens and not (heading_tokens & dominant_tokens) and intent_type != "informational":
+            has_topic_relevance = _topic_signature_candidate_has_relevance(normalized, topic_signature)
+            has_specificity_support = bool(heading_tokens & specificity_tokens)
+            has_process_support = article_angle in {"process_and_decision_factors", "process_and_next_steps"} and bool(
+                heading_tokens & PROCESS_ACTION_TOKENS
+            )
+            is_natural_question = _heading_is_natural_core_question(normalized)
+            if not (
+                has_topic_relevance
+                or has_specificity_support
+                or has_process_support
+                or (is_natural_question and (has_specificity_support or has_process_support))
+            ):
                 conflicting_hits += 1
-        if article_angle == "process_and_decision_factors" and len(_keyword_token_set(normalized) & {"mieten", "miete"}) >= 1:
+        if article_angle == "process_and_decision_factors" and len(heading_tokens & {"mieten", "miete"}) >= 1:
             if len(_keyword_token_set(normalized) & {"verkaufen", "verkauf"}) == 0:
                 conflicting_hits += 1
     if conflicting_hits:
@@ -889,6 +909,7 @@ def _evaluate_plan_quality(
     intent_type: str,
     article_angle: str,
     topic_signature: Optional[Dict[str, Any]],
+    specificity_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     title_eval = _evaluate_title_quality(title=title, primary_keyword=primary_keyword, topic=topic)
     heading_eval = _evaluate_heading_quality(headings=headings, topic_signature=topic_signature)
@@ -897,6 +918,7 @@ def _evaluate_plan_quality(
         intent_type=intent_type,
         article_angle=article_angle,
         topic_signature=topic_signature,
+        specificity_profile=specificity_profile,
     )
     coherence_score = max(
         0,
@@ -9139,6 +9161,7 @@ def run_creator_pipeline(
         intent_type=phase3.get("search_intent_type", ""),
         article_angle=phase3.get("article_angle", ""),
         topic_signature=phase3.get("topic_signature"),
+        specificity_profile=phase3.get("specificity_profile"),
     )
     planner_prompt_trace = (
         (debug.get("prompt_trace") or {}).get("planner")
@@ -9198,6 +9221,7 @@ def run_creator_pipeline(
             intent_type=phase3.get("search_intent_type", ""),
             article_angle=phase3.get("article_angle", ""),
             topic_signature=phase3.get("topic_signature"),
+            specificity_profile=phase3.get("specificity_profile"),
         )
         if isinstance(planner_prompt_trace, dict):
             planner_attempts = planner_prompt_trace.setdefault("attempts", [])

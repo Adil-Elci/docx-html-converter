@@ -78,3 +78,45 @@ def test_fetch_posts_for_site_keeps_non_auth_http_errors(monkeypatch):
         assert exc.response.status_code == 500
     else:
         raise AssertionError("Expected HTTPError for non-auth failure.")
+
+
+def test_fetch_posts_for_site_falls_back_when_authenticated_response_is_not_json(monkeypatch):
+    calls = []
+
+    class _NonJsonResponse(_FakeResponse):
+        def json(self):
+            raise requests.exceptions.JSONDecodeError("Expecting value", "", 0)
+
+    def fake_get(url, *, headers, params, timeout):
+        calls.append({"headers": headers, "params": params})
+        if params.get("context") == "edit":
+            return _NonJsonResponse(status_code=200, payload=None)
+        return _FakeResponse(
+            status_code=200,
+            payload=[
+                {
+                    "id": 22,
+                    "link": "https://example.com/beitrag",
+                    "slug": "beitrag",
+                    "title": {"rendered": "Beitrag"},
+                    "excerpt": {"rendered": "Kurz"},
+                    "categories": [],
+                }
+            ],
+        )
+
+    monkeypatch.setattr("portal_backend.api.internal_linking_sync.requests.get", fake_get)
+
+    posts = _fetch_posts_for_site(
+        site_url="https://example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="user",
+        wp_app_password="pass",
+        per_page=100,
+        timeout_seconds=10,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["params"]["context"] == "edit"
+    assert "context" not in calls[1]["params"]
+    assert posts[0]["status"] == "publish"

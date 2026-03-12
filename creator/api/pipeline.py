@@ -53,7 +53,7 @@ DEFAULT_POLL_SECONDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 90
 PHASE1_CACHE_PROMPT_VERSION = "v3"
 PHASE2_CACHE_PROMPT_VERSION = "v3"
-PAIR_FIT_PROMPT_VERSION = "v3"
+PAIR_FIT_PROMPT_VERSION = "v4"
 DEFAULT_SITE_ANALYSIS_MAX_PAGES = 4
 DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS = 1400
 SEO_TITLE_MIN_CHARS = 45
@@ -1645,9 +1645,11 @@ def _pair_fit_cache_payload_is_usable(payload: Dict[str, Any]) -> bool:
     if decision == "rejected" or final_match_decision in {"weak_fit", "hard_reject"}:
         return True
     candidates = _coerce_pair_fit_topic_candidates(payload.get("topic_candidates"))
+    pair_fit_mode = str(payload.get("pair_fit_mode") or "selection").strip().lower()
+    required_candidate_count = 1 if pair_fit_mode == "validation" else 5
     return bool(
         str(payload.get("final_article_topic") or "").strip()
-        and len(candidates) == 5
+        and len(candidates) == required_candidate_count
         and isinstance(payload.get("intersection_contexts"), list)
         and bool(payload.get("why_this_topic_was_chosen"))
         and final_match_decision in {"accepted", ""}
@@ -1942,6 +1944,7 @@ def _pair_fit_overlap_reason(final_match_decision: str, overlap_terms: List[str]
 
 def _pair_fit_llm_input_payload(
     *,
+    mode: str,
     requested_topic: str,
     exclude_topics: List[str],
     target_site_url: str,
@@ -1956,9 +1959,9 @@ def _pair_fit_llm_input_payload(
     heuristic_candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     shared_contexts = _dedupe_preserve_order([context for context in publishing_contexts if context in set(target_contexts)])
-    return {
+    payload = {
+        "mode": mode,
         "requested_topic": requested_topic,
-        "exclude_topics": exclude_topics[:8],
         "publishing_site_url": publishing_site_url,
         "target_site_url": target_site_url,
         "publishing_profile": _compact_pair_fit_profile(publishing_profile, site_kind="publishing"),
@@ -1970,19 +1973,23 @@ def _pair_fit_llm_input_payload(
             "target_contexts": target_contexts[:8],
             "shared_contexts": shared_contexts,
             "overlap_terms": overlap_terms[:12],
-            "seed_bridge_topics": [
-                {
-                    "topic": str(item.get("topic") or "").strip(),
-                    "heuristic_total_score": int(item.get("total_score") or 0),
-                    "heuristic_breakdown": dict(item.get("score_breakdown") or {}),
-                }
-                for item in heuristic_candidates[:PAIR_FIT_CANDIDATE_COUNT]
-            ],
         },
     }
+    if mode == "selection":
+        payload["exclude_topics"] = exclude_topics[:8]
+        payload["derived_signals"]["seed_bridge_topics"] = [
+            {
+                "topic": str(item.get("topic") or "").strip(),
+                "heuristic_total_score": int(item.get("total_score") or 0),
+                "heuristic_breakdown": dict(item.get("score_breakdown") or {}),
+            }
+            for item in heuristic_candidates[:PAIR_FIT_CANDIDATE_COUNT]
+        ]
+    return payload
 
 
 def _pair_fit_llm_prompts(input_payload: Dict[str, Any]) -> tuple[str, str]:
+    mode = str(input_payload.get("mode") or "selection").strip().lower()
     system_prompt = (
         "Du bist ein redaktioneller Match-Analyst fuer Backlink-geeignete Informationsartikel. "
         "Beurteile, ob auf der Publishing-Seite ein natuerlicher informativer Artikel entstehen kann, "
@@ -1991,6 +1998,37 @@ def _pair_fit_llm_prompts(input_payload: Dict[str, Any]) -> tuple[str, str]:
         "Lehne kommerzielle Ziele nicht automatisch ab. "
         "Antworte ausschliesslich mit gueltigem JSON."
     )
+    if mode == "validation":
+        user_prompt = (
+            "Bewerte ausschliesslich das angegebene requested_topic auf Basis der strukturierten Profildaten.\n"
+            "Arbeitsregeln:\n"
+            "- Pruefe nur dieses eine Thema. Erfinde keine Alternativen und schlage keine Ersatzthemen vor.\n"
+            "- Das Hauptthema muss zuerst natuerlich zur Publishing-Seite passen.\n"
+            "- Der Link zur Zielseite darf nur eine nachrangige, kontextuelle Ressource sein.\n"
+            "- Match auf Kontext- und Zielgruppenebene, nicht nur ueber exakte Keywords.\n"
+            "- final_match_decision ist genau eines von: accepted, weak_fit, hard_reject.\n"
+            "- accepted: das requested_topic ist klar natuerlich und redaktionell glaubwuerdig.\n"
+            "- weak_fit: das requested_topic ist denkbar, aber empfindlich.\n"
+            "- hard_reject: das requested_topic wirkt nicht natuerlich.\n"
+            "- Gib nur JSON mit diesem Schema zurueck:\n"
+            "{\n"
+            '  "publishing_site_relevance": 0,\n'
+            '  "target_site_relevance": 0,\n'
+            '  "informational_value": 0,\n'
+            '  "backlink_naturalness": 0,\n'
+            '  "spam_risk": 0,\n'
+            '  "total_score": 0,\n'
+            '  "backlink_angle": "string",\n'
+            '  "final_match_decision": "accepted|weak_fit|hard_reject",\n'
+            '  "why_this_topic_was_chosen": "string",\n'
+            '  "best_overlap_reason": "string",\n'
+            '  "reject_reason": "string",\n'
+            '  "fit_score": 0\n'
+            "}\n\n"
+            "Input:\n"
+            f"{json.dumps(input_payload, ensure_ascii=False, sort_keys=True, indent=2)}"
+        )
+        return system_prompt, user_prompt
     user_prompt = (
         "Bewerte die Passung zwischen Publishing-Seite und Zielseite auf Basis der strukturierten Profildaten.\n"
         "Arbeitsregeln:\n"
@@ -2033,6 +2071,125 @@ def _pair_fit_llm_prompts(input_payload: Dict[str, Any]) -> tuple[str, str]:
         f"{json.dumps(input_payload, ensure_ascii=False, sort_keys=True, indent=2)}"
     )
     return system_prompt, user_prompt
+
+
+def _pair_fit_normalize_requested_topic_payload(
+    *,
+    llm_payload: Dict[str, Any],
+    requested_topic: str,
+    publishing_terms: List[str],
+    target_terms: List[str],
+    publishing_contexts: List[str],
+    target_contexts: List[str],
+    overlap_terms: List[str],
+    target_business_intent: str,
+) -> Dict[str, Any]:
+    requested_clean = requested_topic.strip()
+    if not requested_clean:
+        raise CreatorError("Pair fit requested-topic normalization requires requested_topic.")
+    fallback_candidate = _pair_fit_score_candidate(
+        requested_clean,
+        publishing_terms=publishing_terms,
+        target_terms=target_terms,
+        publishing_contexts=publishing_contexts,
+        target_contexts=target_contexts,
+        overlap_terms=overlap_terms,
+        target_business_intent=target_business_intent,
+    )
+    candidates = _coerce_pair_fit_topic_candidates(llm_payload.get("topic_candidates"))
+    requested_candidate = next(
+        (
+            item
+            for item in candidates
+            if _keyword_similarity(
+                _normalize_keyword_phrase(str(item.get("topic") or "")),
+                _normalize_keyword_phrase(requested_clean),
+            ) >= 0.88
+        ),
+        None,
+    )
+    if requested_candidate is None:
+        requested_candidate = {
+            **fallback_candidate,
+            "publishing_site_relevance": int(llm_payload.get("publishing_site_relevance") or fallback_candidate["publishing_site_relevance"]),
+            "target_site_relevance": int(llm_payload.get("target_site_relevance") or fallback_candidate["target_site_relevance"]),
+            "informational_value": int(llm_payload.get("informational_value") or fallback_candidate["informational_value"]),
+            "backlink_naturalness": int(llm_payload.get("backlink_naturalness") or fallback_candidate["backlink_naturalness"]),
+            "spam_risk": int(llm_payload.get("spam_risk") or fallback_candidate["spam_risk"]),
+            "total_score": int(llm_payload.get("total_score") or fallback_candidate["total_score"]),
+            "backlink_angle": str(llm_payload.get("backlink_angle") or fallback_candidate["backlink_angle"]).strip(),
+        }
+    requested_candidate["topic"] = requested_clean
+    requested_candidate["seo_plausibility"] = max(
+        1,
+        min(
+            10,
+            int(requested_candidate.get("publishing_site_relevance") or 0)
+            + int(requested_candidate.get("target_site_relevance") or 0)
+            + int(requested_candidate.get("informational_value") or 0)
+            - int(requested_candidate.get("spam_risk") or 0),
+        ),
+    )
+    requested_candidate["non_spamminess"] = max(1, min(10, 10 - int(requested_candidate.get("spam_risk") or 10)))
+    requested_candidate["score_breakdown"] = {
+        "publishing_site_relevance": int(requested_candidate.get("publishing_site_relevance") or 0),
+        "target_site_relevance": int(requested_candidate.get("target_site_relevance") or 0),
+        "informational_value": int(requested_candidate.get("informational_value") or 0),
+        "backlink_naturalness": int(requested_candidate.get("backlink_naturalness") or 0),
+        "spam_risk": int(requested_candidate.get("spam_risk") or 0),
+    }
+    final_match_decision = str(llm_payload.get("final_match_decision") or "").strip().lower()
+    if final_match_decision not in {"accepted", "weak_fit", "hard_reject"}:
+        final_match_decision = _pair_fit_candidate_decision(requested_candidate)
+    shared_contexts = _dedupe_preserve_order([context for context in publishing_contexts if context in set(target_contexts)])
+    why_this_topic_was_chosen = str(llm_payload.get("why_this_topic_was_chosen") or "").strip()
+    if not why_this_topic_was_chosen:
+        why_this_topic_was_chosen = (
+            "Das angefragte Thema passt inhaltlich zur Publishing-Seite und laesst die Zielseite nur als nachrangige Zusatzressource zu."
+            if final_match_decision == "accepted"
+            else "Das angefragte Thema ist nur eingeschraenkt tragfaehig und braucht besondere redaktionelle Vorsicht."
+        )
+    best_overlap_reason = str(llm_payload.get("best_overlap_reason") or "").strip()
+    if not best_overlap_reason:
+        best_overlap_reason = _pair_fit_overlap_reason(final_match_decision, overlap_terms, shared_contexts)
+    reject_reason = str(llm_payload.get("reject_reason") or llm_payload.get("rejection_reason") or "").strip()
+    if final_match_decision == "accepted":
+        reject_reason = ""
+    elif not reject_reason:
+        reject_reason = _pair_fit_reject_reason(final_match_decision, requested_candidate, overlap_terms)
+    fit_score = int(llm_payload.get("fit_score") or 0)
+    if fit_score <= 0:
+        fit_score = max(0, min(100, int(requested_candidate.get("total_score") or 0) * 2))
+    return {
+        "pair_fit_mode": "validation",
+        "publishing_site_topics": publishing_terms[:8],
+        "target_site_topics": target_terms[:8],
+        "publishing_site_contexts": publishing_contexts,
+        "target_site_contexts": target_contexts,
+        "intersection_contexts": shared_contexts,
+        "overlap_terms": overlap_terms,
+        "generated_bridge_topics": [dict(requested_candidate)],
+        "score_breakdown": {
+            "best_candidate": dict(requested_candidate),
+            "shared_context_count": len(shared_contexts),
+            "overlap_term_count": len(overlap_terms),
+            "match_engine": "llm_validation",
+        },
+        "best_overlap_reason": best_overlap_reason,
+        "topic_candidates": [dict(requested_candidate)],
+        "final_article_topic": requested_clean,
+        "requested_topic_evaluation": {
+            **dict(requested_candidate),
+            "decision": final_match_decision,
+        },
+        "why_this_topic_was_chosen": why_this_topic_was_chosen,
+        "backlink_fit_ok": final_match_decision == "accepted",
+        "fit_score": max(0, min(100, fit_score)),
+        "decision": "accepted" if final_match_decision == "accepted" else "rejected",
+        "final_match_decision": final_match_decision,
+        "rejection_reason": reject_reason,
+        "reject_reason": reject_reason,
+    }
 
 
 def _pair_fit_normalize_llm_payload(
@@ -2173,6 +2330,7 @@ def _pair_fit_normalize_llm_payload(
     elif fit_score <= 0:
         fit_score = max(0, min(100, int(best_candidate.get("total_score") or 0) * 2))
     return {
+        "pair_fit_mode": "selection",
         "publishing_site_topics": publishing_terms[:8],
         "target_site_topics": target_terms[:8],
         "publishing_site_contexts": publishing_contexts,
@@ -2251,7 +2409,9 @@ def _run_pair_fit_reasoning(
     )[:PAIR_FIT_CANDIDATE_COUNT]
     if len(heuristic_candidates) < PAIR_FIT_CANDIDATE_COUNT:
         raise CreatorError(f"Pair fit returned invalid candidate count:{len(heuristic_candidates)}")
+    pair_fit_mode = "validation" if requested_topic.strip() else "selection"
     input_payload = _pair_fit_llm_input_payload(
+        mode=pair_fit_mode,
         requested_topic=requested_topic,
         exclude_topics=exclude_topics,
         target_site_url=target_site_url,
@@ -2273,11 +2433,22 @@ def _run_pair_fit_reasoning(
         base_url=llm_base_url,
         model=planning_model,
         timeout_seconds=timeout_seconds,
-        max_tokens=3000,
+        max_tokens=1800 if pair_fit_mode == "validation" else 3000,
         temperature=0.1,
-        request_label="phase3_pair_fit",
+        request_label="phase3_pair_fit_validate" if pair_fit_mode == "validation" else "phase3_pair_fit_select",
         usage_collector=usage_collector,
     )
+    if pair_fit_mode == "validation":
+        return _pair_fit_normalize_requested_topic_payload(
+            llm_payload=llm_payload,
+            requested_topic=requested_topic,
+            publishing_terms=publishing_terms,
+            target_terms=target_terms,
+            publishing_contexts=publishing_contexts,
+            target_contexts=target_contexts,
+            overlap_terms=overlap_terms,
+            target_business_intent=str(target_profile.get("business_intent") or "").strip().lower(),
+        )
     return _pair_fit_normalize_llm_payload(
         llm_payload=llm_payload,
         publishing_terms=publishing_terms,

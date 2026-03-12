@@ -2579,8 +2579,9 @@ def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():
     finally:
         pipeline_module.call_llm_json = original
 
-    assert captured["request_label"] == "phase3_pair_fit"
+    assert captured["request_label"] == "phase3_pair_fit_select"
     input_payload = captured["input_payload"]
+    assert input_payload["mode"] == "selection"
     assert input_payload["derived_signals"]["publishing_contexts"]
     assert input_payload["derived_signals"]["seed_bridge_topics"]
     assert input_payload["target_profile"]["services_or_products"]
@@ -2590,6 +2591,73 @@ def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():
     assert result["final_article_topic"]
     assert "safety" in result["target_site_contexts"]
     assert any(item in result["publishing_site_contexts"] for item in ["family_life", "health", "parenting"])
+
+
+def test_pair_fit_reasoning_uses_validation_mode_for_requested_topic():
+    captured: dict[str, object] = {}
+
+    def fake_call_llm_json(**kwargs):
+        captured["request_label"] = kwargs.get("request_label")
+        prompt = str(kwargs.get("user_prompt") or "")
+        input_json = prompt.split("Input:\n", 1)[1]
+        captured["input_payload"] = json.loads(input_json)
+        return {
+            "publishing_site_relevance": 8,
+            "target_site_relevance": 7,
+            "informational_value": 8,
+            "backlink_naturalness": 7,
+            "spam_risk": 2,
+            "total_score": 39,
+            "backlink_angle": "Die Zielseite bleibt eine nachrangige Zusatzressource.",
+            "final_match_decision": "accepted",
+            "why_this_topic_was_chosen": "Das angefragte Thema passt sauber in den Publishing-Kontext.",
+            "best_overlap_reason": "Gemeinsame Immobilien- und Eigentumskontexte tragen das Thema.",
+            "reject_reason": "",
+            "fit_score": 78,
+        }
+
+    from creator.api import pipeline as pipeline_module
+
+    original = pipeline_module.call_llm_json
+    pipeline_module.call_llm_json = fake_call_llm_json
+    try:
+        requested_topic = "Immobilie verkaufen in Hamburg: worauf Eigentuemer achten sollten"
+        result = _run_pair_fit_reasoning(
+            requested_topic=requested_topic,
+            exclude_topics=[],
+            target_site_url="https://target.example.com",
+            publishing_site_url="https://publisher.example.com",
+            target_profile={
+                "normalized_url": "https://target.example.com",
+                "topics": ["Immobilienmakler", "Hausverkauf", "Hamburg"],
+                "contexts": ["real_estate", "services"],
+                "services_or_products": ["Immobilienmakler", "Hausverkauf"],
+                "business_intent": "commercial",
+            },
+            publishing_profile={
+                "normalized_url": "https://publisher.example.com",
+                "topics": ["Immobilien", "Verkaufen", "Wohnen"],
+                "contexts": ["real_estate", "guidance"],
+                "site_categories": ["Immobilien"],
+                "repeated_keywords": ["immobilien", "verkaufen", "eigentum"],
+            },
+            llm_api_key="test-key",
+            llm_base_url="https://api.openai.com/v1",
+            planning_model="gpt-4.1-mini",
+            timeout_seconds=2,
+            usage_collector=None,
+        )
+    finally:
+        pipeline_module.call_llm_json = original
+
+    assert captured["request_label"] == "phase3_pair_fit_validate"
+    input_payload = captured["input_payload"]
+    assert input_payload["mode"] == "validation"
+    assert "seed_bridge_topics" not in input_payload["derived_signals"]
+    assert result["pair_fit_mode"] == "validation"
+    assert result["final_article_topic"] == requested_topic
+    assert len(result["topic_candidates"]) == 1
+    assert result["requested_topic_evaluation"]["decision"] == "accepted"
 
 
 def test_compact_pair_fit_profile_limits_prompt_fields() -> None:

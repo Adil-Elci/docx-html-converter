@@ -2405,6 +2405,41 @@ def test_build_deterministic_title_package_avoids_recent_duplicate_title():
     assert "hochwertige Nahrungsergänzungsmittel".lower() in title_package["h1"].lower()
 
 
+def test_build_topic_phrase_prefers_specific_detail_segment_for_contextual_colon_topic():
+    phrase = _build_topic_phrase(
+        "Nährwertvergleich: Grüne Pulver und ihre Rolle in einer ausgewogenen Ernährung"
+    )
+
+    assert phrase == "grüne pulver im nährwertvergleich"
+
+
+def test_align_primary_keyword_to_topic_prefers_specific_detail_query_for_contextual_colon_topic():
+    primary_keyword = _align_primary_keyword_to_topic(
+        topic="Nährwertvergleich: Grüne Pulver und ihre Rolle in einer ausgewogenen Ernährung",
+        current_primary="Nährwertvergleich: Grüne Pulver und ihre Rolle in einer ausgewogenen Ernährung",
+        trend_candidates=[],
+        keyword_cluster=["greens", "kollagenpulver"],
+    )
+
+    assert primary_keyword == "grüne pulver im nährwertvergleich"
+
+
+def test_build_deterministic_title_package_keeps_contextual_primary_for_colon_topic():
+    title_package = _build_deterministic_title_package(
+        topic="Nährwertvergleich: Grüne Pulver und ihre Rolle in einer ausgewogenen Ernährung",
+        primary_keyword="grüne pulver im nährwertvergleich",
+        secondary_keywords=[],
+        search_intent_type="commercial_investigation",
+        structured_mode="table",
+        current_year=2026,
+        article_angle="decision_criteria",
+        topic_class="nutrition_supplements",
+    )
+
+    assert "Grüne Pulver Im Nährwertvergleich" in title_package["h1"]
+    assert "grüne pulver im nährwertvergleich" in title_package["meta_title"].lower()
+
+
 def test_build_deterministic_meta_description_meets_length_contract():
     meta_description = _build_deterministic_meta_description(
         topic="Kinder Sonnenbrillen: worauf Eltern achten sollten",

@@ -377,7 +377,7 @@ ABSTRACT_QUERY_TOKENS = {
 }
 GENERIC_TOPIC_CATEGORY_TOKENS = {
     "beauty", "familie", "family", "finance", "gesundheit", "health", "lifestyle", "mode", "shopping",
-    "stil", "produkt", "produkte", "wellness", "wohnen",
+    "stil", "produkt", "produkte", "wellness", "wohnen", "naehrwertvergleich", "preisvergleich", "kostenvergleich",
 }
 QUESTION_LEAD_HELPER_TOKENS = {
     "am", "an", "auf", "bei", "das", "dem", "den", "der", "des", "die", "ein", "eine", "einem", "einen",
@@ -391,6 +391,9 @@ QUESTION_LEAD_VERB_TOKENS = {
 }
 QUESTION_TRAILING_LOW_SIGNAL_TOKENS = {"eigentlich", "heute", "jetzt", "noch", "richtig", "sinnvoll", "wirklich"}
 QUESTION_FOCUS_PRIORITY_TOKENS = {"kosten", "kostet", "preis", "preise", "vergleich", "dosierung", "dosis", "tagesdosis"}
+TOPIC_DETAIL_RELATION_TOKENS = {
+    "rolle", "bedeutung", "wirkung", "einsatz", "nutzen", "nutzung", "anwendung", "platz", "beitrag",
+}
 EDITORIAL_NOISE_TOKENS = {"amp"}
 EDITORIAL_GREETING_PREFIXES = (
     "herzlich willkommen",
@@ -424,6 +427,7 @@ GERMAN_QUESTION_PREFIXES = (
     "welches",
     "wo",
     "woran",
+    "worauf",
     "kann",
     "darf",
 )
@@ -1201,16 +1205,77 @@ def _clean_topic_segment_raw(segment: str, *, preserve_question: bool = False) -
 
 
 def _extract_topic_subject_phrase(topic: str) -> str:
-    for segment in _split_topic_segments(topic):
+    segments = _split_topic_segments(topic)
+    first_subject = ""
+    for segment in segments:
         cleaned = _clean_topic_segment_raw(segment)
         if cleaned and not _looks_like_question_phrase(cleaned):
-            return cleaned
+            first_subject = cleaned
+            break
+    detail_phrase = _extract_topic_detail_phrase(topic)
+    if detail_phrase:
+        if not first_subject:
+            return detail_phrase
+        first_specificity = _topic_phrase_specificity_score(first_subject)
+        detail_specificity = _topic_phrase_specificity_score(detail_phrase)
+        if (
+            _topic_phrase_is_generic(first_subject)
+            or _topic_phrase_domain_token_count(first_subject) < 2
+            or detail_specificity > first_specificity
+        ):
+            return detail_phrase
+    if first_subject:
+        return first_subject
     normalized = _normalize_keyword_phrase(topic)
     words = _strip_trailing_topic_modifiers(normalized.split())
     if len(words) > KEYWORD_MAX_WORDS:
         words = words[:KEYWORD_MAX_WORDS]
     candidate = " ".join(words).strip()
     return candidate if candidate and not _looks_like_question_phrase(candidate) else ""
+
+
+def _trim_topic_detail_segment(segment: str) -> str:
+    cleaned = _clean_topic_segment_raw(segment)
+    normalized = _normalize_keyword_phrase(cleaned)
+    if not normalized:
+        return ""
+    if re.search(
+        r"\bund\s+(?:ihre|ihren|ihrem|ihrer|sein|seine|seinen|seinem|seiner|deren|dessen)\b",
+        normalized,
+    ):
+        left = re.split(
+            r"\bund\s+(?:ihre|ihren|ihrem|ihrer|sein|seine|seinen|seinem|seiner|deren|dessen)\b",
+            normalized,
+            maxsplit=1,
+        )[0].strip()
+        if _is_valid_keyword_phrase(left):
+            return left
+    if " und " in normalized:
+        left, right = normalized.split(" und ", 1)
+        if (
+            len(left.split()) >= 2
+            and (_keyword_token_set(right) & TOPIC_DETAIL_RELATION_TOKENS)
+            and _is_valid_keyword_phrase(left)
+        ):
+            return left.strip()
+    return normalized
+
+
+def _extract_topic_detail_phrase(topic: str) -> str:
+    segments = _split_topic_segments(topic)
+    if len(segments) < 2:
+        return ""
+    best_candidate = ""
+    best_score = tuple()
+    for segment in segments[1:]:
+        candidate = _trim_topic_detail_segment(segment)
+        if not candidate or _looks_like_question_phrase(candidate):
+            continue
+        specificity = _topic_phrase_specificity_score(candidate)
+        if not best_candidate or specificity > best_score:
+            best_candidate = candidate
+            best_score = specificity
+    return best_candidate
 
 
 def _extract_topic_question_focus_phrase(topic: str) -> str:
@@ -1297,6 +1362,21 @@ def _format_sentence_start(value: str) -> str:
     return cleaned[:1].upper() + cleaned[1:]
 
 
+def _title_carries_keyword_phrase(title: str, keyword_phrase: str) -> bool:
+    if _keyword_present(title, keyword_phrase):
+        return True
+    keyword_tokens = list(_filter_keyword_focus_tokens(_keyword_focus_tokens(keyword_phrase)))
+    title_tokens = list(_filter_keyword_focus_tokens(_keyword_focus_tokens(title)))
+    if not keyword_tokens or not title_tokens:
+        return False
+    matched = 0
+    for keyword_token in keyword_tokens:
+        if any(_keyword_token_approx_match(keyword_token, title_token) for title_token in title_tokens):
+            matched += 1
+    required_matches = len(keyword_tokens) if len(keyword_tokens) <= 3 else len(keyword_tokens) - 1
+    return matched >= max(2, required_matches)
+
+
 def _append_sentence_with_limit(current: str, sentence: str, *, max_chars: int) -> str:
     cleaned_sentence = re.sub(r"\s+", " ", str(sentence or "").strip())
     if not cleaned_sentence:
@@ -1344,7 +1424,7 @@ def _ensure_primary_keyword_in_title(
     suffix: str,
     max_chars: int = SEO_TITLE_MAX_CHARS,
 ) -> str:
-    if not primary_title or _keyword_present_relaxed(title, primary_title):
+    if not primary_title or _title_carries_keyword_phrase(title, primary_title):
         return title
     reference_text = _normalize_keyword_phrase(" ".join([question_title, subject_title, title]))
     primary_tokens = _keyword_token_set(primary_title)
@@ -1378,7 +1458,7 @@ def _ensure_primary_keyword_in_title(
     normalized_original = _normalize_keyword_phrase(title)
     for candidate in candidates:
         normalized_candidate = _truncate_title(candidate, max_chars=max_chars)
-        if not _keyword_present_relaxed(normalized_candidate, primary_title):
+        if not _title_carries_keyword_phrase(normalized_candidate, primary_title):
             continue
         if len(normalized_candidate) > max_chars:
             continue
@@ -1409,6 +1489,10 @@ def _build_deterministic_title_package(
         if question_title
         else _format_title_case(subject_title or topic or primary_keyword or "Ratgeber")
     )
+    if question_title and subject_title and not _topic_phrase_is_generic(subject_title):
+        combined_question_title = f"{_format_title_case(subject_title)}: {_format_sentence_start(question_title)}"
+        if len(combined_question_title) <= SEO_H1_MAX_CHARS:
+            topic_title = combined_question_title
     if (
         not question_title
         and primary_title
@@ -1509,6 +1593,17 @@ def _build_deterministic_title_package(
             best_h1 = candidate_h1
             best_score = candidate_score
     h1 = best_h1
+    if primary_title and not _title_carries_keyword_phrase(h1, primary_title):
+        h1_with_primary = _ensure_primary_keyword_in_title(
+            title=h1,
+            primary_title=primary_title,
+            question_title=question_title,
+            subject_title=subject_title or topic or primary_keyword,
+            suffix=suffix,
+            max_chars=SEO_H1_MAX_CHARS,
+        )
+        if _title_carries_keyword_phrase(h1_with_primary, primary_title):
+            h1 = h1_with_primary
 
     title_quality = _evaluate_title_quality(
         title=h1,
@@ -3796,10 +3891,37 @@ def _build_keyword_buckets(
 
 def _build_topic_phrase(topic: str) -> str:
     subject_phrase = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
+    detail_phrase = _normalize_keyword_phrase(_extract_topic_detail_phrase(topic))
     question_focus_phrase = _normalize_keyword_phrase(_extract_topic_question_focus_phrase(topic))
     question_phrase = _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
+    context_phrase = _normalize_keyword_phrase(_clean_topic_segment_raw(_split_topic_segments(topic)[0])) if _split_topic_segments(topic) else ""
+    if (
+        detail_phrase
+        and context_phrase
+        and context_phrase != detail_phrase
+        and len(context_phrase.split()) <= 2
+        and (
+            context_phrase in GENERIC_TOPIC_CATEGORY_TOKENS
+            or context_phrase.endswith("vergleich")
+            or context_phrase.endswith("check")
+        )
+        and not _keyword_present_relaxed(detail_phrase, context_phrase)
+    ):
+        composed_detail = _normalize_keyword_phrase(f"{detail_phrase} im {context_phrase}")
+        if _is_valid_keyword_phrase(composed_detail):
+            detail_phrase = composed_detail
     preferred = subject_phrase or question_focus_phrase or question_phrase or _normalize_keyword_phrase(topic)
-    if question_focus_phrase:
+    if detail_phrase:
+        subject_specificity = _topic_phrase_specificity_score(subject_phrase) if subject_phrase else (0, 0, 0, 0, 0)
+        detail_specificity = _topic_phrase_specificity_score(detail_phrase)
+        if (
+            not subject_phrase
+            or _topic_phrase_is_generic(subject_phrase)
+            or _topic_phrase_domain_token_count(subject_phrase) < 2
+            or detail_specificity > subject_specificity
+        ):
+            preferred = detail_phrase
+    elif question_focus_phrase:
         subject_specificity = _topic_phrase_specificity_score(subject_phrase) if subject_phrase else (0, 0, 0, 0, 0)
         question_specificity = _topic_phrase_specificity_score(question_focus_phrase)
         if not subject_phrase or _topic_phrase_is_generic(subject_phrase):
@@ -3810,7 +3932,7 @@ def _build_topic_phrase(topic: str) -> str:
         ):
             preferred = question_focus_phrase
         elif (
-            question_specificity[0] >= subject_specificity[0] + 1
+            question_specificity[0] >= subject_specificity[0] + 2
             and question_specificity > subject_specificity
         ):
             preferred = question_focus_phrase
@@ -5358,6 +5480,7 @@ def _align_primary_keyword_to_topic(
     if not normalized_topic:
         return current_primary
 
+    topic_phrase = _build_topic_phrase(topic)
     topic_head = _topic_head_keyword(topic)
     current_primary_normalized = _normalize_keyword_phrase(current_primary)
     topic_tokens = _keyword_token_set(normalized_topic)
@@ -5370,7 +5493,7 @@ def _align_primary_keyword_to_topic(
         ]
     )
     candidate_pool = _dedupe_keyword_phrases(
-        [topic_head, current_primary] + trend_candidates + cluster_candidates + [normalized_topic]
+        [topic_phrase, topic_head, current_primary] + trend_candidates + cluster_candidates + [normalized_topic]
     )
     candidate_pool = [
         item
@@ -5395,12 +5518,18 @@ def _align_primary_keyword_to_topic(
         and len(current_primary_normalized.split()) > 4
         and _keyword_similarity(current_primary_normalized, normalized_topic) >= 0.88
     ):
+        if (
+            topic_phrase
+            and topic_phrase != normalized_topic
+            and 2 <= len(_keyword_token_set(topic_phrase)) <= KEYWORD_QUERY_MAX_WORDS
+        ):
+            return topic_phrase
         refined_candidates = [
             item
             for item in candidate_pool
             if 2 <= len(_keyword_token_set(item)) <= 4
             and _keyword_similarity(item, normalized_topic) >= 0.15
-            and not _keyword_is_strict_token_subset(item, normalized_topic)
+            and (item == topic_phrase or not _keyword_is_strict_token_subset(item, normalized_topic))
         ]
         if refined_candidates:
             return max(

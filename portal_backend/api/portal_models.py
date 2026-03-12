@@ -230,20 +230,6 @@ class SiteDefaultCategory(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
-class ClientSiteAccess(Base):
-    __tablename__ = "client_publishing_site_access"
-    __table_args__ = (
-        UniqueConstraint("client_id", "publishing_site_id", name="client_publishing_site_access_client_publishing_site_unique"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
-    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
-    enabled = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
-
-
 class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (

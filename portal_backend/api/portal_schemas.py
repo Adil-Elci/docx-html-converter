@@ -459,25 +459,6 @@ class SiteCredentialOut(BaseModel):
     updated_at: datetime
 
 
-class ClientSiteAccessCreate(BaseModel):
-    client_id: UUID
-    site_id: UUID
-    enabled: bool = True
-
-
-class ClientSiteAccessUpdate(BaseModel):
-    enabled: Optional[bool] = None
-
-
-class ClientSiteAccessOut(BaseModel):
-    id: UUID
-    client_id: UUID
-    site_id: UUID
-    enabled: bool
-    created_at: datetime
-    updated_at: datetime
-
-
 class SubmissionCreate(BaseModel):
     client_id: UUID
     site_id: UUID

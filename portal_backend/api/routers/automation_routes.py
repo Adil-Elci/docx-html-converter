@@ -37,7 +37,6 @@ from ..db import get_db
 from ..portal_models import (
     Client,
     ClientTargetSite,
-    ClientSiteAccess,
     Job,
     JobEvent,
     Site,
@@ -166,24 +165,13 @@ def _resolve_publishing_site(db: Session, publishing_site: str) -> Site:
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active site matches publishing_site.")
 
 
-def _candidate_publishing_sites_for_client(db: Session, *, client_id: UUID, enforce_client_site_access: bool) -> list[Site]:
-    query = db.query(Site).filter(Site.status == "active")
-    if enforce_client_site_access:
-        allowed_ids = [
-            row.site_id
-            for row in (
-                db.query(ClientSiteAccess.site_id)
-                .filter(
-                    ClientSiteAccess.client_id == client_id,
-                    ClientSiteAccess.enabled.is_(True),
-                )
-                .all()
-            )
-        ]
-        if not allowed_ids:
-            return []
-        query = query.filter(Site.id.in_(allowed_ids))
-    return query.order_by(Site.name.asc(), Site.created_at.asc()).all()
+def _candidate_publishing_sites(db: Session) -> list[Site]:
+    return (
+        db.query(Site)
+        .filter(Site.status == "active")
+        .order_by(Site.name.asc(), Site.created_at.asc())
+        .all()
+    )
 
 
 def _parse_auto_site_priority_weights() -> Dict[str, int]:
@@ -281,7 +269,6 @@ def _resolve_or_auto_select_publishing_site(
     payload: AutomationSubmitArticleIn,
     client: Client,
     client_target_site: Optional[ClientTargetSite],
-    enforce_client_site_access: bool,
     creator_endpoint: str,
 ) -> Site:
     explicit_site = (payload.publishing_site or "").strip()
@@ -344,11 +331,7 @@ def _resolve_or_auto_select_publishing_site(
                 },
             )
         return site
-    candidate_sites = _candidate_publishing_sites_for_client(
-        db,
-        client_id=client.id,
-        enforce_client_site_access=enforce_client_site_access,
-    )
+    candidate_sites = _candidate_publishing_sites(db)
     if not candidate_sites:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -604,23 +587,6 @@ def _resolve_client_target_site(
 
     primary = next((row for row in rows if bool(row.is_primary)), None)
     return primary or rows[0]
-
-
-def _require_client_site_access(db: Session, client_id: UUID, site_id: UUID) -> None:
-    access = (
-        db.query(ClientSiteAccess)
-        .filter(
-            ClientSiteAccess.client_id == client_id,
-            ClientSiteAccess.site_id == site_id,
-            ClientSiteAccess.enabled.is_(True),
-        )
-        .first()
-    )
-    if not access:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Client does not have enabled access to this site.",
-        )
 
 
 def _resolve_submission_source(source_type: str, source_url: str) -> Tuple[str, Optional[str], Optional[str]]:
@@ -1010,27 +976,16 @@ async def process_submit_article_webhook(
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
-        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         site = _resolve_or_auto_select_publishing_site(
             db,
             payload=payload,
             client=client,
             client_target_site=client_target_site,
-            enforce_client_site_access=enforce_client_site_access,
             creator_endpoint=get_runtime_config()["creator_endpoint"],
         )
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
-            if enforce_client_site_access:
-                ensure_site_access(db, current_user, site.id)
-        if enforce_client_site_access:
-            _require_client_site_access(db, client.id, site.id)
-        else:
-            logger.info(
-                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
-                client.id,
-                site.id,
-            )
+            ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
             db,
             payload=payload,
@@ -1064,19 +1019,9 @@ async def process_submit_article_webhook(
         site = _resolve_publishing_site(db, payload.publishing_site or "")
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
-        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
-            if enforce_client_site_access:
-                ensure_site_access(db, current_user, site.id)
-        if enforce_client_site_access:
-            _require_client_site_access(db, client.id, site.id)
-        else:
-            logger.info(
-                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
-                client.id,
-                site.id,
-            )
+            ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
             db,
             payload=payload,
@@ -1153,19 +1098,9 @@ async def process_submit_article_webhook(
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
-        enforce_client_site_access = _read_bool_env("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", False)
         if current_user is not None and current_user.role != "admin":
             ensure_client_access(db, current_user, client.id)
-            if enforce_client_site_access:
-                ensure_site_access(db, current_user, site.id)
-        if enforce_client_site_access:
-            _require_client_site_access(db, client.id, site.id)
-        else:
-            logger.info(
-                "automation.webhook.client_site_access_check_skipped client_id=%s site_id=%s",
-                client.id,
-                site.id,
-            )
+            ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
             db,
             payload=payload,

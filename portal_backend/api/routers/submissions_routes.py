@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import List, Optional
 from uuid import UUID
 
@@ -13,10 +12,9 @@ from ..auth import (
     get_current_user,
     require_admin,
     user_client_ids,
-    user_accessible_site_ids,
 )
 from ..db import get_db
-from ..portal_models import Client, ClientSiteAccess, Site, Submission, User
+from ..portal_models import Client, Site, Submission, User
 from ..portal_schemas import SubmissionCreate, SubmissionOut, SubmissionUpdate
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
@@ -55,31 +53,6 @@ def _require_active_site(db: Session, site_id: UUID) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Site is not active.")
 
 
-def _require_access(db: Session, client_id: UUID, site_id: UUID) -> None:
-    enforce_client_site_access = os.getenv("AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if not enforce_client_site_access:
-        return
-    access = (
-        db.query(ClientSiteAccess)
-        .filter(
-            ClientSiteAccess.client_id == client_id,
-            ClientSiteAccess.site_id == site_id,
-            ClientSiteAccess.enabled.is_(True),
-        )
-        .first()
-    )
-    if not access:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Client does not have enabled access to this site.",
-        )
-
-
 def _validate_source_payload(source_type: str, doc_url: Optional[str], file_url: Optional[str]) -> None:
     if source_type == "google-doc":
         if doc_url is None or file_url is not None:
@@ -113,12 +86,6 @@ def list_submissions(
             return []
         query = query.filter(Submission.client_id.in_(allowed_client_ids))
 
-        allowed_site_ids = user_accessible_site_ids(db, current_user)
-        if allowed_site_ids:
-            query = query.filter(Submission.site_id.in_(allowed_site_ids))
-        else:
-            return []
-
     if client_id is not None:
         if current_user.role != "admin":
             ensure_client_access(db, current_user, client_id)
@@ -145,7 +112,6 @@ def create_submission(
         ensure_site_access(db, current_user, payload.site_id)
     _require_active_client(db, payload.client_id)
     _require_active_site(db, payload.site_id)
-    _require_access(db, payload.client_id, payload.site_id)
     _validate_source_payload(payload.source_type, payload.doc_url, payload.file_url)
 
     submission = Submission(

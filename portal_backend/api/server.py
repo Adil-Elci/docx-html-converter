@@ -20,7 +20,6 @@ from .routers import (
     admin_users_router,
     auth_router,
     automation_router,
-    client_site_access_router,
     clients_router,
     db_updater_router,
     jobs_router,
@@ -58,7 +57,6 @@ app.include_router(db_updater_router)
 app.include_router(automation_router)
 app.include_router(sites_router)
 app.include_router(site_credentials_router)
-app.include_router(client_site_access_router)
 app.include_router(submissions_router)
 app.include_router(jobs_router)
 

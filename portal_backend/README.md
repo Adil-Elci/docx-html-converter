@@ -64,14 +64,13 @@ python scripts/create_admin_user.py --email admin@example.com --password "replac
 ## RBAC Enforcement (Phase 2)
 Role model:
 - `admin`: full access to management routes
-- `client`: scoped access only to mapped clients/publishing sites (`client_users` + `client_publishing_site_access`)
+- `client`: scoped access only to mapped clients (`client_users`); publishing sites are shared across clients
 
 Enforced behavior:
 - Admin-only routes:
   - `POST/PATCH /clients`
   - `POST/PATCH /sites`
   - `GET/POST/PATCH /site-credentials*`
-  - `GET/POST/PATCH /client-site-access*`
   - `POST/PATCH /jobs*` and `POST /jobs/{id}/events`, `POST /jobs/{id}/assets`
 - Client-scoped routes:
   - `GET /clients`, `GET /sites`
@@ -222,7 +221,6 @@ Runtime env vars:
 - `AUTOMATION_CATEGORY_LLM_MAX_CATEGORIES` (default: `2`)
 - `AUTOMATION_CATEGORY_LLM_CONFIDENCE_THRESHOLD` (default: `0.55`)
 - `AUTOMATION_DEFAULT_CLIENT_ID` (optional fallback client for async/shadow)
-- `AUTOMATION_ENFORCE_CLIENT_SITE_ACCESS` (default: `false`; set `true` to require `client_publishing_site_access` mapping)
 - `AUTOMATION_AUTO_SITE_MIN_SCORE` (default: `18`; minimum deterministic preselection score when `publishing_site` is omitted for Creator article generation)
 - `AUTOMATION_AUTO_SITE_TOP_K` (default: `5`; top ranked candidate hosts sent through Creator pair-fit before choosing the final host)
 - `AUTOMATION_AUTO_SITE_PRIORITY_WEIGHTS` (optional JSON object mapping `publishing_site_id -> integer weight`)

@@ -29,7 +29,7 @@ logger = logging.getLogger("portal_backend.site_profiles")
 
 PROFILE_KIND_PUBLISHING = "publishing_site"
 PROFILE_KIND_TARGET = "target_site"
-PROFILE_VERSION = "v3"
+PROFILE_VERSION = "v4"
 PROFILE_MIN_PRIMARY_TEXT_CHARS = 220
 PROFILE_NOISE_TAGS = (
     "script",
@@ -70,6 +70,36 @@ PROFILE_BOILERPLATE_LINK_TOKENS = {
     "terms",
     "warenkorb",
 }
+PROFILE_MARKETING_TOKENS = {
+    "angebote",
+    "bewertungen",
+    "bestseller",
+    "entdecke",
+    "extras",
+    "fans",
+    "fragen",
+    "hilfe",
+    "kunden",
+    "perfekt",
+    "shoppen",
+    "tipps",
+    "ziele",
+}
+PROFILE_GENERIC_PHRASE_PREFIXES = (
+    "alles shoppen",
+    "entdecke",
+    "erreiche",
+    "haeufig gestellte",
+    "häufig gestellte",
+    "how can we help",
+    "need support",
+    "our fans",
+    "unsere extras",
+    "warum ",
+    "was sagen",
+    "wie koennen wir",
+    "wie können wir",
+)
 
 CONTEXT_KEYWORDS = {
     "health": {
@@ -116,7 +146,7 @@ EXTRA_STOPWORDS = {
 LOW_SIGNAL_TOKENS = {
     "allgemein", "artikel", "beitrag", "blog", "einfach", "forum", "home", "infos", "jetzt", "magazin",
     "menu", "navigation", "news", "online", "portal", "seite", "service", "start", "startseite", "suche",
-    "thema", "themen", "tipps", "weiterlesen", "wissen",
+    "thema", "themen", "tipps", "weiterlesen", "wissen", "better", "days", "more", "review", "reviews",
 }
 BOILERPLATE_PHRASES = {
     "datenschutz", "impressum", "kontakt", "login", "registrieren", "warenkorb", "konto", "agb",
@@ -127,6 +157,30 @@ COMMERCIAL_TERMS = {
 }
 INFORMATIONAL_TERMS = {
     "ratgeber", "tipps", "checkliste", "anleitung", "faq", "was", "wie", "warum", "wann", "hilft",
+}
+PROFILE_CONTEXT_SOURCE_WEIGHTS = {
+    PROFILE_KIND_TARGET: {
+        "page_titles": 6,
+        "meta_descriptions": 3,
+        "headings": 5,
+        "weighted_keywords": 6,
+        "page_text": 1,
+        "services_or_products": 7,
+        "topics": 5,
+    },
+    PROFILE_KIND_PUBLISHING: {
+        "page_titles": 5,
+        "meta_descriptions": 3,
+        "headings": 5,
+        "weighted_keywords": 4,
+        "page_text": 1,
+        "categories": 5,
+        "prominent_titles": 4,
+        "article_titles": 3,
+        "article_excerpts": 2,
+        "article_slugs": 2,
+        "topic_clusters": 4,
+    },
 }
 
 
@@ -255,35 +309,53 @@ def fetch_site_profile_payload(
         [page.get("meta_description", "") for page in pages if page.get("meta_description")]
     )
     keywords = _extract_weighted_keywords(pages, limit=18)
-    snapshot_contexts = _infer_contexts(
-        keywords
-        + headings
-        + page_titles
-        + meta_descriptions
-    )
-    inventory_contexts = _infer_contexts(
-        _coerce_string_list((inventory_context or {}).get("site_categories"))
-        + _coerce_string_list((inventory_context or {}).get("prominent_titles"))
-        + _coerce_string_list((inventory_context or {}).get("topic_clusters"))
-    )
-    contexts = _dedupe_preserve_order(snapshot_contexts + inventory_contexts)
-    if profile_kind == PROFILE_KIND_PUBLISHING:
-        primary_context = (
-            snapshot_contexts[0]
-            if snapshot_contexts
-            else (inventory_contexts[0] if inventory_contexts else "lifestyle")
-        )
-    else:
-        primary_context = contexts[0] if contexts else "shopping"
     content_tone = _detect_content_tone(combined_text, headings, page_titles)
     domain_topic = _derive_domain_topic(page_titles, headings, keywords, normalized_url)
     categories = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("site_categories")))
     prominent_titles = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("prominent_titles")))
+    article_titles = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("article_titles")))
+    article_excerpts = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("article_excerpts")))
+    article_slugs = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("article_slugs")))
     topic_clusters = _dedupe_preserve_order(
         _coerce_string_list((inventory_context or {}).get("topic_clusters")) + keywords[:8]
     )
     business_type, business_intent = _derive_business_intent(combined_text, keywords, headings)
     services_or_products = _derive_services_or_products(headings, keywords, page_titles)
+    topics = _derive_topics(domain_topic, headings, keywords, categories, prominent_titles)
+    snapshot_context_scores = _score_profile_context_groups(
+        {
+            "page_titles": page_titles,
+            "meta_descriptions": meta_descriptions,
+            "headings": headings,
+            "weighted_keywords": keywords,
+            "page_text": [page.get("text", "") for page in pages if str(page.get("text") or "").strip()],
+            "services_or_products": services_or_products if profile_kind == PROFILE_KIND_TARGET else [],
+            "topics": topics,
+        },
+        profile_kind=profile_kind,
+    )
+    inventory_context_scores = _score_profile_context_groups(
+        {
+            "categories": categories,
+            "prominent_titles": prominent_titles,
+            "article_titles": article_titles,
+            "article_excerpts": article_excerpts,
+            "article_slugs": article_slugs,
+            "topic_clusters": topic_clusters,
+        },
+        profile_kind=PROFILE_KIND_PUBLISHING,
+    )
+    snapshot_contexts = _contexts_from_scores(snapshot_context_scores)
+    inventory_contexts = _contexts_from_scores(inventory_context_scores)
+    combined_context_scores = Counter(snapshot_context_scores)
+    if profile_kind == PROFILE_KIND_PUBLISHING:
+        combined_context_scores.update(inventory_context_scores)
+        primary_context = _best_context_from_scores(combined_context_scores, fallback="lifestyle")
+    else:
+        for context, score in inventory_context_scores.items():
+            combined_context_scores[context] += int(round(score * 0.35))
+        primary_context = _best_context_from_scores(combined_context_scores, fallback="shopping")
+    contexts = _contexts_from_scores(combined_context_scores)
     payload: Dict[str, Any] = {
         "normalized_url": normalized_url,
         "source_url": site_url.strip(),
@@ -295,10 +367,13 @@ def fetch_site_profile_payload(
         "sample_urls": [page.get("url", "") for page in pages if page.get("url")][:8],
         "domain_level_topic": domain_topic,
         "primary_context": primary_context,
-        "topics": _derive_topics(domain_topic, headings, keywords, categories, prominent_titles),
+        "topics": topics,
         "contexts": contexts,
         "snapshot_contexts": snapshot_contexts[:5],
         "inventory_contexts": inventory_contexts[:5],
+        "context_scores": _serialize_context_scores(combined_context_scores),
+        "snapshot_context_scores": _serialize_context_scores(snapshot_context_scores),
+        "inventory_context_scores": _serialize_context_scores(inventory_context_scores),
         "content_tone": content_tone,
         "content_style": _derive_content_style(content_tone, headings, page_titles),
         "site_categories": categories[:12],
@@ -361,7 +436,9 @@ def count_relevant_inventory_articles(
 ) -> int:
     inventory = dict(inventory_context or {})
     titles = _coerce_string_list(inventory.get("article_titles")) or _coerce_string_list(inventory.get("prominent_titles"))
-    if not titles:
+    excerpts = _coerce_string_list(inventory.get("article_excerpts"))
+    slugs = _coerce_string_list(inventory.get("article_slugs"))
+    if not titles and not excerpts and not slugs:
         return 0
     profile = dict(target_profile or {})
     target_primary_context = str(profile.get("primary_context") or "").strip()
@@ -375,12 +452,22 @@ def count_relevant_inventory_articles(
     if not reference_terms:
         return 0
     relevant = 0
-    for title in titles:
-        title_terms = _text_set(title)
+    article_count = max(len(titles), len(excerpts), len(slugs))
+    for index in range(article_count):
+        article_text = " ".join(
+            item
+            for item in [
+                titles[index] if index < len(titles) else "",
+                excerpts[index] if index < len(excerpts) else "",
+                slugs[index] if index < len(slugs) else "",
+            ]
+            if item
+        )
+        title_terms = _text_set(article_text)
         if not title_terms:
             continue
         overlap = len(reference_terms & title_terms)
-        title_contexts = set(_infer_contexts([title]))
+        title_contexts = set(_infer_contexts([article_text]))
         if overlap >= 2 or (overlap >= 1 and target_primary_context and target_primary_context in title_contexts):
             relevant += 1
     return relevant
@@ -445,11 +532,19 @@ def build_publishing_inventory_context(db: Session, *, site_id: UUID, article_li
         .all()
     )
     titles = [(row.title or "").strip() for row in articles if (row.title or "").strip()]
-    topic_clusters = _extract_keywords(" ".join(titles + categories), limit=14)
+    excerpts = [
+        re.sub(r"\s+", " ", (row.excerpt or "").strip())[:240]
+        for row in articles
+        if (row.excerpt or "").strip()
+    ]
+    slugs = [(row.slug or "").replace("-", " ").strip() for row in articles if (row.slug or "").strip()]
+    topic_clusters = _extract_keywords(" ".join(titles + categories + excerpts + slugs), limit=14)
     return {
         "site_categories": _dedupe_preserve_order(categories),
         "prominent_titles": _dedupe_preserve_order(titles)[:12],
         "article_titles": _dedupe_preserve_order(titles)[: max(1, article_limit)],
+        "article_excerpts": _dedupe_preserve_order(excerpts)[: max(1, article_limit)],
+        "article_slugs": _dedupe_preserve_order(slugs)[: max(1, article_limit)],
         "topic_clusters": topic_clusters,
     }
 
@@ -554,11 +649,19 @@ def build_combined_target_profile(
                 return cleaned
         return ""
 
+    exact_context_scores = _coerce_context_score_map(exact_payload.get("context_scores"))
+    root_context_scores = _coerce_context_score_map(root_payload.get("context_scores"))
+    combined_context_scores: Counter[str] = Counter()
+    for context, score in root_context_scores.items():
+        combined_context_scores[context] += score
+    for context, score in exact_context_scores.items():
+        combined_context_scores[context] += int(round(score * 1.2))
+
     merged_topics = _dedupe_preserve_order(
-        _coerce_string_list(root_payload.get("topics")) + _coerce_string_list(exact_payload.get("topics"))
+        _coerce_string_list(exact_payload.get("topics")) + _coerce_string_list(root_payload.get("topics"))
     )
-    merged_contexts = _dedupe_preserve_order(
-        _coerce_string_list(root_payload.get("contexts")) + _coerce_string_list(exact_payload.get("contexts"))
+    merged_contexts = _contexts_from_scores(combined_context_scores) or _dedupe_preserve_order(
+        _coerce_string_list(exact_payload.get("contexts")) + _coerce_string_list(root_payload.get("contexts"))
     )
     merged_keywords = _dedupe_preserve_order(
         _coerce_string_list(exact_payload.get("repeated_keywords")) + _coerce_string_list(root_payload.get("repeated_keywords"))
@@ -576,7 +679,7 @@ def build_combined_target_profile(
         + _coerce_string_list(root_payload.get("sample_urls"))
     )
     merged_services = _dedupe_preserve_order(
-        _coerce_string_list(root_payload.get("services_or_products")) + _coerce_string_list(exact_payload.get("services_or_products"))
+        _coerce_string_list(exact_payload.get("services_or_products")) + _coerce_string_list(root_payload.get("services_or_products"))
     )
     merged_clusters = _dedupe_preserve_order(
         _coerce_string_list(root_payload.get("topic_clusters")) + _coerce_string_list(exact_payload.get("topic_clusters"))
@@ -593,9 +696,19 @@ def build_combined_target_profile(
         "sample_page_titles": merged_titles[:8],
         "sample_urls": merged_urls[:8],
         "domain_level_topic": _merge_strings(root_payload.get("domain_level_topic"), exact_payload.get("domain_level_topic")),
-        "primary_context": _merge_strings(root_payload.get("primary_context"), exact_payload.get("primary_context")),
+        "primary_context": _best_context_from_scores(
+            combined_context_scores,
+            fallback=_merge_strings(exact_payload.get("primary_context"), root_payload.get("primary_context"), "shopping"),
+        ),
         "topics": merged_topics[:18],
         "contexts": merged_contexts[:12],
+        "snapshot_contexts": _dedupe_preserve_order(
+            _coerce_string_list(exact_payload.get("snapshot_contexts")) + _coerce_string_list(root_payload.get("snapshot_contexts"))
+        )[:8],
+        "inventory_contexts": _dedupe_preserve_order(
+            _coerce_string_list(exact_payload.get("inventory_contexts")) + _coerce_string_list(root_payload.get("inventory_contexts"))
+        )[:8],
+        "context_scores": _serialize_context_scores(combined_context_scores),
         "content_tone": _merge_strings(exact_payload.get("content_tone"), root_payload.get("content_tone")),
         "content_style": _merge_strings(root_payload.get("content_style"), exact_payload.get("content_style")),
         "site_categories": _dedupe_preserve_order(
@@ -1123,6 +1236,148 @@ def _extract_weighted_keywords(pages: Sequence[Dict[str, Any]], *, limit: int) -
     return [token for token, _ in counter.most_common(limit)]
 
 
+def _profile_phrase_tokens(value: str) -> List[str]:
+    return [_normalize_signal_token(token) for token in re.findall(r"\b[a-zA-ZäöüÄÖÜß-]{3,}\b", (value or "").lower())]
+
+
+def _profile_phrase_is_generic(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (value or "").strip().lower())
+    if not normalized:
+        return True
+    if any(normalized.startswith(prefix) for prefix in PROFILE_GENERIC_PHRASE_PREFIXES):
+        return True
+    tokens = [token for token in _profile_phrase_tokens(normalized) if token]
+    if not tokens:
+        return True
+    signal_tokens = [
+        token
+        for token in tokens
+        if _is_signal_token(token)
+        and token not in PROFILE_MARKETING_TOKENS
+        and token not in BOILERPLATE_PHRASES
+    ]
+    if len(signal_tokens) == 0:
+        return True
+    context_matches = sum(_context_match_count(normalized, keywords=keywords) for keywords in CONTEXT_KEYWORDS.values())
+    if context_matches == 0 and len(signal_tokens) <= 1:
+        return True
+    return False
+
+
+def _filter_profile_editorial_phrases(values: Sequence[str], *, max_items: int) -> List[str]:
+    filtered: List[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+        if not cleaned or _profile_phrase_is_generic(cleaned):
+            continue
+        filtered.append(cleaned)
+        if len(filtered) >= max_items:
+            break
+    return _dedupe_preserve_order(filtered)
+
+
+def _select_profile_signal_phrases(
+    values: Sequence[str],
+    *,
+    keyword_pool: Sequence[str],
+    max_items: int,
+) -> List[str]:
+    selected: List[str] = []
+    normalized_keyword_pool = {
+        normalized
+        for item in keyword_pool
+        for normalized in [_normalize_signal_token(item)]
+        if normalized
+        and _is_signal_token(normalized)
+        and normalized not in PROFILE_MARKETING_TOKENS
+        and sum(_context_match_count(normalized, keywords=keywords) for keywords in CONTEXT_KEYWORDS.values()) > 0
+    }
+    for cleaned in _filter_profile_editorial_phrases(values, max_items=max_items * 3):
+        tokens = _text_set(cleaned)
+        if not tokens:
+            continue
+        context_hits = sum(_context_match_count(cleaned, keywords=keywords) for keywords in CONTEXT_KEYWORDS.values())
+        keyword_overlap = len(tokens & normalized_keyword_pool)
+        if len(tokens) == 1 and context_hits == 0:
+            continue
+        if context_hits == 0 and keyword_overlap == 0:
+            continue
+        if len(tokens) > 6 and keyword_overlap < 2 and context_hits < 2:
+            continue
+        selected.append(cleaned)
+        if len(selected) >= max_items:
+            break
+    return _dedupe_preserve_order(selected)
+
+
+def _context_match_count(value: str, *, keywords: Sequence[str]) -> int:
+    lowered = str(value or "").lower()
+    tokens = _text_set(value)
+    matches: set[str] = set()
+    for keyword in keywords:
+        normalized = _normalize_signal_token(keyword)
+        if not normalized:
+            continue
+        if normalized in tokens or keyword in lowered:
+            matches.add(normalized)
+    return len(matches)
+
+
+def _score_profile_context_groups(groups: Dict[str, Sequence[str]], *, profile_kind: str) -> Counter[str]:
+    weights = PROFILE_CONTEXT_SOURCE_WEIGHTS.get(profile_kind, {})
+    scores: Counter[str] = Counter()
+    for group_name, values in groups.items():
+        weight = int(weights.get(group_name, 0))
+        if weight <= 0:
+            continue
+        for value in _coerce_string_list(list(values)):
+            if not value:
+                continue
+            for context, keywords in CONTEXT_KEYWORDS.items():
+                match_count = _context_match_count(value, keywords=keywords)
+                if match_count > 0:
+                    scores[context] += weight * min(3, match_count)
+    return scores
+
+
+def _contexts_from_scores(scores: Counter[str]) -> List[str]:
+    ranked = sorted(
+        ((context, score) for context, score in scores.items() if score > 0),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return [context for context, _score in ranked[:5]]
+
+
+def _best_context_from_scores(scores: Counter[str], *, fallback: str) -> str:
+    ranked = _contexts_from_scores(scores)
+    return ranked[0] if ranked else fallback
+
+
+def _serialize_context_scores(scores: Counter[str]) -> Dict[str, int]:
+    return {
+        context: int(score)
+        for context, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        if score > 0
+    }
+
+
+def _coerce_context_score_map(value: Any) -> Counter[str]:
+    scores: Counter[str] = Counter()
+    if not isinstance(value, dict):
+        return scores
+    for key, raw_score in value.items():
+        context = str(key or "").strip()
+        if not context:
+            continue
+        try:
+            parsed = int(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            scores[context] += parsed
+    return scores
+
+
 def _infer_contexts(values: Sequence[str]) -> List[str]:
     text = " ".join(_coerce_string_list(values)).lower()
     scores: List[Tuple[str, int]] = []
@@ -1135,7 +1390,11 @@ def _infer_contexts(values: Sequence[str]) -> List[str]:
 
 
 def _derive_domain_topic(page_titles: Sequence[str], headings: Sequence[str], keywords: Sequence[str], normalized_url: str) -> str:
-    candidates = _dedupe_preserve_order(list(page_titles[:2]) + list(headings[:4]) + list(keywords[:4]))
+    editorial_candidates = _filter_profile_editorial_phrases(
+        list(page_titles[:4]) + list(headings[:6]),
+        max_items=8,
+    )
+    candidates = _dedupe_preserve_order(editorial_candidates + list(keywords[:4]) + list(page_titles[:2]) + list(headings[:4]))
     for item in candidates:
         cleaned = item.strip()
         if cleaned:
@@ -1151,8 +1410,11 @@ def _derive_topics(
     categories: Sequence[str],
     prominent_titles: Sequence[str],
 ) -> List[str]:
+    editorial_headings = _select_profile_signal_phrases(headings, keyword_pool=keywords, max_items=6)
+    editorial_titles = _select_profile_signal_phrases(prominent_titles, keyword_pool=keywords, max_items=4)
+    keyword_topics = _select_profile_signal_phrases(keywords[:8], keyword_pool=keywords, max_items=6)
     topics = _dedupe_preserve_order(
-        [domain_topic] + list(categories[:6]) + list(headings[:6]) + list(prominent_titles[:4]) + list(keywords[:6])
+        [domain_topic] + list(categories[:6]) + editorial_headings + editorial_titles + keyword_topics
     )
     return [topic for topic in topics if topic][:12]
 
@@ -1192,7 +1454,13 @@ def _derive_business_intent(text: str, keywords: Sequence[str], headings: Sequen
 
 
 def _derive_services_or_products(headings: Sequence[str], keywords: Sequence[str], page_titles: Sequence[str]) -> List[str]:
-    return _dedupe_preserve_order(list(headings[:6]) + list(page_titles[:4]) + list(keywords[:8]))[:12]
+    editorial_phrases = _select_profile_signal_phrases(
+        list(headings[:8]) + list(page_titles[:6]),
+        keyword_pool=keywords,
+        max_items=10,
+    )
+    keyword_entities = _select_profile_signal_phrases(keywords[:8], keyword_pool=keywords, max_items=8)
+    return _dedupe_preserve_order(editorial_phrases + keyword_entities)[:12]
 
 
 def _estimate_commerciality(text: str, headings: Sequence[str], keywords: Sequence[str]) -> int:

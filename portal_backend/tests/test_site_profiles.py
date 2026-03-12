@@ -291,6 +291,80 @@ def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_invent
     assert "real_estate" in payload["contexts"]
 
 
+def test_fetch_site_profile_payload_detects_nutrition_target_and_filters_generic_marketing_headings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "portal_backend.api.site_profiles._build_snapshot_pages",
+        lambda *_args, **_kwargs: [
+            {
+                "url": "https://shop.example.com",
+                "title": "Orangefit® - more better days",
+                "meta_description": "Pflanzliche Supplements und Shakes fuer deinen Alltag.",
+                "headings": ["Erreiche deine Ziele", "Greens", "Warum Orangefit Greens?"],
+                "text": "Greens, Shakes, vegane Vitamine und Kollagenpulver fuer den Alltag.",
+            },
+            {
+                "url": "https://shop.example.com/greens",
+                "title": "Orangefit® Greens - Der Rockstar unter den grünen Säften",
+                "meta_description": "Greens mit Vitaminen und Ballaststoffen.",
+                "headings": ["Greens", "Warum Orangefit Greens?", "Was ist alles enthalten?"],
+                "text": "Greens Pulver mit Vitaminen, Ballaststoffen und pflanzlichen Inhaltsstoffen.",
+            },
+            {
+                "url": "https://shop.example.com/kollagen",
+                "title": "Kollagen Booster von Orangefit® – Veganes Kollagenpulver",
+                "meta_description": "Veganes Kollagenpulver mit Hyaluron und Biotin.",
+                "headings": ["Kollagen Booster", "Veganes Kollagenpulver kaufen?"],
+                "text": "Kollagen Booster als veganes Kollagenpulver fuer Haut, Haare und Naegel.",
+            },
+        ],
+    )
+
+    payload = fetch_site_profile_payload(
+        site_url="https://shop.example.com",
+        profile_kind="target_site",
+    )
+
+    assert payload["primary_context"] == "nutrition"
+    assert "nutrition" in payload["contexts"]
+    assert "Greens" in payload["services_or_products"]
+    assert any("Kollagen Booster" in item for item in payload["services_or_products"])
+    assert not any(item == "Erreiche deine Ziele" for item in payload["services_or_products"])
+
+
+def test_fetch_site_profile_payload_can_use_inventory_depth_to_identify_nutrition_publishing_site(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "portal_backend.api.site_profiles._build_snapshot_pages",
+        lambda *_args, **_kwargs: [
+            {
+                "url": "https://publisher.example.com",
+                "title": "Vergleiche und Ratgeber",
+                "meta_description": "Praktische Hinweise fuer informierte Kaufentscheidungen.",
+                "headings": ["Neue Vergleiche", "Beliebte Ratgeber"],
+                "text": "Vergleiche, Preisfragen und alltagsnahe Orientierung.",
+            }
+        ],
+    )
+
+    payload = fetch_site_profile_payload(
+        site_url="https://publisher.example.com",
+        profile_kind="publishing_site",
+        inventory_context={
+            "site_categories": ["Gesundheit", "Supplements"],
+            "prominent_titles": ["Greens Kosten im Vergleich", "Kollagenpräparate nach Tagesdosis vergleichen"],
+            "article_titles": ["Greens Kosten im Vergleich", "Kollagenpräparate nach Tagesdosis vergleichen"],
+            "article_excerpts": [
+                "Preisvergleich fuer Greens Pulver mit Blick auf Inhaltsstoffe und Portionen.",
+                "Worauf man bei Kollagenpräparaten, Rohstoffen und Laborstandards achten sollte.",
+            ],
+            "article_slugs": ["greens-kosten-vergleich", "kollagenpraeparate-tagesdosis-vergleich"],
+            "topic_clusters": ["greens", "kollagen", "supplements", "vitamin"],
+        },
+    )
+
+    assert payload["primary_context"] == "nutrition"
+    assert "nutrition" in payload["inventory_contexts"]
+
+
 def test_shortlist_ranked_publishing_candidates_prioritizes_stronger_target_context() -> None:
     ranked = [
         {

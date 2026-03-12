@@ -110,6 +110,12 @@ PAIR_FIT_INFORMATIONAL_CUES = {
 }
 PAIR_FIT_CONTEXT_KEYWORDS = {
     "health": {"arzt", "augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz", "sicht", "symptome", "therapie", "vorsorge"},
+    "nutrition": {
+        "aminosaeure", "collagen", "dosierung", "eiweiss", "ernaehrung", "greens", "inhaltsstoffe",
+        "kollagen", "kollagenpraeparate", "kollagenpräparate", "kreatin", "mineralstoff",
+        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "pulver",
+        "shake", "superfood", "supplement", "supplements", "vegan", "vitamin",
+    },
     "safety": {"absicherung", "sicherheit", "schutz", "uv", "vorsicht", "warnung", "warnzeichen", "praevention", "risiko"},
     "lifestyle": {"alltag", "ideen", "leben", "lifestyle", "mode", "ratgeber", "stil", "trends"},
     "family_life": {"alltag", "baby", "eltern", "familie", "familien", "haushalt", "kinder", "partnerschaft", "schwangerschaft"},
@@ -126,6 +132,7 @@ PAIR_FIT_CONTEXT_KEYWORDS = {
 }
 PAIR_FIT_CONTEXT_LABELS = {
     "health": "gesundheitlichen Fragen",
+    "nutrition": "Ernährung und Supplements",
     "safety": "Sicherheit im Alltag",
     "lifestyle": "alltagsnahen Entscheidungen",
     "family_life": "Familienalltag",
@@ -145,6 +152,7 @@ PAIR_FIT_CONTEXT_AUDIENCES = {
     "parenting": "Eltern und Bezugspersonen",
     "education": "Lernende und Familien",
     "health": "gesundheitsbewusste Leserinnen und Leser",
+    "nutrition": "ernährungsbewusste Leserinnen und Leser",
     "wellbeing": "achtsame Leserinnen und Leser",
     "home": "Haushalte",
     "finance": "preisbewusste Leserinnen und Leser",

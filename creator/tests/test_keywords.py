@@ -55,6 +55,7 @@ from creator.api.pipeline import (
     _sanitize_editorial_phrase,
     _phase1_from_target_profile,
     _normalize_faq_section_questions,
+    _pair_fit_expand_contexts,
     run_creator_pipeline,
     _select_keywords,
     _structured_content_mode,
@@ -196,6 +197,19 @@ def test_select_signature_target_terms_keeps_relevant_target_terms_only():
 
     assert any("sonnenbrillen" in item.lower() for item in terms)
     assert not any("hoerhilfe" in item.lower() for item in terms)
+
+
+def test_pair_fit_expand_contexts_detects_nutrition_from_supplement_terms():
+    contexts = _pair_fit_expand_contexts(
+        {
+            "contexts": [],
+            "page_title": "Orangefit Greens und Kollagen",
+            "domain_level_topic": "Nahrungsergänzungsmittel",
+        },
+        ranked_terms=["greens", "kollagen", "veganes protein", "nahrungsergänzungsmittel"],
+    )
+
+    assert "nutrition" in contexts
 
 
 def test_select_keywords_does_not_reuse_irrelevant_allowed_topics_as_support_phrases():

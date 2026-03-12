@@ -33,6 +33,7 @@ from ..automation_service import (
     resolve_source_url,
     run_submit_article_pipeline,
 )
+from ..creator_history import load_recent_creator_history
 from ..db import get_db
 from ..portal_models import (
     Client,
@@ -321,6 +322,15 @@ def _resolve_or_auto_select_publishing_site(
             detail="target_site_url is required for creator article generation.",
         )
     priority_weights = _parse_auto_site_priority_weights()
+    creator_history = load_recent_creator_history(
+        db,
+        client_id=client.id,
+        target_site_url=target_url,
+        row_limit=120,
+        max_topics=14,
+        max_titles=12,
+    )
+    exclude_topics = list(creator_history.get("exclude_topics") or [])
     if explicit_site:
         site = _resolve_publishing_site(db, explicit_site)
         target_profile, target_profile_content_hash, candidate_rankings = top_ranked_publishing_sites_for_target(
@@ -344,7 +354,7 @@ def _resolve_or_auto_select_publishing_site(
             client_target_site_id=client_target_site.id if client_target_site is not None else None,
             candidate_rankings=candidate_rankings,
             requested_topic=payload.topic,
-            exclude_topics=[],
+            exclude_topics=exclude_topics,
             timeout_seconds=90,
         )
         if selected_pair is None:
@@ -408,7 +418,7 @@ def _resolve_or_auto_select_publishing_site(
         client_target_site_id=client_target_site.id if client_target_site is not None else None,
         candidate_rankings=ranked,
         requested_topic=payload.topic,
-        exclude_topics=[],
+        exclude_topics=exclude_topics,
         timeout_seconds=90,
     )
     if selected_pair is None:

@@ -719,6 +719,44 @@ def test_evaluate_plan_quality_allows_process_headings_with_specificity_support(
     assert evaluation["intent_consistency_score"] >= 80
 
 
+def test_evaluate_plan_quality_flags_titles_too_similar_to_history():
+    evaluation = _evaluate_plan_quality(
+        title="Wellness Und Lifestyle: Welche Kriterien bei der Auswahl wirklich zählen",
+        headings=[
+            "Welche Kriterien entscheiden bei hochwertigen Nahrungsergaenzungsmitteln?",
+            "Welche Unterschiede sind in der Praxis relevant?",
+            "Welche Fehler sind bei der Auswahl haeufig?",
+            "Wie laesst sich die Qualitaet im Alltag sinnvoll pruefen?",
+            "Fazit",
+            "FAQ",
+        ],
+        primary_keyword="hochwertige nahrungsergaenzungsmittel kosten",
+        topic="Was kosten hochwertige Nahrungsergaenzungsmittel wirklich?",
+        intent_type="informational",
+        article_angle="decision_criteria",
+        topic_signature={
+            "subject_phrase": "hochwertige nahrungsergaenzungsmittel",
+            "primary_keyword": "hochwertige nahrungsergaenzungsmittel kosten",
+            "specific_tokens": ["nahrungsergaenzungsmittel", "kosten", "qualitaet"],
+            "all_tokens": ["nahrungsergaenzungsmittel", "kosten", "qualitaet", "protein", "zertifizierung"],
+        },
+        specificity_profile={
+            "topic_class": "nutrition_supplements",
+            "intent_type": "informational",
+            "min_specifics": 3,
+            "buckets": {
+                "product_formulation": ["protein", "omega", "vitamin"],
+                "quality_signals": ["bioverfuegbarkeit", "zertifizierung", "dosierung"],
+                "cost_use_cases": ["preis", "monat", "portion"],
+            },
+        },
+        recent_titles=["Wellness Und Lifestyle: Welche Kriterien bei der Auswahl wirklich zählen"],
+    )
+
+    assert "title_duplicate_history" in evaluation["errors"] or "title_too_similar_to_history" in evaluation["errors"]
+    assert evaluation["title_quality_score"] < 70
+
+
 def test_select_phase4_repair_topic_prefers_clean_core_topic():
     repaired = _select_phase4_repair_topic(
         requested_topic="",
@@ -2285,6 +2323,23 @@ def test_build_deterministic_title_package_avoids_dangling_truncation_and_uses_s
     assert "Kinder Sonnenbrillen" in title_package["h1"]
     assert not title_package["h1"].endswith(" und")
     assert not title_package["h1"].endswith(":")
+
+
+def test_build_deterministic_title_package_avoids_recent_duplicate_title():
+    title_package = _build_deterministic_title_package(
+        topic="Wellness und Lifestyle: Was kosten hochwertige Nahrungsergänzungsmittel wirklich?",
+        primary_keyword="hochwertige nahrungsergänzungsmittel kosten",
+        secondary_keywords=["protein pulver kosten", "omega 3 preisvergleich"],
+        search_intent_type="informational",
+        structured_mode="table",
+        current_year=2026,
+        article_angle="decision_criteria",
+        topic_class="nutrition_supplements",
+        recent_titles=["Wellness Und Lifestyle: Welche Kriterien bei der Auswahl wirklich zählen"],
+    )
+
+    assert title_package["h1"] != "Wellness Und Lifestyle: Welche Kriterien bei der Auswahl wirklich zählen"
+    assert "hochwertige Nahrungsergänzungsmittel".lower() in title_package["h1"].lower()
 
 
 def test_build_deterministic_meta_description_meets_length_contract():

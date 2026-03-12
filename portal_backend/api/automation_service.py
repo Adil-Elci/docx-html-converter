@@ -760,6 +760,7 @@ def call_creator_service(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
@@ -789,6 +790,8 @@ def call_creator_service(
         body["topic"] = topic
     if exclude_topics:
         body["exclude_topics"] = exclude_topics
+    if recent_article_titles:
+        body["recent_article_titles"] = recent_article_titles
     if internal_link_inventory:
         body["internal_link_inventory"] = internal_link_inventory
     if phase1_cache_payload and phase1_cache_content_hash:
@@ -959,6 +962,7 @@ def run_create_article_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
@@ -1004,6 +1008,7 @@ def run_create_article_pipeline(
         anchor=anchor,
         topic=topic,
         exclude_topics=exclude_topics,
+        recent_article_titles=recent_article_titles,
         internal_link_inventory=internal_link_inventory,
         phase1_cache_payload=phase1_cache_payload,
         phase1_cache_content_hash=phase1_cache_content_hash,

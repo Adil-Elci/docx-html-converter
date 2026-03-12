@@ -847,6 +847,99 @@ def _evaluate_title_quality(
     return {"score": max(0, score), "errors": _dedupe_string_values(errors)}
 
 
+def _dedupe_recent_title_values(values: Optional[List[str]]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for raw_value in values or []:
+        cleaned = " ".join(str(raw_value or "").split()).strip()
+        if not cleaned:
+            continue
+        normalized = _normalize_keyword_phrase(cleaned)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(cleaned)
+    return out
+
+
+def _evaluate_title_history_novelty(
+    *,
+    title: str,
+    recent_titles: Optional[List[str]],
+) -> Dict[str, Any]:
+    normalized_title = _normalize_keyword_phrase(title)
+    if not normalized_title:
+        return {"score_penalty": 0, "errors": [], "max_similarity": 0.0}
+    history = _dedupe_recent_title_values(recent_titles)
+    max_similarity = max(
+        (_keyword_similarity(normalized_title, _normalize_keyword_phrase(item)) for item in history),
+        default=0.0,
+    )
+    errors: List[str] = []
+    score_penalty = 0
+    title_word_count = len(normalized_title.split())
+    if max_similarity >= 0.96:
+        score_penalty = 65
+        errors.append("title_duplicate_history")
+    elif max_similarity >= 0.88 and title_word_count >= 4:
+        score_penalty = 36
+        errors.append("title_too_similar_to_history")
+    elif max_similarity >= 0.82 and title_word_count >= 5:
+        score_penalty = 16
+    return {
+        "score_penalty": score_penalty,
+        "errors": _dedupe_string_values(errors),
+        "max_similarity": round(max_similarity, 3),
+    }
+
+
+def _derive_title_support_clause_variants(
+    *,
+    topic: str,
+    intent_type: str,
+    article_angle: str,
+    topic_class: str,
+    structured_mode: str,
+) -> List[str]:
+    base_clause = _derive_title_support_clause(
+        topic=topic,
+        intent_type=intent_type,
+        article_angle=article_angle,
+        topic_class=topic_class,
+        structured_mode=structured_mode,
+    )
+    candidates: List[str] = [base_clause]
+    if article_angle == "recognition_and_next_steps":
+        candidates.extend(
+            [
+                "Wie man Chancen und Risiken frueh erkennt",
+                "Welche Signale in der Praxis wirklich zaehlen",
+            ]
+        )
+    elif article_angle in {"process_and_decision_factors", "process_and_next_steps"}:
+        candidates.extend(
+            [
+                "Welche Schritte zuerst wichtig sind",
+                "Wie der Ablauf in der Praxis gelingt",
+            ]
+        )
+    elif article_angle == "decision_criteria":
+        candidates.extend(
+            [
+                "Worauf man bei der Auswahl achten sollte",
+                "Was in der Praxis den Unterschied macht",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                "Worauf es in der Praxis ankommt",
+                "Was man konkret beachten sollte",
+            ]
+        )
+    return _dedupe_string_values([item for item in candidates if str(item or "").strip()])
+
+
 def _heading_generic_penalty(heading: str) -> int:
     normalized = _normalize_keyword_phrase(heading)
     penalty = 0
@@ -991,6 +1084,7 @@ def _evaluate_plan_quality(
     article_angle: str,
     topic_signature: Optional[Dict[str, Any]],
     specificity_profile: Optional[Dict[str, Any]] = None,
+    recent_titles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     title_eval = _evaluate_title_quality(
         title=title,
@@ -998,6 +1092,11 @@ def _evaluate_plan_quality(
         topic=topic,
         max_chars=SEO_H1_MAX_CHARS,
     )
+    title_history_eval = _evaluate_title_history_novelty(
+        title=title,
+        recent_titles=recent_titles,
+    )
+    adjusted_title_score = max(0, int(title_eval["score"]) - int(title_history_eval["score_penalty"]))
     heading_eval = _evaluate_heading_quality(headings=headings, topic_signature=topic_signature)
     intent_eval = _evaluate_plan_intent_consistency(
         headings=headings,
@@ -1008,18 +1107,22 @@ def _evaluate_plan_quality(
     )
     coherence_score = max(
         0,
-        int(round((title_eval["score"] * 0.25) + (heading_eval["score"] * 0.45) + (intent_eval["score"] * 0.30))),
+        int(round((adjusted_title_score * 0.25) + (heading_eval["score"] * 0.45) + (intent_eval["score"] * 0.30))),
     )
     errors = _dedupe_string_values(
-        list(title_eval["errors"]) + list(heading_eval["errors"]) + list(intent_eval["errors"])
+        list(title_eval["errors"])
+        + list(title_history_eval["errors"])
+        + list(heading_eval["errors"])
+        + list(intent_eval["errors"])
     )
     if coherence_score < PLAN_QUALITY_MIN_SCORE:
         errors.append("plan_quality_below_threshold")
     return {
-        "title_quality_score": title_eval["score"],
+        "title_quality_score": adjusted_title_score,
         "heading_quality_score": heading_eval["score"],
         "intent_consistency_score": intent_eval["score"],
         "coherence_score": coherence_score,
+        "title_history_similarity": title_history_eval["max_similarity"],
         "errors": _dedupe_string_values(errors),
     }
 
@@ -1287,6 +1390,7 @@ def _build_deterministic_title_package(
     current_year: int,
     article_angle: str = "",
     topic_class: str = "general",
+    recent_titles: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     subject_title = _extract_topic_subject_phrase(topic)
     question_title = _extract_topic_question_phrase(topic)
@@ -1330,14 +1434,73 @@ def _build_deterministic_title_package(
             h1 = _truncate_title(f"{h1}: {fallback_suffix}", max_chars=SEO_H1_MAX_CHARS)
         else:
             h1 = _truncate_title(f"{h1}: Wichtige Fragen und naechste Schritte", max_chars=SEO_H1_MAX_CHARS)
-    h1 = _ensure_primary_keyword_in_title(
-        title=h1,
-        primary_title=primary_title,
-        question_title=question_title,
-        subject_title=subject_title or topic or primary_keyword,
-        suffix=suffix,
-        max_chars=SEO_H1_MAX_CHARS,
+    support_clause_variants = _derive_title_support_clause_variants(
+        topic=topic,
+        intent_type=search_intent_type,
+        article_angle=article_angle,
+        topic_class=topic_class,
+        structured_mode=structured_mode,
     )
+
+    raw_candidates: List[str] = []
+
+    def _push_candidate(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+        if not cleaned:
+            return
+        if cleaned in raw_candidates:
+            return
+        raw_candidates.append(cleaned)
+
+    _push_candidate(h1)
+    if question_title:
+        _push_candidate(_format_sentence_start(question_title))
+    if subject_title and question_title:
+        _push_candidate(f"{_format_title_case(subject_title)}: {_format_sentence_start(question_title)}")
+    if primary_title and question_title:
+        _push_candidate(f"{primary_title}: {_format_sentence_start(question_title)}")
+    for clause in support_clause_variants:
+        if subject_title:
+            _push_candidate(f"{_format_title_case(subject_title)}: {clause}")
+        if primary_title and primary_title != _format_title_case(subject_title):
+            _push_candidate(f"{primary_title}: {clause}")
+    if primary_title:
+        _push_candidate(primary_title)
+
+    best_h1 = h1
+    best_score = float("-inf")
+    recent_title_values = _dedupe_recent_title_values(recent_titles)
+    for index, raw_candidate in enumerate(raw_candidates):
+        candidate_h1 = _ensure_primary_keyword_in_title(
+            title=_truncate_title(raw_candidate, max_chars=SEO_H1_MAX_CHARS),
+            primary_title=primary_title,
+            question_title=question_title,
+            subject_title=subject_title or topic or primary_keyword,
+            suffix=suffix,
+            max_chars=SEO_H1_MAX_CHARS,
+        )
+        if include_year and str(current_year) not in candidate_h1:
+            candidate_h1 = _truncate_title(f"{candidate_h1} {current_year}", max_chars=SEO_H1_MAX_CHARS)
+        title_quality = _evaluate_title_quality(
+            title=candidate_h1,
+            primary_keyword=primary_keyword,
+            topic=topic,
+            max_chars=SEO_H1_MAX_CHARS,
+        )
+        history_eval = _evaluate_title_history_novelty(
+            title=candidate_h1,
+            recent_titles=recent_title_values,
+        )
+        candidate_score = float(title_quality["score"] - history_eval["score_penalty"]) - (index * 0.2)
+        if question_title and _keyword_similarity(candidate_h1, question_title) >= 0.85:
+            candidate_score += 3.0
+        if history_eval["max_similarity"] <= 0.45:
+            candidate_score += 1.0
+        if candidate_score > best_score:
+            best_h1 = candidate_h1
+            best_score = candidate_score
+    h1 = best_h1
+
     title_quality = _evaluate_title_quality(
         title=h1,
         primary_keyword=primary_keyword,
@@ -1355,10 +1518,17 @@ def _build_deterministic_title_package(
             topic=topic,
             max_chars=SEO_H1_MAX_CHARS,
         )
-        if fallback_quality["score"] >= title_quality["score"]:
+        fallback_history_eval = _evaluate_title_history_novelty(
+            title=natural_fallback,
+            recent_titles=recent_title_values,
+        )
+        fallback_score = fallback_quality["score"] - fallback_history_eval["score_penalty"]
+        current_score = title_quality["score"] - _evaluate_title_history_novelty(
+            title=h1,
+            recent_titles=recent_title_values,
+        )["score_penalty"]
+        if fallback_score >= current_score:
             h1 = natural_fallback
-    if include_year and str(current_year) not in h1:
-        h1 = _truncate_title(f"{h1} {current_year}", max_chars=SEO_H1_MAX_CHARS)
     meta_title = _truncate_title(h1)
     slug_seed = primary_keyword or topic
     slug = _derive_slug(slug_seed)[:SEO_SLUG_MAX_CHARS]
@@ -9260,6 +9430,7 @@ def run_creator_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     exclude_topics: Optional[List[str]] = None,
+    recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
@@ -9357,6 +9528,8 @@ def run_creator_pipeline(
             "Creator requires deterministic target_profile and publishing_profile for profile-first topic selection."
         )
     debug["internal_link_inventory_count"] = len(provided_internal_link_inventory)
+    safe_recent_titles = _dedupe_recent_title_values(recent_article_titles)
+    debug["recent_article_titles_count"] = len(safe_recent_titles)
 
     def _collect_llm_usage(record: Dict[str, Any]) -> None:
         label = str(record.get("label") or "unspecified")
@@ -9676,6 +9849,7 @@ def run_creator_pipeline(
         current_year=current_year,
         article_angle=phase3.get("article_angle", ""),
         topic_class=phase3.get("topic_class", "general"),
+        recent_titles=safe_recent_titles,
     )
     phase3["title_package"] = title_package
     phase3["keyword_buckets"] = _build_keyword_buckets(
@@ -9797,6 +9971,7 @@ def run_creator_pipeline(
         article_angle=phase3.get("article_angle", ""),
         topic_signature=phase3.get("topic_signature"),
         specificity_profile=phase3.get("specificity_profile"),
+        recent_titles=safe_recent_titles,
     )
     planner_prompt_trace = (
         (debug.get("prompt_trace") or {}).get("planner")
@@ -9823,6 +9998,7 @@ def run_creator_pipeline(
                         "title_package": phase3.get("title_package") or {},
                         "content_brief": phase3.get("content_brief") or {},
                         "faq_candidates": phase3.get("faq_candidates") or [],
+                        "recent_article_titles": safe_recent_titles[:8],
                         "internal_link_candidates": internal_links_prompt_entries[:8],
                     },
                     "plan": phase4,
@@ -9904,6 +10080,7 @@ def run_creator_pipeline(
             current_year=current_year,
             article_angle=phase3.get("article_angle", "practical_guidance"),
             topic_class=phase3.get("topic_class", "general"),
+            recent_titles=safe_recent_titles,
         )
         phase4 = _build_deterministic_article_plan(
             phase1=phase1,
@@ -9920,6 +10097,7 @@ def run_creator_pipeline(
             article_angle=phase3.get("article_angle", ""),
             topic_signature=phase3.get("topic_signature"),
             specificity_profile=phase3.get("specificity_profile"),
+            recent_titles=safe_recent_titles,
         )
         if isinstance(planner_prompt_trace, dict):
             planner_attempts = planner_prompt_trace.setdefault("attempts", [])
@@ -9941,6 +10119,7 @@ def run_creator_pipeline(
                             "title_package": phase3.get("title_package") or {},
                             "content_brief": phase3.get("content_brief") or {},
                             "faq_candidates": phase3.get("faq_candidates") or [],
+                            "recent_article_titles": safe_recent_titles[:8],
                             "internal_link_candidates": internal_links_prompt_entries[:8],
                         },
                         "plan": phase4,

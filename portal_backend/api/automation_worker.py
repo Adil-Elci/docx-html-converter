@@ -19,6 +19,7 @@ from .automation_service import (
     run_submit_article_pipeline,
     run_create_article_pipeline,
 )
+from .creator_history import load_recent_creator_history
 from .creator_prompt_trace import normalize_prompt_trace_payload
 from .internal_linking import build_creator_internal_link_inventory, upsert_publishing_site_article
 from .internal_linking_sync import fetch_creator_internal_link_inventory_for_site, run_internal_link_inventory_sync
@@ -430,6 +431,7 @@ class AutomationJobWorker:
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
                     exclude_topics=payload.get("exclude_topics") or [],
+                    recent_article_titles=payload.get("recent_article_titles") or [],
                     internal_link_inventory=payload.get("internal_link_inventory") or [],
                     phase1_cache_payload=payload.get("phase1_cache_payload"),
                     phase1_cache_content_hash=payload.get("phase1_cache_content_hash"),
@@ -680,30 +682,20 @@ class AutomationJobWorker:
                     }
                 )
 
-            # Gather topics from previous creator outputs for the same
-            # client + publishing site + target site so the creator can
-            # avoid generating duplicate articles.
             exclude_topics: List[str] = []
+            recent_article_titles: List[str] = []
             if creator_mode and target_site_url:
-                prev_outputs = (
-                    session.query(CreatorOutput.payload)
-                    .filter(
-                        CreatorOutput.client_id == job.client_id,
-                        CreatorOutput.site_id == job.site_id,
-                        CreatorOutput.target_site_url == target_site_url,
-                        CreatorOutput.job_id != job.id,
-                    )
-                    .order_by(CreatorOutput.created_at.desc())
-                    .limit(50)
-                    .all()
+                history = load_recent_creator_history(
+                    session,
+                    client_id=job.client_id,
+                    target_site_url=target_site_url,
+                    exclude_job_id=job.id,
+                    row_limit=120,
+                    max_topics=14,
+                    max_titles=12,
                 )
-                for (prev_payload,) in prev_outputs:
-                    if not isinstance(prev_payload, dict):
-                        continue
-                    phase3_data = prev_payload.get("phase3") or {}
-                    prev_topic = phase3_data.get("final_article_topic", "")
-                    if isinstance(prev_topic, str) and prev_topic.strip():
-                        exclude_topics.append(prev_topic.strip())
+                exclude_topics = list(history.get("exclude_topics") or [])
+                recent_article_titles = list(history.get("recent_article_titles") or [])
 
             phase1_cache_payload: Optional[Dict[str, Any]] = None
             phase1_cache_content_hash = ""
@@ -828,6 +820,7 @@ class AutomationJobWorker:
                 "anchor": anchor,
                 "topic": topic,
                 "exclude_topics": exclude_topics,
+                "recent_article_titles": recent_article_titles,
                 "internal_link_inventory": internal_link_inventory,
                 "target_site_id": str(target_site_id) if target_site_id else "",
                 "publishing_site_id": str(site.id),

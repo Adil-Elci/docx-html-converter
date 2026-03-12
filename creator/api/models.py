@@ -58,6 +58,7 @@ class CreatorRequest(BaseModel):
     anchor: Optional[str] = None
     topic: Optional[str] = None
     exclude_topics: List[str] = Field(default_factory=list, description="Previously used topics to avoid duplicating")
+    recent_article_titles: List[str] = Field(default_factory=list, description="Recent titles for novelty checks")
     internal_link_inventory: List[InternalLinkInventoryItem] = Field(default_factory=list)
     phase1_cache: Optional[Phase2CacheEnvelope] = None
     phase2_cache: Optional[Phase2CacheEnvelope] = None
@@ -77,6 +78,12 @@ class CreatorRequest(BaseModel):
         if value is None:
             return []
         if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @validator("recent_article_titles", pre=True, always=True)
+    def _clean_recent_article_titles(cls, value: Any) -> List[str]:
+        if value is None or not isinstance(value, list):
             return []
         return [str(item).strip() for item in value if str(item).strip()]
 

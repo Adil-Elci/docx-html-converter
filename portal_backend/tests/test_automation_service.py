@@ -221,6 +221,74 @@ def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
+def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_call_creator_service(**kwargs):
+        captured.update(kwargs)
+        return _creator_output_without_images()
+
+    monkeypatch.setattr(automation_service, "call_creator_service", fake_call_creator_service)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **_kwargs: {"id": 321, "link": "https://publisher.example.com/draft"},
+    )
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_media_item",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected media upload")),
+    )
+
+    automation_service.run_create_article_pipeline(
+        creator_endpoint="http://creator.test",
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher.example.com",
+        publishing_site_id="site-id",
+        client_target_site_id="target-id",
+        anchor="Kinderbrille",
+        topic=None,
+        exclude_topics=["Kinder Sonnenbrillen"],
+        recent_article_titles=["Sonnenbrillen fuer Kinder: Welche Kriterien wirklich zaehlen"],
+        internal_link_inventory=[],
+        phase1_cache_payload=None,
+        phase1_cache_content_hash="",
+        phase2_cache_payload=None,
+        phase2_cache_content_hash="",
+        target_profile_payload=None,
+        target_profile_content_hash="",
+        publishing_profile_payload=None,
+        publishing_profile_content_hash="",
+        site_url="https://publisher.example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="user",
+        wp_app_password="pass",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=7,
+        category_ids=[9],
+        category_candidates=[],
+        timeout_seconds=5,
+        creator_timeout_seconds=5,
+        poll_timeout_seconds=5,
+        poll_interval_seconds=1,
+        image_width=1024,
+        image_height=576,
+        leonardo_api_key="configured-but-should-not-be-used",
+        leonardo_base_url="https://leonardo.example.com",
+        leonardo_model_id="model-id",
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="",
+        category_llm_model="",
+        category_llm_max_categories=1,
+        category_llm_confidence_threshold=0.5,
+    )
+
+    assert captured["exclude_topics"] == ["Kinder Sonnenbrillen"]
+    assert captured["recent_article_titles"] == ["Sonnenbrillen fuer Kinder: Welche Kriterien wirklich zaehlen"]
+
+
 def test_run_create_article_pipeline_clears_existing_featured_media_when_creator_returns_no_image(monkeypatch) -> None:
     calls: dict[str, object] = {}
 

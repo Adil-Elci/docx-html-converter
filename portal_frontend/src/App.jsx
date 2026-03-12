@@ -473,7 +473,7 @@ export default function App() {
       return t("errorClientTargetSiteRequired");
     }
     const publishingSite = (block.publishing_site || "").trim();
-    if (!publishingSite) return t("errorTargetRequired");
+    if (!isCreateArticle && !publishingSite) return t("errorTargetRequired");
     const sourceType = isCreateArticle ? "" : (block.source_type || "").trim();
     if (!isCreateArticle && !sourceType) return t("errorFileTypeRequired");
     if (!isCreateArticle && sourceType === "google-doc" && !(block.doc_url || "").trim()) return t("errorGoogleDocRequired");
@@ -485,7 +485,8 @@ export default function App() {
     const formData = new FormData();
     const sourceType = isCreateArticle ? "google-doc" : (block.source_type || "").trim();
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
-    formData.append("publishing_site", block.publishing_site.trim());
+    const publishingSite = (block.publishing_site || "").trim();
+    if (publishingSite) formData.append("publishing_site", publishingSite);
     formData.append("client_name", effectiveClientName);
     if (isCreateArticle) {
       const targetSiteId = (block.target_site_id || "").trim();
@@ -3394,7 +3395,10 @@ export default function App() {
                           ) : null}
 
                           <div className={`submission-field submission-field-site ${isCreateArticleSection ? "submission-field-inline" : ""}`.trim()}>
-                            <label>{t("targetWebsite")}</label>
+                            <label>
+                              {t("targetWebsite")}
+                              {isCreateArticleSection ? ` (${t("optional")})` : ""}
+                            </label>
                             <div className="site-suggest-wrap">
                               <input
                                 value={block.publishing_site}
@@ -3420,7 +3424,7 @@ export default function App() {
                                   setTargetSiteSuggestionsBlockId(null);
                                 }}
                                 placeholder={t("placeholderTargetWebsite")}
-                                required
+                                required={!isCreateArticleSection}
                               />
                               {submissionFieldErrors[block.id]?.publishing_site ? (
                                 <div className="file-type-tooltip" role="alert">

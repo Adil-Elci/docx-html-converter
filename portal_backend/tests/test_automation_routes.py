@@ -182,6 +182,50 @@ def test_select_best_accepted_pair_prefers_specialized_context_match_for_special
     )
 
     assert selected is not None
-    assert len(evaluated) == 2
+    assert len(evaluated) == 1
     assert selected["site_url"] == "https://specialist.example.com"
     assert selected["specialized_context_match"] is True
+
+
+def test_select_best_accepted_pair_skips_broad_fallback_when_specialist_is_accepted(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
+    calls: list[str] = []
+
+    def _fake_pair_fit(**kwargs):
+        publishing_site_url = kwargs.get("publishing_site_url") or ""
+        calls.append(str(publishing_site_url))
+        if "specialist" in publishing_site_url:
+            return _pair_fit_result("accepted", fit_score=61, backlink_fit_ok=True)
+        return _pair_fit_result("accepted", fit_score=99, backlink_fit_ok=True)
+
+    monkeypatch.setattr(automation_routes, "call_creator_pair_fit", _fake_pair_fit)
+
+    broad = _candidate("https://broad.example.com", score=90)
+    broad["profile"] = {"normalized_url": "https://broad.example.com", "primary_context": "lifestyle", "contexts": ["lifestyle", "home"]}
+    broad["details"] = {"publishing_primary_context": "lifestyle", "semantic_score": 45, "internal_link_support": 15}
+
+    specialist = _candidate("https://specialist.example.com", score=55)
+    specialist["profile"] = {
+        "normalized_url": "https://specialist.example.com",
+        "primary_context": "real_estate",
+        "contexts": ["real_estate", "finance"],
+        "snapshot_contexts": ["real_estate"],
+    }
+    specialist["details"] = {"publishing_primary_context": "real_estate", "semantic_score": 58, "internal_link_support": 9}
+
+    selected, evaluated = automation_routes._select_best_accepted_pair(
+        creator_endpoint="https://creator.example.com",
+        target_site_url="https://target.example.com",
+        target_profile_payload={"topics": ["Immobilie verkaufen"], "primary_context": "real_estate"},
+        target_profile_content_hash="target-hash",
+        client_target_site_id=None,
+        candidate_rankings=[specialist, broad],
+        requested_topic=None,
+        exclude_topics=[],
+        timeout_seconds=5,
+    )
+
+    assert selected is not None
+    assert selected["site_url"] == "https://specialist.example.com"
+    assert calls == ["https://specialist.example.com"]
+    assert len(evaluated) == 1

@@ -157,6 +157,37 @@ def test_shortlist_ranked_publishing_candidates_prefers_specialized_context_matc
     ]
 
 
+def test_shortlist_ranked_publishing_candidates_keeps_specialists_with_relaxed_floor() -> None:
+    ranked = [
+        {
+            "site_url": "https://broad.example.com",
+            "site_name": "Broad",
+            "score": 91,
+            "profile": {"primary_context": "lifestyle", "contexts": ["lifestyle", "home"]},
+            "details": {"publishing_primary_context": "lifestyle", "semantic_score": 48, "internal_link_support": 15},
+        },
+        {
+            "site_url": "https://specialist-low.example.com",
+            "site_name": "Specialist Low",
+            "score": 12,
+            "profile": {"primary_context": "real_estate", "contexts": ["real_estate", "finance"]},
+            "details": {"publishing_primary_context": "real_estate", "semantic_score": 14, "internal_link_support": 3},
+        },
+    ]
+
+    shortlisted = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile={"primary_context": "real_estate"},
+        limit=2,
+        min_score=18,
+    )
+
+    assert [item["site_url"] for item in shortlisted] == [
+        "https://specialist-low.example.com",
+        "https://broad.example.com",
+    ]
+
+
 def test_build_combined_target_profile_merges_page_and_root_context() -> None:
     exact_profile = {
         "page_title": "Schwimmbrille fuer Kinder",

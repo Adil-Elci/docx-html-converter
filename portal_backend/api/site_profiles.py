@@ -322,15 +322,23 @@ def _shortlist_ranked_publishing_candidates(
     *,
     target_profile: Dict[str, Any],
     limit: int,
+    min_score: int = 18,
 ) -> List[Dict[str, Any]]:
     shortlisted = list(ranked)
     target_primary_context = str(target_profile.get("primary_context") or "").strip()
     if target_primary_context in SPECIALIZED_SELECTION_CONTEXTS:
+        specialized_min_score = max(8, min_score - 10)
         matching = [
-            item for item in shortlisted if _candidate_matches_specialized_target_context(item, target_primary_context)
+            item
+            for item in shortlisted
+            if _candidate_matches_specialized_target_context(item, target_primary_context)
+            and int(item.get("score") or 0) >= specialized_min_score
         ]
         non_matching = [
-            item for item in shortlisted if not _candidate_matches_specialized_target_context(item, target_primary_context)
+            item
+            for item in shortlisted
+            if not _candidate_matches_specialized_target_context(item, target_primary_context)
+            and int(item.get("score") or 0) >= min_score
         ]
         matching.sort(
             key=lambda item: (
@@ -350,6 +358,7 @@ def _shortlist_ranked_publishing_candidates(
         )
         shortlisted = matching + non_matching if matching else non_matching
     else:
+        shortlisted = [item for item in shortlisted if int(item.get("score") or 0) >= min_score]
         shortlisted.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
     return shortlisted[: max(1, limit)]
 
@@ -773,8 +782,6 @@ def top_ranked_publishing_sites_for_target(
             inventory_context=inventory_context,
             business_priority_weight=int(weights.get(str(site.id), 0)),
         )
-        if score < min_score:
-            continue
         ranked.append(
             {
                 "site_id": str(site.id),
@@ -791,6 +798,7 @@ def top_ranked_publishing_sites_for_target(
         ranked,
         target_profile=target_profile,
         limit=limit,
+        min_score=min_score,
     )
     return target_profile, target_profile_content_hash, ranked
 

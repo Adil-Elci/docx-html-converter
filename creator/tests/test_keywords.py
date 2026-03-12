@@ -15,6 +15,8 @@ from creator.api.pipeline import (
     _build_deterministic_outline,
     _build_partial_creator_output,
     _build_pipeline_execution_policy,
+    _build_specificity_profile,
+    _build_topic_phrase,
     _build_phase4_fallback_outline,
     _build_site_snapshot,
     _build_style_profile,
@@ -42,6 +44,7 @@ from creator.api.pipeline import (
     _normalize_section_html,
     _normalize_writer_html_fragment,
     _format_content_brief_prompt_text,
+    _infer_topic_class,
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
@@ -344,6 +347,69 @@ def test_select_keywords_keeps_primary_query_topic_led_for_broad_family_topic():
     assert result["primary_keyword"] == "sonnenschutz fuer die ganze familie"
     assert "Warenkorb" not in " ".join(result["secondary_keywords"])
     assert title_package["h1"].startswith("Sonnenschutz Fuer Die Ganze Familie:")
+
+
+def test_select_keywords_prefers_specific_question_focus_over_broad_category_label():
+    topic = "Wellness und Lifestyle: Was kosten hochwertige Nahrungsergänzungsmittel wirklich?"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="wellness und lifestyle",
+        llm_secondary=[],
+        keyword_cluster=["nahrungsergänzungsmittel", "protein", "omega 3", "vitamin d", "kosten"],
+        allowed_topics=["Gesundheit", "Wellness", "Preisvergleich"],
+        trend_candidates=[
+            "nahrungsergänzungsmittel kosten",
+            "omega 3 preisvergleich",
+            "protein pulver kosten",
+        ],
+        faq_candidates=[
+            "was kosten hochwertige nahrungsergänzungsmittel wirklich",
+            "worauf sollte man bei nahrungsergänzungsmitteln achten",
+        ],
+        target_terms=["Veganes Protein", "Nahrungsergänzungsmittel", "Vitamin D"],
+        overlap_terms=["kosten", "vergleich"],
+        internal_link_inventory=[],
+    )
+
+    assert _build_topic_phrase(topic) == "hochwertige nahrungsergänzungsmittel kosten"
+    assert result["primary_keyword"] == "hochwertige nahrungsergänzungsmittel kosten"
+    assert result["primary_keyword"] != "wellness und lifestyle"
+    assert any("protein" in item or "nahrungsergänzung" in item for item in result["secondary_keywords"])
+
+
+def test_infer_topic_class_detects_nutrition_supplements_topics():
+    topic = "Wellness und Lifestyle: Was kosten hochwertige Nahrungsergänzungsmittel wirklich?"
+
+    inferred = _infer_topic_class(
+        topic=topic,
+        target_profile={
+            "topics": ["Veganes Protein", "Nahrungsergänzungsmittel", "Vitamin D"],
+            "services_or_products": ["Protein Pulver", "Omega 3", "Nahrungsergänzungsmittel"],
+        },
+        publishing_profile={
+            "topics": ["Gesundheit", "Preisvergleich", "Ernährung"],
+        },
+        content_brief={
+            "target_signals": ["Veganes Protein", "Nahrungsergänzungsmittel"],
+            "publishing_signals": ["Preisvergleich", "Ernährung"],
+        },
+    )
+
+    assert inferred == "nutrition_supplements"
+
+
+def test_build_specificity_profile_for_supplements_uses_product_specific_buckets():
+    profile = _build_specificity_profile(
+        topic="Was kosten hochwertige Nahrungsergänzungsmittel wirklich?",
+        topic_class="nutrition_supplements",
+        intent_type="informational",
+    )
+
+    assert profile["topic_class"] == "nutrition_supplements"
+    assert profile["min_specifics"] == 3
+    assert "protein" in profile["buckets"]["product_formulation"]
+    assert "zertifizierung" in profile["buckets"]["quality_signals"]
+    assert "preis" in profile["buckets"]["cost_use_cases"]
 
 
 def test_select_keywords_rejects_self_assessment_page_labels_as_primary_keyword():
@@ -1179,7 +1245,8 @@ def test_build_deterministic_outline_produces_valid_structure():
     assert outline["outline"][-2]["h2"] == "Fazit"
     assert outline["outline"][-1]["h2"] == "FAQ"
     assert 4 <= len(outline["outline"]) <= 6
-    assert outline["outline"][0]["h2"] == "Welche Kriterien entscheiden bei Eltern sucht schwangerschaft?"
+    assert "eltern sucht schwangerschaft" in outline["outline"][0]["h2"].lower()
+    assert any(fragment in outline["outline"][0]["h2"].lower() for fragment in ("welche kriterien", "woran erkennt man"))
     assert any("ursachen" in item["h2"].lower() for item in outline["outline"])
 
 

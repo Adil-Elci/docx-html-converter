@@ -72,7 +72,15 @@ PROFILE_BOILERPLATE_LINK_TOKENS = {
 }
 
 CONTEXT_KEYWORDS = {
-    "health": {"augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz", "sicht", "symptome", "therapie", "vorsorge"},
+    "health": {
+        "augen", "behandlung", "ernaehrung", "gesundheit", "koerper", "medizin", "praevention", "schutz",
+        "sicht", "symptome", "therapie", "vorsorge",
+    },
+    "nutrition": {
+        "aminosaeure", "dosierung", "eiweiss", "ernaehrung", "inhaltsstoffe", "kreatin", "mineralstoff",
+        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "supplement", "supplements",
+        "vegan", "vitamin",
+    },
     "safety": {"absicherung", "praevention", "risiko", "sicherheit", "schutz", "uv", "vorsicht", "warnzeichen"},
     "lifestyle": {"alltag", "ideen", "leben", "mode", "ratgeber", "stil", "trends"},
     "family_life": {"alltag", "baby", "eltern", "familie", "familien", "kinder", "partnerschaft", "schwangerschaft"},
@@ -89,7 +97,9 @@ CONTEXT_KEYWORDS = {
     "beauty": {"beauty", "haut", "kosmetik", "pflege", "stil"},
     "shopping": {"kaufen", "shop", "produkt", "preis", "vergleich", "online"},
 }
-SPECIALIZED_SELECTION_CONTEXTS = {"beauty", "education", "finance", "health", "mobility", "productivity", "real_estate", "shopping"}
+SPECIALIZED_SELECTION_CONTEXTS = {
+    "beauty", "education", "finance", "health", "mobility", "nutrition", "productivity", "real_estate", "shopping",
+}
 GERMAN_STOPWORDS = {
     "aber", "alle", "als", "also", "am", "an", "auch", "auf", "aus", "bei", "bin", "bis", "das", "dass",
     "de", "dem", "den", "der", "des", "die", "doch", "ein", "eine", "einer", "eines", "er", "es", "für",

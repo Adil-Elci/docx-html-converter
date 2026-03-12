@@ -262,6 +262,11 @@ PROCESS_ACTION_TOKENS = {
 TOPIC_CLASS_KEYWORDS = {
     "real_estate": {"immobilie", "immobilien", "haus", "makler", "miete", "mieten", "verkauf", "verkaufen", "wohnung"},
     "health_parenting": {"arzt", "augen", "baby", "eltern", "familie", "familien", "gesundheit", "kinder", "schutz", "vorsorge"},
+    "nutrition_supplements": {
+        "aminosaeure", "dosierung", "eiweiss", "ernaehrung", "inhaltsstoffe", "kreatin", "mineralstoff",
+        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "supplement", "supplements",
+        "vegan", "vitamin",
+    },
     "product_service": {"auswahl", "kategorie", "material", "modell", "modelle", "produkt", "produkte", "qualitaet", "vergleich"},
     "finance_legal": {"finanzierung", "frist", "gesetz", "kosten", "provision", "recht", "steuer", "vertrag", "zins"},
 }
@@ -275,6 +280,18 @@ SPECIFICITY_SIGNAL_BUCKETS = {
         "standards_safety": {"ce", "iso", "kategorie", "klasse", "norm", "risiko", "schutzklasse", "uv", "uv400"},
         "age_use_case": {"alltag", "babys", "gebirge", "kinder", "kleinkinder", "schulkinder", "sommer", "strand", "urlaub"},
         "decision_criteria": {"bruchsicher", "groesse", "komfort", "material", "passform", "sitz", "schutz", "gewicht"},
+    },
+    "nutrition_supplements": {
+        "product_formulation": {
+            "aminosaeure", "bioverfuegbarkeit", "darreichungsform", "dosierung", "inhaltsstoffe", "portion",
+            "protein", "rohstoffe", "taegliche", "tagesdosis", "vitamin", "wirkstoff",
+        },
+        "quality_signals": {
+            "allergen", "bio", "deklaration", "gmp", "labor", "labortest", "reinheit", "siegel", "vegan", "zertifizierung",
+        },
+        "cost_use_cases": {
+            "abo", "alltag", "kapseln", "kosten", "monat", "preis", "preise", "pulver", "sticks", "vergleich",
+        },
     },
     "product_service": {
         "criteria_specs": {"kategorie", "klasse", "material", "modell", "passform", "preis", "preise", "qualitaet", "schutz"},
@@ -320,7 +337,7 @@ ARTICLE_MAX_WORDS = 1200
 KEYWORD_LOW_SIGNAL_TOKENS = {
     "aktuell", "aktuelle", "aktuellen", "allgemein", "beitrag", "beitraege", "beliebt", "beliebte",
     "entdecken", "ganze", "hilfe", "hilfreich", "infos", "magazin", "mehr", "ratgeber", "spannend", "spannende",
-    "thema", "themen", "tipps", "wissen", "wertvolle", "amp", "ideen", "richtig", "fuer", "jeden",
+    "thema", "themen", "tipps", "wissen", "wertvolle", "amp", "ideen", "richtig", "fuer", "jeden", "wirklich",
 }
 
 GERMAN_KEYWORD_MODIFIERS = (
@@ -349,6 +366,22 @@ ABSTRACT_QUERY_TOKENS = {
     "anzeichen", "aspekte", "ausloeser", "chancen", "fehler", "fragen", "hinweise", "kriterien",
     "orientierung", "signale", "schritte", "ueberblick", "ursachen", "warnzeichen",
 }
+GENERIC_TOPIC_CATEGORY_TOKENS = {
+    "beauty", "familie", "family", "finance", "gesundheit", "health", "lifestyle", "mode", "shopping",
+    "stil", "wellness", "wohnen",
+}
+QUESTION_LEAD_HELPER_TOKENS = {
+    "am", "an", "auf", "bei", "das", "dem", "den", "der", "des", "die", "ein", "eine", "einem", "einen",
+    "einer", "eines", "fuer", "für", "ihr", "ihre", "im", "in", "man", "mein", "meine", "meinem", "meinen",
+    "meiner", "mit", "sich", "und", "unser", "unsere", "vom", "von", "zum", "zur",
+}
+QUESTION_LEAD_VERB_TOKENS = {
+    "bleibt", "braucht", "brauchen", "empfiehlt", "empfehlen", "erkennt", "erkennen", "gelingt", "helfen", "hilft",
+    "ist", "sind", "kann", "koennen", "können", "kostet", "kosten", "laesst", "lässt", "lassen", "lohnt", "lohnen",
+    "macht", "machen", "passt", "prueft", "prüft", "soll", "sollte", "sollten", "waehlt", "wählt", "wird", "werden",
+}
+QUESTION_TRAILING_LOW_SIGNAL_TOKENS = {"eigentlich", "heute", "jetzt", "noch", "richtig", "sinnvoll", "wirklich"}
+QUESTION_FOCUS_PRIORITY_TOKENS = {"kosten", "kostet", "preis", "preise", "vergleich", "dosierung", "dosis", "tagesdosis"}
 EDITORIAL_NOISE_TOKENS = {"amp"}
 EDITORIAL_GREETING_PREFIXES = (
     "herzlich willkommen",
@@ -372,6 +405,7 @@ OUTLINE_DECISION_TOKENS = {
 }
 
 GERMAN_QUESTION_PREFIXES = (
+    "was",
     "was ist",
     "wie",
     "wann",
@@ -607,6 +641,7 @@ def _infer_topic_class(
             " ".join(str(item).strip() for item in ((target_profile or {}).get("topics") or []) if str(item).strip()),
             " ".join(str(item).strip() for item in ((target_profile or {}).get("services_or_products") or []) if str(item).strip()),
             " ".join(str(item).strip() for item in ((publishing_profile or {}).get("topics") or []) if str(item).strip()),
+            " ".join(str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()),
             " ".join(str(item).strip() for item in ((content_brief or {}).get("publishing_signals") or []) if str(item).strip()),
         ]
     )
@@ -725,7 +760,7 @@ def _build_specificity_profile(
         str(bucket_name): sorted(str(token).strip() for token in bucket_tokens if str(token).strip())
         for bucket_name, bucket_tokens in raw_buckets.items()
     }
-    min_specifics = 3 if topic_class in {"real_estate", "health_parenting", "product_service", "finance_legal"} else 2
+    min_specifics = 3 if topic_class in {"real_estate", "health_parenting", "nutrition_supplements", "product_service", "finance_legal"} else 2
     if intent_type in {"transactional", "commercial_investigation"}:
         min_specifics = max(min_specifics, 3)
     return {
@@ -1064,6 +1099,67 @@ def _extract_topic_subject_phrase(topic: str) -> str:
         words = words[:KEYWORD_MAX_WORDS]
     candidate = " ".join(words).strip()
     return candidate if candidate and not _looks_like_question_phrase(candidate) else ""
+
+
+def _extract_topic_question_focus_phrase(topic: str) -> str:
+    normalized_question = _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
+    if not normalized_question:
+        return ""
+    words = normalized_question.split()
+    if not words:
+        return ""
+    if words[0] in GERMAN_QUESTION_PREFIXES:
+        words = words[1:]
+    leading_signal = ""
+    while words and words[0] in (QUESTION_LEAD_HELPER_TOKENS | QUESTION_LEAD_VERB_TOKENS):
+        if not leading_signal and words[0] in QUESTION_FOCUS_PRIORITY_TOKENS:
+            leading_signal = "kosten" if words[0] in {"kostet", "kosten"} else words[0]
+        words = words[1:]
+    filtered_words = [
+        word
+        for word in words
+        if word not in QUESTION_LEAD_HELPER_TOKENS
+        and word not in QUESTION_TRAILING_LOW_SIGNAL_TOKENS
+        and word not in GERMAN_QUESTION_PREFIXES
+    ]
+    while len(filtered_words) > 2 and filtered_words[-1] in (QUESTION_TRAILING_LOW_SIGNAL_TOKENS | TOPIC_SUFFIX_MODIFIERS | TRAILING_TITLE_STOPWORDS):
+        filtered_words.pop()
+    if leading_signal and leading_signal not in filtered_words:
+        filtered_words.append(leading_signal)
+    if len(filtered_words) > KEYWORD_QUERY_MAX_WORDS:
+        if leading_signal and filtered_words[-1] == leading_signal:
+            filtered_words = filtered_words[: KEYWORD_QUERY_MAX_WORDS - 1] + [leading_signal]
+        else:
+            filtered_words = filtered_words[:KEYWORD_QUERY_MAX_WORDS]
+    candidate = " ".join(filtered_words).strip()
+    return candidate if _is_valid_keyword_phrase(candidate) else ""
+
+
+def _topic_phrase_is_generic(value: str) -> bool:
+    focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
+    if not focus_tokens:
+        return True
+    domain_tokens = focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS
+    return not domain_tokens and bool(focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS)
+
+
+def _topic_phrase_specificity_score(value: str) -> tuple[int, int, int, int, int]:
+    focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
+    domain_tokens = focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS
+    generic_tokens = focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS
+    priority_tokens = focus_tokens & QUESTION_FOCUS_PRIORITY_TOKENS
+    return (
+        len(domain_tokens),
+        len(priority_tokens),
+        -len(generic_tokens),
+        len(focus_tokens),
+        -len(_normalize_keyword_phrase(value).split()),
+    )
+
+
+def _topic_phrase_domain_token_count(value: str) -> int:
+    focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
+    return len(focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS)
 
 
 def _extract_topic_question_phrase(topic: str) -> str:
@@ -3520,11 +3616,20 @@ def _build_keyword_buckets(
 
 
 def _build_topic_phrase(topic: str) -> str:
-    preferred = (
-        _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
-        or _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
-        or _normalize_keyword_phrase(topic)
-    )
+    subject_phrase = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
+    question_focus_phrase = _normalize_keyword_phrase(_extract_topic_question_focus_phrase(topic))
+    question_phrase = _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
+    preferred = subject_phrase or question_focus_phrase or question_phrase or _normalize_keyword_phrase(topic)
+    if question_focus_phrase:
+        if not subject_phrase or _topic_phrase_is_generic(subject_phrase):
+            preferred = question_focus_phrase
+        elif (
+            _topic_phrase_domain_token_count(subject_phrase) < 2
+            and _topic_phrase_specificity_score(question_focus_phrase) > _topic_phrase_specificity_score(subject_phrase)
+        ):
+            preferred = question_focus_phrase
+    elif not preferred:
+        preferred = _normalize_keyword_phrase(topic)
     words = _strip_query_year_tokens(_strip_trailing_topic_modifiers(preferred.split()))
     if len(words) > KEYWORD_MAX_WORDS:
         normalized = " ".join(words[:KEYWORD_MAX_WORDS])
@@ -5038,7 +5143,7 @@ def _faq_candidate_has_planning_noise(
 
 def _topic_head_keyword(topic: str) -> str:
     subject_phrase = _normalize_keyword_phrase(_extract_topic_subject_phrase(topic))
-    normalized = subject_phrase or _build_topic_phrase(topic)
+    normalized = (subject_phrase if subject_phrase and not _topic_phrase_is_generic(subject_phrase) else "") or _build_topic_phrase(topic)
     words = _strip_query_year_tokens(_strip_trailing_topic_modifiers(normalized.split()))
     compressed_words = [
         word

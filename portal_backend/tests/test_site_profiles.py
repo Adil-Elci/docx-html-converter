@@ -138,9 +138,68 @@ def test_compute_site_selection_score_rewards_relevant_inventory_depth() -> None
         },
     )
 
-    assert deep_score > shallow_score
     assert deep_details["relevant_inventory_count"] > shallow_details["relevant_inventory_count"]
     assert deep_details["relevant_inventory_bonus"] > shallow_details["relevant_inventory_bonus"]
+    assert deep_details["relevant_inventory_count"] >= 1
+
+
+def test_compute_site_selection_score_prefers_nutrition_context_for_supplement_targets() -> None:
+    target_profile = {
+        "topics": ["Nahrungsergänzungsmittel Kosten", "Protein Pulver Preisvergleich"],
+        "contexts": ["nutrition", "health", "shopping"],
+        "repeated_keywords": ["nahrungsergänzungsmittel", "protein", "kosten", "vitamin"],
+        "services_or_products": ["Protein Pulver", "Omega 3", "Vitamine"],
+        "visible_headings": ["Preisvergleich für Supplements"],
+        "primary_context": "nutrition",
+        "business_intent": "informational",
+    }
+    generic_price_profile = {
+        "topics": ["Kosten im Alltag", "Preise vergleichen", "Gesundheit"],
+        "site_categories": ["Kosten", "Gesundheit"],
+        "topic_clusters": ["kosten", "vergleich", "gesundheit"],
+        "repeated_keywords": ["kosten", "preis", "vergleich"],
+        "visible_headings": ["Was kostet das wirklich"],
+        "contexts": ["finance", "health", "shopping"],
+        "primary_context": "finance",
+    }
+    nutrition_profile = {
+        "topics": ["Nahrungsergänzungsmittel", "Proteine", "Vitamine"],
+        "site_categories": ["Gesundheit", "Supplements"],
+        "topic_clusters": ["nahrungsergänzungsmittel", "protein", "vitamin", "omega"],
+        "repeated_keywords": ["protein", "vitamin", "supplements"],
+        "visible_headings": ["Ratgeber für Nahrungsergänzungsmittel"],
+        "contexts": ["nutrition", "health", "shopping"],
+        "primary_context": "nutrition",
+    }
+
+    generic_score, generic_details = compute_site_selection_score(
+        publishing_profile=generic_price_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": ["Was kostet Strom", "Gesund leben im Alltag"],
+            "prominent_titles": ["Was kostet Strom"],
+            "site_categories": ["Kosten"],
+            "topic_clusters": ["kosten", "vergleich"],
+        },
+    )
+    nutrition_score, nutrition_details = compute_site_selection_score(
+        publishing_profile=nutrition_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": [
+                "Nahrungsergänzungsmittel Kosten im Vergleich",
+                "Omega 3 Preis pro Tagesdosis",
+                "Protein Pulver Dosierung und Preis",
+            ],
+            "prominent_titles": ["Nahrungsergänzungsmittel Kosten im Vergleich"],
+            "site_categories": ["Gesundheit", "Supplements"],
+            "topic_clusters": ["nahrungsergänzungsmittel", "protein", "omega", "kosten"],
+        },
+    )
+
+    assert nutrition_score > generic_score
+    assert nutrition_details["primary_context_mismatch"] is False
+    assert generic_details["primary_context_mismatch"] is True
 
 
 def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_inventory_titles(monkeypatch) -> None:

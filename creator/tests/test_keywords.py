@@ -2599,6 +2599,155 @@ def test_pair_fit_normalize_prefers_balanced_bridge_topic():
     assert result["final_article_topic"] == "Kinder Sonnenbrillen: worauf Eltern achten sollten"
 
 
+def test_pair_fit_normalize_keeps_requested_topic_when_it_is_accepted():
+    result = _pair_fit_normalize_llm_payload(
+        llm_payload={
+            "topic_candidates": [
+                {
+                    "topic": "Immobilie verkaufen in Hamburg: worauf Eigentuemer achten sollten",
+                    "publishing_site_relevance": 8,
+                    "target_site_relevance": 7,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 39,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 7,
+                    "informational_value": 8,
+                    "backlink_naturalness": 6,
+                    "spam_risk": 2,
+                    "total_score": 37,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Hausverkauf vorbereiten: Unterlagen und Bewertung",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 6,
+                    "informational_value": 7,
+                    "backlink_naturalness": 6,
+                    "spam_risk": 3,
+                    "total_score": 34,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Verkaufsstart fuer Eigentuemer: realistische Preisfindung",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 6,
+                    "informational_value": 7,
+                    "backlink_naturalness": 5,
+                    "spam_risk": 3,
+                    "total_score": 31,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Makler oder Selbstverkauf: erste Orientierung",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 6,
+                    "informational_value": 7,
+                    "backlink_naturalness": 5,
+                    "spam_risk": 4,
+                    "total_score": 29,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+            ],
+            "final_article_topic": "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+            "final_match_decision": "accepted",
+            "why_this_topic_was_chosen": "generic",
+            "best_overlap_reason": "shared",
+            "fit_score": 76,
+        },
+        publishing_terms=["immobilien", "verkaufen", "wohnen", "eigentum"],
+        target_terms=["immobilienmakler", "hausverkauf", "hamburg"],
+        publishing_contexts=["real_estate", "guidance"],
+        target_contexts=["real_estate", "services"],
+        overlap_terms=["immobilien", "verkaufen", "hamburg"],
+        requested_topic="Immobilie verkaufen in Hamburg: worauf Eigentuemer achten sollten",
+    )
+
+    assert result["final_match_decision"] == "accepted"
+    assert result["final_article_topic"] == "Immobilie verkaufen in Hamburg: worauf Eigentuemer achten sollten"
+    assert result["requested_topic_evaluation"]["decision"] == "accepted"
+
+
+def test_pair_fit_normalize_rejects_requested_topic_instead_of_swapping_to_better_alternative():
+    result = _pair_fit_normalize_llm_payload(
+        llm_payload={
+            "topic_candidates": [
+                {
+                    "topic": "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+                    "publishing_site_relevance": 8,
+                    "target_site_relevance": 8,
+                    "informational_value": 8,
+                    "backlink_naturalness": 7,
+                    "spam_risk": 2,
+                    "total_score": 40,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Hausverkauf vorbereiten: Unterlagen und Bewertung",
+                    "publishing_site_relevance": 7,
+                    "target_site_relevance": 7,
+                    "informational_value": 7,
+                    "backlink_naturalness": 6,
+                    "spam_risk": 3,
+                    "total_score": 35,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Makler oder Selbstverkauf: erste Orientierung",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 6,
+                    "informational_value": 7,
+                    "backlink_naturalness": 5,
+                    "spam_risk": 4,
+                    "total_score": 29,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Preisfindung fuer Eigentuemer im Ueberblick",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 6,
+                    "informational_value": 6,
+                    "backlink_naturalness": 5,
+                    "spam_risk": 4,
+                    "total_score": 27,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+                {
+                    "topic": "Besichtigung vorbereiten: typische Fehler vermeiden",
+                    "publishing_site_relevance": 6,
+                    "target_site_relevance": 5,
+                    "informational_value": 6,
+                    "backlink_naturalness": 4,
+                    "spam_risk": 4,
+                    "total_score": 25,
+                    "backlink_angle": "Nachrangige Ressource.",
+                },
+            ],
+            "final_article_topic": "Immobilie verkaufen: Checkliste und praktische Schritte fuer Hausverkaeufer",
+            "final_match_decision": "accepted",
+            "why_this_topic_was_chosen": "generic",
+            "best_overlap_reason": "shared",
+            "fit_score": 80,
+        },
+        publishing_terms=["immobilien", "verkaufen", "wohnen", "eigentum"],
+        target_terms=["immobilienmakler", "hausverkauf", "hamburg"],
+        publishing_contexts=["real_estate", "guidance"],
+        target_contexts=["real_estate", "services"],
+        overlap_terms=["immobilien", "verkaufen", "hamburg"],
+        requested_topic="Photovoltaik und Immobilienförderung in Deutschland",
+    )
+
+    assert result["final_match_decision"] in {"weak_fit", "hard_reject"}
+    assert result["decision"] == "rejected"
+    assert result["final_article_topic"] == "Photovoltaik und Immobilienförderung in Deutschland"
+    assert result["requested_topic_evaluation"]["decision"] == result["final_match_decision"]
+
+
 def test_pair_fit_cache_payload_is_usable_requires_complete_accepted_payload():
     accepted_payload = {
         "final_article_topic": "Kandidat 1",

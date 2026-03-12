@@ -1885,6 +1885,34 @@ def _pair_fit_score_candidate(
     }
 
 
+def _pair_fit_candidate_decision(candidate: Dict[str, Any]) -> str:
+    publishing_relevance = int(candidate.get("publishing_site_relevance") or 0)
+    target_relevance = int(candidate.get("target_site_relevance") or 0)
+    informational_value = int(candidate.get("informational_value") or 0)
+    backlink_naturalness = int(candidate.get("backlink_naturalness") or 0)
+    spam_risk = int(candidate.get("spam_risk") or 10)
+    total_score = int(candidate.get("total_score") or 0)
+    if (
+        publishing_relevance >= 6
+        and target_relevance >= 6
+        and informational_value >= 6
+        and backlink_naturalness >= 5
+        and spam_risk <= 5
+        and total_score >= 30
+    ):
+        return "accepted"
+    if (
+        publishing_relevance >= 4
+        and target_relevance >= 4
+        and informational_value >= 4
+        and backlink_naturalness >= 3
+        and spam_risk <= 7
+        and total_score >= 20
+    ):
+        return "weak_fit"
+    return "hard_reject"
+
+
 def _pair_fit_reject_reason(final_match_decision: str, best_candidate: Dict[str, Any], overlap_terms: List[str]) -> str:
     if final_match_decision == "accepted":
         return ""
@@ -1967,6 +1995,7 @@ def _pair_fit_llm_prompts(input_payload: Dict[str, Any]) -> tuple[str, str]:
         "- Vermeide zu breite Oberbegriffe, wenn die Zielseite ein konkretes Themenfeld erkennen laesst.\n"
         "- Bevorzuge Themen, die Publishing-Kontext und konkretes Zielseiten-Feld gleichzeitig sichtbar machen.\n"
         "- Nutze die Seed-Topics als Startpunkt, darfst sie aber verbessern oder ersetzen.\n"
+        "- Wenn requested_topic gesetzt ist, musst du dieses Thema als einen der 5 Kandidaten explizit bewerten. Du darfst es sprachlich glätten, aber nicht in ein anderes Thema umdeuten.\n"
         "- Erzeuge genau 5 Kandidaten in deutscher Sprache.\n"
         "- Kandidaten bewerten auf einer Skala 0-10 fuer publishing_site_relevance, target_site_relevance, informational_value, backlink_naturalness, spam_risk.\n"
         "- total_score ist 0-50.\n"
@@ -2047,13 +2076,29 @@ def _pair_fit_normalize_llm_payload(
     if not final_topic:
         raise CreatorError("Pair fit returned no final_article_topic.")
     requested_normalized = _normalize_keyword_phrase(requested_topic)
+    requested_topic_evaluation: Optional[Dict[str, Any]] = None
     if requested_normalized:
         requested_candidate = next(
             (item for item in candidates if _keyword_similarity(_normalize_keyword_phrase(str(item.get("topic") or "")), requested_normalized) >= 0.88),
             None,
         )
-        if requested_candidate is not None and final_match_decision != "hard_reject":
-            final_topic = str(requested_candidate.get("topic") or "").strip() or final_topic
+        if requested_candidate is None:
+            requested_candidate = _pair_fit_score_candidate(
+                requested_topic.strip(),
+                publishing_terms=publishing_terms,
+                target_terms=target_terms,
+                publishing_contexts=publishing_contexts,
+                target_contexts=target_contexts,
+                overlap_terms=overlap_terms,
+                target_business_intent="informational",
+            )
+        requested_decision = _pair_fit_candidate_decision(requested_candidate)
+        requested_topic_evaluation = {
+            **dict(requested_candidate),
+            "decision": requested_decision,
+        }
+        final_topic = str(requested_candidate.get("topic") or "").strip() or requested_topic.strip() or final_topic
+        final_match_decision = requested_decision
     selected_candidate = next(
         (item for item in candidates if _keyword_similarity(_normalize_keyword_phrase(str(item.get("topic") or "")), _normalize_keyword_phrase(final_topic)) >= 0.88),
         candidates[0],
@@ -2068,35 +2113,39 @@ def _pair_fit_normalize_llm_payload(
             -int(item.get("spam_risk") or 10),
         ),
     )
-    final_topic_score = _pair_fit_score_candidate(
-        final_topic,
-        publishing_terms=publishing_terms,
-        target_terms=target_terms,
-        publishing_contexts=publishing_contexts,
-        target_contexts=target_contexts,
-        overlap_terms=overlap_terms,
-        target_business_intent="informational",
-    )
-    if (
-        int(final_topic_score.get("publishing_site_relevance") or 0) < 5
-        or int(final_topic_score.get("target_site_relevance") or 0) < 5
-        or int(best_candidate.get("total_score") or 0) >= int(final_topic_score.get("total_score") or 0) + 3
-    ):
-        final_topic = str(best_candidate.get("topic") or "").strip() or final_topic
-        selected_candidate = next(
-            (
-                item
-                for item in candidates
-                if _keyword_similarity(
-                    _normalize_keyword_phrase(str(item.get("topic") or "")),
-                    _normalize_keyword_phrase(final_topic),
-                )
-                >= 0.88
-            ),
-            best_candidate,
-        )
-    else:
+    if requested_normalized:
+        selected_candidate = requested_topic_evaluation or selected_candidate
         best_candidate = selected_candidate
+    else:
+        final_topic_score = _pair_fit_score_candidate(
+            final_topic,
+            publishing_terms=publishing_terms,
+            target_terms=target_terms,
+            publishing_contexts=publishing_contexts,
+            target_contexts=target_contexts,
+            overlap_terms=overlap_terms,
+            target_business_intent="informational",
+        )
+        if (
+            int(final_topic_score.get("publishing_site_relevance") or 0) < 5
+            or int(final_topic_score.get("target_site_relevance") or 0) < 5
+            or int(best_candidate.get("total_score") or 0) >= int(final_topic_score.get("total_score") or 0) + 3
+        ):
+            final_topic = str(best_candidate.get("topic") or "").strip() or final_topic
+            selected_candidate = next(
+                (
+                    item
+                    for item in candidates
+                    if _keyword_similarity(
+                        _normalize_keyword_phrase(str(item.get("topic") or "")),
+                        _normalize_keyword_phrase(final_topic),
+                    )
+                    >= 0.88
+                ),
+                best_candidate,
+            )
+        else:
+            best_candidate = selected_candidate
     shared_contexts = _dedupe_preserve_order([context for context in publishing_contexts if context in set(target_contexts)])
     why_this_topic_was_chosen = str(llm_payload.get("why_this_topic_was_chosen") or "").strip()
     if not why_this_topic_was_chosen:
@@ -2114,7 +2163,9 @@ def _pair_fit_normalize_llm_payload(
     elif not reject_reason:
         reject_reason = _pair_fit_reject_reason(final_match_decision, best_candidate, overlap_terms)
     fit_score = int(llm_payload.get("fit_score") or 0)
-    if fit_score <= 0:
+    if requested_normalized:
+        fit_score = max(0, min(100, int(best_candidate.get("total_score") or 0) * 2))
+    elif fit_score <= 0:
         fit_score = max(0, min(100, int(best_candidate.get("total_score") or 0) * 2))
     return {
         "publishing_site_topics": publishing_terms[:8],
@@ -2133,6 +2184,7 @@ def _pair_fit_normalize_llm_payload(
         "best_overlap_reason": best_overlap_reason,
         "topic_candidates": candidates,
         "final_article_topic": final_topic,
+        "requested_topic_evaluation": requested_topic_evaluation or {},
         "why_this_topic_was_chosen": why_this_topic_was_chosen,
         "backlink_fit_ok": final_match_decision == "accepted",
         "fit_score": max(0, min(100, fit_score)),

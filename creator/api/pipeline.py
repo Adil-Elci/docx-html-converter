@@ -263,9 +263,10 @@ TOPIC_CLASS_KEYWORDS = {
     "real_estate": {"immobilie", "immobilien", "haus", "makler", "miete", "mieten", "verkauf", "verkaufen", "wohnung"},
     "health_parenting": {"arzt", "augen", "baby", "eltern", "familie", "familien", "gesundheit", "kinder", "schutz", "vorsorge"},
     "nutrition_supplements": {
-        "aminosaeure", "dosierung", "eiweiss", "ernaehrung", "inhaltsstoffe", "kreatin", "mineralstoff",
-        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "supplement", "supplements",
-        "vegan", "vitamin",
+        "aminosaeure", "collagen", "dosierung", "eiweiss", "ernaehrung", "greens", "inhaltsstoffe",
+        "kollagen", "kollagenpraeparate", "kollagenpräparate", "kreatin", "mineralstoff",
+        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "pulver",
+        "shake", "superfood", "supplement", "supplements", "vegan", "vitamin",
     },
     "product_service": {"auswahl", "kategorie", "material", "modell", "modelle", "produkt", "produkte", "qualitaet", "vergleich"},
     "finance_legal": {"finanzierung", "frist", "gesetz", "kosten", "provision", "recht", "steuer", "vertrag", "zins"},
@@ -368,7 +369,7 @@ ABSTRACT_QUERY_TOKENS = {
 }
 GENERIC_TOPIC_CATEGORY_TOKENS = {
     "beauty", "familie", "family", "finance", "gesundheit", "health", "lifestyle", "mode", "shopping",
-    "stil", "wellness", "wohnen",
+    "stil", "produkt", "produkte", "wellness", "wohnen",
 }
 QUESTION_LEAD_HELPER_TOKENS = {
     "am", "an", "auf", "bei", "das", "dem", "den", "der", "des", "die", "ein", "eine", "einem", "einen",
@@ -3791,11 +3792,18 @@ def _build_topic_phrase(topic: str) -> str:
     question_phrase = _normalize_keyword_phrase(_extract_topic_question_phrase(topic))
     preferred = subject_phrase or question_focus_phrase or question_phrase or _normalize_keyword_phrase(topic)
     if question_focus_phrase:
+        subject_specificity = _topic_phrase_specificity_score(subject_phrase) if subject_phrase else (0, 0, 0, 0, 0)
+        question_specificity = _topic_phrase_specificity_score(question_focus_phrase)
         if not subject_phrase or _topic_phrase_is_generic(subject_phrase):
             preferred = question_focus_phrase
         elif (
             _topic_phrase_domain_token_count(subject_phrase) < 2
-            and _topic_phrase_specificity_score(question_focus_phrase) > _topic_phrase_specificity_score(subject_phrase)
+            and question_specificity > subject_specificity
+        ):
+            preferred = question_focus_phrase
+        elif (
+            question_specificity[0] >= subject_specificity[0] + 1
+            and question_specificity > subject_specificity
         ):
             preferred = question_focus_phrase
     elif not preferred:

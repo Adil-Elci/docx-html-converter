@@ -77,9 +77,10 @@ CONTEXT_KEYWORDS = {
         "sicht", "symptome", "therapie", "vorsorge",
     },
     "nutrition": {
-        "aminosaeure", "dosierung", "eiweiss", "ernaehrung", "inhaltsstoffe", "kreatin", "mineralstoff",
-        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "supplement", "supplements",
-        "vegan", "vitamin",
+        "aminosaeure", "collagen", "dosierung", "eiweiss", "ernaehrung", "greens", "inhaltsstoffe",
+        "kollagen", "kollagenpraeparate", "kollagenpräparate", "kreatin", "mineralstoff",
+        "nahrungsergaenzungsmittel", "nahrungsergänzungsmittel", "omega", "protein", "pulver",
+        "shake", "superfood", "supplement", "supplements", "vegan", "vitamin",
     },
     "safety": {"absicherung", "praevention", "risiko", "sicherheit", "schutz", "uv", "vorsicht", "warnzeichen"},
     "lifestyle": {"alltag", "ideen", "leben", "mode", "ratgeber", "stil", "trends"},

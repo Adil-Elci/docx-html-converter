@@ -202,6 +202,65 @@ def test_compute_site_selection_score_prefers_nutrition_context_for_supplement_t
     assert generic_details["primary_context_mismatch"] is True
 
 
+def test_compute_site_selection_score_recognizes_greens_and_kollagen_as_nutrition_context() -> None:
+    target_profile = {
+        "topics": ["Greens Kosten", "Kollagenpräparate Preisvergleich"],
+        "contexts": ["nutrition", "health", "shopping"],
+        "repeated_keywords": ["greens", "kollagen", "preise", "nahrungsergänzungsmittel"],
+        "services_or_products": ["Greens Pulver", "Kollagenpräparate"],
+        "visible_headings": ["Greens und Kollagen im Preisvergleich"],
+        "primary_context": "nutrition",
+        "business_intent": "informational",
+    }
+    cost_magazine_profile = {
+        "topics": ["Kosten im Alltag", "Preise vergleichen", "Wellness"],
+        "site_categories": ["Kosten", "Wellness"],
+        "topic_clusters": ["kosten", "vergleich", "wellness"],
+        "repeated_keywords": ["kosten", "preis", "vergleich"],
+        "visible_headings": ["Was kostet das wirklich"],
+        "contexts": ["finance", "lifestyle", "health"],
+        "primary_context": "finance",
+    }
+    supplement_profile = {
+        "topics": ["Greens", "Kollagen", "Nahrungsergänzungsmittel"],
+        "site_categories": ["Gesundheit", "Supplements"],
+        "topic_clusters": ["greens", "kollagen", "supplements", "ernährung"],
+        "repeated_keywords": ["greens", "kollagen", "supplements"],
+        "visible_headings": ["Greens und Kollagen im Vergleich"],
+        "contexts": ["nutrition", "health", "shopping"],
+        "primary_context": "nutrition",
+    }
+
+    cost_score, cost_details = compute_site_selection_score(
+        publishing_profile=cost_magazine_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": ["Was kostet Strom", "Wellness im Alltag"],
+            "prominent_titles": ["Was kostet Strom"],
+            "site_categories": ["Kosten"],
+            "topic_clusters": ["kosten", "vergleich"],
+        },
+    )
+    supplement_score, supplement_details = compute_site_selection_score(
+        publishing_profile=supplement_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": [
+                "Greens Kosten im Vergleich",
+                "Kollagenpräparate: Preis pro Tagesdosis",
+                "Nahrungsergänzungsmittel richtig vergleichen",
+            ],
+            "prominent_titles": ["Greens Kosten im Vergleich"],
+            "site_categories": ["Gesundheit", "Supplements"],
+            "topic_clusters": ["greens", "kollagen", "supplements", "kosten"],
+        },
+    )
+
+    assert supplement_score > cost_score
+    assert supplement_details["primary_context_mismatch"] is False
+    assert cost_details["primary_context_mismatch"] is True
+
+
 def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_inventory_titles(monkeypatch) -> None:
     monkeypatch.setattr(
         "portal_backend.api.site_profiles._build_snapshot_pages",

@@ -322,3 +322,78 @@ def test_select_best_accepted_pair_prefers_topic_supporting_inventory(monkeypatc
     assert selected["site_url"] == "https://support.example.com"
     assert selected["topic_internal_support_count"] >= 1
     assert len(evaluated) == 2
+
+
+def test_select_best_accepted_pair_prefers_deeper_relevant_inventory_when_topic_support_ties(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
+    monkeypatch.setattr(
+        automation_routes,
+        "call_creator_pair_fit",
+        lambda **_kwargs: _pair_fit_result(
+            "accepted",
+            fit_score=79,
+            backlink_fit_ok=True,
+            final_article_topic="Greens und Kollagen Kosten im Vergleich",
+        ),
+    )
+
+    shallow = _candidate("https://shallow.example.com", score=88)
+    shallow["profile"] = {
+        "normalized_url": "https://shallow.example.com",
+        "primary_context": "finance",
+        "contexts": ["finance", "health"],
+        "snapshot_contexts": ["finance"],
+    }
+    shallow["details"] = {
+        "publishing_primary_context": "finance",
+        "semantic_score": 52,
+        "internal_link_support": 6,
+        "relevant_inventory_count": 0,
+    }
+
+    deep = _candidate("https://deep.example.com", score=80)
+    deep["profile"] = {
+        "normalized_url": "https://deep.example.com",
+        "primary_context": "nutrition",
+        "contexts": ["nutrition", "health", "shopping"],
+        "snapshot_contexts": ["nutrition"],
+    }
+    deep["details"] = {
+        "publishing_primary_context": "nutrition",
+        "semantic_score": 50,
+        "internal_link_support": 9,
+        "relevant_inventory_count": 3,
+    }
+    deep["inventory_context"] = {
+        "article_titles": [
+            "Greens Kosten im Vergleich",
+            "Kollagenpräparate: Preis pro Portion",
+            "Nahrungsergänzungsmittel Preise richtig einordnen",
+        ],
+        "prominent_titles": [
+            "Greens Kosten im Vergleich",
+            "Kollagenpräparate: Preis pro Portion",
+        ],
+        "site_categories": ["Gesundheit", "Supplements"],
+        "topic_clusters": ["greens", "kollagen", "preise", "supplements"],
+    }
+
+    selected, evaluated = automation_routes._select_best_accepted_pair(
+        creator_endpoint="https://creator.example.com",
+        target_site_url="https://target.example.com",
+        target_profile_payload={
+            "topics": ["Greens Kosten", "Kollagenpräparate Preisvergleich"],
+            "services_or_products": ["Greens", "Kollagenpräparate"],
+            "primary_context": "nutrition",
+        },
+        target_profile_content_hash="target-hash",
+        client_target_site_id=None,
+        candidate_rankings=[shallow, deep],
+        requested_topic=None,
+        exclude_topics=[],
+        timeout_seconds=5,
+    )
+
+    assert selected is not None
+    assert selected["site_url"] == "https://deep.example.com"
+    assert len(evaluated) == 2

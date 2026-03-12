@@ -377,6 +377,34 @@ def test_select_keywords_prefers_specific_question_focus_over_broad_category_lab
     assert any("protein" in item or "nahrungsergänzung" in item for item in result["secondary_keywords"])
 
 
+def test_select_keywords_prefers_specific_supplement_cost_phrase_over_wellness_category_label():
+    topic = "Nahrungsergänzungsmittel und Wellness-Produkte: Was kosten hochwertige Greens und Kollagenpräparate wirklich?"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="nahrungsergänzungsmittel und wellness produkte",
+        llm_secondary=[],
+        keyword_cluster=["greens", "kollagen", "nahrungsergänzungsmittel", "preise", "vergleich"],
+        allowed_topics=["Wellness", "Lifestyle", "Preisvergleich"],
+        trend_candidates=[
+            "greens kosten",
+            "kollagen kosten",
+            "nahrungsergänzungsmittel kosten",
+        ],
+        faq_candidates=[
+            "was kosten hochwertige greens und kollagenpräparate wirklich",
+            "worauf sollte man bei greens und kollagenpräparaten achten",
+        ],
+        target_terms=["Greens", "Kollagen", "Nahrungsergänzungsmittel"],
+        overlap_terms=["kosten", "vergleich"],
+        internal_link_inventory=[],
+    )
+
+    assert _build_topic_phrase(topic) == "hochwertige greens kollagenpräparate kosten"
+    assert result["primary_keyword"] == "hochwertige greens kollagenpräparate kosten"
+    assert result["primary_keyword"] != "nahrungsergänzungsmittel und wellness produkte"
+    assert any("greens" in item or "kollagen" in item for item in result["secondary_keywords"])
+
+
 def test_infer_topic_class_detects_nutrition_supplements_topics():
     topic = "Wellness und Lifestyle: Was kosten hochwertige Nahrungsergänzungsmittel wirklich?"
 
@@ -391,6 +419,27 @@ def test_infer_topic_class_detects_nutrition_supplements_topics():
         },
         content_brief={
             "target_signals": ["Veganes Protein", "Nahrungsergänzungsmittel"],
+            "publishing_signals": ["Preisvergleich", "Ernährung"],
+        },
+    )
+
+    assert inferred == "nutrition_supplements"
+
+
+def test_infer_topic_class_detects_greens_and_kollagen_as_nutrition_supplements() -> None:
+    topic = "Nahrungsergänzungsmittel und Wellness-Produkte: Was kosten hochwertige Greens und Kollagenpräparate wirklich?"
+
+    inferred = _infer_topic_class(
+        topic=topic,
+        target_profile={
+            "topics": ["Greens", "Kollagen", "Nahrungsergänzungsmittel"],
+            "services_or_products": ["Greens Pulver", "Kollagenpräparate", "Protein"],
+        },
+        publishing_profile={
+            "topics": ["Gesundheit", "Ernährung", "Preisvergleich"],
+        },
+        content_brief={
+            "target_signals": ["Greens", "Kollagen"],
             "publishing_signals": ["Preisvergleich", "Ernährung"],
         },
     )

@@ -342,6 +342,39 @@ def candidate_target_context_strength(candidate: Dict[str, Any], target_primary_
     return strength
 
 
+def count_relevant_inventory_articles(
+    *,
+    inventory_context: Optional[Dict[str, Any]],
+    target_profile: Optional[Dict[str, Any]] = None,
+    topic: str = "",
+) -> int:
+    inventory = dict(inventory_context or {})
+    titles = _coerce_string_list(inventory.get("article_titles")) or _coerce_string_list(inventory.get("prominent_titles"))
+    if not titles:
+        return 0
+    profile = dict(target_profile or {})
+    target_primary_context = str(profile.get("primary_context") or "").strip()
+    reference_terms = _text_set(
+        topic,
+        profile.get("topics"),
+        profile.get("services_or_products"),
+        profile.get("repeated_keywords"),
+        profile.get("visible_headings"),
+    )
+    if not reference_terms:
+        return 0
+    relevant = 0
+    for title in titles:
+        title_terms = _text_set(title)
+        if not title_terms:
+            continue
+        overlap = len(reference_terms & title_terms)
+        title_contexts = set(_infer_contexts([title]))
+        if overlap >= 2 or (overlap >= 1 and target_primary_context and target_primary_context in title_contexts):
+            relevant += 1
+    return relevant
+
+
 def _shortlist_ranked_publishing_candidates(
     ranked: Sequence[Dict[str, Any]],
     *,
@@ -405,6 +438,7 @@ def build_publishing_inventory_context(db: Session, *, site_id: UUID, article_li
     return {
         "site_categories": _dedupe_preserve_order(categories),
         "prominent_titles": _dedupe_preserve_order(titles)[:12],
+        "article_titles": _dedupe_preserve_order(titles)[: max(1, article_limit)],
         "topic_clusters": topic_clusters,
     }
 
@@ -733,18 +767,33 @@ def compute_site_selection_score(
         target_profile.get("services_or_products"),
         target_profile.get("repeated_keywords"),
     )
+    relevant_inventory_count = count_relevant_inventory_articles(
+        inventory_context=inventory,
+        target_profile=target_profile,
+    )
     support_terms = _text_set(
         inventory.get("prominent_titles"),
         inventory.get("site_categories"),
         inventory.get("topic_clusters"),
     )
     internal_link_support = int(round(min(15, len(target_terms & support_terms) * 3 + min(6, title_count // 5)) * support_multiplier))
+    relevant_inventory_bonus = int(round(min(10, relevant_inventory_count * 2) * support_multiplier))
     freshness_activity = min(10, min(6, title_count // 4) + min(4, cluster_count // 3))
-    final_score = min(100, semantic_score + authority_score + internal_link_support + freshness_activity + max(0, business_priority_weight))
+    final_score = min(
+        100,
+        semantic_score
+        + authority_score
+        + internal_link_support
+        + relevant_inventory_bonus
+        + freshness_activity
+        + max(0, business_priority_weight),
+    )
     details = {
         "semantic_score": semantic_score,
         "authority_score": authority_score,
         "internal_link_support": internal_link_support,
+        "relevant_inventory_count": relevant_inventory_count,
+        "relevant_inventory_bonus": relevant_inventory_bonus,
         "freshness_activity": freshness_activity,
         "business_priority_weight": max(0, business_priority_weight),
         "support_multiplier": support_multiplier,

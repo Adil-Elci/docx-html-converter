@@ -12,15 +12,28 @@ def _candidate(site_url: str, *, score: int = 40) -> dict[str, object]:
             "contexts": ["family_life", "health"],
         },
         "content_hash": f"{site_url}-hash",
+        "inventory_context": {
+            "article_titles": [],
+            "prominent_titles": [],
+            "site_categories": [],
+            "topic_clusters": [],
+        },
     }
 
 
-def _pair_fit_result(decision: str, *, fit_score: int = 40, backlink_fit_ok: bool | None = None) -> dict[str, object]:
+def _pair_fit_result(
+    decision: str,
+    *,
+    fit_score: int = 40,
+    backlink_fit_ok: bool | None = None,
+    final_article_topic: str = "",
+) -> dict[str, object]:
     return {
         "pair_fit": {
             "final_match_decision": decision,
             "backlink_fit_ok": decision == "accepted" if backlink_fit_ok is None else backlink_fit_ok,
             "fit_score": fit_score,
+            "final_article_topic": final_article_topic,
         },
         "cached": False,
     }
@@ -234,4 +247,78 @@ def test_select_best_accepted_pair_prefers_specialist_when_broad_has_no_target_c
     assert selected is not None
     assert selected["site_url"] == "https://specialist.example.com"
     assert calls == ["https://specialist.example.com", "https://broad.example.com"]
+    assert len(evaluated) == 2
+
+
+def test_select_best_accepted_pair_prefers_topic_supporting_inventory(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_REJECTED_PAIRS_FOR_TESTING", raising=False)
+
+    def _fake_pair_fit(**kwargs):
+        publishing_site_url = kwargs.get("publishing_site_url") or ""
+        if "support" in publishing_site_url:
+            return _pair_fit_result(
+                "accepted",
+                fit_score=74,
+                backlink_fit_ok=True,
+                final_article_topic="Nahrungsergänzungsmittel Kosten Vergleich",
+            )
+        return _pair_fit_result(
+            "accepted",
+            fit_score=82,
+            backlink_fit_ok=True,
+            final_article_topic="Nahrungsergänzungsmittel Kosten Vergleich",
+        )
+
+    monkeypatch.setattr(automation_routes, "call_creator_pair_fit", _fake_pair_fit)
+
+    zero_support = _candidate("https://zero-support.example.com", score=82)
+    zero_support["profile"] = {
+        "normalized_url": "https://zero-support.example.com",
+        "primary_context": "health",
+        "contexts": ["health", "lifestyle"],
+        "snapshot_contexts": ["health"],
+    }
+    zero_support["details"] = {"publishing_primary_context": "health", "semantic_score": 54, "internal_link_support": 6}
+
+    support = _candidate("https://support.example.com", score=76)
+    support["profile"] = {
+        "normalized_url": "https://support.example.com",
+        "primary_context": "health",
+        "contexts": ["health", "lifestyle"],
+        "snapshot_contexts": ["health"],
+    }
+    support["details"] = {"publishing_primary_context": "health", "semantic_score": 53, "internal_link_support": 10}
+    support["inventory_context"] = {
+        "article_titles": [
+            "Nahrungsergänzungsmittel Kosten im Vergleich",
+            "Omega-3 kaufen: Preis pro Tagesdosis verstehen",
+            "Vitamin D Preisvergleich für Einsteiger",
+        ],
+        "prominent_titles": [
+            "Nahrungsergänzungsmittel Kosten im Vergleich",
+            "Omega-3 kaufen: Preis pro Tagesdosis verstehen",
+        ],
+        "site_categories": ["Gesundheit", "Ernährung"],
+        "topic_clusters": ["nahrungsergänzungsmittel", "kosten", "omega", "vitamin"],
+    }
+
+    selected, evaluated = automation_routes._select_best_accepted_pair(
+        creator_endpoint="https://creator.example.com",
+        target_site_url="https://target.example.com",
+        target_profile_payload={
+            "topics": ["Nahrungsergänzungsmittel", "Preisvergleich"],
+            "services_or_products": ["Omega 3", "Vitamine"],
+            "primary_context": "health",
+        },
+        target_profile_content_hash="target-hash",
+        client_target_site_id=None,
+        candidate_rankings=[zero_support, support],
+        requested_topic=None,
+        exclude_topics=[],
+        timeout_seconds=5,
+    )
+
+    assert selected is not None
+    assert selected["site_url"] == "https://support.example.com"
+    assert selected["topic_internal_support_count"] >= 1
     assert len(evaluated) == 2

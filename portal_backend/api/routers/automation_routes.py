@@ -56,6 +56,7 @@ from ..portal_schemas import (
 from ..site_profiles import (
     SPECIALIZED_SELECTION_CONTEXTS,
     candidate_target_context_strength,
+    count_relevant_inventory_articles,
     derive_site_root_url,
     normalize_site_profile_url,
     top_ranked_publishing_sites_for_target,
@@ -224,7 +225,9 @@ def _select_best_accepted_pair(
             key=lambda item: (
                 bool(item.get("override_selected")),
                 not bool(item.get("target_context_strength")),
+                not bool(item.get("topic_internal_support_count")),
                 -int(item.get("pair_fit_score") or 0),
+                -int(item.get("topic_internal_support_count") or 0),
                 -int(item.get("target_context_strength") or 0),
                 -int(item.get("score") or 0),
                 -int((item.get("details") or {}).get("semantic_score") or 0),
@@ -269,6 +272,11 @@ def _select_best_accepted_pair(
         override_selected = bool(allow_rejected_pairs and final_match_decision in {"weak_fit", "hard_reject"})
         combined_score = int(candidate.get("score") or 0) + int(pair_fit.get("fit_score") or 0)
         context_strength = _candidate_context_strength(candidate)
+        topic_internal_support_count = count_relevant_inventory_articles(
+            inventory_context=candidate.get("inventory_context") if isinstance(candidate.get("inventory_context"), dict) else {},
+            target_profile=target_profile_payload,
+            topic=str(pair_fit.get("final_article_topic") or ""),
+        )
         result = {
             **candidate,
             "pair_fit": pair_fit,
@@ -280,6 +288,7 @@ def _select_best_accepted_pair(
             "combined_score": combined_score,
             "specialized_context_match": context_strength > 0,
             "target_context_strength": context_strength,
+            "topic_internal_support_count": topic_internal_support_count,
         }
         evaluated.append(result)
 

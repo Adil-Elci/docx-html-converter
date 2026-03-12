@@ -90,6 +90,59 @@ def test_compute_site_selection_score_prefers_real_estate_specialist_over_broad_
     assert broad_details["primary_context_mismatch"] is True
 
 
+def test_compute_site_selection_score_rewards_relevant_inventory_depth() -> None:
+    target_profile = {
+        "topics": ["Nahrungsergänzungsmittel Kosten", "Omega 3 Preisvergleich"],
+        "contexts": ["health", "lifestyle"],
+        "repeated_keywords": ["nahrungsergänzungsmittel", "kosten", "omega"],
+        "services_or_products": ["Omega 3", "Vitamin D"],
+        "visible_headings": ["Preisvergleich für Supplements"],
+        "primary_context": "health",
+        "business_intent": "informational",
+    }
+    publishing_profile = {
+        "topics": ["Gesundheit", "Ernährung", "Wellness"],
+        "site_categories": ["Gesundheit", "Wellness"],
+        "topic_clusters": ["gesundheit", "supplements", "ernährung"],
+        "repeated_keywords": ["gesundheit", "vitamin", "omega"],
+        "visible_headings": ["Ratgeber für Nahrungsergänzungsmittel"],
+        "contexts": ["health", "lifestyle"],
+        "primary_context": "health",
+    }
+
+    shallow_score, shallow_details = compute_site_selection_score(
+        publishing_profile=publishing_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": ["Gesund leben im Alltag", "Mehr Energie im Büro"],
+            "prominent_titles": ["Gesund leben im Alltag", "Mehr Energie im Büro"],
+            "site_categories": ["Gesundheit"],
+            "topic_clusters": ["gesundheit", "alltag"],
+        },
+    )
+    deep_score, deep_details = compute_site_selection_score(
+        publishing_profile=publishing_profile,
+        target_profile=target_profile,
+        inventory_context={
+            "article_titles": [
+                "Nahrungsergänzungsmittel Kosten im Vergleich",
+                "Omega 3 Preisvergleich nach Tagesdosis",
+                "Vitamin D kaufen: Preis und Dosierung prüfen",
+            ],
+            "prominent_titles": [
+                "Nahrungsergänzungsmittel Kosten im Vergleich",
+                "Omega 3 Preisvergleich nach Tagesdosis",
+            ],
+            "site_categories": ["Gesundheit", "Supplements"],
+            "topic_clusters": ["nahrungsergänzungsmittel", "kosten", "omega", "vitamin"],
+        },
+    )
+
+    assert deep_score > shallow_score
+    assert deep_details["relevant_inventory_count"] > shallow_details["relevant_inventory_count"]
+    assert deep_details["relevant_inventory_bonus"] > shallow_details["relevant_inventory_bonus"]
+
+
 def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_inventory_titles(monkeypatch) -> None:
     monkeypatch.setattr(
         "portal_backend.api.site_profiles._build_snapshot_pages",

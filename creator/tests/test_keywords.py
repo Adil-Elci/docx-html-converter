@@ -1631,6 +1631,175 @@ def test_run_creator_pipeline_strict_mode_raises_phase5_writer_validation_error(
         )
 
 
+def test_run_creator_pipeline_uses_editorial_repair_call_for_repairable_draft(monkeypatch):
+    monkeypatch.setenv("CREATOR_KEYWORD_TRENDS_ENABLED", "false")
+
+    monkeypatch.setattr(
+        "creator.api.pipeline._run_pair_fit_reasoning",
+        lambda **kwargs: {
+            "final_match_decision": "accepted",
+            "backlink_fit_ok": True,
+            "final_article_topic": "Kinder Sehprobleme erkennen und richtig reagieren",
+            "why_this_topic_was_chosen": "Passt zum Familien- und Gesundheitskontext.",
+            "best_overlap_reason": "Familienalltag und Kindergesundheit ueberlappen sinnvoll.",
+            "overlap_terms": ["kinder", "gesundheit"],
+            "publishing_site_contexts": ["Familienalltag"],
+            "target_site_contexts": ["Kinderbrillen"],
+        },
+    )
+
+    captured_labels: list[str] = []
+
+    def fake_call_llm_text(**kwargs):
+        label = str(kwargs.get("request_label") or "")
+        captured_labels.append(label)
+        if label.startswith("phase5_writer"):
+            prompt = str(kwargs.get("user_prompt") or "")
+            plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
+            plan = json.loads(plan_json)
+            parts = [
+                "[[INTRO_HTML]]",
+                (
+                    "<p>Kinder Sehprobleme erkennen und richtig reagieren spielt eine wichtige Rolle im Familienalltag. "
+                    "In der heutigen Zeit gibt es verschiedene Aspekte und zahlreiche moeglichkeiten, "
+                    "weshalb ein ganzheitlicher Ansatz fuer Eltern wichtig erscheint.</p>"
+                ),
+                "[[/INTRO_HTML]]",
+            ]
+            for section in plan["sections"]:
+                if section["kind"] == "faq":
+                    for index, _question in enumerate(section["h3"], start=1):
+                        parts.extend(
+                            [
+                                f"[[FAQ_{index}]]",
+                                (
+                                    "<p>Es ist wichtig zu beachten, dass verschiedene Aspekte eine wichtige Rolle spielen "
+                                    "und sich festhalten laesst, dass Orientierung hilft.</p>"
+                                ),
+                                f"[[/FAQ_{index}]]",
+                            ]
+                        )
+                    continue
+                body_html = (
+                    "<p>In der heutigen Zeit spielt eine wichtige Rolle, dass verschiedene Aspekte betrachtet werden. "
+                    "Es ist wichtig zu beachten, dass zahlreiche moeglichkeiten bestehen und sich festhalten laesst, "
+                    "dass ein ganzheitlicher Ansatz sinnvoll erscheint.</p>"
+                    "<p>Im Fokus steht dabei, dass verschiedene Aspekte und zahlreiche moeglichkeiten Eltern helfen sollen, "
+                    "ohne schon konkrete Warnzeichen, Ausloeser oder alltagsnahe Beispiele zu nennen.</p>"
+                )
+                if "table" in (section.get("required_elements") or []):
+                    body_html += (
+                        "<table><tr><th>Signal</th><th>Einordnung</th></tr>"
+                        "<tr><td>Blinzeln</td><td>beobachten</td></tr></table>"
+                    )
+                parts.extend([f"[[SECTION:{section['section_id']}]]", body_html, "[[/SECTION]]"])
+            parts.extend(["[[EXCERPT]]", "Allgemeine Orientierung fuer Eltern.", "[[/EXCERPT]]"])
+            return "\n".join(parts)
+
+        assert label.startswith("phase7_repair_attempt_1")
+        return (
+            "<h1>Kinder Sehprobleme erkennen und richtig reagieren</h1>"
+            "<p>Kinder Sehprobleme erkennen und richtig reagieren bedeutet fuer Eltern, Warnzeichen im Alltag frueh zu deuten und "
+            "zwischen kurzfristiger Ueberforderung und echtem Abklaerungsbedarf zu unterscheiden. Wenn Kinder beim Lesen haeufig "
+            "blinzeln, sehr nah an Bildschirme gehen oder ueber Kopfschmerzen nach Hausaufgaben klagen, braucht es konkrete Beobachtung "
+            "statt allgemeiner Vermutungen. Entscheidend ist, Beschwerden nach Situation zu unterscheiden: Treten sie nur abends auf, "
+            "nur bei Hausaufgaben oder auch beim Sport? Genau diese Alltagssituationen liefern spaeter die wichtigsten Hinweise fuer "
+            "eine sinnvolle Einordnung durch Eltern, Optiker oder Augenarzt.</p>"
+            "<h2>Welche Anzeichen sollten Eltern ernst nehmen?</h2>"
+            "<p>Typische Hinweise sind haeufiges Augenreiben, schiefer Kopfstand beim Lesen, Konzentrationsabfall nach kurzer Sehbelastung "
+            "und Unsicherheit beim Ballfangen. Solche Muster sind besonders relevant, wenn sie ueber mehrere Wochen auftreten oder in Schule "
+            "und Freizeit gleichermassen auffallen. Auch sehr geringer Abstand zu Buch, Tablet oder Fernseher ist ein brauchbares Signal, "
+            "vor allem wenn Kinder dadurch Buchstaben verwechseln oder Zeilen verlieren.</p>"
+            "<p>Hilfreich ist eine kleine Beobachtungstabelle ueber sieben bis vierzehn Tage. Eltern koennen notieren, wann Blinzeln, "
+            "Kopfschmerzen, Vorbeugen oder Unsicherheit beim Werfen auftreten. Damit laesst sich spaeter besser unterscheiden, ob eher "
+            "eine Sehschwaeche, Uebermuedung oder eine situative Ueberforderung dahintersteckt.</p>"
+            "<table><tr><th>Signal</th><th>Moegliche Bedeutung</th></tr><tr><td>Blinzeln</td><td>Unschaerfe oder Ueberanstrengung</td></tr></table>"
+            "<h2>Welche Fehler verzoegern die richtige Reaktion?</h2>"
+            "<p>Viele Familien warten zu lange, weil sie einzelne Auffaelligkeiten als Phase abtun. Hilfreicher ist eine kurze Beobachtungsliste: "
+            "Wann tritt das Verhalten auf, bei welcher Entfernung, und ob Beschwerden nach Lesen, Hausaufgaben oder Sport staerker werden. "
+            "Ein zweiter Fehler ist, nur auf schulische Leistung zu schauen. Sehprobleme zeigen sich oft zuerst ueber Ausweichverhalten, "
+            "nicht ueber Noten.</p>"
+            "<p>Wer Symptome dokumentiert, kann den spaeteren Termin genauer vorbereiten und schneller erklaeren, ob es um Kopfschmerzen, Unsicherheit "
+            "beim Lesen oder Belastung im Schulalltag geht. Ebenfalls wichtig: keine Kinderbrille auf Verdacht kaufen, ohne vorher die Ursache "
+            "der Beschwerden sauber zu pruefen. Erst die richtige Abklaerung schafft die Grundlage fuer eine passende Loesung.</p>"
+            "<h2>Welche naechsten Schritte helfen im Familienalltag?</h2>"
+            "<p>Im Alltag hilft ein klarer Ablauf: Auffaelligkeiten notieren, Bildschirmabstand und Licht pruefen und bei anhaltenden Signalen einen "
+            "Augenarzt- oder Optikertermin einplanen. So wird aus vagem Sorgen ein konkreter Entscheidungsprozess. Bei Grundschulkindern lohnt es "
+            "sich, Arbeitsabstand, Sitzplatz, Lesedauer und Pausen mitzudenken, weil Belastung und Sehaufgabe oft zusammenhaengen.</p>"
+            "<p>Besonders bei Kindern im Grundschulalter lohnt sich der Blick auf Hausaufgaben, Lesen und Sport, weil dort Sehprobleme frueh sichtbar werden "
+            "und die Passform einer spaeteren Kinderbrille besser eingeordnet werden kann. Wenn bereits eine Brille getragen wird, sollten Eltern auch "
+            "darauf achten, ob sie im Alltag rutscht, Druckstellen verursacht oder beim Sport konsequent abgenommen wird. Dann ist nicht nur die Sehstärke, "
+            "sondern auch die alltagstaugliche Anpassung ein Thema.</p>"
+            "<h2>Fazit</h2>"
+            "<p>Eltern brauchen bei Kinder Sehprobleme keine allgemeinen Beruhigungsfloskeln, sondern klare Kriterien: wiederkehrende Warnzeichen, konkrete "
+            "Alltagssituationen und eine kurze Dokumentation der Beschwerden. Genau daraus entsteht eine belastbare Entscheidung, wann Beobachtung reicht und "
+            "wann fachlicher Rat sinnvoll ist. Kinder Sehprobleme erkennen und richtig reagieren heisst deshalb vor allem: Muster sammeln, Situationen vergleichen "
+            "und nicht nur auf einzelne Momente zu reagieren. So wird aus Unsicherheit ein klarer naechster Schritt.</p>"
+            "<h2>FAQ</h2>"
+            "<h3>Was ist bei Kinder Sehprobleme erkennen und richtig reagieren wichtig?</h3>"
+            "<p>Wichtig sind wiederkehrende Muster wie Blinzeln, Augenreiben, Kopfschmerzen oder sehr geringer Leseabstand. Entscheidend ist, ob die Anzeichen "
+            "mehrfach in Schule, Freizeit oder bei Hausaufgaben auftreten und sich dokumentieren lassen. Je klarer der Zusammenhang mit konkreten Situationen ist, "
+            "desto besser laesst sich spaeter fachlich abklaeren, was hinter den Beschwerden steckt.</p>"
+            "<h3>Worauf sollten Eltern im Alltag besonders achten?</h3>"
+            "<p>Aufmerksam werden sollten Eltern, wenn Kinder beim Lesen schnell ermueden, Buchstaben verwechseln oder beim Ballspielen Entfernungen schlecht "
+            "einschaetzen. Solche Situationen liefern oft die besten Hinweise fuer eine fachliche Abklaerung. Auch Bildschirmabstand, Kopfhaltung und Reaktion auf "
+            "helles Licht sind im Alltag aufschlussreiche Beobachtungspunkte.</p>"
+            "<h3>Welche naechsten Schritte helfen dann im Alltag?</h3>"
+            "<p>Hilfreich sind eine kurze Beobachtungsliste, passende Lichtverhaeltnisse und ein frueh geplanter Termin bei Augenarzt oder Optiker. Dadurch "
+            "laesst sich der Alltag konkret einordnen und die Beratung gezielter vorbereiten. Wenn bereits eine Kinderbrille getragen wird, sollten Sitz, "
+            "Belastbarkeit und Nutzung in Schule und Freizeit gleich mit ueberprueft werden.</p>"
+        )
+
+    monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
+
+    result = run_creator_pipeline(
+        target_site_url="https://www.brillenhaus24.de/",
+        publishing_site_url="https://familien4leben.com/",
+        publishing_site_id=None,
+        client_target_site_id=None,
+        anchor=None,
+        topic="Kinder Sehprobleme erkennen und richtig reagieren",
+        exclude_topics=[],
+        internal_link_inventory=[
+            {
+                "url": "https://familien4leben.com/gesundheit/kinderaugen-warnzeichen",
+                "title": "Kinderaugen verstehen und Warnzeichen erkennen",
+                "slug": "kinderaugen-warnzeichen",
+                "excerpt": "Welche Anzeichen fuer Sehprobleme Eltern kennen sollten",
+                "categories": ["Gesundheit", "Kinder"],
+            }
+        ],
+        target_profile_payload={
+            "normalized_url": "https://www.brillenhaus24.de/",
+            "page_title": "Brillenhaus24",
+            "meta_description": "Kinderbrillen und alltagstaugliche Sehhilfen.",
+            "topics": ["Kinder Sehprobleme", "Kinderbrillen"],
+            "contexts": ["Augengesundheit"],
+            "repeated_keywords": ["kinder", "sehprobleme", "augen"],
+            "services_or_products": ["Kinderbrillen"],
+            "business_type": "Optiker",
+            "business_intent": "commercial",
+        },
+        publishing_profile_payload={
+            "normalized_url": "https://familien4leben.com/",
+            "page_title": "Familien4Leben",
+            "meta_description": "Ratgeber fuer Familien und Gesundheit im Alltag.",
+            "topics": ["Familienalltag", "Kindergesundheit"],
+            "contexts": ["Familienalltag"],
+            "site_categories": ["Familie"],
+            "topic_clusters": ["Gesundheit", "Elternratgeber"],
+            "content_style": ["sachlich"],
+            "content_tone": "hilfreich",
+        },
+        dry_run=True,
+    )
+
+    assert captured_labels == ["phase5_writer_attempt_1", "phase7_repair_attempt_1"]
+    assert result["spam_risk_score"] <= 35
+    assert result["specificity_score"] >= 65
+    assert result["debug"]["prompt_trace"]["repair_attempts"][0]["request_label"] == "phase7_repair_attempt_1"
+
+
 def test_ensure_primary_keyword_in_intro_injects_missing_keyword():
     html = "<h1>Titel</h1><p>Ein sachlicher Einstieg ohne exakten Suchbegriff.</p><h2>Abschnitt</h2><p>Text.</p>"
 
@@ -2030,6 +2199,29 @@ def test_validate_keyword_coverage_ok():
         ],
     )
     assert not errors
+
+
+def test_validate_keyword_coverage_allows_natural_question_h2s_without_exact_primary_phrase():
+    html = """
+    <h1>Kinder Sehprobleme erkennen und richtig reagieren</h1>
+    <p>Kinder sehprobleme erkennen und richtig reagieren hilft Eltern, Warnzeichen im Alltag besser einzuordnen.</p>
+    <h2>Welche Anzeichen sollten Eltern ernst nehmen?</h2>
+    <p>Typische Hinweise sind Blinzeln, sehr geringer Leseabstand und Kopfschmerzen nach Hausaufgaben.</p>
+    <h2>Welche Fehler verzoegern die richtige Reaktion?</h2>
+    <p>Viele Familien warten zu lange oder dokumentieren Beschwerden nicht systematisch genug.</p>
+    <h2>Fazit</h2>
+    <p>Kinder sehprobleme erkennen und richtig reagieren gelingt besser mit klarer Beobachtung und frueher Abklaerung.</p>
+    """
+    errors = _validate_keyword_coverage(
+        html,
+        primary_keyword="kinder sehprobleme erkennen und richtig reagieren",
+        secondary_keywords=[
+            "warnzeichen bei kindern",
+            "kopfschmerzen nach hausaufgaben",
+        ],
+    )
+
+    assert "primary_keyword_missing_h2" not in errors
 
 
 def test_validate_keyword_coverage_allows_phrase_repetition_below_twelve_occurrences():

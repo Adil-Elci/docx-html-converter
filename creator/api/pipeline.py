@@ -788,6 +788,11 @@ def _heading_is_natural_core_question(heading: str) -> bool:
     return any(
         normalized.startswith(prefix)
         for prefix in (
+            "welche anzeichen",
+            "welche warnzeichen",
+            "welche symptome",
+            "welche hinweise",
+            "welche signale",
             "welche kriterien",
             "welche unterlagen",
             "welche unterschiede",
@@ -5430,14 +5435,16 @@ def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondar
 
     h1_text = _extract_h1_text(article_html)
     intro_text = _extract_first_paragraph_text(article_html)
-    h2_text = " ".join(_extract_h2_headings(article_html))
+    h2_headings = _extract_h2_headings(article_html)
+    h2_text = " ".join(h2_headings)
     plain_text = _strip_html_tags(article_html)
 
     if not _keyword_present_relaxed(h1_text, primary):
         errors.append("primary_keyword_missing_h1")
     if not _keyword_present_relaxed(intro_text, primary):
         errors.append("primary_keyword_missing_intro")
-    if not _keyword_present_relaxed(h2_text, primary):
+    natural_question_h2_count = sum(1 for heading in h2_headings if _heading_is_natural_core_question(heading))
+    if not _keyword_present_relaxed(h2_text, primary) and natural_question_h2_count < 2:
         errors.append("primary_keyword_missing_h2")
 
     required_secondaries = secondaries[:KEYWORD_MIN_SECONDARY]
@@ -6832,6 +6839,7 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
                 "attempts": [],
             },
             "writer_attempts": [],
+            "repair_attempts": [],
         }
         debug["prompt_trace"] = prompt_trace
 
@@ -6839,6 +6847,8 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
     if planner_trace is None:
         planner_trace = {"mode": "deterministic", "attempts": []}
         prompt_trace["planner"] = planner_trace
+    if not isinstance(prompt_trace.get("repair_attempts"), list):
+        prompt_trace["repair_attempts"] = []
     planner_attempts = planner_trace.get("attempts") if isinstance(planner_trace.get("attempts"), list) else []
     if not planner_attempts and phase3 and phase4:
         planning_quality = debug.get("planning_quality") if isinstance(debug.get("planning_quality"), dict) else {}
@@ -6961,6 +6971,215 @@ def _generate_article_from_plan(
         "slug": "",
         "excerpt": excerpt,
         "article_html": article_html,
+    }
+
+
+def _strip_all_links(html: str) -> str:
+    return re.sub(
+        r"<a[^>]*>(.*?)</a>",
+        r"\1",
+        html or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def _is_editorial_llm_repairable_error(error: str) -> bool:
+    value = (error or "").strip()
+    if not value or _is_link_only_error(value):
+        return False
+    return (
+        _is_keyword_context_repairable_error(value)
+        or value.startswith("word_count_too_short:")
+        or value.startswith("heading_")
+        or value.startswith("section_topic_drift:")
+        or value.startswith("generic_filler_excessive:")
+        or value.startswith("specificity_too_low:")
+        or value.startswith("faq_answers_too_thin:")
+        or value.startswith("faq_question_integrity_invalid:")
+        or value.startswith("keyword_overused:")
+        or value.startswith("backlink_promotional")
+        or value.startswith("backlink_sentence_templated")
+        or value.startswith("backlink_sentence_too_thin")
+        or value.startswith("backlink_context_misaligned")
+        or value.startswith("conclusion_generic")
+        or value.startswith("conclusion_not_topic_specific")
+        or value.startswith("faq_question_format_invalid")
+        or value.startswith("faq_questions_not_unique")
+        or value.startswith("publishing_context_missing")
+        or value.startswith("entity_noise_detected")
+        or value.startswith("greeting_noise_detected")
+        or value.startswith("spam_")
+    )
+
+
+def _normalize_repaired_article_html(value: str) -> str:
+    cleaned = _strip_code_fences(value or "")
+    cleaned = re.sub(r"</?(?:html|body)[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = _strip_all_links(cleaned)
+    cleaned = _sanitize_generated_fragment_html(cleaned)
+    cleaned = _strip_empty_blocks(cleaned)
+    cleaned = _strip_leading_empty_blocks(cleaned)
+    return cleaned.strip()
+
+
+def _build_repair_prompt_request(
+    *,
+    article_html: str,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    repair_errors: List[str],
+    llm_model: str,
+    max_tokens: int,
+    attempt: int,
+) -> Dict[str, Any]:
+    content_brief_text = _format_content_brief_prompt_text(phase3.get("content_brief") or {})
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
+    repair_plan = {
+        "required_h1": article_plan.get("h1"),
+        "section_order": [
+            {
+                "section_id": section.get("section_id"),
+                "kind": section.get("kind"),
+                "h2": section.get("h2"),
+                "h3": section.get("h3") or [],
+                "goal": section.get("goal") or "",
+                "required_keywords": section.get("required_keywords") or [],
+                "required_terms": section.get("required_terms") or [],
+            }
+            for section in (article_plan.get("sections") or [])
+        ],
+        "intent_type": article_plan.get("intent_type") or phase3.get("search_intent_type"),
+        "article_angle": article_plan.get("article_angle") or phase3.get("article_angle"),
+        "topic_class": article_plan.get("topic_class") or phase3.get("topic_class"),
+        "specificity_profile": article_plan.get("specificity_profile") or phase3.get("specificity_profile") or {},
+        "keyword_buckets": keyword_buckets,
+        "repair_errors": repair_errors[:10],
+    }
+    system_prompt = (
+        "Revise a German (de-DE) HTML article that already has a fixed section structure. "
+        "Fix only the editorial quality issues listed by the application. "
+        "Keep the article informational, topic-focused, and non-promotional. "
+        "Do not add hyperlinks. Return HTML only."
+    )
+    user_prompt = (
+        f"Topic: {phase3.get('final_article_topic', '')}\n"
+        f"Primary query: {phase3.get('primary_keyword', '')}\n"
+        f"Secondary queries: {(keyword_buckets.get('secondary_queries') or phase3.get('secondary_keywords') or [])}\n"
+        f"Semantic entities: {(keyword_buckets.get('semantic_entities') or [])}\n"
+        f"Intent type: {phase3.get('search_intent_type', 'informational')}\n"
+        f"Article angle: {phase3.get('article_angle', 'practical_guidance')}\n"
+        f"Editorial brief: {content_brief_text}\n"
+        f"Repair plan:\n{json.dumps(repair_plan, ensure_ascii=False, sort_keys=True, indent=2)}\n\n"
+        "Current HTML draft (links already stripped, keep HTML structure coherent):\n"
+        f"{article_html}\n\n"
+        "Rules:\n"
+        "- Return one full HTML article only. No markdown, no JSON, no explanations.\n"
+        "- Keep exactly one <h1> and preserve the overall section order.\n"
+        "- Keep the FAQ and Fazit sections at the end.\n"
+        "- You may rewrite H2/H3 wording only if needed to fix heading quality or topical drift.\n"
+        "- Do not add, remove, or move major sections.\n"
+        "- Do not add hyperlinks. The application will reinsert links after repair.\n"
+        "- Remove generic filler, advertorial phrasing, and repeated keyword stuffing.\n"
+        "- Strengthen concrete specifics, topic focus, and useful decision guidance.\n"
+        f"- Ensure the repaired article reaches at least {ARTICLE_MIN_WORDS} words unless the draft is already longer.\n"
+        "- Keep language strictly German (de-DE)."
+    )
+    return {
+        "request_label": f"phase7_repair_attempt_{attempt}",
+        "model": llm_model,
+        "max_tokens": max_tokens,
+        "repair_errors": list(repair_errors),
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
+
+
+def _repair_article_with_llm(
+    *,
+    article_html: str,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    repair_errors: List[str],
+    backlink_url: str,
+    publishing_site_url: str,
+    internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
+    min_internal_links: int,
+    max_internal_links: int,
+    llm_api_key: str,
+    llm_base_url: str,
+    llm_model: str,
+    http_timeout: int,
+    max_tokens: int,
+    attempt: int,
+    prompt_trace: Optional[List[Dict[str, Any]]] = None,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    prompt_request = _build_repair_prompt_request(
+        article_html=_strip_all_links(article_html),
+        article_plan=article_plan,
+        phase3=phase3,
+        repair_errors=repair_errors,
+        llm_model=llm_model,
+        max_tokens=max_tokens,
+        attempt=attempt,
+    )
+    system_prompt = str(prompt_request.get("system_prompt") or "")
+    user_prompt = str(prompt_request.get("user_prompt") or "")
+    request_label = str(prompt_request.get("request_label") or f"phase7_repair_attempt_{attempt}")
+    if prompt_trace is not None:
+        prompt_trace.append(
+            {
+                "attempt": len(prompt_trace) + 1,
+                "request_label": request_label,
+                "model": llm_model,
+                "max_tokens": max_tokens,
+                "repair_errors": list(repair_errors or []),
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+    raw_text = call_llm_text(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        api_key=llm_api_key,
+        base_url=llm_base_url,
+        model=llm_model,
+        timeout_seconds=http_timeout,
+        max_tokens=max_tokens,
+        temperature=0.2,
+        request_label=request_label,
+        usage_collector=usage_collector,
+    )
+    repaired_html = _normalize_repaired_article_html(raw_text)
+    if not repaired_html:
+        raise LLMError("Repair output empty.")
+    repaired_html = _ensure_required_h1(repaired_html, str(article_plan.get("h1") or ""))
+    repaired_html = _ensure_primary_keyword_in_intro(repaired_html, phase3.get("primary_keyword", ""))
+    repaired_html = _repair_link_constraints(
+        article_html=repaired_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
+        min_internal_links=min_internal_links,
+        max_internal_links=max_internal_links,
+        backlink_placement=str(article_plan.get("backlink_placement") or "intro"),
+        anchor_text=str(article_plan.get("anchor_text_final") or "Weitere Informationen"),
+        required_h1=str(article_plan.get("h1") or ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+    )
+    repaired_html = _normalize_faq_section_questions(repaired_html)
+    repaired_html = _strip_empty_blocks(repaired_html)
+    repaired_html = _strip_leading_empty_blocks(repaired_html)
+    repaired_html = _trim_article_to_word_limit(repaired_html, ARTICLE_MAX_WORDS)
+    excerpt = _extract_first_paragraph_text(repaired_html)[:200]
+    return {
+        "meta_title": str(article_plan.get("h1") or "").strip(),
+        "meta_description": "",
+        "slug": "",
+        "excerpt": excerpt,
+        "article_html": repaired_html,
     }
 
 
@@ -8243,6 +8462,7 @@ def run_creator_pipeline(
                 "attempts": [],
             },
             "writer_attempts": [],
+            "repair_attempts": [],
         },
     }
     current_year = datetime.datetime.now().year
@@ -8856,6 +9076,11 @@ def run_creator_pipeline(
     backlink_url = phase1["backlink_url"]
     writer_feedback: List[str] = []
     writer_token_floor = _estimate_html_max_tokens(ARTICLE_MAX_WORDS, floor=2600, ceiling=3800)
+    repair_prompt_trace = (
+        (debug.get("prompt_trace") or {}).get("repair_attempts")
+        if isinstance(debug.get("prompt_trace"), dict)
+        else None
+    )
     for attempt in range(1, phase5_max_attempts + 1):
         try:
             writer_max_tokens = max(
@@ -8917,6 +9142,129 @@ def run_creator_pipeline(
         )
 
         if validation_errors:
+            repaired_html = phase5_candidate["article_html"]
+            if any(_is_keyword_context_repairable_error(error) for error in validation_errors):
+                repaired_html = _repair_keyword_context_gaps(
+                    article_html=repaired_html,
+                    errors=validation_errors,
+                    topic=phase3["final_article_topic"],
+                    primary_keyword=phase3.get("primary_keyword", ""),
+                    content_brief=phase3.get("content_brief") or {},
+                )
+                repaired_html = _repair_link_constraints(
+                    article_html=repaired_html,
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    internal_links=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                    backlink_placement=phase4["backlink_placement"],
+                    anchor_text=phase4["anchor_text_final"],
+                    required_h1=phase4["h1"],
+                    primary_keyword=phase3.get("primary_keyword", ""),
+                )
+                repaired_html = _normalize_faq_section_questions(repaired_html)
+                repaired_html = _strip_empty_blocks(repaired_html)
+                repaired_html = _strip_leading_empty_blocks(repaired_html)
+                repaired_html = _trim_article_to_word_limit(repaired_html, ARTICLE_MAX_WORDS)
+                if repaired_html != phase5_candidate["article_html"]:
+                    phase5_candidate = {
+                        **phase5_candidate,
+                        "article_html": repaired_html,
+                        "excerpt": _extract_first_paragraph_text(repaired_html)[:200] or phase5_candidate.get("excerpt") or "",
+                    }
+                    validation_errors = _collect_article_validation_errors(
+                        article_html=phase5_candidate["article_html"],
+                        meta_title=phase5_candidate.get("meta_title") or phase3["title_package"]["meta_title"],
+                        meta_description=phase5_candidate.get("meta_description") or "",
+                        slug=phase5_candidate.get("slug") or phase3["title_package"]["slug"],
+                        topic=phase3["final_article_topic"],
+                        primary_keyword=phase3.get("primary_keyword", ""),
+                        secondary_keywords=phase3.get("secondary_keywords") or [],
+                        required_h1=phase4["h1"],
+                        structured_mode=phase3.get("structured_content_mode", "none"),
+                        backlink_url=backlink_url,
+                        backlink_placement=phase4["backlink_placement"],
+                        publishing_site_url=publishing_site_url,
+                        min_internal_links=effective_internal_min,
+                        max_internal_links=effective_internal_max,
+                        content_brief=phase3.get("content_brief") or {},
+                        intent_type=phase3.get("search_intent_type", ""),
+                        article_angle=phase3.get("article_angle", ""),
+                        topic_signature=phase3.get("topic_signature"),
+                        specificity_profile=phase3.get("specificity_profile"),
+                    )
+            repairable_errors = _dedupe_string_values(
+                [error for error in validation_errors if _is_editorial_llm_repairable_error(error)]
+            )
+            if validation_errors and repairable_errors and phase7_repair_attempts > 0:
+                latest_errors = list(validation_errors)
+                repaired_success_payload: Optional[Dict[str, Any]] = None
+                for repair_attempt in range(1, phase7_repair_attempts + 1):
+                    try:
+                        repaired_payload = _repair_article_with_llm(
+                            article_html=phase5_candidate["article_html"],
+                            article_plan=phase4,
+                            phase3=phase3,
+                            repair_errors=repairable_errors,
+                            backlink_url=backlink_url,
+                            publishing_site_url=publishing_site_url,
+                            internal_link_candidates=internal_link_candidates,
+                            internal_link_anchor_map=internal_link_anchor_map,
+                            min_internal_links=effective_internal_min,
+                            max_internal_links=effective_internal_max,
+                            llm_api_key=llm_api_key,
+                            llm_base_url=llm_base_url,
+                            llm_model=writing_model,
+                            http_timeout=http_timeout,
+                            max_tokens=phase7_repair_max_tokens,
+                            attempt=repair_attempt,
+                            prompt_trace=repair_prompt_trace,
+                            usage_collector=_collect_llm_usage,
+                        )
+                    except LLMError as exc:
+                        latest_errors = _dedupe_string_values(latest_errors + [f"repair_call_failed:{exc}"])
+                        continue
+                    repaired_candidate = _apply_deterministic_article_metadata(
+                        repaired_payload,
+                        phase3=phase3,
+                        phase4=phase4,
+                    )
+                    latest_errors = _collect_article_validation_errors(
+                        article_html=repaired_candidate["article_html"],
+                        meta_title=repaired_candidate.get("meta_title") or phase3["title_package"]["meta_title"],
+                        meta_description=repaired_candidate.get("meta_description") or "",
+                        slug=repaired_candidate.get("slug") or phase3["title_package"]["slug"],
+                        topic=phase3["final_article_topic"],
+                        primary_keyword=phase3.get("primary_keyword", ""),
+                        secondary_keywords=phase3.get("secondary_keywords") or [],
+                        required_h1=phase4["h1"],
+                        structured_mode=phase3.get("structured_content_mode", "none"),
+                        backlink_url=backlink_url,
+                        backlink_placement=phase4["backlink_placement"],
+                        publishing_site_url=publishing_site_url,
+                        min_internal_links=effective_internal_min,
+                        max_internal_links=effective_internal_max,
+                        content_brief=phase3.get("content_brief") or {},
+                        intent_type=phase3.get("search_intent_type", ""),
+                        article_angle=phase3.get("article_angle", ""),
+                        topic_signature=phase3.get("topic_signature"),
+                        specificity_profile=phase3.get("specificity_profile"),
+                    )
+                    if not latest_errors:
+                        repaired_success_payload = repaired_candidate
+                        break
+                    repairable_errors = _dedupe_string_values(
+                        [error for error in latest_errors if _is_editorial_llm_repairable_error(error)]
+                    )
+                if repaired_success_payload is not None:
+                    article_payload = repaired_success_payload
+                    break
+                validation_errors = latest_errors
+            if not validation_errors:
+                article_payload = phase5_candidate
+                break
             if strict_failure_mode:
                 raise CreatorError(f"Phase 5 writer attempt {attempt} validation failed: {validation_errors}")
             errors.extend(validation_errors)

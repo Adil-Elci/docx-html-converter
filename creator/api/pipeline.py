@@ -58,6 +58,7 @@ DEFAULT_SITE_ANALYSIS_MAX_PAGES = 4
 DEFAULT_SITE_ANALYSIS_PAGE_TEXT_CHARS = 1400
 SEO_TITLE_MIN_CHARS = 45
 SEO_TITLE_MAX_CHARS = 68
+SEO_H1_MAX_CHARS = 96
 SEO_DESCRIPTION_MIN_CHARS = 120
 SEO_DESCRIPTION_MAX_CHARS = 160
 SEO_SLUG_MAX_CHARS = 80
@@ -776,6 +777,7 @@ def _evaluate_title_quality(
     title: str,
     primary_keyword: str,
     topic: str,
+    max_chars: int = SEO_TITLE_MAX_CHARS,
 ) -> Dict[str, Any]:
     normalized_title = _normalize_keyword_phrase(title)
     normalized_primary = _normalize_keyword_phrase(primary_keyword)
@@ -784,7 +786,7 @@ def _evaluate_title_quality(
     score = 100
     if not normalized_title:
         return {"score": 0, "errors": ["title_missing"]}
-    if len(title.strip()) < SEO_TITLE_MIN_CHARS or len(title.strip()) > SEO_TITLE_MAX_CHARS:
+    if len(title.strip()) < SEO_TITLE_MIN_CHARS or len(title.strip()) > max_chars:
         score -= 12
         errors.append("title_length_invalid")
     if any(phrase in normalized_title for phrase in TITLE_FILLER_PHRASES):
@@ -955,7 +957,12 @@ def _evaluate_plan_quality(
     topic_signature: Optional[Dict[str, Any]],
     specificity_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    title_eval = _evaluate_title_quality(title=title, primary_keyword=primary_keyword, topic=topic)
+    title_eval = _evaluate_title_quality(
+        title=title,
+        primary_keyword=primary_keyword,
+        topic=topic,
+        max_chars=SEO_H1_MAX_CHARS,
+    )
     heading_eval = _evaluate_heading_quality(headings=headings, topic_signature=topic_signature)
     intent_eval = _evaluate_plan_intent_consistency(
         headings=headings,
@@ -1127,6 +1134,7 @@ def _ensure_primary_keyword_in_title(
     question_title: str,
     subject_title: str,
     suffix: str,
+    max_chars: int = SEO_TITLE_MAX_CHARS,
 ) -> str:
     if not primary_title or _keyword_present_relaxed(title, primary_title):
         return title
@@ -1161,10 +1169,10 @@ def _ensure_primary_keyword_in_title(
 
     normalized_original = _normalize_keyword_phrase(title)
     for candidate in candidates:
-        normalized_candidate = _truncate_title(candidate)
+        normalized_candidate = _truncate_title(candidate, max_chars=max_chars)
         if not _keyword_present_relaxed(normalized_candidate, primary_title):
             continue
-        if len(normalized_candidate) > SEO_TITLE_MAX_CHARS:
+        if len(normalized_candidate) > max_chars:
             continue
         if len(normalized_candidate) >= SEO_TITLE_MIN_CHARS:
             return normalized_candidate
@@ -1215,38 +1223,46 @@ def _build_deterministic_title_package(
         structured_mode=structured_mode,
     )
     if question_title:
-        h1 = _truncate_title(topic_title)
+        h1 = _truncate_title(topic_title, max_chars=SEO_H1_MAX_CHARS)
     else:
-        h1 = _truncate_title(topic_title)
+        h1 = _truncate_title(topic_title, max_chars=SEO_H1_MAX_CHARS)
     if suffix and ":" not in h1 and len(h1) < SEO_TITLE_MIN_CHARS:
-        h1 = _truncate_title(f"{h1}: {suffix}")
+        h1 = _truncate_title(f"{h1}: {suffix}", max_chars=SEO_H1_MAX_CHARS)
     if len(h1) < SEO_TITLE_MIN_CHARS:
         fallback_suffix = "Worauf es in der Praxis ankommt"
         if suffix and _keyword_similarity(suffix, fallback_suffix) < 0.6:
-            h1 = _truncate_title(f"{h1}: {fallback_suffix}")
+            h1 = _truncate_title(f"{h1}: {fallback_suffix}", max_chars=SEO_H1_MAX_CHARS)
         else:
-            h1 = _truncate_title(f"{h1}: Wichtige Fragen und naechste Schritte")
+            h1 = _truncate_title(f"{h1}: Wichtige Fragen und naechste Schritte", max_chars=SEO_H1_MAX_CHARS)
     h1 = _ensure_primary_keyword_in_title(
         title=h1,
         primary_title=primary_title,
         question_title=question_title,
         subject_title=subject_title or topic or primary_keyword,
         suffix=suffix,
+        max_chars=SEO_H1_MAX_CHARS,
     )
-    title_quality = _evaluate_title_quality(title=h1, primary_keyword=primary_keyword, topic=topic)
+    title_quality = _evaluate_title_quality(
+        title=h1,
+        primary_keyword=primary_keyword,
+        topic=topic,
+        max_chars=SEO_H1_MAX_CHARS,
+    )
     if title_quality["errors"]:
         natural_fallback = _truncate_title(
-            f"{_format_title_case(subject_title or primary_keyword or topic)}: {_derive_title_support_clause(topic=topic, intent_type=search_intent_type, article_angle=article_angle or 'practical_guidance', topic_class=topic_class, structured_mode=structured_mode) or 'Worauf es wirklich ankommt'}"
+            f"{_format_title_case(subject_title or primary_keyword or topic)}: {_derive_title_support_clause(topic=topic, intent_type=search_intent_type, article_angle=article_angle or 'practical_guidance', topic_class=topic_class, structured_mode=structured_mode) or 'Worauf es wirklich ankommt'}",
+            max_chars=SEO_H1_MAX_CHARS,
         )
         fallback_quality = _evaluate_title_quality(
             title=natural_fallback,
             primary_keyword=primary_keyword,
             topic=topic,
+            max_chars=SEO_H1_MAX_CHARS,
         )
         if fallback_quality["score"] >= title_quality["score"]:
             h1 = natural_fallback
     if include_year and str(current_year) not in h1:
-        h1 = _truncate_title(f"{h1} {current_year}")
+        h1 = _truncate_title(f"{h1} {current_year}", max_chars=SEO_H1_MAX_CHARS)
     meta_title = _truncate_title(h1)
     slug_seed = primary_keyword or topic
     slug = _derive_slug(slug_seed)[:SEO_SLUG_MAX_CHARS]

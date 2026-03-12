@@ -53,7 +53,12 @@ from ..portal_schemas import (
     AutomationStatusEventOut,
     AutomationStatusOut,
 )
-from ..site_profiles import derive_site_root_url, normalize_site_profile_url, top_ranked_publishing_sites_for_target
+from ..site_profiles import (
+    SPECIALIZED_SELECTION_CONTEXTS,
+    derive_site_root_url,
+    normalize_site_profile_url,
+    top_ranked_publishing_sites_for_target,
+)
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 logger = logging.getLogger("portal_backend.automation")
@@ -207,6 +212,39 @@ def _select_best_accepted_pair(
     timeout_seconds: int,
 ) -> Tuple[Optional[Dict[str, object]], list[Dict[str, object]]]:
     allow_rejected_pairs = _read_bool_env("ALLOW_REJECTED_PAIRS_FOR_TESTING", False)
+    target_primary_context = str(target_profile_payload.get("primary_context") or "").strip()
+
+    def _candidate_matches_specialized_target(item: Dict[str, object]) -> bool:
+        if target_primary_context not in SPECIALIZED_SELECTION_CONTEXTS:
+            return False
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        profile = item.get("profile") if isinstance(item.get("profile"), dict) else {}
+        publishing_primary_context = str(
+            details.get("publishing_primary_context")
+            or profile.get("primary_context")
+            or ""
+        ).strip()
+        publishing_contexts = {
+            str(value).strip()
+            for value in (profile.get("contexts") or [])
+            if str(value).strip()
+        }
+        publishing_contexts.update(
+            {
+                str(value).strip()
+                for value in (profile.get("snapshot_contexts") or [])
+                if str(value).strip()
+            }
+        )
+        publishing_contexts.update(
+            {
+                str(value).strip()
+                for value in (profile.get("inventory_contexts") or [])
+                if str(value).strip()
+            }
+        )
+        return publishing_primary_context == target_primary_context or target_primary_context in publishing_contexts
+
     evaluated: list[Dict[str, object]] = []
     for candidate in candidate_rankings:
         try:
@@ -251,12 +289,14 @@ def _select_best_accepted_pair(
                 "final_match_decision": final_match_decision,
                 "pair_fit_score": int(pair_fit.get("fit_score") or 0),
                 "combined_score": combined_score,
+                "specialized_context_match": _candidate_matches_specialized_target(candidate),
             }
         )
     accepted_pairs = [item for item in evaluated if item.get("accepted")]
     accepted_pairs.sort(
         key=lambda item: (
             bool(item.get("override_selected")),
+            not bool(item.get("specialized_context_match")),
             -int(item.get("pair_fit_score") or 0),
             -int(item.get("score") or 0),
             -int((item.get("details") or {}).get("semantic_score") or 0),

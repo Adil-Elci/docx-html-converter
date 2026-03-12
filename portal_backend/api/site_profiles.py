@@ -29,7 +29,7 @@ logger = logging.getLogger("portal_backend.site_profiles")
 
 PROFILE_KIND_PUBLISHING = "publishing_site"
 PROFILE_KIND_TARGET = "target_site"
-PROFILE_VERSION = "v2"
+PROFILE_VERSION = "v3"
 PROFILE_MIN_PRIMARY_TEXT_CHARS = 220
 PROFILE_NOISE_TAGS = (
     "script",
@@ -244,15 +244,26 @@ def fetch_site_profile_payload(
         [page.get("meta_description", "") for page in pages if page.get("meta_description")]
     )
     keywords = _extract_weighted_keywords(pages, limit=18)
-    contexts = _infer_contexts(
+    snapshot_contexts = _infer_contexts(
         keywords
         + headings
         + page_titles
         + meta_descriptions
-        + _coerce_string_list((inventory_context or {}).get("site_categories"))
-        + _coerce_string_list((inventory_context or {}).get("prominent_titles"))
     )
-    primary_context = contexts[0] if contexts else ("shopping" if profile_kind == PROFILE_KIND_TARGET else "lifestyle")
+    inventory_contexts = _infer_contexts(
+        _coerce_string_list((inventory_context or {}).get("site_categories"))
+        + _coerce_string_list((inventory_context or {}).get("prominent_titles"))
+        + _coerce_string_list((inventory_context or {}).get("topic_clusters"))
+    )
+    contexts = _dedupe_preserve_order(snapshot_contexts + inventory_contexts)
+    if profile_kind == PROFILE_KIND_PUBLISHING:
+        primary_context = (
+            snapshot_contexts[0]
+            if snapshot_contexts
+            else (inventory_contexts[0] if inventory_contexts else "lifestyle")
+        )
+    else:
+        primary_context = contexts[0] if contexts else "shopping"
     content_tone = _detect_content_tone(combined_text, headings, page_titles)
     domain_topic = _derive_domain_topic(page_titles, headings, keywords, normalized_url)
     categories = _dedupe_preserve_order(_coerce_string_list((inventory_context or {}).get("site_categories")))
@@ -275,6 +286,8 @@ def fetch_site_profile_payload(
         "primary_context": primary_context,
         "topics": _derive_topics(domain_topic, headings, keywords, categories, prominent_titles),
         "contexts": contexts,
+        "snapshot_contexts": snapshot_contexts[:5],
+        "inventory_contexts": inventory_contexts[:5],
         "content_tone": content_tone,
         "content_style": _derive_content_style(content_tone, headings, page_titles),
         "site_categories": categories[:12],
@@ -288,6 +301,57 @@ def fetch_site_profile_payload(
         "profile_generated_at": datetime.now(timezone.utc).isoformat(),
     }
     return payload
+
+
+def _candidate_matches_specialized_target_context(candidate: Dict[str, Any], target_primary_context: str) -> bool:
+    if target_primary_context not in SPECIALIZED_SELECTION_CONTEXTS:
+        return False
+    profile = dict(candidate.get("profile") or {})
+    details = dict(candidate.get("details") or {})
+    publishing_primary_context = str(
+        details.get("publishing_primary_context")
+        or profile.get("primary_context")
+        or ""
+    ).strip()
+    publishing_contexts = set(_expanded_profile_contexts(profile))
+    return publishing_primary_context == target_primary_context or target_primary_context in publishing_contexts
+
+
+def _shortlist_ranked_publishing_candidates(
+    ranked: Sequence[Dict[str, Any]],
+    *,
+    target_profile: Dict[str, Any],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    shortlisted = list(ranked)
+    target_primary_context = str(target_profile.get("primary_context") or "").strip()
+    if target_primary_context in SPECIALIZED_SELECTION_CONTEXTS:
+        matching = [
+            item for item in shortlisted if _candidate_matches_specialized_target_context(item, target_primary_context)
+        ]
+        non_matching = [
+            item for item in shortlisted if not _candidate_matches_specialized_target_context(item, target_primary_context)
+        ]
+        matching.sort(
+            key=lambda item: (
+                -int(item.get("score") or 0),
+                -int((item.get("details") or {}).get("semantic_score") or 0),
+                -int((item.get("details") or {}).get("internal_link_support") or 0),
+                str(item.get("site_name") or ""),
+            )
+        )
+        non_matching.sort(
+            key=lambda item: (
+                -int(item.get("score") or 0),
+                -int((item.get("details") or {}).get("semantic_score") or 0),
+                -int((item.get("details") or {}).get("internal_link_support") or 0),
+                str(item.get("site_name") or ""),
+            )
+        )
+        shortlisted = matching + non_matching if matching else non_matching
+    else:
+        shortlisted.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
+    return shortlisted[: max(1, limit)]
 
 
 def build_publishing_inventory_context(db: Session, *, site_id: UUID, article_limit: int = 80) -> Dict[str, Any]:
@@ -723,8 +787,12 @@ def top_ranked_publishing_sites_for_target(
                 "inventory_context": inventory_context,
             }
         )
-    ranked.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
-    return target_profile, target_profile_content_hash, ranked[: max(1, limit)]
+    ranked = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile=target_profile,
+        limit=limit,
+    )
+    return target_profile, target_profile_content_hash, ranked
 
 
 def select_best_publishing_site_for_target(

@@ -2,8 +2,10 @@ from portal_backend.api.site_profiles import (
     _extract_internal_links,
     _extract_keywords,
     _extract_page_signals,
+    _shortlist_ranked_publishing_candidates,
     build_combined_target_profile,
     compute_site_selection_score,
+    fetch_site_profile_payload,
     score_publishing_site_fit,
 )
 
@@ -86,6 +88,73 @@ def test_compute_site_selection_score_prefers_real_estate_specialist_over_broad_
     assert specialist_score > broad_score
     assert specialist_details["primary_context_mismatch"] is False
     assert broad_details["primary_context_mismatch"] is True
+
+
+def test_fetch_site_profile_payload_prefers_snapshot_primary_context_over_inventory_titles(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "portal_backend.api.site_profiles._build_snapshot_pages",
+        lambda *_args, **_kwargs: [
+            {
+                "url": "https://publisher.example.com",
+                "title": "Familienalltag mit Ideen fuer Zuhause",
+                "meta_description": "Praktische Ideen fuer Eltern, Kinder und den Familienalltag.",
+                "headings": ["Ideen fuer den Familienalltag", "Alltag mit Kindern leichter organisieren"],
+                "text": "Familien, Eltern und Kinder finden hier Ideen fuer den Alltag, Organisation und Routinen.",
+            }
+        ],
+    )
+
+    payload = fetch_site_profile_payload(
+        site_url="https://publisher.example.com",
+        profile_kind="publishing_site",
+        inventory_context={
+            "site_categories": ["Immobilien", "Hausverkauf"],
+            "prominent_titles": ["Immobilie verkaufen in Hamburg", "Wertermittlung vor dem Notartermin"],
+            "topic_clusters": ["immobilienverkauf", "wertermittlung", "notar"],
+        },
+    )
+
+    assert payload["primary_context"] == "family_life"
+    assert "family_life" in payload["snapshot_contexts"]
+    assert "real_estate" in payload["inventory_contexts"]
+    assert "real_estate" in payload["contexts"]
+
+
+def test_shortlist_ranked_publishing_candidates_prefers_specialized_context_matches() -> None:
+    ranked = [
+        {
+            "site_url": "https://broad.example.com",
+            "site_name": "Broad",
+            "score": 92,
+            "profile": {"primary_context": "lifestyle", "contexts": ["lifestyle", "home"]},
+            "details": {"publishing_primary_context": "lifestyle", "semantic_score": 42, "internal_link_support": 15},
+        },
+        {
+            "site_url": "https://specialist-a.example.com",
+            "site_name": "Specialist A",
+            "score": 60,
+            "profile": {"primary_context": "real_estate", "contexts": ["real_estate", "finance"]},
+            "details": {"publishing_primary_context": "real_estate", "semantic_score": 54, "internal_link_support": 9},
+        },
+        {
+            "site_url": "https://specialist-b.example.com",
+            "site_name": "Specialist B",
+            "score": 58,
+            "profile": {"primary_context": "real_estate", "contexts": ["real_estate", "home"]},
+            "details": {"publishing_primary_context": "real_estate", "semantic_score": 50, "internal_link_support": 8},
+        },
+    ]
+
+    shortlisted = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile={"primary_context": "real_estate"},
+        limit=2,
+    )
+
+    assert [item["site_url"] for item in shortlisted] == [
+        "https://specialist-a.example.com",
+        "https://specialist-b.example.com",
+    ]
 
 
 def test_build_combined_target_profile_merges_page_and_root_context() -> None:

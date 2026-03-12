@@ -2174,6 +2174,23 @@ def test_build_deterministic_title_package_targets_seo_length():
     assert title_package["slug"] == "baby-vorbereiten-checkliste"
 
 
+def test_build_deterministic_title_package_keeps_h1_natural_when_meta_title_is_shorter():
+    title_package = _build_deterministic_title_package(
+        topic="Chancen im Hamburger Immobilienmarkt 2026 fuer Kaeufer und Verkaeufer fruehzeitig erkennen und richtig handeln",
+        primary_keyword="hamburger immobilienmarkt 2026",
+        secondary_keywords=["immobilie verkaufen hamburg"],
+        search_intent_type="informational",
+        structured_mode="none",
+        current_year=2026,
+        article_angle="recognition_and_next_steps",
+        topic_class="real_estate",
+    )
+
+    assert title_package["h1"].lower().startswith("chancen im hamburger immobilienmarkt 2026")
+    assert "fruehzeitig erkennen" in title_package["h1"].lower()
+    assert len(title_package["h1"]) > len(title_package["meta_title"])
+
+
 def test_build_deterministic_title_package_uses_topic_over_site_identity_keyword():
     title_package = _build_deterministic_title_package(
         topic="Kinder Sonnenbrillen: Worauf Eltern beim UV Schutz achten sollten",

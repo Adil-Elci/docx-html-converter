@@ -397,3 +397,32 @@ def test_select_best_accepted_pair_prefers_deeper_relevant_inventory_when_topic_
     assert selected is not None
     assert selected["site_url"] == "https://deep.example.com"
     assert len(evaluated) == 2
+
+
+def test_compose_submission_notes_includes_origin_metadata() -> None:
+    notes = automation_routes._compose_submission_notes(
+        "idem-123",
+        "draft",
+        0,
+        custom_target_site_url="https://www.orangefit.de/",
+        manual_create_article=True,
+        creator_mode=True,
+        auto_selected_site=True,
+        submission_origin_metadata={
+            "submission_origin": "portal_frontend:admin:create_article",
+            "submission_actor_user_id": "user-123",
+            "submission_actor_role": "admin",
+            "submission_actor_email": "admin@example.com",
+            "submission_request_ip": "10.0.1.13",
+            "submission_user_agent": "Mozilla/5.0 Test Agent",
+        },
+    )
+
+    note_map = automation_routes._extract_note_map(notes)
+    assert note_map["idempotency_key"] == "idem-123"
+    assert note_map["submission_origin"] == "portal_frontend:admin:create_article"
+    assert note_map["submission_actor_user_id"] == "user-123"
+    assert note_map["submission_actor_role"] == "admin"
+    assert note_map["submission_actor_email"] == "admin@example.com"
+    assert note_map["submission_request_ip"] == "10.0.1.13"
+    assert note_map["submission_user_agent"] == "Mozilla/5.0 Test Agent"

@@ -102,6 +102,12 @@ const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
 const TREND_RECENT_LIMIT = 6;
 const SITE_FIT_RECENT_LIMIT = 6;
 
+const generateRequestToken = (prefix) => {
+  const cryptoUuid = globalThis.crypto?.randomUUID?.();
+  if (cryptoUuid) return `${prefix}-${cryptoUuid}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
 const normalizeHost = (raw) => {
   const value = (raw || "").trim();
   if (!value) return "";
@@ -288,6 +294,7 @@ export default function App() {
   const siteSuggestInputRefs = useRef({});
   const targetSiteSuggestInputRefs = useRef({});
   const submissionFieldErrorTimersRef = useRef({});
+  const creatorSubmitKeysRef = useRef({});
   const [suggestionStyle, setSuggestionStyle] = useState(null);
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
@@ -370,6 +377,7 @@ export default function App() {
     setUploadProgressBlockId(null);
     setSubmissionFieldErrors({});
     setBatchBlockStatus({});
+    creatorSubmitKeysRef.current = {};
   };
 
   const resetClientSubmissionState = () => {
@@ -397,10 +405,25 @@ export default function App() {
     setCreatorCancelingByBlock({});
     setCreatorCancelConfirmByBlock({});
     setCreatorDraftsHydrated(false);
+    creatorSubmitKeysRef.current = {};
   };
+
+  const clearCreatorSubmitKey = useCallback((blockId) => {
+    delete creatorSubmitKeysRef.current[String(blockId)];
+  }, []);
+
+  const getOrCreateCreatorSubmitKey = useCallback((blockId) => {
+    const key = String(blockId);
+    const existing = creatorSubmitKeysRef.current[key];
+    if (existing) return existing;
+    const next = generateRequestToken(`creator-submit-${key}`);
+    creatorSubmitKeysRef.current[key] = next;
+    return next;
+  }, []);
 
   const setSubmissionBlockField = (blockId, field, value) => {
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
+    if (isCreateArticleSection) clearCreatorSubmitKey(blockId);
     setter((prev) => prev.map((block) => (block.id === blockId ? { ...block, [field]: value } : block)));
   };
 
@@ -445,6 +468,7 @@ export default function App() {
 
   const removeSubmissionBlock = (blockId) => {
     const trackedJobIds = creatorJobsByBlock[blockId] || [];
+    clearCreatorSubmitKey(blockId);
     const setter = isCreateArticleSection ? setCreateArticleSubmissionBlocks : setSubmitArticleSubmissionBlocks;
     setter((prev) => {
       if (prev.length <= 1) return prev;
@@ -509,7 +533,7 @@ export default function App() {
     return "";
   };
 
-  const buildSubmissionFormData = (block, { isCreateArticle, clientName }) => {
+  const buildSubmissionFormData = (block, { isCreateArticle, clientName, creatorSubmitKey }) => {
     const formData = new FormData();
     const sourceType = isCreateArticle ? "google-doc" : (block.source_type || "").trim();
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
@@ -528,7 +552,10 @@ export default function App() {
     formData.append("execution_mode", "async");
     if ((block.anchor || "").trim()) formData.append("anchor", block.anchor.trim());
     if ((block.topic || "").trim()) formData.append("topic", block.topic.trim());
-    if (isCreateArticle) formData.append("creator_mode", "true");
+    if (isCreateArticle) {
+      formData.append("creator_mode", "true");
+      if ((creatorSubmitKey || "").trim()) formData.append("idempotency_key", creatorSubmitKey.trim());
+    }
     if (!isCreateArticle && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
     } else if (sourceType === "word-doc" && block.docx_file) {
@@ -536,6 +563,14 @@ export default function App() {
     }
     return formData;
   };
+
+  const buildCreatorSubmitHeaders = useCallback((isCreateArticle) => {
+    if (!isCreateArticle) return undefined;
+    const role = (currentUser?.role || "anonymous").trim().toLowerCase() || "anonymous";
+    return {
+      "X-Portal-Origin": `portal_frontend:${role}:create_article`,
+    };
+  }, [currentUser?.role]);
 
   useEffect(() => {
     if (currentUser?.role !== "client") return;
@@ -1076,11 +1111,14 @@ export default function App() {
     }
   };
 
-  const postMultipartWithProgress = (url, formData) => (
+  const postMultipartWithProgress = (url, formData, headers = {}) => (
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url, true);
       xhr.withCredentials = true;
+      Object.entries(headers || {}).forEach(([key, value]) => {
+        if (value) xhr.setRequestHeader(key, value);
+      });
 
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
@@ -2013,22 +2051,26 @@ export default function App() {
 
     try {
       setSubmitting(true);
+      const creatorSubmitKey = isCreateArticleSection ? getOrCreateCreatorSubmitKey(block.id) : "";
+      const requestHeaders = buildCreatorSubmitHeaders(isCreateArticleSection) || undefined;
       const formData = buildSubmissionFormData(block, {
         isCreateArticle: isCreateArticleSection,
         clientName: resolvedClientName,
+        creatorSubmitKey,
       });
       const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
       let responseData = null;
       if (effectiveSourceType === "word-doc" && block.docx_file) {
         setUploadProgressBlockId(block.id);
         setUploadProgress(0);
-        responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData);
+        responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData, requestHeaders);
         setUploadProgress(100);
       } else {
         setUploadProgressBlockId(null);
         const response = await fetch(`${baseApiUrl}/automation/submit-article-webhook`, {
           method: "POST",
           credentials: "include",
+          headers: requestHeaders,
           body: formData,
         });
 
@@ -2044,6 +2086,7 @@ export default function App() {
       if (responseData?.job_id && isCreateArticleSection) {
         const jobId = responseData.job_id;
         attachCreatorJobsToBlock(block.id, [jobId]);
+        clearCreatorSubmitKey(block.id);
       } else {
         setShowSubmissionSuccessModal(true);
       }
@@ -2113,9 +2156,12 @@ export default function App() {
         const block = blocks[i];
         setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "submitting" }));
         try {
+          const creatorSubmitKey = isCreateArticleSection ? getOrCreateCreatorSubmitKey(block.id) : "";
+          const requestHeaders = buildCreatorSubmitHeaders(isCreateArticleSection) || undefined;
           const formData = buildSubmissionFormData(block, {
             isCreateArticle: isCreateArticleSection,
             clientName: resolvedClientName,
+            creatorSubmitKey,
           });
           const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
           let responseData = null;
@@ -2123,13 +2169,14 @@ export default function App() {
           if (effectiveSourceType === "word-doc" && block.docx_file) {
             setUploadProgressBlockId(block.id);
             setUploadProgress(0);
-            responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData);
+            responseData = await postMultipartWithProgress(`${baseApiUrl}/automation/submit-article-webhook`, formData, requestHeaders);
             setUploadProgress(100);
           } else {
             setUploadProgressBlockId(null);
             const response = await fetch(`${baseApiUrl}/automation/submit-article-webhook`, {
               method: "POST",
               credentials: "include",
+              headers: requestHeaders,
               body: formData,
             });
             if (!response.ok) {
@@ -2143,6 +2190,7 @@ export default function App() {
 
           if (responseData?.job_id && isCreateArticleSection) {
             collectedJobsByBlock[block.id] = [responseData.job_id];
+            clearCreatorSubmitKey(block.id);
           }
           succeeded++;
           setBatchBlockStatus((prev) => ({ ...prev, [block.id]: "success" }));

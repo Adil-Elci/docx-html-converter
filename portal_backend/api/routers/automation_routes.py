@@ -655,6 +655,40 @@ def _safe_note_value(value: object) -> str:
     return str(value).replace(";", "_").replace("=", "_").strip()
 
 
+def _first_forwarded_ip(raw_value: Optional[str]) -> str:
+    cleaned = (raw_value or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned.split(",", 1)[0].strip()
+
+
+def _build_submission_origin_metadata(request: Request, current_user: Optional[User]) -> Dict[str, str]:
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    forwarded_ip = _first_forwarded_ip(request.headers.get("x-forwarded-for"))
+    request_ip = forwarded_ip or ((request.client.host or "").strip() if request.client else "")
+    portal_origin = (request.headers.get("x-portal-origin") or "").strip()
+    if not portal_origin:
+        if current_user is not None:
+            portal_origin = f"portal_backend:{(current_user.role or 'unknown').strip().lower() or 'unknown'}"
+        else:
+            portal_origin = "external"
+
+    metadata: Dict[str, str] = {
+        "submission_origin": portal_origin[:120],
+    }
+    if current_user is not None:
+        metadata["submission_actor_user_id"] = str(current_user.id)
+        if current_user.role:
+            metadata["submission_actor_role"] = current_user.role.strip().lower()[:40]
+        if current_user.email:
+            metadata["submission_actor_email"] = current_user.email.strip()[:160]
+    if request_ip:
+        metadata["submission_request_ip"] = request_ip[:80]
+    if user_agent:
+        metadata["submission_user_agent"] = user_agent[:200]
+    return metadata
+
+
 def _compose_submission_notes(
     idempotency_key: str,
     post_status: str,
@@ -667,6 +701,7 @@ def _compose_submission_notes(
     manual_create_article: bool = False,
     creator_mode: bool = False,
     auto_selected_site: bool = False,
+    submission_origin_metadata: Optional[Dict[str, str]] = None,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -693,6 +728,18 @@ def _compose_submission_notes(
         parts.append("creator_mode=true")
     if auto_selected_site:
         parts.append("auto_selected_site=true")
+    if submission_origin_metadata:
+        for key in (
+            "submission_origin",
+            "submission_actor_user_id",
+            "submission_actor_role",
+            "submission_actor_email",
+            "submission_request_ip",
+            "submission_user_agent",
+        ):
+            value = (submission_origin_metadata.get(key) or "").strip()
+            if value:
+                parts.append(f"{key}={_safe_note_value(value)}")
     return ";".join(parts)
 
 
@@ -785,6 +832,7 @@ def _enqueue_job(
     client_target_site: Optional[ClientTargetSite],
     creator_mode: bool,
     auto_selected_site: bool = False,
+    submission_origin_metadata: Optional[Dict[str, str]] = None,
 ) -> Tuple[Submission, Job, bool]:
     manual_create_article = request_kind == "create_article" and not (source_url or "").strip()
     creator_create_article = manual_create_article and creator_mode
@@ -821,6 +869,7 @@ def _enqueue_job(
         manual_create_article=manual_create_article,
         creator_mode=creator_mode,
         auto_selected_site=auto_selected_site,
+        submission_origin_metadata=submission_origin_metadata,
     )
 
     existing_submission = _find_existing_submission(
@@ -850,10 +899,6 @@ def _enqueue_job(
                 existing_job.approved_at = None
             if manual_create_article and not creator_create_article and existing_job.job_status in {"queued", "retrying", "failed", "processing"}:
                 existing_job.job_status = "pending_approval"
-                existing_job.last_error = None
-                changed_existing_job = True
-            if creator_create_article and existing_job.job_status == "pending_approval":
-                existing_job.job_status = "queued"
                 existing_job.last_error = None
                 changed_existing_job = True
             if existing_job.job_status == "failed":
@@ -985,6 +1030,7 @@ async def process_submit_article_webhook(
     current_user: Optional[User] = Depends(get_optional_current_user),
 ) -> AutomationSubmitArticleOut:
     payload = await _parse_automation_payload(request)
+    submission_origin_metadata = _build_submission_origin_metadata(request, current_user)
     logger.info(
         "automation.webhook.received mode=%s source_type=%s publishing_site=%s idempotency_key=%s",
         payload.execution_mode,
@@ -1045,6 +1091,7 @@ async def process_submit_article_webhook(
             client_target_site=client_target_site,
             creator_mode=True,
             auto_selected_site=not bool((payload.publishing_site or "").strip()),
+            submission_origin_metadata=submission_origin_metadata,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
@@ -1080,6 +1127,7 @@ async def process_submit_article_webhook(
             author_id=0,
             client_target_site=client_target_site,
             creator_mode=payload.creator_mode,
+            submission_origin_metadata=submission_origin_metadata,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":
@@ -1159,6 +1207,7 @@ async def process_submit_article_webhook(
             author_id=author_id,
             client_target_site=client_target_site,
             creator_mode=payload.creator_mode,
+            submission_origin_metadata=submission_origin_metadata,
         )
         shadow_dispatched = False
         if payload.execution_mode == "shadow":

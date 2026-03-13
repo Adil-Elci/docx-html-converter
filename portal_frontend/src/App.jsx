@@ -41,6 +41,14 @@ const emptyRejectForm = () => ({
   other_reason: "",
 });
 
+const REJECT_REASON_OPTIONS = [
+  { value: "quality_below_standard", labelKey: "rejectReasonQuality" },
+  { value: "policy_or_compliance_issue", labelKey: "rejectReasonPolicy" },
+  { value: "seo_or_link_issue", labelKey: "rejectReasonSeo" },
+  { value: "format_or_structure_issue", labelKey: "rejectReasonFormat" },
+  { value: "other", labelKey: "rejectReasonOther" },
+];
+
 const emptyLoginForm = () => ({
   email: "",
   password: "",
@@ -240,11 +248,15 @@ export default function App() {
   const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingSelectedJobIds, setPendingSelectedJobIds] = useState([]);
+  const [pendingBulkAction, setPendingBulkAction] = useState("");
   const [publishingJobId, setPublishingJobId] = useState("");
   const [rejectingJobId, setRejectingJobId] = useState("");
   const [regeneratingImageJobId, setRegeneratingImageJobId] = useState("");
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+  const [bulkRejectForm, setBulkRejectForm] = useState(emptyRejectForm());
   const [publishedArticles, setPublishedArticles] = useState([]);
   const [publishedLoading, setPublishedLoading] = useState(false);
   const [publishedTotal, setPublishedTotal] = useState(0);
@@ -254,6 +266,7 @@ export default function App() {
   const [publishedClientId, setPublishedClientId] = useState("");
   const [publishedSiteId, setPublishedSiteId] = useState("");
   const [publishedSort, setPublishedSort] = useState("published_at");
+  const [savingClientNotificationId, setSavingClientNotificationId] = useState("");
   const [queueStats, setQueueStats] = useState(null);
   const [queueStatsLoading, setQueueStatsLoading] = useState(false);
   const [queueAutoRefresh, setQueueAutoRefresh] = useState(true);
@@ -270,8 +283,14 @@ export default function App() {
   const [uploadProgressBlockId, setUploadProgressBlockId] = useState(null);
   const inactivityTimerRef = useRef(null);
   const portalRefreshInFlightRef = useRef(false);
+  const pendingSelectAllRef = useRef(null);
 
   const t = useMemo(() => (key) => getLabel(language, key), [language]);
+  const pendingSelectedJobIdSet = useMemo(() => new Set(pendingSelectedJobIds), [pendingSelectedJobIds]);
+  const pendingSelectedCount = pendingSelectedJobIds.length;
+  const allPendingSelected = pendingJobs.length > 0 && pendingJobs.every((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
+  const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
+  const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -703,7 +722,10 @@ export default function App() {
     try {
       setPendingLoading(true);
       const items = await api.get("/jobs/pending");
-      setPendingJobs(items || []);
+      const nextItems = Array.isArray(items) ? items : [];
+      const nextJobIdSet = new Set(nextItems.map((item) => String(item?.job_id || "")).filter(Boolean));
+      setPendingJobs(nextItems);
+      setPendingSelectedJobIds((prev) => prev.filter((jobId) => nextJobIdSet.has(jobId)));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -794,6 +816,28 @@ export default function App() {
     }
   };
 
+  const toggleClientPublishNotifications = async (client) => {
+    const clientId = String(client?.id || "").trim();
+    if (!clientId) return;
+    const nextValue = !Boolean(client?.publish_notifications_enabled);
+    try {
+      setSavingClientNotificationId(clientId);
+      setError("");
+      setSuccess("");
+      const updatedClient = await api.patch(`/clients/${clientId}`, {
+        publish_notifications_enabled: nextValue,
+      });
+      setClients((prev) => prev.map((item) => (
+        String(item?.id || "") === clientId ? updatedClient : item
+      )));
+      setSuccess(t("clientPublishEmailsUpdated"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingClientNotificationId("");
+    }
+  };
+
   const getRejectForm = (jobId) => rejectForms[jobId] || emptyRejectForm();
 
   const setRejectFormField = (jobId, field, value) => {
@@ -804,6 +848,116 @@ export default function App() {
         [field]: value,
       },
     }));
+  };
+
+  const setBulkRejectFormField = (field, value) => {
+    setBulkRejectForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const togglePendingJobSelection = (jobId) => {
+    const normalizedJobId = String(jobId || "").trim();
+    if (!normalizedJobId) return;
+    setPendingSelectedJobIds((prev) => (
+      prev.includes(normalizedJobId)
+        ? prev.filter((item) => item !== normalizedJobId)
+        : [...prev, normalizedJobId]
+    ));
+  };
+
+  const toggleSelectAllPendingJobs = () => {
+    const allJobIds = pendingJobs.map((item) => String(item?.job_id || "")).filter(Boolean);
+    if (allJobIds.length === 0) {
+      setPendingSelectedJobIds([]);
+      return;
+    }
+    setPendingSelectedJobIds((prev) => {
+      const prevSet = new Set(prev);
+      const nextAllSelected = allJobIds.every((jobId) => prevSet.has(jobId));
+      return nextAllSelected ? [] : allJobIds;
+    });
+  };
+
+  const clearPendingSelection = () => {
+    setPendingSelectedJobIds([]);
+  };
+
+  const formatPendingBulkError = (summary, failures) => {
+    const detailLines = failures.slice(0, 3).map(({ item, message }) => {
+      const label = item.content_title || item.site_url || item.site_name || item.client_name || String(item.job_id || "");
+      return `${label}: ${message}`;
+    });
+    if (failures.length > 3) {
+      detailLines.push(
+        t("pendingBulkMoreFailures").replace("{count}", String(failures.length - 3))
+      );
+    }
+    return detailLines.length ? `${summary}\n${detailLines.join("\n")}` : summary;
+  };
+
+  const runPendingBulkAction = async ({
+    action,
+    run,
+    successKey,
+    partialKey,
+    failedKey,
+    onComplete,
+  }) => {
+    const selectedJobs = pendingJobs.filter((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
+    if (selectedJobs.length === 0) return;
+    try {
+      setPendingBulkAction(action);
+      setError("");
+      setSuccess("");
+
+      let succeeded = 0;
+      const failures = [];
+      for (const item of selectedJobs) {
+        try {
+          await run(item);
+          succeeded += 1;
+        } catch (err) {
+          failures.push({
+            item,
+            message: err?.message || t("errorRequestFailed"),
+          });
+        }
+      }
+
+      await loadPendingJobs();
+      if (typeof onComplete === "function") onComplete();
+
+      const total = selectedJobs.length;
+      const failed = failures.length;
+      if (failed === 0) {
+        setSuccess(t(successKey).replace("{count}", String(succeeded)));
+        return;
+      }
+
+      if (succeeded > 0) {
+        setSuccess(
+          t(partialKey)
+            .replace("{succeeded}", String(succeeded))
+            .replace("{total}", String(total))
+            .replace("{failed}", String(failed))
+        );
+      }
+
+      setError(
+        formatPendingBulkError(
+          t(failedKey)
+            .replace("{failed}", String(failed))
+            .replace("{total}", String(total)),
+          failures
+        )
+      );
+    } catch (err) {
+      setError(err?.message || t("errorRequestFailed"));
+    } finally {
+      setPendingBulkAction("");
+    }
   };
 
   const rejectPendingJob = async (jobId) => {
@@ -833,6 +987,39 @@ export default function App() {
     } finally {
       setRejectingJobId("");
     }
+  };
+
+  const publishSelectedPendingJobs = async () => {
+    await runPendingBulkAction({
+      action: "publish",
+      run: (item) => api.post(`/jobs/${item.job_id}/publish`, {}),
+      successKey: "pendingBulkPublishSuccess",
+      partialKey: "pendingBulkPublishPartial",
+      failedKey: "pendingBulkPublishFailed",
+    });
+  };
+
+  const rejectSelectedPendingJobs = async () => {
+    const draft = bulkRejectForm;
+    if (draft.reason_code === "other" && !(draft.other_reason || "").trim()) {
+      setError(t("rejectOtherReasonRequired"));
+      return;
+    }
+
+    await runPendingBulkAction({
+      action: "reject",
+      run: (item) => api.post(`/jobs/${item.job_id}/reject`, {
+        reason_code: draft.reason_code,
+        other_reason: draft.reason_code === "other" ? draft.other_reason.trim() : null,
+      }),
+      successKey: "pendingBulkRejectSuccess",
+      partialKey: "pendingBulkRejectPartial",
+      failedKey: "pendingBulkRejectFailed",
+      onComplete: () => {
+        setBulkRejectOpen(false);
+        setBulkRejectForm(emptyRejectForm());
+      },
+    });
   };
 
   const regeneratePendingJobImage = async (jobId) => {
@@ -1237,6 +1424,16 @@ export default function App() {
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!pendingSelectAllRef.current) return;
+    pendingSelectAllRef.current.indeterminate = somePendingSelected && !allPendingSelected;
+  }, [somePendingSelected, allPendingSelected]);
+
+  useEffect(() => {
+    if (pendingSelectedCount > 0) return;
+    setBulkRejectOpen(false);
+  }, [pendingSelectedCount]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
@@ -2890,8 +3087,33 @@ export default function App() {
               <div className="admin-entity-list">
                 {clients.map((client, index) => (
                   <div key={client.id} className="admin-entity-card" style={{"--i": index}}>
-                    <strong>{client.name}</strong>
-                    <span className="muted-text">{client.email || client.phone_number || "-"}</span>
+                    <div className="admin-entity-card-row">
+                      <div className="admin-entity-card-copy">
+                        <strong>{client.name}</strong>
+                        <span className="muted-text">{client.email || client.phone_number || "-"}</span>
+                      </div>
+                      <button
+                        className="btn secondary small"
+                        type="button"
+                        onClick={() => toggleClientPublishNotifications(client)}
+                        disabled={savingClientNotificationId === client.id}
+                      >
+                        {savingClientNotificationId === client.id
+                          ? t("clientPublishEmailsSaving")
+                          : client.publish_notifications_enabled
+                            ? t("clientPublishEmailsDisable")
+                            : t("clientPublishEmailsEnable")}
+                      </button>
+                    </div>
+                    <div className="admin-entity-meta-row">
+                      <span className="list-label">{t("clientPublishEmailsLabel")}</span>
+                      <span className={`client-notification-status ${client.publish_notifications_enabled ? "enabled" : "disabled"}`}>
+                        {client.publish_notifications_enabled
+                          ? t("clientPublishEmailsEnabled")
+                          : t("clientPublishEmailsDisabled")}
+                      </span>
+                    </div>
+                    <span className="muted-text small-text">{t("clientPublishEmailsHelp")}</span>
                   </div>
                 ))}
               </div>
@@ -3107,6 +3329,106 @@ export default function App() {
                   <span className="pending-count">{pendingJobs.length}</span>
                 ) : null}
               </div>
+              {!pendingLoading && pendingJobs.length > 0 ? (
+                <>
+                  <div className="pending-bulk-toolbar">
+                    <label className="pending-select-toggle">
+                      <input
+                        ref={pendingSelectAllRef}
+                        type="checkbox"
+                        checked={allPendingSelected}
+                        onChange={toggleSelectAllPendingJobs}
+                        disabled={pendingActionsBusy}
+                        aria-label={t("pendingSelectAllJobs")}
+                      />
+                      <span>{t("pendingSelectAllJobs")}</span>
+                    </label>
+                    <span className="pending-bulk-summary">
+                      {t("pendingSelectedCount").replace("{count}", String(pendingSelectedCount))}
+                    </span>
+                    <div className="pending-bulk-actions">
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        onClick={() => {
+                          setBulkRejectOpen((prev) => !prev);
+                        }}
+                        disabled={pendingSelectedCount === 0 || pendingActionsBusy}
+                      >
+                        {pendingBulkAction === "reject" ? t("pendingBulkRejecting") : t("pendingBulkReject")}
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={publishSelectedPendingJobs}
+                        disabled={pendingSelectedCount === 0 || pendingActionsBusy}
+                      >
+                        {pendingBulkAction === "publish" ? t("pendingBulkPublishing") : t("pendingBulkPublish")}
+                      </button>
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        onClick={clearPendingSelection}
+                        disabled={pendingSelectedCount === 0 || pendingActionsBusy}
+                      >
+                        {t("pendingClearSelection")}
+                      </button>
+                    </div>
+                  </div>
+                  {bulkRejectOpen && pendingSelectedCount > 0 ? (
+                    <div className="pending-reject-panel pending-bulk-reject-panel">
+                      <div className="pending-bulk-reject-copy">
+                        <strong>{t("pendingBulkRejectTitle")}</strong>
+                        <p className="muted-text">
+                          {t("pendingBulkRejectHelp").replace("{count}", String(pendingSelectedCount))}
+                        </p>
+                      </div>
+                      <label>{t("rejectReasonLabel")}</label>
+                      <select
+                        value={bulkRejectForm.reason_code}
+                        onChange={(e) => setBulkRejectFormField("reason_code", e.target.value)}
+                        disabled={pendingActionsBusy}
+                      >
+                        {REJECT_REASON_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {t(option.labelKey)}
+                          </option>
+                        ))}
+                      </select>
+                      {bulkRejectForm.reason_code === "other" ? (
+                        <div>
+                          <label>{t("rejectOtherLabel")}</label>
+                          <textarea
+                            rows={3}
+                            value={bulkRejectForm.other_reason}
+                            onChange={(e) => setBulkRejectFormField("other_reason", e.target.value)}
+                            placeholder={t("rejectOtherPlaceholder")}
+                            disabled={pendingActionsBusy}
+                          />
+                        </div>
+                      ) : null}
+                      <div className="pending-reject-actions">
+                        <button
+                          className="btn secondary"
+                          type="button"
+                          onClick={() => setBulkRejectOpen(false)}
+                          disabled={pendingActionsBusy}
+                        >
+                          {t("close")}
+                        </button>
+                        <button
+                          className="btn danger"
+                          type="button"
+                          onClick={rejectSelectedPendingJobs}
+                          disabled={pendingActionsBusy}
+                        >
+                          {pendingBulkAction === "reject" ? t("pendingBulkRejecting") : t("pendingBulkConfirmReject")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
               {pendingLoading ? (
                 <div className="loading-inline" role="status" aria-live="polite">
                   <span className="sr-only">{t("loading")}</span>
@@ -3119,6 +3441,7 @@ export default function App() {
               ) : null}
               <div className="pending-list-table">
                 <div className="pending-list-header">
+                  <span className="pending-selection-column" aria-hidden="true" />
                   <span>{t("createdByLabel")}</span>
                   <span>{t("publishingSiteLabel")}</span>
                   <span>{t("targetSiteLabel")}</span>
@@ -3128,11 +3451,26 @@ export default function App() {
                   <span>{t("actionsLabel")}</span>
                 </div>
                 {pendingJobs.map((item, index) => {
+                  const jobId = String(item.job_id || "");
+                  const isSelected = pendingSelectedJobIdSet.has(jobId);
                   const draftReviewUrl = getDraftReviewUrl(item);
                   const requestKind = item.request_kind === "create_article" ? "create_article" : "submit_article";
                   return (
-                    <div key={item.job_id} className="pending-item-wrap" style={{"--i": index}}>
+                    <div
+                      key={item.job_id}
+                      className={`pending-item-wrap ${isSelected ? "is-selected" : ""}`}
+                      style={{"--i": index}}
+                    >
                       <div className="pending-item-row">
+                        <div className="pending-select-cell">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => togglePendingJobSelection(jobId)}
+                            disabled={pendingActionsBusy}
+                            aria-label={t("pendingSelectJob").replace("{title}", item.content_title || item.site_name || item.client_name || jobId)}
+                          />
+                        </div>
                         <span data-label={t("createdByLabel")}>{item.client_name}</span>
                         <span data-label={t("publishingSiteLabel")}>{item.site_url || item.site_name}</span>
                         <span data-label={t("targetSiteLabel")}>{item.target_site_url || t("contentTitleFallback")}</span>
@@ -3153,7 +3491,7 @@ export default function App() {
                             className="btn secondary"
                             type="button"
                             onClick={() => regeneratePendingJobImage(item.job_id)}
-                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
+                            disabled={!item.wp_post_id || pendingActionsBusy}
                           >
                             {regeneratingImageJobId === item.job_id ? t("regeneratingImage") : t("regeneratePostImage")}
                           </button>
@@ -3161,7 +3499,7 @@ export default function App() {
                             className="btn"
                             type="button"
                             onClick={() => publishPendingJob(item.job_id)}
-                            disabled={!item.wp_post_id || publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
+                            disabled={!item.wp_post_id || pendingActionsBusy}
                           >
                             {publishingJobId === item.job_id ? t("publishing") : t("publish")}
                           </button>
@@ -3175,7 +3513,7 @@ export default function App() {
                                 [item.job_id]: prev[item.job_id] || emptyRejectForm(),
                               }));
                             }}
-                            disabled={publishingJobId === item.job_id || rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
+                            disabled={pendingActionsBusy}
                           >
                             {t("reject")}
                           </button>
@@ -3187,12 +3525,13 @@ export default function App() {
                           <select
                             value={getRejectForm(item.job_id).reason_code}
                             onChange={(e) => setRejectFormField(item.job_id, "reason_code", e.target.value)}
+                            disabled={pendingActionsBusy}
                           >
-                            <option value="quality_below_standard">{t("rejectReasonQuality")}</option>
-                            <option value="policy_or_compliance_issue">{t("rejectReasonPolicy")}</option>
-                            <option value="seo_or_link_issue">{t("rejectReasonSeo")}</option>
-                            <option value="format_or_structure_issue">{t("rejectReasonFormat")}</option>
-                            <option value="other">{t("rejectReasonOther")}</option>
+                            {REJECT_REASON_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {t(option.labelKey)}
+                              </option>
+                            ))}
                           </select>
                           {getRejectForm(item.job_id).reason_code === "other" ? (
                             <div>
@@ -3202,6 +3541,7 @@ export default function App() {
                                 value={getRejectForm(item.job_id).other_reason}
                                 onChange={(e) => setRejectFormField(item.job_id, "other_reason", e.target.value)}
                                 placeholder={t("rejectOtherPlaceholder")}
+                                disabled={pendingActionsBusy}
                               />
                             </div>
                           ) : null}
@@ -3210,7 +3550,7 @@ export default function App() {
                               className="btn secondary"
                               type="button"
                               onClick={() => setOpenRejectJobId("")}
-                              disabled={rejectingJobId === item.job_id}
+                              disabled={pendingActionsBusy}
                             >
                               {t("close")}
                             </button>
@@ -3218,7 +3558,7 @@ export default function App() {
                               className="btn danger"
                               type="button"
                               onClick={() => rejectPendingJob(item.job_id)}
-                              disabled={rejectingJobId === item.job_id || regeneratingImageJobId === item.job_id}
+                              disabled={pendingActionsBusy}
                             >
                               {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
                             </button>

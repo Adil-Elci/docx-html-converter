@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -121,3 +122,50 @@ def test_pending_job_to_out_includes_target_site_url() -> None:
     )
 
     assert out.target_site_url == "https://target.example.com"
+
+
+def test_extract_rejection_event_metadata_reads_admin_reject_payload() -> None:
+    fallback_created_at = datetime(2026, 3, 13, 9, 0, tzinfo=timezone.utc)
+
+    metadata = jobs_routes._extract_rejection_event_metadata(
+        {
+            "action": "admin_reject",
+            "reason_summary": "Content quality below publishing standard",
+            "rejected_by_email": "admin@example.com",
+            "rejected_at": "2026-03-13T10:15:00+00:00",
+        },
+        fallback_created_at=fallback_created_at,
+    )
+
+    assert metadata == {
+        "rejected_at": datetime(2026, 3, 13, 10, 15, tzinfo=timezone.utc),
+        "rejected_by": "admin@example.com",
+        "rejection_reason": "Content quality below publishing standard",
+    }
+
+
+def test_rejected_article_to_out_includes_rejection_fields() -> None:
+    rejected_at = datetime(2026, 3, 13, 11, 30, tzinfo=timezone.utc)
+    out = jobs_routes._rejected_article_to_out(
+        SimpleNamespace(
+            id=uuid4(),
+            job_status="rejected",
+            wp_post_url="https://publisher.example.com/draft",
+            created_at=rejected_at,
+            updated_at=rejected_at,
+        ),
+        SimpleNamespace(id=uuid4(), request_kind="submit_article"),
+        SimpleNamespace(id=uuid4(), name="Client"),
+        SimpleNamespace(id=uuid4(), name="Publisher", site_url="https://publisher.example.com"),
+        content_title="Rejected example",
+        target_site_url="https://target.example.com",
+        rejection_reason="Formatting or structure issue",
+        rejected_by="admin@example.com",
+        rejected_at=rejected_at,
+    )
+
+    assert out.content_title == "Rejected example"
+    assert out.target_site_url == "https://target.example.com"
+    assert out.rejection_reason == "Formatting or structure issue"
+    assert out.rejected_by == "admin@example.com"
+    assert out.rejected_at == rejected_at

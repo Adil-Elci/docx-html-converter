@@ -44,6 +44,8 @@ from ..portal_schemas import (
     PendingJobRegenerateImageOut,
     PendingJobRejectIn,
     PendingJobRejectOut,
+    RejectedArticleOut,
+    RejectedArticlesPageOut,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -225,6 +227,39 @@ def _pending_job_to_out(
     )
 
 
+def _rejected_article_to_out(
+    job: Job,
+    submission: Submission,
+    client: Client,
+    site: Site,
+    *,
+    content_title: Optional[str] = None,
+    target_site_url: Optional[str] = None,
+    rejection_reason: Optional[str] = None,
+    rejected_by: Optional[str] = None,
+    rejected_at: Optional[datetime] = None,
+) -> RejectedArticleOut:
+    return RejectedArticleOut(
+        job_id=job.id,
+        submission_id=submission.id,
+        request_kind=submission.request_kind,
+        client_id=client.id,
+        client_name=(client.name or "").strip(),
+        site_id=site.id,
+        site_name=(site.name or "").strip(),
+        site_url=(site.site_url or "").strip(),
+        target_site_url=(target_site_url or "").strip() or None,
+        content_title=(content_title or "").strip() or None,
+        rejection_reason=(rejection_reason or "").strip() or None,
+        rejected_by=(rejected_by or "").strip() or None,
+        rejected_at=rejected_at,
+        status=job.job_status,
+        wp_post_url=(job.wp_post_url or "").strip() or None,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
 def _extract_note_map(notes: Optional[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     if not notes:
@@ -236,6 +271,75 @@ def _extract_note_map(notes: Optional[str]) -> dict[str, str]:
         key, value = item.split("=", 1)
         out[key.strip().lower()] = value.strip()
     return out
+
+
+def _get_content_titles_by_job_id(db: Session, job_ids: List[UUID]) -> dict[UUID, str]:
+    if not job_ids:
+        return {}
+    event_rows = (
+        db.query(JobEvent.job_id, JobEvent.payload)
+        .filter(
+            JobEvent.job_id.in_(job_ids),
+            JobEvent.event_type == "converter_ok",
+        )
+        .order_by(JobEvent.created_at.desc())
+        .all()
+    )
+
+    title_map: dict[UUID, str] = {}
+    for job_id_value, payload in event_rows:
+        if job_id_value in title_map or not isinstance(payload, dict):
+            continue
+        raw_title = payload.get("title")
+        if isinstance(raw_title, str) and raw_title.strip():
+            title_map[job_id_value] = raw_title.strip()
+    return title_map
+
+
+def _extract_rejection_event_metadata(payload: Any, *, fallback_created_at: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("action") or "").strip().lower() != "admin_reject":
+        return None
+
+    rejected_at = fallback_created_at
+    raw_rejected_at = payload.get("rejected_at")
+    if isinstance(raw_rejected_at, str) and raw_rejected_at.strip():
+        try:
+            rejected_at = datetime.fromisoformat(raw_rejected_at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            rejected_at = fallback_created_at
+
+    rejected_by = payload.get("rejected_by_email")
+    rejection_reason = payload.get("reason_summary")
+    return {
+        "rejected_at": rejected_at,
+        "rejected_by": rejected_by.strip() if isinstance(rejected_by, str) and rejected_by.strip() else None,
+        "rejection_reason": rejection_reason.strip() if isinstance(rejection_reason, str) and rejection_reason.strip() else None,
+    }
+
+
+def _get_rejection_metadata_by_job_id(db: Session, job_ids: List[UUID]) -> dict[UUID, dict[str, Any]]:
+    if not job_ids:
+        return {}
+    event_rows = (
+        db.query(JobEvent.job_id, JobEvent.payload, JobEvent.created_at)
+        .filter(
+            JobEvent.job_id.in_(job_ids),
+            JobEvent.event_type == "failed",
+        )
+        .order_by(JobEvent.created_at.desc())
+        .all()
+    )
+
+    metadata_by_job: dict[UUID, dict[str, Any]] = {}
+    for job_id_value, payload, created_at in event_rows:
+        if job_id_value in metadata_by_job:
+            continue
+        metadata = _extract_rejection_event_metadata(payload, fallback_created_at=created_at)
+        if metadata:
+            metadata_by_job[job_id_value] = metadata
+    return metadata_by_job
 
 
 def _get_enabled_credential_for_site(db: Session, site_id: UUID) -> SiteCredential:
@@ -467,6 +571,91 @@ def list_published_articles(
     return PublishedArticlesPageOut(items=out, total=total, limit=limit, offset=offset)
 
 
+@router.get("/rejected", response_model=RejectedArticlesPageOut)
+def list_rejected_articles(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    q: Optional[str] = Query(default=None),
+    client_id: Optional[UUID] = Query(default=None),
+    site_id: Optional[UUID] = Query(default=None),
+    sort: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> RejectedArticlesPageOut:
+    query = (
+        db.query(Job, Submission, Client, Site)
+        .join(Submission, Submission.id == Job.submission_id)
+        .join(Client, Client.id == Job.client_id)
+        .join(Site, Site.id == Job.site_id)
+        .filter(Job.job_status == "rejected")
+    )
+    if client_id is not None:
+        query = query.filter(Job.client_id == client_id)
+    if site_id is not None:
+        query = query.filter(Job.site_id == site_id)
+    if q:
+        cleaned = q.strip().lower()
+        if cleaned:
+            like = f"%{cleaned}%"
+            query = query.filter(
+                or_(
+                    func.lower(func.coalesce(Submission.title, "")).like(like),
+                    func.lower(func.coalesce(Submission.rejection_reason, "")).like(like),
+                    func.lower(func.coalesce(Job.last_error, "")).like(like),
+                    func.lower(func.coalesce(Client.name, "")).like(like),
+                    func.lower(func.coalesce(Site.name, "")).like(like),
+                    func.lower(func.coalesce(Site.site_url, "")).like(like),
+                )
+            )
+
+    total = query.count()
+    normalized_sort = (sort or "").strip().lower()
+    if normalized_sort and normalized_sort not in {"rejected_at", "title"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="sort must be rejected_at or title.")
+
+    if normalized_sort == "title":
+        ordering = (func.lower(func.coalesce(Submission.title, "")).asc(), Job.updated_at.desc())
+    else:
+        ordering = (Job.updated_at.desc(), Job.created_at.desc())
+
+    rows = query.order_by(*ordering).offset(offset).limit(limit).all()
+    if not rows:
+        return RejectedArticlesPageOut(items=[], total=total, limit=limit, offset=offset)
+
+    job_ids = [job.id for job, _, _, _ in rows]
+    title_map = _get_content_titles_by_job_id(db, job_ids)
+    rejection_metadata_by_job = _get_rejection_metadata_by_job_id(db, job_ids)
+
+    out: List[RejectedArticleOut] = []
+    for job, submission, client, site in rows:
+        title_value = title_map.get(job.id)
+        if not title_value and isinstance(submission.title, str):
+            title_value = submission.title.strip() or None
+        note_map = _extract_note_map(submission.notes)
+        rejection_metadata = rejection_metadata_by_job.get(job.id) or {}
+        rejection_reason = (
+            rejection_metadata.get("rejection_reason")
+            or ((submission.rejection_reason or "").strip() or None)
+            or ((job.last_error or "").strip() or None)
+        )
+        rejected_by = rejection_metadata.get("rejected_by")
+        rejected_at = rejection_metadata.get("rejected_at") or job.updated_at
+        out.append(
+            _rejected_article_to_out(
+                job,
+                submission,
+                client,
+                site,
+                content_title=title_value,
+                target_site_url=note_map.get("client_target_site_url"),
+                rejection_reason=rejection_reason,
+                rejected_by=rejected_by,
+                rejected_at=rejected_at,
+            )
+        )
+    return RejectedArticlesPageOut(items=out, total=total, limit=limit, offset=offset)
+
+
 @router.get("/pending", response_model=List[PendingJobOut])
 def list_pending_jobs(
     request_kind: Optional[str] = Query(default=None),
@@ -499,25 +688,7 @@ def list_pending_jobs(
         return []
 
     job_ids = [job.id for job, _, _, _ in rows]
-    event_rows = (
-        db.query(JobEvent.job_id, JobEvent.payload)
-        .filter(
-            JobEvent.job_id.in_(job_ids),
-            JobEvent.event_type == "converter_ok",
-        )
-        .order_by(JobEvent.created_at.desc())
-        .all()
-    )
-
-    title_map: dict[UUID, str] = {}
-    for job_id_value, payload in event_rows:
-        if job_id_value in title_map:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        raw_title = payload.get("title")
-        if isinstance(raw_title, str) and raw_title.strip():
-            title_map[job_id_value] = raw_title.strip()
+    title_map = _get_content_titles_by_job_id(db, job_ids)
 
     out: List[PendingJobOut] = []
     for job, submission, client, site in rows:

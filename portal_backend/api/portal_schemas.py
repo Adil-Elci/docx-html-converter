@@ -693,6 +693,33 @@ class PublishedArticlesPageOut(BaseModel):
 class JobEventCreate(BaseModel):
     event_type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
+class RejectedArticleOut(BaseModel):
+    job_id: UUID
+    submission_id: UUID
+    request_kind: str
+    client_id: UUID
+    client_name: str
+    site_id: UUID
+    site_name: str
+    site_url: str
+    target_site_url: Optional[str] = None
+    content_title: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    rejected_by: Optional[str] = None
+    rejected_at: Optional[datetime] = None
+    status: str
+    wp_post_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RejectedArticlesPageOut(BaseModel):
+    items: List[RejectedArticleOut]
+    total: int
+    limit: int
+    offset: int
+
+
 
     @validator("event_type")
     def validate_event_type(cls, value: str) -> str:

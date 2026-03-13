@@ -91,7 +91,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "queue-dashboard", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
@@ -266,6 +266,15 @@ export default function App() {
   const [publishedClientId, setPublishedClientId] = useState("");
   const [publishedSiteId, setPublishedSiteId] = useState("");
   const [publishedSort, setPublishedSort] = useState("published_at");
+  const [rejectedArticles, setRejectedArticles] = useState([]);
+  const [rejectedLoading, setRejectedLoading] = useState(false);
+  const [rejectedTotal, setRejectedTotal] = useState(0);
+  const [rejectedOffset, setRejectedOffset] = useState(0);
+  const [rejectedLimit, setRejectedLimit] = useState(PUBLISHED_PAGE_SIZE);
+  const [rejectedQuery, setRejectedQuery] = useState("");
+  const [rejectedClientId, setRejectedClientId] = useState("");
+  const [rejectedSiteId, setRejectedSiteId] = useState("");
+  const [rejectedSort, setRejectedSort] = useState("rejected_at");
   const [savingClientNotificationId, setSavingClientNotificationId] = useState("");
   const [queueStats, setQueueStats] = useState(null);
   const [queueStatsLoading, setQueueStatsLoading] = useState(false);
@@ -763,6 +772,36 @@ export default function App() {
     }
   };
 
+  const loadRejectedArticles = async (forUser = currentUser, overrides = {}) => {
+    if (forUser?.role !== "admin") return;
+    try {
+      setRejectedLoading(true);
+      const params = new URLSearchParams();
+      const nextQuery = (overrides.query ?? rejectedQuery).trim();
+      const nextClientId = ((overrides.clientId ?? rejectedClientId) || "").trim();
+      const nextSiteId = ((overrides.siteId ?? rejectedSiteId) || "").trim();
+      const nextLimit = Number(overrides.limit ?? rejectedLimit) || rejectedLimit;
+      const nextOffset = Number(overrides.offset ?? rejectedOffset) || 0;
+      const nextSort = ((overrides.sort ?? rejectedSort) || "rejected_at").trim();
+      params.set("limit", String(nextLimit));
+      params.set("offset", String(nextOffset));
+      if (nextSort) params.set("sort", nextSort);
+      if (nextQuery) params.set("q", nextQuery);
+      if (nextClientId) params.set("client_id", nextClientId);
+      if (nextSiteId) params.set("site_id", nextSiteId);
+      const payload = await api.get(`/jobs/rejected?${params.toString()}`);
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setRejectedArticles(items);
+      setRejectedTotal(Number(payload?.total || 0));
+      setRejectedLimit(Number(payload?.limit || nextLimit));
+      setRejectedOffset(Number(payload?.offset || nextOffset));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRejectedLoading(false);
+    }
+  };
+
   const loadQueueStats = async () => {
     try {
       setQueueStatsLoading(true);
@@ -1102,6 +1141,7 @@ export default function App() {
       return t("publishedStatusPublished");
     }
     if (normalized === "pending_approval") return t("publishedStatusPending");
+    if (normalized === "rejected") return t("publishedStatusRejected");
     if (normalized === "failed") return t("publishedStatusFailed");
     return normalized.replace(/_/g, " ");
   };
@@ -1150,6 +1190,34 @@ export default function App() {
     const safeOffset = Math.max(0, nextOffset);
     setPublishedOffset(safeOffset);
     loadPublishedArticles(currentUser, { offset: safeOffset });
+  };
+
+  const applyRejectedSearch = () => {
+    setRejectedOffset(0);
+    loadRejectedArticles(currentUser, { query: rejectedQuery.trim(), offset: 0 });
+  };
+
+  const resetRejectedFilters = () => {
+    setRejectedQuery("");
+    setRejectedClientId("");
+    setRejectedSiteId("");
+    setRejectedSort("rejected_at");
+    setRejectedLimit(PUBLISHED_PAGE_SIZE);
+    setRejectedOffset(0);
+    loadRejectedArticles(currentUser, {
+      query: "",
+      clientId: "",
+      siteId: "",
+      sort: "rejected_at",
+      limit: PUBLISHED_PAGE_SIZE,
+      offset: 0,
+    });
+  };
+
+  const goToRejectedOffset = (nextOffset) => {
+    const safeOffset = Math.max(0, nextOffset);
+    setRejectedOffset(safeOffset);
+    loadRejectedArticles(currentUser, { offset: safeOffset });
   };
 
   useEffect(() => {
@@ -1443,6 +1511,12 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection !== "rejected-articles") return;
+    loadRejectedArticles();
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
     if (activeSection !== "queue-dashboard") return;
     loadQueueStats();
   }, [currentUser, activeSection]);
@@ -1470,6 +1544,9 @@ export default function App() {
           }
           if (activeSection === "published-articles") {
             await loadPublishedArticles(currentUser);
+          }
+          if (activeSection === "rejected-articles") {
+            await loadRejectedArticles(currentUser);
           }
           if (activeSection === "admin") {
             await loadAdminUsers(currentUser);
@@ -2229,6 +2306,7 @@ export default function App() {
   const isAdminUser = currentUser?.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isPublishedArticlesSection = isAdminUser && activeSection === "published-articles";
+  const isRejectedArticlesSection = isAdminUser && activeSection === "rejected-articles";
   const isQueueDashboardSection = isAdminUser && activeSection === "queue-dashboard";
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isCreateArticleSection = activeSection === "create-article";
@@ -2342,6 +2420,14 @@ export default function App() {
   const publishedTo = publishedTotal === 0 ? 0 : Math.min(publishedOffset + publishedLimit, publishedTotal);
   const publishedCanPrev = publishedTotal > 0 && publishedOffset > 0;
   const publishedCanNext = publishedTotal > 0 && publishedOffset + publishedLimit < publishedTotal;
+  const rejectedPageCount = rejectedTotal === 0 ? 0 : Math.ceil(rejectedTotal / Math.max(rejectedLimit, 1));
+  const rejectedPage = rejectedTotal === 0
+    ? 0
+    : Math.min(rejectedPageCount, Math.floor(rejectedOffset / Math.max(rejectedLimit, 1)) + 1);
+  const rejectedFrom = rejectedTotal === 0 ? 0 : rejectedOffset + 1;
+  const rejectedTo = rejectedTotal === 0 ? 0 : Math.min(rejectedOffset + rejectedLimit, rejectedTotal);
+  const rejectedCanPrev = rejectedTotal > 0 && rejectedOffset > 0;
+  const rejectedCanNext = rejectedTotal > 0 && rejectedOffset + rejectedLimit < rejectedTotal;
   const activeSuggestion = useMemo(() => {
     const activeBlocks = isCreateArticleSection ? createArticleSubmissionBlocks : submitArticleSubmissionBlocks;
     if (clientSuggestionsBlockId) {
@@ -3315,6 +3401,181 @@ export default function App() {
                     type="button"
                     onClick={() => goToPublishedOffset(publishedOffset + publishedLimit)}
                     disabled={!publishedCanNext || publishedLoading}
+                  >
+                    {t("publishedNext")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : isRejectedArticlesSection ? (
+            <div className="panel form-panel published-panel">
+              <div className="published-header">
+                <h2>{t("rejectedArticlesTitle")}</h2>
+                {!rejectedLoading && rejectedTotal > 0 ? (
+                  <span className="published-total-badge">{rejectedTotal}</span>
+                ) : null}
+              </div>
+              <div className="published-controls">
+                <div className="published-field">
+                  <label>{t("publishedSearchLabel")}</label>
+                  <input
+                    type="text"
+                    value={rejectedQuery}
+                    onChange={(e) => setRejectedQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        applyRejectedSearch();
+                      }
+                    }}
+                    placeholder={t("rejectedSearchPlaceholder")}
+                  />
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedFilterClient")}</label>
+                  <select
+                    value={rejectedClientId}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setRejectedClientId(next);
+                      setRejectedOffset(0);
+                      loadRejectedArticles(currentUser, { clientId: next, offset: 0 });
+                    }}
+                  >
+                    <option value="">{t("publishedAllClients")}</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {(client.name || "").trim() || client.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedFilterSite")}</label>
+                  <select
+                    value={rejectedSiteId}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setRejectedSiteId(next);
+                      setRejectedOffset(0);
+                      loadRejectedArticles(currentUser, { siteId: next, offset: 0 });
+                    }}
+                  >
+                    <option value="">{t("publishedAllSites")}</option>
+                    {sites.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {(site.site_url || "").trim() || (site.name || "").trim() || site.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedSortLabel")}</label>
+                  <select
+                    value={rejectedSort}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setRejectedSort(next);
+                      setRejectedOffset(0);
+                      loadRejectedArticles(currentUser, { sort: next, offset: 0 });
+                    }}
+                  >
+                    <option value="rejected_at">{t("rejectedSortRejectedAt")}</option>
+                    <option value="title">{t("rejectedSortTitle")}</option>
+                  </select>
+                </div>
+                <div className="published-field">
+                  <label>{t("publishedPageSizeLabel")}</label>
+                  <select
+                    value={rejectedLimit}
+                    onChange={(e) => {
+                      const next = Number(e.target.value) || PUBLISHED_PAGE_SIZE;
+                      setRejectedLimit(next);
+                      setRejectedOffset(0);
+                      loadRejectedArticles(currentUser, { limit: next, offset: 0 });
+                    }}
+                  >
+                    {PUBLISHED_PAGE_SIZES.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="published-actions">
+                  <button className="btn secondary" type="button" onClick={applyRejectedSearch} disabled={rejectedLoading}>
+                    {t("publishedSearchButton")}
+                  </button>
+                  <button className="btn" type="button" onClick={resetRejectedFilters} disabled={rejectedLoading}>
+                    {t("publishedClearFilters")}
+                  </button>
+                </div>
+              </div>
+              {rejectedLoading ? (
+                <div className="loading-inline" role="status" aria-live="polite">
+                  <span className="sr-only">{t("loading")}</span>
+                </div>
+              ) : null}
+              {!rejectedLoading && rejectedArticles.length === 0 ? (
+                <p className="muted-text">{t("rejectedArticlesEmpty")}</p>
+              ) : null}
+              <div className="rejected-list-table">
+                <div className="rejected-list-header">
+                  <span>{t("contentTitleLabel")}</span>
+                  <span>{t("publishedClientLabel")}</span>
+                  <span>{t("publishedSiteLabel")}</span>
+                  <span>{t("targetSiteLabel")}</span>
+                  <span>{t("jobTypeLabel")}</span>
+                  <span>{t("rejectedAtLabel")}</span>
+                  <span>{t("rejectedReasonLabel")}</span>
+                </div>
+                {rejectedArticles.map((item, index) => {
+                  const clientName = (item?.client_name || "").trim() || item?.client_id || t("notAvailable");
+                  const siteLabel = (item?.site_url || "").trim() || (item?.site_name || "").trim() || item?.site_id || t("notAvailable");
+                  const targetSiteLabel = (item?.target_site_url || "").trim() || t("contentTitleFallback");
+                  const rejectionReason = (item?.rejection_reason || "").trim() || t("notAvailable");
+                  const rejectedBy = (item?.rejected_by || "").trim() || t("notAvailable");
+                  return (
+                    <div key={item.job_id} className="rejected-item-row" style={{ "--i": index }}>
+                      <span data-label={t("contentTitleLabel")}>{item?.content_title || t("contentTitleFallback")}</span>
+                      <span data-label={t("publishedClientLabel")}>{clientName}</span>
+                      <span data-label={t("publishedSiteLabel")}>{siteLabel}</span>
+                      <span data-label={t("targetSiteLabel")}>{targetSiteLabel}</span>
+                      <span data-label={t("jobTypeLabel")}>
+                        {item?.request_kind === "create_article" ? t("jobTypeCreatedArticle") : t("jobTypeSubmittedArticle")}
+                      </span>
+                      <span data-label={t("rejectedAtLabel")}>{formatPublishedAt(item?.rejected_at)}</span>
+                      <div className="rejected-reason-cell" data-label={t("rejectedReasonLabel")}>
+                        <span>{rejectionReason}</span>
+                        <span className="muted-text small-text">
+                          {t("rejectedByLabel")}: {rejectedBy}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="published-pagination">
+                <span className="muted-text">
+                  {t("publishedShowingLabel")} {rejectedFrom}-{rejectedTo} {t("publishedOfLabel")} {rejectedTotal}
+                </span>
+                <div className="pagination-actions">
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => goToRejectedOffset(rejectedOffset - rejectedLimit)}
+                    disabled={!rejectedCanPrev || rejectedLoading}
+                  >
+                    {t("publishedPrevious")}
+                  </button>
+                  <span className="muted-text">
+                    {t("publishedPageLabel")} {rejectedPage} {t("publishedOfLabel")} {rejectedPageCount}
+                  </span>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => goToRejectedOffset(rejectedOffset + rejectedLimit)}
+                    disabled={!rejectedCanNext || rejectedLoading}
                   >
                     {t("publishedNext")}
                   </button>
@@ -4581,6 +4842,12 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         <path d="M8 9h8M8 13h5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </svg>
     ),
+    "rejected-articles": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
     "queue-dashboard": (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <path d="M4 6h16M4 10h12M4 14h14M4 18h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -4604,6 +4871,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "create-article", label: t("navCreateArticle") },
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
         { id: "published-articles", label: t("navPublishedArticles") },
+        { id: "rejected-articles", label: t("navRejectedArticles") },
         { id: "queue-dashboard", label: t("navQueueDashboard") },
       ]
     : [

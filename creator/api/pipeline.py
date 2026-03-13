@@ -1324,12 +1324,29 @@ def _extract_topic_subject_phrase(topic: str) -> str:
             return "" if _keyword_candidate_has_subject_noise(detail_phrase) else detail_phrase
         first_specificity = _topic_phrase_specificity_score(first_subject)
         detail_specificity = _topic_phrase_specificity_score(detail_phrase)
+        first_core_tokens = _keyword_query_core_tokens(first_subject)
+        detail_core_tokens = _keyword_query_core_tokens(detail_phrase)
+        detail_focus_tokens = {
+            token
+            for token in _keyword_token_set(detail_phrase)
+            if token in QUESTION_FOCUS_PRIORITY_TOKENS
+            or token in TOPIC_DETAIL_RELATION_TOKENS
+            or token.endswith("vergleich")
+            or token.endswith("check")
+        }
         if (
             _keyword_candidate_has_subject_noise(detail_phrase)
             and not _keyword_candidate_has_subject_noise(first_subject)
             and _topic_phrase_domain_token_count(first_subject) >= 2
         ):
             return first_subject
+        if (
+            " und " in first_subject
+            and detail_focus_tokens
+            and bool(detail_core_tokens - first_core_tokens)
+            and not _keyword_candidate_has_subject_noise(detail_phrase)
+        ):
+            return detail_phrase
         if (
             _topic_phrase_is_generic(first_subject)
             or _topic_phrase_domain_token_count(first_subject) < 2
@@ -1351,6 +1368,31 @@ def _trim_topic_detail_segment(segment: str) -> str:
     normalized = _normalize_keyword_phrase(cleaned)
     if not normalized:
         return ""
+    relation_object_match = re.match(
+        r"^(?P<context>(?:naehrwertvergleich|nährwertvergleich|preisvergleich|kostenvergleich|vergleich|check))\s+(?:von|fuer|für)\s+(?P<object>.+)$",
+        normalized,
+    )
+    if relation_object_match:
+        context = _normalize_keyword_phrase(relation_object_match.group("context"))
+        object_phrase = _normalize_keyword_phrase(relation_object_match.group("object"))
+        if object_phrase:
+            object_words = object_phrase.split()
+            relation_object_singular_forms = {
+                "produkten": "produkte",
+                "praeparaten": "praeparate",
+                "präparaten": "präparate",
+                "getraenken": "getraenke",
+                "getränken": "getränke",
+                "supplementen": "supplemente",
+                "pulvern": "pulver",
+            }
+            if object_words and object_words[-1] in relation_object_singular_forms:
+                object_words[-1] = relation_object_singular_forms[object_words[-1]]
+                object_phrase = " ".join(object_words)
+            if _is_valid_keyword_phrase(object_phrase):
+                composed = _normalize_keyword_phrase(f"{object_phrase} im {context}")
+                if _is_valid_keyword_phrase(composed):
+                    return composed
     if re.search(
         r"\bund\s+(?:ihre|ihren|ihrem|ihrer|sein|seine|seinen|seinem|seiner|deren|dessen)\b",
         normalized,
@@ -5450,6 +5492,56 @@ def _topic_signature_candidate_has_relevance(candidate: str, topic_signature: Op
     return bool(stats["specific_overlap"]) or len(stats["broad_overlap"]) >= 2
 
 
+def _keyword_candidate_aligns_with_topic_subject(
+    candidate: str,
+    *,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate, allow_single_token=True)
+    if not normalized:
+        return False
+    candidate_tokens = _keyword_query_core_tokens(normalized)
+    if not candidate_tokens:
+        return False
+    reference_phrase = ""
+    if isinstance(topic_signature, dict):
+        reference_phrase = str(
+            topic_signature.get("subject_phrase")
+            or topic_signature.get("question_phrase")
+            or topic_signature.get("primary_keyword")
+            or ""
+        ).strip()
+    reference_tokens = _keyword_query_core_tokens(f"{topic} {primary_keyword} {reference_phrase}")
+    family_overlap = {
+        token
+        for token in candidate_tokens
+        if _token_matches_reference_family(token, reference_tokens, allow_prefix_match=False)
+    }
+    if candidate_tokens & reference_tokens or family_overlap:
+        shared_tokens = (candidate_tokens & reference_tokens) | family_overlap
+        if len(candidate_tokens) == 1 or len(shared_tokens) >= 2:
+            return True
+        stats = _topic_signature_candidate_stats(normalized, topic_signature)
+        if not stats["drift"]:
+            return True
+        return max(
+            _keyword_similarity(normalized, topic),
+            _keyword_similarity(normalized, primary_keyword),
+            _keyword_similarity(normalized, reference_phrase),
+        ) >= 0.42
+    if _topic_signature_candidate_has_relevance(normalized, topic_signature):
+        return True
+    if len(candidate_tokens) == 1:
+        return False
+    return max(
+        _keyword_similarity(normalized, topic),
+        _keyword_similarity(normalized, primary_keyword),
+        _keyword_similarity(normalized, reference_phrase),
+    ) >= 0.38
+
+
 def _topic_signature_candidate_score(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> float:
     stats = _topic_signature_candidate_stats(candidate, topic_signature)
     if not stats["non_generic_tokens"]:
@@ -5604,6 +5696,13 @@ def _select_secondary_keyword_seed_entities(
         if not normalized:
             continue
         if _keyword_candidate_is_brand_heavy(normalized, signature):
+            continue
+        if not _keyword_candidate_aligns_with_topic_subject(
+            normalized,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        ):
             continue
         tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(normalized))
         if not tokens:
@@ -5980,6 +6079,8 @@ def _faq_candidate_has_planning_noise(
     if not focus_phrase:
         return False
     if _phrase_has_same_family_duplicate_tokens(focus_phrase):
+        return True
+    if _keyword_candidate_has_subject_noise(focus_phrase):
         return True
     if _is_brand_identity_phrase(focus_phrase, brand_name):
         return True
@@ -7267,6 +7368,10 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
         internal_link_inventory=[],
     )
     subject_phrase = str(signature.get("subject_phrase") or _build_topic_phrase(topic) or "dieses thema").strip()
+    if _keyword_candidate_has_subject_noise(subject_phrase):
+        subject_phrase = _normalize_keyword_phrase(
+            str(signature.get("primary_keyword") or _build_topic_phrase(topic) or "").strip()
+        ) or subject_phrase
     question_phrase = _format_sentence_start(str(signature.get("question_phrase") or _extract_topic_question_phrase(topic)).strip())
     cluster_support = next(
         (str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()),
@@ -7291,6 +7396,8 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
         primary_keyword=str(signature.get("primary_keyword") or subject_phrase or topic),
         topic_signature=signature,
     )
+    if _keyword_candidate_has_subject_noise(focus_heading):
+        focus_heading = _format_outline_heading(subject_phrase) if subject_phrase else ""
     support_question_focus = ""
     if support_phrase and _keyword_candidate_is_query_like(
         support_phrase,

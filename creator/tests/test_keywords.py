@@ -509,6 +509,38 @@ def test_select_keywords_rejects_editorial_support_phrase_as_primary_query():
     assert any("greens" in item for item in result["secondary_keywords"])
 
 
+def test_build_topic_phrase_prefers_detail_phrase_for_greens_comparison_topic():
+    phrase = _build_topic_phrase(
+        "Grüne Pulver und Superfood-Drinks: Nährwertvergleich von Greens-Produkten"
+    )
+
+    assert phrase == "greens produkte im nährwertvergleich"
+
+
+def test_select_keywords_filters_brand_heavy_and_sibling_supplement_secondaries_for_greens_topic():
+    topic = "Grüne Pulver und Superfood-Drinks: Nährwertvergleich von Greens-Produkten"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="grüne pulver und superfood drinks",
+        llm_secondary=[],
+        keyword_cluster=["greens", "orangefit", "kollagen", "dosierung", "qualität"],
+        allowed_topics=["Nährwertvergleich", "Wellness", "Lifestyle"],
+        trend_candidates=["grüne pulver und superfood drinks"],
+        faq_candidates=[
+            "worauf sollte man bei greens produkten achten",
+            "welche inhaltsstoffe sind bei greens wichtig",
+        ],
+        target_terms=["Greens", "Orangefit", "Kollagen"],
+        overlap_terms=["nährwerte", "inhaltsstoffe"],
+        internal_link_inventory=[],
+    )
+
+    assert result["primary_keyword"] == "greens produkte im nährwertvergleich"
+    assert "orangefit pulver" not in result["secondary_keywords"]
+    assert "kollagen pulver" not in result["secondary_keywords"]
+    assert any("greens" in item for item in result["secondary_keywords"])
+
+
 def test_infer_topic_class_detects_nutrition_supplements_topics():
     topic = "Wellness und Lifestyle: Was kosten hochwertige Nahrungsergänzungsmittel wirklich?"
 
@@ -1227,6 +1259,31 @@ def test_ensure_faq_candidates_filters_brand_heavy_fallback_focus():
 
     assert len(questions) == 3
     assert not any("orangefit" in question.lower() for question in questions)
+
+
+def test_ensure_faq_candidates_rebuilds_noisy_greens_subject_questions():
+    topic = "Grüne Pulver und Superfood-Drinks: Nährwertvergleich von Greens-Produkten"
+    questions = _ensure_faq_candidates(
+        topic,
+        [
+            "Was ist grüne pulver und superfood drinks?",
+            "Woran erkennt man fruehzeitig Hinweise auf grüne pulver und superfood drinks?",
+        ],
+        topic_signature={
+            "subject_phrase": "grüne pulver und superfood drinks",
+            "primary_keyword": "greens produkte im nährwertvergleich",
+            "target_terms": ["Orangefit", "Greens", "Kollagen"],
+            "target_support_phrases": ["orangefit pulver"],
+            "support_phrases": ["greens produkte im nährwertvergleich"],
+            "keyword_cluster_phrases": ["greens produkte im nährwertvergleich"],
+        },
+        brand_name="Orangefit",
+    )
+
+    assert len(questions) == 3
+    assert not any("grüne pulver und superfood drinks" in question.lower() for question in questions)
+    assert not any("orangefit" in question.lower() for question in questions)
+    assert any("greens" in question.lower() or "auswahl" in question.lower() for question in questions)
 
 
 def test_evaluate_title_quality_flags_family_duplicate_tokens():

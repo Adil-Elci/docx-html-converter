@@ -98,6 +98,23 @@ def test_build_keyword_query_variants_prefers_compact_topic_phrase_for_contextua
     assert all(len(item.split()) <= 8 for item in queries)
 
 
+def test_build_keyword_query_variants_does_not_seed_queries_from_publishing_topics():
+    queries = _build_keyword_query_variants(
+        topic="Grüne Pulver im Alltag: Nährwertvergleich und praktische Anwendung für gesundheitsbewusste Konsumenten",
+        primary_hint="Grüne Pulver im Alltag: Nährwertvergleich und praktische Anwendung für gesundheitsbewusste Konsumenten",
+        allowed_topics=[
+            "Nährwertvergleich Lebensmittel Nährwerte einfach prüfen",
+            "Wertvolle Infos rund um unsere Nahrungsmittel",
+        ],
+        max_queries=8,
+    )
+
+    assert queries
+    assert queries[0] == "grüne pulver im alltag"
+    assert "nährwertvergleich lebensmittel nährwerte einfach prüfen" not in queries
+    assert all("gesundheitsbewusste konsumenten" not in item for item in queries)
+
+
 def test_select_keywords_contract():
     result = _select_keywords(
         topic="Eltern-Sucht in der Schwangerschaft",
@@ -453,6 +470,42 @@ def test_select_keywords_builds_supplement_secondaries_from_semantic_signals_whe
     assert result["primary_keyword"] == "inhaltsstoffe und wirkung von greens produkten"
     assert len(result["secondary_keywords"]) >= KEYWORD_MIN_SECONDARY
     assert any(item == "greens inhaltsstoffe" for item in result["secondary_keywords"])
+
+
+def test_build_topic_phrase_prefers_concrete_subject_over_editorial_support_detail():
+    phrase = _build_topic_phrase(
+        "Grüne Pulver im Alltag: Nährwertvergleich und praktische Anwendung für gesundheitsbewusste Konsumenten"
+    )
+
+    assert phrase == "grüne pulver im alltag"
+
+
+def test_select_keywords_rejects_editorial_support_phrase_as_primary_query():
+    topic = "Grüne Pulver im Alltag: Nährwertvergleich und praktische Anwendung für gesundheitsbewusste Konsumenten"
+    result = _select_keywords(
+        topic=topic,
+        llm_primary="nährwertvergleich und praktische anwendung für gesundheitsbewusste konsumenten",
+        llm_secondary=[],
+        keyword_cluster=["greens", "kollagen", "orangefit", "dosierung", "qualität"],
+        allowed_topics=[
+            "Nährwertvergleich Lebensmittel Nährwerte einfach prüfen",
+            "Wertvolle Infos rund um unsere Nahrungsmittel",
+        ],
+        trend_candidates=["nährwertvergleich und praktische anwendung für gesundheitsbewusste konsumenten"],
+        faq_candidates=[
+            "worauf sollte man bei greens produkten achten",
+            "wie nutzt man grüne pulver im alltag",
+        ],
+        target_terms=["Greens", "Kollagen", "Orangefit"],
+        overlap_terms=["nährwerte", "inhaltsstoffe"],
+        internal_link_inventory=[],
+    )
+
+    assert result["primary_keyword"] == "grüne pulver im alltag"
+    assert result["primary_keyword"] != "nährwertvergleich und praktische anwendung für gesundheitsbewusste konsumenten"
+    assert all("gesundheitsbewusste" not in item for item in result["secondary_keywords"])
+    assert all("konsumenten" not in item for item in result["secondary_keywords"])
+    assert result["keyword_buckets"]["provenance"]["primary_query"][0]["query_like"] is True
     assert any("greens" in item for item in result["secondary_keywords"])
 
 

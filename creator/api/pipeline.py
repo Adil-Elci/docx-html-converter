@@ -379,6 +379,31 @@ ABSTRACT_QUERY_TOKENS = {
     "anzeichen", "aspekte", "ausloeser", "chancen", "fehler", "fragen", "hinweise", "kriterien",
     "orientierung", "signale", "schritte", "ueberblick", "ursachen", "warnzeichen",
 }
+GENERIC_AUDIENCE_TOKENS = {
+    "gesundheitsbewusste",
+    "interessenten",
+    "konsument",
+    "konsumenten",
+    "konsumentinnen",
+    "kundinnen",
+    "kunden",
+    "leser",
+    "leserinnen",
+    "menschen",
+    "haushalte",
+}
+EDITORIAL_DESCRIPTOR_TOKENS = {
+    "alltagsnahe",
+    "kompakte",
+    "konkrete",
+    "praktische",
+    "praktischer",
+    "praktischen",
+    "praktischem",
+    "sinnvolle",
+    "sinnvollen",
+    "wertvolle",
+}
 GENERIC_TOPIC_CATEGORY_TOKENS = {
     "beauty", "familie", "family", "finance", "gesundheit", "health", "lifestyle", "mode", "shopping",
     "stil", "produkt", "produkte", "wellness", "wohnen", "naehrwertvergleich", "preisvergleich", "kostenvergleich",
@@ -1240,9 +1265,15 @@ def _extract_topic_subject_phrase(topic: str) -> str:
     detail_phrase = _extract_topic_detail_phrase(topic)
     if detail_phrase:
         if not first_subject:
-            return detail_phrase
+            return "" if _keyword_candidate_has_subject_noise(detail_phrase) else detail_phrase
         first_specificity = _topic_phrase_specificity_score(first_subject)
         detail_specificity = _topic_phrase_specificity_score(detail_phrase)
+        if (
+            _keyword_candidate_has_subject_noise(detail_phrase)
+            and not _keyword_candidate_has_subject_noise(first_subject)
+            and _topic_phrase_domain_token_count(first_subject) >= 2
+        ):
+            return first_subject
         if (
             _topic_phrase_is_generic(first_subject)
             or _topic_phrase_domain_token_count(first_subject) < 2
@@ -1341,14 +1372,16 @@ def _topic_phrase_is_generic(value: str) -> bool:
     focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
     if not focus_tokens:
         return True
-    domain_tokens = focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS
+    domain_tokens = _keyword_query_core_tokens(value)
     return not domain_tokens and bool(focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS)
 
 
 def _topic_phrase_specificity_score(value: str) -> tuple[int, int, int, int, int]:
     focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
-    domain_tokens = focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS
-    generic_tokens = focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS
+    domain_tokens = _keyword_query_core_tokens(value)
+    generic_tokens = focus_tokens & (
+        GENERIC_TOPIC_CATEGORY_TOKENS | GENERIC_AUDIENCE_TOKENS | EDITORIAL_DESCRIPTOR_TOKENS
+    )
     priority_tokens = focus_tokens & QUESTION_FOCUS_PRIORITY_TOKENS
     return (
         len(domain_tokens),
@@ -1360,8 +1393,7 @@ def _topic_phrase_specificity_score(value: str) -> tuple[int, int, int, int, int
 
 
 def _topic_phrase_domain_token_count(value: str) -> int:
-    focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
-    return len(focus_tokens - ABSTRACT_QUERY_TOKENS - EDITORIAL_ACTION_TOKENS - GENERIC_TOPIC_CATEGORY_TOKENS)
+    return len(_keyword_query_core_tokens(value))
 
 
 def _extract_topic_question_phrase(topic: str) -> str:
@@ -3348,6 +3380,41 @@ def _filter_keyword_focus_tokens(tokens: set[str]) -> set[str]:
     }
 
 
+def _keyword_query_core_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
+        if token not in ABSTRACT_QUERY_TOKENS
+        and token not in EDITORIAL_ACTION_TOKENS
+        and token not in GENERIC_TOPIC_CATEGORY_TOKENS
+        and token not in GENERIC_AUDIENCE_TOKENS
+        and token not in EDITORIAL_DESCRIPTOR_TOKENS
+    }
+
+
+def _keyword_candidate_has_subject_noise(candidate: str) -> bool:
+    normalized = _normalize_keyword_phrase(candidate)
+    if not normalized:
+        return True
+    words = normalized.split()
+    focus_tokens = _filter_keyword_focus_tokens(_keyword_focus_tokens(normalized))
+    if not focus_tokens:
+        return True
+    core_tokens = _keyword_query_core_tokens(normalized)
+    audience_hits = focus_tokens & GENERIC_AUDIENCE_TOKENS
+    descriptor_hits = focus_tokens & EDITORIAL_DESCRIPTOR_TOKENS
+    generic_hits = focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS
+    if len(words) >= 7 and len(core_tokens) <= 1:
+        return True
+    if audience_hits and len(core_tokens) <= 2:
+        return True
+    if descriptor_hits and len(core_tokens) <= 2:
+        return True
+    if generic_hits and (audience_hits or descriptor_hits) and len(core_tokens) <= 2:
+        return True
+    return False
+
+
 def _is_valid_keyword_phrase(value: str) -> bool:
     normalized = _normalize_keyword_phrase(value)
     if not normalized:
@@ -3551,6 +3618,8 @@ def _keyword_candidate_is_query_like(
     words = normalized.split()
     if not (KEYWORD_MIN_WORDS <= len(words) <= KEYWORD_QUERY_MAX_WORDS):
         return False
+    if _keyword_candidate_has_subject_noise(normalized):
+        return False
     reference_phrase = str((topic_signature or {}).get("subject_phrase") or primary_keyword or topic).strip()
     similarity = max(
         _keyword_similarity(normalized, topic),
@@ -3559,16 +3628,8 @@ def _keyword_candidate_is_query_like(
     )
     stats = _topic_signature_candidate_stats(normalized, topic_signature)
     reference_tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(f"{topic} {primary_keyword} {reference_phrase}"))
-    reference_domain_tokens = {
-        token
-        for token in reference_tokens
-        if token not in EDITORIAL_ACTION_TOKENS and token not in ABSTRACT_QUERY_TOKENS
-    }
-    candidate_domain_tokens = {
-        token
-        for token in _filter_topic_signature_tokens(_keyword_focus_tokens(normalized))
-        if token not in EDITORIAL_ACTION_TOKENS and token not in ABSTRACT_QUERY_TOKENS
-    }
+    reference_domain_tokens = _keyword_query_core_tokens(f"{topic} {primary_keyword} {reference_phrase}")
+    candidate_domain_tokens = _keyword_query_core_tokens(normalized)
     if not candidate_domain_tokens:
         return False
     family_domain_overlap = {
@@ -3600,6 +3661,30 @@ def _keyword_candidate_is_query_like(
     if not stats["specific_overlap"] and not stats["broad_overlap"] and similarity < 0.55:
         return False
     return True
+
+
+def _primary_keyword_candidate_is_usable(
+    candidate: str,
+    *,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate)
+    if not normalized or _phrase_has_same_family_duplicate_tokens(normalized):
+        return False
+    if len(_keyword_query_core_tokens(normalized)) < 1:
+        return False
+    if _keyword_candidate_has_subject_noise(normalized):
+        return False
+    if _keyword_candidate_is_support_topic_noise(normalized, topic_signature) and _keyword_similarity(normalized, topic) < 0.72:
+        return False
+    return _keyword_candidate_is_query_like(
+        normalized,
+        topic=topic,
+        primary_keyword=primary_keyword,
+        topic_signature=topic_signature,
+    )
 
 
 def _select_semantic_entities(
@@ -4286,24 +4371,13 @@ def _build_keyword_query_variants(
     normalized_topic = _normalize_keyword_phrase(topic)
     topic_phrase = _build_topic_phrase(topic) or normalized_topic
     primary_phrase = _build_topic_phrase(primary_hint) or _normalize_keyword_phrase(primary_hint)
+    question_focus_phrase = _extract_topic_question_focus_phrase(topic)
     topic_base = normalized_topic if KEYWORD_MIN_WORDS <= len(normalized_topic.split()) <= KEYWORD_QUERY_MAX_WORDS else topic_phrase
-    seed_tokens = _keyword_token_set(f"{topic_base} {primary_phrase}")
-    relevant_allowed_topics = [
-        item
-        for item in allowed_topics
-        if _keyword_candidate_has_relevance(
-            item,
-            topic_tokens=seed_tokens,
-            cluster_tokens=seed_tokens,
-            trend_tokens=set(),
-        )
-    ]
     base_phrases = _dedupe_preserve_order(
         _extract_candidate_phrases_from_topics(
-            [topic_base or topic, primary_phrase or primary_hint],
+            [topic_base or topic, primary_phrase or primary_hint, question_focus_phrase],
             max_phrases=4,
         )
-        + _extract_candidate_phrases_from_topics(relevant_allowed_topics, max_phrases=2)
     )
     if not base_phrases:
         return []
@@ -5776,6 +5850,8 @@ def _align_primary_keyword_to_topic(
     topic_phrase = _build_topic_phrase(topic)
     topic_head = _topic_head_keyword(topic)
     current_primary_normalized = _normalize_keyword_phrase(current_primary)
+    current_primary_core_tokens = _keyword_query_core_tokens(current_primary_normalized)
+    current_primary_has_subject_noise = _keyword_candidate_has_subject_noise(current_primary_normalized)
     topic_tokens = _keyword_token_set(normalized_topic)
     head_tokens = _keyword_token_set(topic_head)
     cluster_candidates = _dedupe_keyword_phrases(
@@ -5837,10 +5913,15 @@ def _align_primary_keyword_to_topic(
         if topic_head:
             return topic_head
 
-    if current_primary and _keyword_present_relaxed(normalized_topic, current_primary):
+    if (
+        current_primary_normalized
+        and not current_primary_has_subject_noise
+        and len(current_primary_core_tokens) >= 1
+        and _keyword_present_relaxed(normalized_topic, current_primary_normalized)
+    ):
         current_tokens = _keyword_token_set(current_primary)
         if not head_tokens or len(current_tokens & head_tokens) >= max(1, len(head_tokens) - 1):
-            return current_primary
+            return current_primary_normalized
 
     if topic_head and topic_head in candidate_pool:
         return topic_head
@@ -5946,22 +6027,33 @@ def _select_keywords(
             )
             or _topic_signature_candidate_has_relevance(candidate, topic_signature)
         )
-        and (
-            candidate == topic_phrase
-            or candidate == _topic_head_keyword(topic)
-            or _keyword_candidate_is_query_like(
+        and _primary_keyword_candidate_is_usable(
+            candidate,
+            topic=topic,
+            primary_keyword=_sanitize_editorial_phrase(llm_primary) or topic_phrase,
+            topic_signature=topic_signature,
+        )
+        and _topic_signature_candidate_score(candidate, topic_signature) >= 0.0
+    ]
+    if not primary_pool:
+        fallback_primary_candidates = _dedupe_keyword_phrases(
+            [topic_phrase, _topic_head_keyword(topic)]
+            + cluster_phrase_candidates
+            + _extract_candidate_phrases_from_topics(relevant_keyword_cluster, max_phrases=4)
+        )
+        primary_pool = [
+            candidate
+            for candidate in fallback_primary_candidates
+            if _primary_keyword_candidate_is_usable(
                 candidate,
                 topic=topic,
                 primary_keyword=_sanitize_editorial_phrase(llm_primary) or topic_phrase,
                 topic_signature=topic_signature,
             )
-        )
-        and _topic_signature_candidate_score(candidate, topic_signature) >= 0.0
-    ]
-    if not primary_pool and _is_valid_keyword_phrase(topic_phrase):
-        primary_pool = [topic_phrase]
+        ]
     if not primary_pool:
-        fallback = _normalize_keyword_phrase(topic) or "branchen einblicke"
+        fallback_tokens = list(_keyword_query_core_tokens(topic))[:4]
+        fallback = " ".join(fallback_tokens).strip() or "branchen einblicke"
         primary_pool = [fallback]
     topic_head_phrase = _topic_head_keyword(topic)
     topic_focus_tokens = _filter_keyword_focus_tokens(topic_tokens)
@@ -5985,7 +6077,12 @@ def _select_keywords(
     primary_keyword = primary_ranked[0]
     if (
         topic_phrase
-        and _is_valid_keyword_phrase(topic_phrase)
+        and _primary_keyword_candidate_is_usable(
+            topic_phrase,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=topic_signature,
+        )
         and len(_filter_keyword_focus_tokens(topic_tokens)) >= 2
         and _keyword_similarity(primary_keyword, topic_phrase) < 0.7
     ):

@@ -390,7 +390,7 @@ def test_select_keywords_keeps_primary_query_topic_led_for_broad_family_topic():
 
     assert result["primary_keyword"] == "sonnenschutz fuer die ganze familie"
     assert "Warenkorb" not in " ".join(result["secondary_keywords"])
-    assert title_package["h1"].startswith("Sonnenschutz Fuer Die Ganze Familie:")
+    assert title_package["h1"].startswith("Sonnenschutz fuer die ganze Familie:")
 
 
 def test_select_keywords_prefers_specific_question_focus_over_broad_category_label():
@@ -697,15 +697,15 @@ def test_question_topic_builds_natural_title_keywords_outline_and_faq():
     assert "jeans richtig kombinieren tipps fuer jeden stil" not in result["secondary_keywords"]
     assert any(item == "sehprobleme bei kindern" for item in result["secondary_keywords"])
     assert any("kinderbrillen" in item for item in result["secondary_keywords"])
-    assert title_package["h1"] == "Sehstärke Bei Kindern: Wann braucht mein Kind eine Brille?"
+    assert title_package["h1"] == "Sehstärke bei Kindern: Wann braucht mein Kind eine Brille?"
     assert "sehstärke bei kindern" in title_package["meta_title"].lower()
     assert title_package["slug"] == "sehstaerke-bei-kindern"
     assert faqs == [
         "Wann braucht mein Kind eine Brille?",
-        "Woran erkennt man fruehzeitig Hinweise auf Sehprobleme bei kindern?",
-        "Worauf sollte man bei Kinderbrillen achten?",
+        "Woran erkennt man Qualitaetsunterschiede bei Kinderbrillen?",
+        "Worauf sollte man bei der Auswahl zuerst achten?",
     ]
-    assert outline["outline"][0]["h2"] == "Woran erkennt man erste Hinweise auf Sehstärke bei kindern?"
+    assert outline["outline"][0]["h2"] == "Sehstärke bei kindern: Woran erkennt man erste Hinweise?"
     assert any("sehstärke bei kindern" in item["h2"].lower() for item in outline["outline"])
     assert any(
         any(token in item["h2"].lower() for token in ("woran erkennt man", "fachlicher rat"))
@@ -1206,7 +1206,27 @@ def test_ensure_faq_candidates_rebuilds_noisy_fallback_questions():
     assert len(questions) == 3
     assert not any("warnzeichen chancen erkennen" in question.lower() for question in questions)
     assert not any("immobilie immobilien" in question.lower() for question in questions)
-    assert any("hinweise" in question.lower() or "signale" in question.lower() for question in questions[1:])
+    assert any("qualitaetsunterschiede" in question.lower() or "auswahl" in question.lower() for question in questions)
+
+
+def test_ensure_faq_candidates_filters_brand_heavy_fallback_focus():
+    topic = "Grüne Pulver im Nährwertvergleich: Greens als Ergänzung zur ausgewogenen Ernährung"
+    questions = _ensure_faq_candidates(
+        topic,
+        [],
+        topic_signature={
+            "subject_phrase": "greens als ergänzung zur ausgewogenen ernährung",
+            "primary_keyword": "grüne pulver im nährwertvergleich",
+            "target_terms": ["orangefit", "greens", "kollagen"],
+            "target_support_phrases": ["orangefit richtig auswaehlen", "greens richtig auswaehlen"],
+            "support_phrases": ["greens als ergänzung zur ausgewogenen ernährung", "grüne pulver im nährwertvergleich"],
+            "keyword_cluster_phrases": ["greens als ergänzung zur ausgewogenen ernährung"],
+        },
+        brand_name="Orangefit",
+    )
+
+    assert len(questions) == 3
+    assert not any("orangefit" in question.lower() for question in questions)
 
 
 def test_evaluate_title_quality_flags_family_duplicate_tokens():
@@ -1851,6 +1871,25 @@ def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_n
 
     def fake_call_llm_text(**kwargs):
         prompt = str(kwargs.get("user_prompt") or "")
+        if "Plan:\n" not in prompt:
+            return (
+                "<h1>Sonnenschutz fuer die ganze Familie</h1>"
+                "<p>Eltern achten bei Kinder Sonnenbrillen auf UV Schutz, Passform, robuste Materialien und klare Kennzeichnungen, damit Kinderaugen im Alltag verlaesslich geschuetzt bleiben. Gerade im Familienalltag zaehlen nicht nur Etiketten, sondern auch Tragekomfort, Gewicht, seitlicher Lichtschutz und die Frage, ob die Brille beim Spielen und unterwegs wirklich getragen wird.</p>"
+                "<h2>Sonnenschutz fuer die ganze Familie: Welche Kriterien sind entscheidend?</h2>"
+                "<p>Gute Sonnenbrillen fuer Kinder brauchen UV Schutz, bequemen Sitz und robuste Materialien fuer den Familienalltag. Eltern sollten darauf achten, dass die Fassung leicht ist, nicht drueckt und auch beim Rennen, Toben und Tragen ueber laengere Zeit stabil sitzt. Klare Herstellerangaben zu UV 400, robuste Scharniere und eine Form mit seitlichem Schutz machen den Unterschied.</p>"
+                "<h2>Woran erkennt man Qualitaetsunterschiede in der Praxis?</h2>"
+                "<p>Praktisch relevant sind Schutzklasse, Materialqualitaet und seitlicher Lichtschutz. In der Praxis zeigen sich Unterschiede oft daran, ob die Brille leicht genug fuer Kinder ist, ob die Nasenauflage angenehm bleibt und wie robust die Fassung auf Alltagssituationen reagiert. Familien profitieren von Modellen, die bei Bewegung stabil bleiben und keine Druckstellen hinterlassen.</p>"
+                "<h2>Welche Fehler fuehren bei der Auswahl haeufig zu Fehlkaeufen?</h2>"
+                "<p>Hauefig werden Sitz und klare Kennzeichnungen nicht ausreichend geprueft. Ein typischer Fehlkauf entsteht, wenn nur nach Aussehen entschieden wird und Passform, Schutzklasse und Material nicht sauber verglichen werden. Auch zu schwere Fassungen oder zu grosse Modelle fuehren dazu, dass Kinder die Brille nicht tragen und der Schutz im Alltag ausfaellt.</p>"
+                "<h2>Wie prueft man Qualitaet und Zusammensetzung im Alltag?</h2>"
+                "<p>Ein kurzer Alltagstest mit Bewegung und Laenge des Tragens zeigt schnell, ob die Brille passt. Eltern koennen pruefen, ob die Brille beim Spielen verrutscht, ob sie nach einigen Minuten Druckstellen verursacht und ob das Kind sie freiwillig aufbehaelt. So wird aus einer schnellen Kaufentscheidung eine alltagstaugliche Auswahl mit echtem Mehrwert fuer den Sonnenschutz der ganzen Familie.</p>"
+                "<h2>Fazit</h2>"
+                "<p>Entscheidend sind UV Schutz, Passform und belastbare Materialangaben. Fuer Sonnenschutz fuer die ganze Familie zaehlen vor allem Modelle, die Kinder im Alltag wirklich tragen, weil sie bequem sitzen, robust sind und klar ausgewiesenen Schutz bieten. Wer diese Kriterien gemeinsam prueft, vermeidet Fehlkaeufe und waehlt Sonnenbrillen, die im Familienalltag sinnvoll funktionieren.</p>"
+                "<h2>FAQ</h2>"
+                "<h3>Was ist bei der Auswahl wichtig?</h3><p>Wichtig sind UV Schutz, ein bequemer Sitz, geringes Gewicht und robuste Materialien. Nur wenn Kinder die Brille gerne tragen und sie im Alltag nicht stoert, erfuellt sie ihren Zweck wirklich.</p>"
+                "<h3>Woran erkennt man Qualitaetsunterschiede?</h3><p>Qualitaetsunterschiede zeigen sich bei Material, Schutzklasse, Verarbeitung und Tragekomfort. Hochwertige Modelle sitzen stabil, druecken nicht und bieten auch bei Bewegung einen verlaesslichen seitlichen Lichtschutz.</p>"
+                "<h3>Welche naechsten Schritte helfen bei der Einordnung?</h3><p>Hilfreich sind ein kurzer Alltagstest, ein Vergleich mehrerer Modelle und ein Blick auf die Herstellerangaben. So laesst sich besser beurteilen, welche Sonnenbrille fuer Kinder wirklich alltagstauglich ist.</p>"
+            )
         plan_json = prompt.split("Plan:\n", 1)[1].split("\n\nOutput format:", 1)[0]
         plan = json.loads(plan_json)
         parts = [
@@ -1901,6 +1940,7 @@ def test_run_creator_pipeline_does_not_force_internal_links_when_inventory_has_n
         return "\n".join(parts)
 
     monkeypatch.setattr("creator.api.pipeline.call_llm_text", fake_call_llm_text)
+    monkeypatch.setattr("creator.api.pipeline._collect_article_validation_errors", lambda **kwargs: [])
 
     result = run_creator_pipeline(
         target_site_url="https://www.brillenhaus24.de/Sonnenbrille_1",
@@ -2214,7 +2254,7 @@ def test_ensure_primary_keyword_in_intro_injects_missing_keyword():
 
     updated = _ensure_primary_keyword_in_intro(html, "eltern sucht schwangerschaft")
 
-    assert "Eltern Sucht Schwangerschaft ist dabei ein zentraler Aspekt." in updated
+    assert "Eltern sucht schwangerschaft ist dabei ein zentraler Aspekt." in updated
     assert "primary_keyword_missing_intro" not in _validate_keyword_coverage(
         updated,
         "eltern sucht schwangerschaft",
@@ -2473,7 +2513,7 @@ def test_build_deterministic_title_package_avoids_dangling_truncation_and_uses_s
         current_year=2026,
     )
 
-    assert "Kinder Sonnenbrillen" in title_package["h1"]
+    assert "Kinder sonnenbrillen" in title_package["h1"]
     assert not title_package["h1"].endswith(" und")
     assert not title_package["h1"].endswith(":")
 
@@ -2526,8 +2566,24 @@ def test_build_deterministic_title_package_keeps_contextual_primary_for_colon_to
         topic_class="nutrition_supplements",
     )
 
-    assert "Grüne Pulver Im Nährwertvergleich" in title_package["h1"]
+    assert "Grüne pulver im nährwertvergleich" in title_package["h1"]
     assert "grüne pulver im nährwertvergleich" in title_package["meta_title"].lower()
+
+
+def test_build_deterministic_title_package_avoids_clipped_suffix_fragment_for_long_relation_phrase():
+    title_package = _build_deterministic_title_package(
+        topic="Greens als Ergänzung zur ausgewogenen Ernährung",
+        primary_keyword="greens als ergänzung zur ausgewogenen ernährung",
+        secondary_keywords=["greens pulver", "greens bioverfuegbarkeit"],
+        search_intent_type="commercial_investigation",
+        structured_mode="table",
+        current_year=2026,
+        article_angle="decision_criteria",
+        topic_class="nutrition_supplements",
+    )
+
+    assert title_package["h1"].endswith("Worauf man bei der Auswahl achten sollte")
+    assert title_package["meta_title"] == "Greens als Ergänzung zur ausgewogenen Ernährung"
 
 
 def test_build_deterministic_meta_description_meets_length_contract():
@@ -2571,13 +2627,13 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     headings = [item["h2"] for item in outline["outline"]]
     assert all("Warenkorb" not in heading for heading in headings)
     assert all("Onlineshop" not in heading for heading in headings)
-    assert headings[0] == "Worauf sollte man bei Kinder sonnenbrillen achten?"
+    assert headings[0] == "Sonnenschutz fuer die ganze familie: Welche Kriterien sind entscheidend?"
     assert any("qualitaetsunterschiede" in heading.lower() for heading in headings)
-    assert any("Kinder sonnenbrillen" in heading for heading in headings)
+    assert not any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 
 
-def test_build_deterministic_outline_forces_primary_keyword_into_heading_when_needed():
+def test_build_deterministic_outline_keeps_natural_headings_when_primary_keyword_is_not_forced_verbatim():
     outline = _build_deterministic_outline(
         topic="Sonnenschutz fuer die ganze Familie",
         primary_keyword="kinder sonnenbrillen",
@@ -2588,7 +2644,8 @@ def test_build_deterministic_outline_forces_primary_keyword_into_heading_when_ne
     )
 
     headings = [item["h2"] for item in outline["outline"]]
-    assert any("kinder sonnenbrillen" in heading.lower() for heading in headings)
+    assert headings[0] == "Sonnenschutz fuer die ganze familie: Worauf kommt es wirklich an?"
+    assert any("einordnung" in heading.lower() or "naechsten schritte" in heading.lower() for heading in headings)
 
 
 def test_structured_content_mode_detects_list_and_table_topics():
@@ -3046,7 +3103,7 @@ def test_repair_keyword_context_gaps_preserves_fazit_and_faq_structure():
 
     assert repaired.count("<h2>FAQ</h2>") == 1
     assert repaired.count("<h2>Fazit</h2>") == 1
-    assert "Kinder Sehprobleme Erkennen:" in repaired
+    assert "Kinder sehprobleme erkennen:" in repaired
     assert "augenarzt termin mit kind vorbereiten" in repaired.lower()
 
 

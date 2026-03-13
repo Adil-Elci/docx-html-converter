@@ -422,6 +422,7 @@ QUESTION_TRAILING_LOW_SIGNAL_TOKENS = {"eigentlich", "heute", "jetzt", "noch", "
 QUESTION_FOCUS_PRIORITY_TOKENS = {"kosten", "kostet", "preis", "preise", "vergleich", "dosierung", "dosis", "tagesdosis"}
 TOPIC_DETAIL_RELATION_TOKENS = {
     "rolle", "bedeutung", "wirkung", "einsatz", "nutzen", "nutzung", "anwendung", "platz", "beitrag",
+    "ergaenzung", "ergänzung",
     "inhaltsstoffe", "naehrstoffgehalt", "nährstoffgehalt", "qualitaet", "qualität",
 }
 EDITORIAL_NOISE_TOKENS = {"amp"}
@@ -893,6 +894,9 @@ def _evaluate_title_quality(
     if any(normalized_title.endswith(phrase) for phrase in TITLE_WEAK_TAIL_PHRASES):
         score -= 14
         errors.append("title_weak_tail")
+    if _title_has_dangling_suffix_fragment(title):
+        score -= 18
+        errors.append("title_dangling_suffix_fragment")
     if normalized_primary and _count_keyword_occurrences(normalized_title, normalized_primary) > 1:
         score -= 24
         errors.append("title_keyword_stuffed")
@@ -1019,8 +1023,14 @@ def _heading_generic_penalty(heading: str) -> int:
 
 def _heading_is_natural_core_question(heading: str) -> bool:
     normalized = _normalize_keyword_phrase(heading)
+    candidates = [normalized]
+    if ":" in heading:
+        tail = _normalize_keyword_phrase(heading.split(":", 1)[1])
+        if tail:
+            candidates.append(tail)
     return any(
-        normalized.startswith(prefix)
+        candidate.startswith(prefix)
+        for candidate in candidates
         for prefix in (
             "welche anzeichen",
             "welche warnzeichen",
@@ -1028,18 +1038,24 @@ def _heading_is_natural_core_question(heading: str) -> bool:
             "welche hinweise",
             "welche signale",
             "welche kriterien",
+            "welche kriterien sind",
             "welche unterlagen",
             "welche unterschiede",
             "welche fehler",
+            "welche fehler fuehren",
             "welche ursachen",
             "welche schritte",
             "welche naechsten schritte",
             "welche weiteren aspekte",
             "woran erkennt man",
+            "woran erkennt man qualitaetsunterschiede",
             "wann ist fachlicher rat",
             "wann lohnt sich",
             "wie laesst sich",
+            "wie prueft man",
+            "wie vergleicht man",
             "worauf kommt es",
+            "worauf sollte man",
         )
     )
 
@@ -1051,12 +1067,14 @@ def _evaluate_heading_quality(
 ) -> Dict[str, Any]:
     errors: List[str] = []
     score = 100
-    normalized_headings = [
-        _normalize_keyword_phrase(heading)
+    heading_pairs = [
+        (str(heading).strip(), _normalize_keyword_phrase(heading))
         for heading in headings
         if _normalize_keyword_phrase(heading) not in {"fazit", "faq"}
     ]
-    for heading in normalized_headings:
+    normalized_headings = [normalized for _raw, normalized in heading_pairs]
+    for raw_heading, heading in heading_pairs:
+        is_natural_question = _heading_is_natural_core_question(raw_heading)
         penalty = _heading_generic_penalty(heading)
         if penalty:
             score -= penalty
@@ -1064,13 +1082,13 @@ def _evaluate_heading_quality(
         if _phrase_has_same_family_duplicate_tokens(heading):
             score -= 22
             errors.append(f"heading_family_duplicate_tokens:{heading}")
-        if _phrase_has_editorial_noise(heading) and not _heading_is_natural_core_question(heading):
+        if _phrase_has_editorial_noise(heading) and not is_natural_question:
             score -= 18
             errors.append(f"heading_invalid:{heading}")
-        if _keyword_candidate_is_support_topic_noise(heading, topic_signature) and not _heading_is_natural_core_question(heading):
+        if _keyword_candidate_is_support_topic_noise(heading, topic_signature) and not is_natural_question:
             score -= 18
             errors.append(f"heading_support_topic_noise:{heading}")
-        if not _topic_signature_candidate_has_relevance(heading, topic_signature) and not _heading_is_natural_core_question(heading):
+        if not _topic_signature_candidate_has_relevance(heading, topic_signature) and not is_natural_question:
             score -= 22
             errors.append(f"heading_topic_drift:{heading}")
     for index, heading in enumerate(normalized_headings):
@@ -1114,13 +1132,13 @@ def _evaluate_plan_intent_consistency(
         if normalized in {"fazit", "faq"}:
             continue
         heading_tokens = _keyword_token_set(normalized)
+        is_natural_question = _heading_is_natural_core_question(str(heading))
         if dominant_tokens and not (heading_tokens & dominant_tokens) and intent_type != "informational":
             has_topic_relevance = _topic_signature_candidate_has_relevance(normalized, topic_signature)
             has_specificity_support = bool(heading_tokens & specificity_tokens)
             has_process_support = article_angle in {"process_and_decision_factors", "process_and_next_steps"} and bool(
                 heading_tokens & PROCESS_ACTION_TOKENS
             )
-            is_natural_question = _heading_is_natural_core_question(normalized)
             if not (
                 has_topic_relevance
                 or has_specificity_support
@@ -1191,19 +1209,57 @@ def _evaluate_plan_quality(
 
 
 def _format_title_case(value: str) -> str:
-    words = [word for word in re.split(r"\s+", (value or "").strip()) if word]
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return ""
+    words = [word for word in cleaned.split(" ") if word]
+    if not words:
+        return ""
     out: List[str] = []
-    for word in words:
+    for index, word in enumerate(words):
         if word.isupper():
             out.append(word)
-        else:
+        elif index == 0:
             out.append(word[:1].upper() + word[1:])
+        else:
+            out.append(word)
     return " ".join(out)
+
+
+def _title_has_dangling_suffix_fragment(value: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip()).strip(" -,:;/")
+    if not cleaned or ":" not in cleaned:
+        return False
+    tail = _normalize_keyword_phrase(cleaned.split(":", 1)[1])
+    if not tail:
+        return False
+    tail_tokens = tail.split()
+    if not tail_tokens:
+        return False
+    if len(tail_tokens) <= 3 and (
+        tail_tokens[0] in GERMAN_QUESTION_PREFIXES
+        or any(token in ABSTRACT_QUERY_TOKENS for token in tail_tokens)
+    ):
+        return True
+    if len(tail_tokens) <= 4 and (
+        any(token in {"auswahl", "praxis", "vergleich"} for token in tail_tokens)
+        and any(token in GERMAN_QUESTION_PREFIXES or token in ABSTRACT_QUERY_TOKENS for token in tail_tokens)
+    ):
+        return True
+    if tail_tokens[0] in GERMAN_QUESTION_PREFIXES:
+        trailing_tokens = set(tail_tokens[1:])
+        if trailing_tokens and not (trailing_tokens & QUESTION_LEAD_VERB_TOKENS):
+            return True
+    return False
 
 
 def _truncate_title(value: str, *, max_chars: int = SEO_TITLE_MAX_CHARS) -> str:
     def _clean_trailing_fragment(fragment: str) -> str:
         cleaned_fragment = fragment.strip(" -,:;/")
+        if _title_has_dangling_suffix_fragment(cleaned_fragment):
+            head = cleaned_fragment.split(":", 1)[0].strip(" -,:;/")
+            if head:
+                cleaned_fragment = head
         words = cleaned_fragment.split()
         while len(words) > 2 and _normalize_keyword_phrase(words[-1]) in TRAILING_TITLE_STOPWORDS:
             words.pop()
@@ -1417,6 +1473,63 @@ def _format_sentence_start(value: str) -> str:
     if not cleaned:
         return ""
     return cleaned[:1].upper() + cleaned[1:]
+
+
+def _compress_heading_focus_phrase(value: str) -> str:
+    normalized = _sanitize_editorial_phrase(value, allow_single_token=True)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    action_positions = [
+        index
+        for index, word in enumerate(words)
+        if word in EDITORIAL_ACTION_TOKENS or word in PROCESS_ACTION_TOKENS
+    ]
+    if action_positions:
+        first_action = action_positions[0]
+        if first_action >= 2:
+            normalized = " ".join(words[:first_action]).strip()
+    if " als " in normalized and len(normalized.split()) >= 4:
+        left, right = normalized.split(" als ", 1)
+        left_tokens = _keyword_query_core_tokens(left)
+        right_tokens = _keyword_token_set(right)
+        if (
+            left_tokens
+            and len(left.split()) <= 4
+            and (right_tokens & TOPIC_DETAIL_RELATION_TOKENS)
+        ):
+            normalized = left.strip()
+    words = normalized.split()
+    if len(words) > 5:
+        return ""
+    if (set(words) & (EDITORIAL_ACTION_TOKENS | PROCESS_ACTION_TOKENS)) and len(words) >= 3:
+        return ""
+    if _keyword_candidate_has_subject_noise(normalized) and len(_keyword_query_core_tokens(normalized)) <= 2:
+        return ""
+    if len(_keyword_query_core_tokens(normalized)) < 1:
+        return ""
+    return _format_outline_heading(normalized)
+
+
+def _select_outline_focus_heading(
+    *,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]] = None,
+) -> str:
+    signature = topic_signature or {}
+    candidates = [
+        str(signature.get("question_phrase") or "").strip(),
+        str(signature.get("subject_phrase") or "").strip(),
+        _extract_topic_subject_phrase(topic),
+        _build_topic_phrase(topic),
+        primary_keyword,
+    ]
+    for candidate in candidates:
+        cleaned = _compress_heading_focus_phrase(candidate)
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def _title_carries_keyword_phrase(title: str, keyword_phrase: str) -> bool:
@@ -3412,6 +3525,14 @@ def _keyword_candidate_has_subject_noise(candidate: str) -> bool:
         return True
     if generic_hits and (audience_hits or descriptor_hits) and len(core_tokens) <= 2:
         return True
+    if " als " in normalized and len(words) >= 5:
+        left, right = normalized.split(" als ", 1)
+        left_tokens = _keyword_query_core_tokens(left)
+        right_tokens = _keyword_token_set(right)
+        if left_tokens and len(left_tokens) <= 2 and (right_tokens & TOPIC_DETAIL_RELATION_TOKENS):
+            return True
+        if left_tokens and (right_tokens & TOPIC_DETAIL_RELATION_TOKENS) and len(core_tokens) <= max(3, len(left_tokens) + 1):
+            return True
     return False
 
 
@@ -3507,6 +3628,48 @@ def _is_brand_identity_phrase(value: str, brand_name: str) -> bool:
     if brand_tokens <= value_tokens and len(value_tokens - brand_tokens) <= 2:
         return True
     return False
+
+
+def _topic_signature_brand_like_tokens(topic_signature: Optional[Dict[str, Any]]) -> set[str]:
+    if not isinstance(topic_signature, dict):
+        return set()
+    subject_tokens = _keyword_query_core_tokens(
+        " ".join(
+            [
+                str(topic_signature.get("subject_phrase") or ""),
+                str(topic_signature.get("primary_keyword") or ""),
+                " ".join(str(item).strip() for item in (topic_signature.get("target_support_phrases") or []) if str(item).strip()),
+                " ".join(str(item).strip() for item in (topic_signature.get("support_phrases") or []) if str(item).strip()),
+            ]
+        )
+    )
+    brand_like_tokens: set[str] = set()
+    for value in (topic_signature.get("target_terms") or []):
+        normalized = _sanitize_editorial_phrase(str(value).strip(), allow_single_token=True)
+        if not normalized:
+            continue
+        candidate_tokens = _keyword_query_core_tokens(normalized)
+        if not candidate_tokens:
+            continue
+        if candidate_tokens & subject_tokens:
+            continue
+        brand_like_tokens.update(candidate_tokens)
+    return brand_like_tokens
+
+
+def _keyword_candidate_is_brand_heavy(candidate: str, topic_signature: Optional[Dict[str, Any]]) -> bool:
+    normalized = _sanitize_editorial_phrase(candidate, allow_single_token=True)
+    if not normalized:
+        return False
+    brand_like_tokens = _topic_signature_brand_like_tokens(topic_signature)
+    if not brand_like_tokens:
+        return False
+    candidate_tokens = _keyword_query_core_tokens(normalized)
+    if not candidate_tokens:
+        return False
+    if not (candidate_tokens & brand_like_tokens):
+        return False
+    return len(candidate_tokens - brand_like_tokens) <= 1
 
 
 def _keyword_similarity(a: str, b: str) -> float:
@@ -3612,6 +3775,8 @@ def _keyword_candidate_is_query_like(
 ) -> bool:
     normalized = _sanitize_editorial_phrase(candidate)
     if not normalized or _keyword_candidate_has_question_noise(normalized):
+        return False
+    if _keyword_candidate_is_brand_heavy(normalized, topic_signature):
         return False
     if _phrase_has_same_family_duplicate_tokens(normalized):
         return False
@@ -5438,6 +5603,8 @@ def _select_secondary_keyword_seed_entities(
         normalized = _sanitize_editorial_phrase(raw_value, allow_single_token=True)
         if not normalized:
             continue
+        if _keyword_candidate_is_brand_heavy(normalized, signature):
+            continue
         tokens = _filter_topic_signature_tokens(_keyword_focus_tokens(normalized))
         if not tokens:
             continue
@@ -5751,6 +5918,7 @@ def _finalize_secondary_keywords(
         for candidate in _dedupe_keyword_phrases(secondary_keywords)
         if _keyword_similarity(candidate, primary_keyword) < 0.75
         and not _keyword_redundant_with_topic(candidate, topic)
+        and not _keyword_candidate_is_brand_heavy(candidate, topic_signature)
         and _keyword_candidate_is_query_like(
             candidate,
             topic=topic,
@@ -5773,6 +5941,8 @@ def _finalize_secondary_keywords(
         if _keyword_similarity(candidate, primary_keyword) >= 0.75:
             continue
         if _keyword_redundant_with_topic(candidate, topic):
+            continue
+        if _keyword_candidate_is_brand_heavy(candidate, topic_signature):
             continue
         if not _keyword_candidate_is_query_like(
             candidate,
@@ -5912,6 +6082,26 @@ def _align_primary_keyword_to_topic(
             )
         if topic_head:
             return topic_head
+
+    if current_primary_normalized and _keyword_candidate_has_subject_noise(current_primary_normalized):
+        refined_candidates = [
+            item
+            for item in candidate_pool
+            if item != current_primary_normalized
+            and 2 <= len(_keyword_token_set(item)) <= 4
+            and not _keyword_candidate_has_subject_noise(item)
+            and _keyword_similarity(item, normalized_topic) >= 0.12
+        ]
+        if refined_candidates:
+            return max(
+                refined_candidates,
+                key=lambda item: (
+                    5.0 * len(_keyword_token_set(item) & head_tokens)
+                    + 2.5 * len(_keyword_token_set(item) & topic_tokens)
+                    - 1.0 * len(_keyword_token_set(item) - topic_tokens),
+                    -len(_keyword_token_set(item)),
+                ),
+            )
 
     if (
         current_primary_normalized
@@ -6639,7 +6829,7 @@ def _ensure_primary_keyword_in_intro(html: str, primary_keyword: str) -> str:
     if _keyword_present(intro_text, keyword):
         return article_html
 
-    sentence = f"{_format_title_case(primary_keyword)} ist dabei ein zentraler Aspekt."
+    sentence = f"{_format_sentence_start(primary_keyword)} ist dabei ein zentraler Aspekt."
 
     def _inject(match: re.Match[str]) -> str:
         inner = match.group(1)
@@ -7090,10 +7280,17 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
         _pick_outline_target_focus_phrase(signature, exclude_phrases=[subject_phrase, support_phrase]),
     ]:
         normalized = _sanitize_editorial_phrase(candidate, allow_single_token=True)
+        if _keyword_candidate_is_brand_heavy(normalized, signature):
+            continue
         if normalized:
             raw_target_term_value = normalized
             break
     raw_target_term = _format_title_case(raw_target_term_value)
+    focus_heading = _select_outline_focus_heading(
+        topic=topic,
+        primary_keyword=str(signature.get("primary_keyword") or subject_phrase or topic),
+        topic_signature=signature,
+    )
     support_question_focus = ""
     if support_phrase and _keyword_candidate_is_query_like(
         support_phrase,
@@ -7103,24 +7300,33 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
     ):
         support_question_focus = _format_sentence_start(support_phrase)
     target_question_focus = raw_target_term if raw_target_term_value else ""
+    faq_focus = target_question_focus or support_question_focus or focus_heading
+    if _keyword_candidate_is_brand_heavy(faq_focus, signature):
+        faq_focus = focus_heading or support_question_focus
     if question_phrase:
         direct_question = question_phrase if question_phrase.endswith("?") else f"{question_phrase}?"
         questions = [
             direct_question,
             (
-                f"Woran erkennt man fruehzeitig Hinweise auf {support_question_focus}?"
-                if support_question_focus
-                else f"Welche Hinweise sind bei {_format_sentence_start(subject_phrase)} besonders wichtig?"
+                f"Woran erkennt man Qualitaetsunterschiede bei {faq_focus}?"
+                if faq_focus
+                else "Woran erkennt man Qualitaetsunterschiede in der Praxis?"
             ),
-            f"Welche nächsten Schritte helfen bei {_format_sentence_start(subject_phrase)}?",
+            "Worauf sollte man bei der Auswahl zuerst achten?",
         ]
-        if raw_target_term:
-            questions[-1] = f"Worauf sollte man bei {raw_target_term} achten?"
         return questions
     questions = [
-        f"Was ist bei {subject_phrase} wichtig?",
-        f"Worauf sollte man bei {target_question_focus or support_question_focus or 'der Auswahl'} achten?",
-        "Welche nächsten Schritte helfen dann im Alltag?",
+        (
+            f"Was ist bei {focus_heading or _format_sentence_start(subject_phrase)} wichtig?"
+            if (focus_heading or subject_phrase)
+            else "Was ist bei der Auswahl wichtig?"
+        ),
+        (
+            f"Woran erkennt man Qualitaetsunterschiede bei {faq_focus}?"
+            if faq_focus
+            else "Woran erkennt man Qualitaetsunterschiede?"
+        ),
+        "Welche Kriterien helfen bei der Auswahl?",
     ]
     return questions
 
@@ -7148,19 +7354,28 @@ def _ensure_faq_candidates(
         return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
     topic_phrase = _build_topic_phrase(topic) or "dieses thema"
-    fallback_questions = _build_faq_fallback_questions(topic, topic_signature=topic_signature)
+    fallback_questions = [
+        question
+        for question in _build_faq_fallback_questions(topic, topic_signature=topic_signature)
+        if not _faq_candidate_has_planning_noise(
+            question,
+            topic_signature=topic_signature,
+            brand_name=brand_name,
+        )
+    ]
     normalized_faqs = _dedupe_faq_questions(normalized_faqs + fallback_questions, max_items=FAQ_MIN_QUESTIONS)
     if len(normalized_faqs) >= FAQ_MIN_QUESTIONS:
         return normalized_faqs[:FAQ_MIN_QUESTIONS]
 
     compact_topic = _topic_head_keyword(topic) or topic_phrase or "diesem thema"
     backup_questions = [
-        f"Was bedeutet {compact_topic} im Alltag?",
-        f"Woran erkennt man {compact_topic} fruehzeitig?",
-        f"Wann ist fachlicher Rat bei {compact_topic} sinnvoll?",
+        "Was ist bei der Auswahl wichtig?",
+        "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
+        "Welche naechsten Schritte helfen bei der Einordnung?",
     ]
     normalized_faqs = _dedupe_faq_questions(
-        normalized_faqs + backup_questions,
+        normalized_faqs
+        + backup_questions,
         max_items=max(FAQ_MIN_QUESTIONS, len(normalized_faqs) + len(backup_questions)),
     )
     return normalized_faqs[:FAQ_MIN_QUESTIONS]
@@ -7420,6 +7635,11 @@ def _build_question_topic_outline_headings(
         signature.get("subject_phrase") or _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses thema"
     ).strip()
     subject_heading = _format_outline_heading(subject_phrase)
+    focus_heading = _select_outline_focus_heading(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        topic_signature=signature,
+    )
     resolved_angle = article_angle or _infer_article_angle(
         topic=topic,
         intent_type=intent_type,
@@ -7443,27 +7663,43 @@ def _build_question_topic_outline_headings(
 
     if resolved_angle == "recognition_and_next_steps":
         return [
-            f"Woran erkennt man erste Hinweise auf {subject_heading}?",
+            (
+                f"{focus_heading}: Woran erkennt man erste Hinweise?"
+                if focus_heading
+                else f"Woran erkennt man erste Hinweise auf {subject_heading}?"
+            ),
             "Welche Ursachen oder Ausloeser sind haeufig?",
             "Welche Schritte helfen im Alltag zuerst?",
-            f"Wann ist fachlicher Rat bei {subject_heading} sinnvoll?",
+            (
+                f"{focus_heading}: Wann ist fachlicher Rat sinnvoll?"
+                if focus_heading
+                else f"Wann ist fachlicher Rat bei {subject_heading} sinnvoll?"
+            ),
         ]
     if resolved_angle in {"process_and_decision_factors", "process_and_next_steps"}:
         return [
-            "Welche Unterlagen und Kennzahlen zaehlen zuerst?",
+            (
+                f"{focus_heading}: Welche Unterlagen und Kennzahlen zaehlen zuerst?"
+                if focus_heading
+                else "Welche Unterlagen und Kennzahlen zaehlen zuerst?"
+            ),
             "Welche Fehler kosten dabei Zeit oder Geld?",
             "Wann lohnt sich professionelle Unterstuetzung?",
             "Wie laesst sich der Ablauf realistisch vorbereiten?",
         ]
     if resolved_angle == "decision_criteria":
         return [
-            f"Worauf sollte man bei {subject_heading} achten?",
+            (
+                f"{focus_heading}: Welche Kriterien sind entscheidend?"
+                if focus_heading
+                else "Welche Kriterien sind bei der Auswahl entscheidend?"
+            ),
             "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
             "Welche Fehler fuehren bei der Auswahl haeufig zu Fehlkaeufen?",
             (
-                f"Wie laesst sich {subject_heading} sinnvoll vergleichen?"
+                "Wie laesst sich die Qualitaet sinnvoll vergleichen?"
                 if comparison_like_topic
-                else f"Wie prueft man {subject_heading} im Alltag?"
+                else "Wie prueft man Qualitaet und Zusammensetzung im Alltag?"
             ),
         ]
     if intent_type == "navigational":
@@ -7474,9 +7710,13 @@ def _build_question_topic_outline_headings(
             "Wie findet man die wichtigsten Naechsten Schritte schnell?",
         ]
     return [
-        f"Worauf kommt es bei {subject_heading} wirklich an?",
+        (
+            f"{focus_heading}: Worauf kommt es wirklich an?"
+            if focus_heading
+            else f"Worauf kommt es bei {subject_heading} wirklich an?"
+        ),
         "Welche Fehler sind im Alltag haeufig?",
-        f"Welche Kriterien helfen bei {subject_heading} weiter?",
+        "Welche Kriterien helfen bei der Einordnung weiter?",
         "Welche naechsten Schritte bringen in der Praxis am meisten?",
     ]
 
@@ -7512,20 +7752,25 @@ def _build_deterministic_outline(
         topic_class=topic_class,
         topic_signature=topic_signature,
     )
+    focus_heading = _select_outline_focus_heading(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        topic_signature=topic_signature,
+    )
     if primary_keyword and not any(
         _keyword_present(heading, primary_keyword) or _keyword_similarity(heading, primary_keyword) >= 0.78
         for heading in raw_headings
     ):
-        primary_focus = _format_outline_heading(_sanitize_editorial_phrase(primary_keyword) or primary_keyword)
+        primary_focus = focus_heading or _compress_heading_focus_phrase(primary_keyword)
         if primary_focus:
             if resolved_angle == "recognition_and_next_steps":
-                raw_headings[0] = f"Woran erkennt man erste Hinweise auf {primary_focus}?"
+                raw_headings[0] = f"{primary_focus}: Woran erkennt man erste Hinweise?"
             elif resolved_angle in {"process_and_decision_factors", "process_and_next_steps"}:
-                raw_headings[0] = f"Welche Schritte sind bei {primary_focus} zuerst wichtig?"
+                raw_headings[0] = f"{primary_focus}: Welche Schritte sind zuerst wichtig?"
             elif resolved_angle == "decision_criteria":
-                raw_headings[0] = f"Worauf sollte man bei {primary_focus} achten?"
+                raw_headings[0] = f"{primary_focus}: Welche Kriterien sind entscheidend?"
             else:
-                raw_headings[0] = f"Welche Kriterien entscheiden bei {primary_focus}?"
+                raw_headings[0] = f"{primary_focus}: Worauf kommt es wirklich an?"
     core_sections: List[Dict[str, Any]] = []
     for heading in raw_headings:
         if len(core_sections) >= ARTICLE_MAX_H2 - 2:
@@ -9498,7 +9743,7 @@ def _internal_anchor_text(url: str, anchor_map: Optional[Dict[str, str]] = None)
     cleaned = re.sub(r"[-_]+", " ", tail).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     if len(cleaned) >= 3:
-        return cleaned.capitalize()
+        return _format_sentence_start(cleaned)
     return "Weiterfuehrende Informationen"
 
 
@@ -9517,7 +9762,7 @@ def _build_internal_anchor_variants(item: Dict[str, Any]) -> List[str]:
     if slug:
         slug_variant = re.sub(r"[-_]+", " ", slug).strip()
         if slug_variant:
-            variants.append(_format_title_case(slug_variant))
+            variants.append(_format_sentence_start(slug_variant))
     return _merge_string_lists(variants, max_items=4)
 
 

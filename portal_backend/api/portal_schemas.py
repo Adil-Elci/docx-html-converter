@@ -690,9 +690,6 @@ class PublishedArticlesPageOut(BaseModel):
     offset: int
 
 
-class JobEventCreate(BaseModel):
-    event_type: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
 class RejectedArticleOut(BaseModel):
     job_id: UUID
     submission_id: UUID
@@ -720,6 +717,9 @@ class RejectedArticlesPageOut(BaseModel):
     offset: int
 
 
+class JobEventCreate(BaseModel):
+    event_type: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
 
     @validator("event_type")
     def validate_event_type(cls, value: str) -> str:

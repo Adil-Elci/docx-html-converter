@@ -284,6 +284,18 @@ TOPIC_CLASS_KEYWORDS = {
     "finance_legal": {"finanzierung", "frist", "gesetz", "kosten", "provision", "recht", "steuer", "vertrag", "zins"},
 }
 SPECIFICITY_SIGNAL_BUCKETS = {
+    "home": {
+        "space_planning": {
+            "bewegungsflaeche", "einbaumoebel", "flaeche", "grundriss", "moebel", "moeblierung",
+            "proportion", "raumgroesse", "stauraum",
+        },
+        "light_color": {
+            "beleuchtung", "farbton", "farbe", "kelvin", "licht", "tageslicht", "wandfarbe",
+        },
+        "materials_comfort": {
+            "akustik", "boden", "material", "teppich", "textilien", "vorhaenge", "wohnkomfort",
+        },
+    },
     "real_estate": {
         "market_context": {"lage", "markt", "marktwert", "nachfrage", "preis", "preise", "stadtteil", "zins"},
         "documents_process": {"besichtigung", "energieausweis", "expose", "grundbuch", "notar", "unterlagen", "vertrag", "wertermittlung"},
@@ -372,7 +384,7 @@ GENERIC_UI_CHROME_TOKENS = {
     "sortierung", "suche", "warenkorb", "wunschliste",
 }
 EDITORIAL_ACTION_TOKENS = {
-    "achten", "auswaehlen", "erkennen", "gelingt", "hilft", "kaufen", "lohnt", "nutzen", "pruefen",
+    "achten", "auswaehlen", "erkennen", "gestalten", "gelingt", "hilft", "kaufen", "lohnt", "nutzen", "optimieren", "pruefen",
     "reagieren", "steigert", "vergleichen", "verstehen", "zaehlt",
 }
 ABSTRACT_QUERY_TOKENS = {
@@ -1551,6 +1563,72 @@ def _compress_heading_focus_phrase(value: str) -> str:
     if len(_keyword_query_core_tokens(normalized)) < 1:
         return ""
     return _format_outline_heading(normalized)
+
+
+def _topic_phrase_is_action_led(value: str) -> bool:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return False
+    tokens = _keyword_token_set(normalized)
+    return bool(tokens & (EDITORIAL_ACTION_TOKENS | PROCESS_ACTION_TOKENS))
+
+
+def _extract_topic_detail_focus_phrase(topic: str) -> str:
+    detail_phrase = _extract_topic_detail_phrase(topic)
+    normalized = _normalize_keyword_phrase(detail_phrase)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    for index in range(len(words) - 2, -1, -1):
+        if words[index] not in {"fuer", "für", "zur", "zum", "bei", "mit"}:
+            continue
+        tail = _sanitize_editorial_phrase(" ".join(words[index + 1 :]), allow_single_token=True)
+        if tail and not _topic_phrase_is_generic(tail):
+            return tail
+    cleaned = _sanitize_editorial_phrase(normalized, allow_single_token=True)
+    if not cleaned or _topic_phrase_is_generic(cleaned):
+        return ""
+    return cleaned
+
+
+def _format_question_focus_context(value: str) -> str:
+    normalized = _sanitize_editorial_phrase(value, allow_single_token=True)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    if not words:
+        return ""
+    if words[0] in {"der", "die", "das", "dem", "den", "des"}:
+        head = words[0]
+        tail = _format_outline_heading(" ".join(words[1:])) if len(words) > 1 else ""
+        return f"{head} {tail}".strip()
+    if len(words) == 1 and words[0].endswith(("ung", "keit", "heit", "ion", "tät", "anz", "enz")):
+        return f"der {_format_outline_heading(words[0])}"
+    return normalized
+
+
+def _focus_heading_needs_generic_question_templates(
+    focus_heading: str,
+    *,
+    topic: str,
+    topic_signature: Optional[Dict[str, Any]] = None,
+) -> bool:
+    normalized_focus = _normalize_keyword_phrase(focus_heading)
+    if not normalized_focus:
+        return True
+    if _topic_phrase_is_action_led(normalized_focus):
+        return True
+    if _keyword_candidate_has_subject_noise(normalized_focus):
+        return True
+    subject_phrase = str((topic_signature or {}).get("subject_phrase") or _extract_topic_subject_phrase(topic) or "").strip()
+    detail_focus = _extract_topic_detail_focus_phrase(topic)
+    if (
+        detail_focus
+        and _keyword_similarity(normalized_focus, _normalize_keyword_phrase(subject_phrase or topic)) >= 0.82
+        and _keyword_similarity(detail_focus, normalized_focus) < 0.45
+    ):
+        return True
+    return False
 
 
 def _select_outline_focus_heading(
@@ -6003,6 +6081,183 @@ def _build_secondary_keyword_fallbacks(
     ]
 
 
+def _ordered_topic_query_tokens(value: str) -> List[str]:
+    normalized = _normalize_keyword_phrase(value)
+    if not normalized:
+        return []
+    out: List[str] = []
+    for word in normalized.split():
+        if (
+            word in KEYWORD_LOW_SIGNAL_TOKENS
+            or word in GERMAN_KEYWORD_MODIFIERS
+            or word in ABSTRACT_QUERY_TOKENS
+            or word in EDITORIAL_ACTION_TOKENS
+            or word in GENERIC_TOPIC_CATEGORY_TOKENS
+            or word in GENERIC_AUDIENCE_TOKENS
+            or word in EDITORIAL_DESCRIPTOR_TOKENS
+            or word in {"und", "oder", "im", "in", "bei", "fuer", "für", "von", "mit"}
+        ):
+            continue
+        if any(existing == word for existing in out):
+            continue
+        out.append(word)
+    return out
+
+
+def _secondary_keyword_has_fragment_noise(
+    candidate: str,
+    *,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]],
+) -> bool:
+    normalized = _normalize_keyword_phrase(candidate)
+    if not normalized:
+        return True
+    candidate_tokens = [
+        token
+        for token in _ordered_topic_query_tokens(normalized)
+        if token
+    ]
+    relation_tokens = [
+        token
+        for token in candidate_tokens
+        if token in QUESTION_FOCUS_PRIORITY_TOKENS or token in TOPIC_DETAIL_RELATION_TOKENS
+    ]
+    if len(candidate_tokens) != 2 or len(relation_tokens) != 1:
+        return False
+    base_tokens = [token for token in candidate_tokens if token not in relation_tokens]
+    if len(base_tokens) != 1:
+        return False
+    subject_tokens = set(
+        _ordered_topic_query_tokens(
+            str((topic_signature or {}).get("subject_phrase") or primary_keyword or topic)
+        )
+    )
+    base = base_tokens[0]
+    if base in subject_tokens:
+        return True
+    if base in {"produkt", "produkte", "pulver", "drink", "drinks"}:
+        return True
+    return False
+
+
+def _refine_supplement_secondary_keywords(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    keyword_cluster: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+) -> List[str]:
+    signature = topic_signature or {}
+    topic_class = _infer_topic_class_from_keyword_signals(
+        topic,
+        primary_keyword,
+        str(signature.get("subject_phrase") or ""),
+        " ".join(str(item).strip() for item in (signature.get("keyword_cluster_phrases") or []) if str(item).strip()),
+        " ".join(str(item).strip() for item in (signature.get("semantic_entities") or []) if str(item).strip()),
+    )
+    if topic_class != "nutrition_supplements":
+        return secondary_keywords[:KEYWORD_MAX_SECONDARY]
+
+    cleaned_existing = [
+        candidate
+        for candidate in _dedupe_keyword_phrases(secondary_keywords)
+        if not _secondary_keyword_has_fragment_noise(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        )
+    ]
+    subject_head_tokens = [
+        token
+        for token in _ordered_topic_query_tokens(
+            str(signature.get("subject_phrase") or primary_keyword or topic)
+        )
+        if token not in QUESTION_FOCUS_PRIORITY_TOKENS and not token.endswith("vergleich")
+    ]
+    subject_head = " ".join(subject_head_tokens[:2]) if len(subject_head_tokens) >= 2 else ""
+    existing_topic_tokens = set(_ordered_topic_query_tokens(f"{topic} {primary_keyword}"))
+    profile = _build_specificity_profile(topic=topic, topic_class=topic_class, intent_type="informational")
+    relation_terms: List[str] = []
+    for bucket_name in ("product_formulation", "quality_signals", "cost_use_cases"):
+        for raw_value in (profile.get("buckets") or {}).get(bucket_name, []):
+            normalized = _normalize_keyword_phrase(str(raw_value).strip())
+            if not normalized or normalized in existing_topic_tokens:
+                continue
+            if normalized in ABSTRACT_QUERY_TOKENS or normalized in EDITORIAL_ACTION_TOKENS:
+                continue
+            if len(normalized) < 5:
+                continue
+            if normalized not in relation_terms:
+                relation_terms.append(normalized)
+
+    preferred_entities: List[str] = []
+    for raw_value in _merge_string_lists(
+        keyword_cluster,
+        [str(item).strip() for item in (signature.get("semantic_entities") or []) if str(item).strip()],
+        [str(item).strip() for item in (signature.get("target_terms") or []) if str(item).strip()],
+        max_items=12,
+    ):
+        normalized = _sanitize_editorial_phrase(raw_value, allow_single_token=True)
+        if not normalized:
+            continue
+        if _keyword_candidate_is_brand_heavy(normalized, signature):
+            continue
+        if not _keyword_candidate_aligns_with_topic_subject(
+            normalized,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        ):
+            continue
+        if normalized in existing_topic_tokens:
+            continue
+        if _secondary_keyword_has_fragment_noise(
+            normalized,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        ):
+            continue
+        preferred_entities.append(normalized)
+        if len(preferred_entities) >= 2:
+            break
+
+    supplement_candidates: List[str] = []
+    for entity in preferred_entities:
+        for relation in relation_terms[:4]:
+            supplement_candidates.append(f"{entity} {relation}")
+    if subject_head:
+        for relation in relation_terms[:4]:
+            supplement_candidates.append(f"{subject_head} {relation}")
+
+    refined = list(cleaned_existing)
+    for candidate in _dedupe_keyword_phrases(supplement_candidates):
+        if len(refined) >= KEYWORD_MAX_SECONDARY:
+            break
+        if _keyword_similarity(candidate, primary_keyword) >= 0.75:
+            continue
+        if _keyword_redundant_with_topic(candidate, topic):
+            continue
+        if _keyword_candidate_is_brand_heavy(candidate, signature):
+            continue
+        if not _keyword_candidate_is_query_like(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        ):
+            continue
+        if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in refined):
+            continue
+        refined.append(candidate)
+
+    return refined[:KEYWORD_MAX_SECONDARY]
+
+
 def _finalize_secondary_keywords(
     *,
     topic: str,
@@ -6053,7 +6308,13 @@ def _finalize_secondary_keywords(
         if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
             continue
         finalized.append(candidate)
-    return finalized[:KEYWORD_MAX_SECONDARY]
+    return _refine_supplement_secondary_keywords(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        secondary_keywords=finalized[:KEYWORD_MAX_SECONDARY],
+        keyword_cluster=keyword_cluster,
+        topic_signature=topic_signature,
+    )
 
 
 def _faq_candidate_has_planning_noise(
@@ -6065,6 +6326,8 @@ def _faq_candidate_has_planning_noise(
     normalized = _normalize_keyword_phrase(question)
     if not normalized:
         return True
+    signature = topic_signature or {}
+    subject_phrase = _normalize_keyword_phrase(str(signature.get("subject_phrase") or ""))
     focus_phrase = re.sub(
         r"^(?:was ist|wie|wann|warum|welche|welcher|welches|wo|woran|worauf|kann|darf)\s+",
         "",
@@ -6080,11 +6343,20 @@ def _faq_candidate_has_planning_noise(
         return False
     if _phrase_has_same_family_duplicate_tokens(focus_phrase):
         return True
+    if (
+        subject_phrase
+        and _topic_phrase_is_action_led(subject_phrase)
+        and _keyword_similarity(
+            _normalize_keyword_phrase(_fold_keyword_text(focus_phrase)),
+            _normalize_keyword_phrase(_fold_keyword_text(subject_phrase)),
+        ) >= 0.82
+    ):
+        return True
     if _keyword_candidate_has_subject_noise(focus_phrase):
         return True
     if _is_brand_identity_phrase(focus_phrase, brand_name):
         return True
-    return _keyword_candidate_is_support_topic_noise(focus_phrase, topic_signature)
+    return _keyword_candidate_is_support_topic_noise(focus_phrase, signature)
 
 
 def _topic_head_keyword(topic: str) -> str:
@@ -7083,8 +7355,8 @@ def _validate_seo_metadata(
     normalized_slug = _derive_slug(slug or "")
     if normalized_slug != (slug or "").strip():
         errors.append("slug_format_invalid")
-    slug_tokens = _keyword_token_set(slug or "")
-    primary_tokens = _keyword_token_set(primary_keyword)
+    slug_tokens = _keyword_token_set(_fold_keyword_text(normalized_slug.replace("-", " ")))
+    primary_tokens = _keyword_token_set(_fold_keyword_text(primary_keyword))
     if len(slug_tokens & primary_tokens) < min(2, max(1, len(primary_tokens))):
         errors.append("slug_missing_primary_keyword")
     h1_text = _extract_h1_text(article_html)
@@ -7399,7 +7671,10 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
     if _keyword_candidate_has_subject_noise(focus_heading):
         focus_heading = _format_outline_heading(subject_phrase) if subject_phrase else ""
     support_question_focus = ""
-    if support_phrase and _keyword_candidate_is_query_like(
+    if support_phrase and _keyword_candidate_has_editorial_quality(
+        support_phrase,
+        signature,
+    ) and not _keyword_candidate_has_subject_noise(support_phrase) and _keyword_candidate_is_query_like(
         support_phrase,
         topic=topic,
         primary_keyword=str(signature.get("primary_keyword") or subject_phrase or topic),
@@ -7422,6 +7697,38 @@ def _build_faq_fallback_questions(topic: str, *, topic_signature: Optional[Dict[
             "Worauf sollte man bei der Auswahl zuerst achten?",
         ]
         return questions
+    if _topic_phrase_is_action_led(subject_phrase):
+        detail_focus = _extract_topic_detail_focus_phrase(topic)
+        planning_focus = _format_question_focus_context(detail_focus)
+        implementation_focus = _format_sentence_start(detail_focus) if detail_focus else ""
+        return [
+            (
+                f"Welche Kriterien sind bei {planning_focus} entscheidend?"
+                if planning_focus
+                else "Welche Kriterien sind bei der Planung entscheidend?"
+            ),
+            "Welche Fehler sollte man in der Praxis vermeiden?",
+            (
+                f"Wie laesst sich {implementation_focus} sinnvoll umsetzen?"
+                if implementation_focus
+                else "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
+            ),
+        ]
+    if (
+        str(signature.get("topic_class") or "").strip() == "nutrition_supplements"
+        and (
+            _keyword_candidate_has_subject_noise(subject_phrase)
+            or _keyword_candidate_has_subject_noise(faq_focus)
+            or _keyword_candidate_has_subject_noise(focus_heading)
+            or _keyword_similarity(faq_focus, subject_phrase) >= 0.84
+            or _keyword_similarity(focus_heading, subject_phrase) >= 0.84
+        )
+    ):
+        return [
+            "Welche Kriterien sind bei der Auswahl entscheidend?",
+            "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
+            "Welche Inhaltsstoffe und Qualitaetsmerkmale sind besonders wichtig?",
+        ]
     questions = [
         (
             f"Was ist bei {focus_heading or _format_sentence_start(subject_phrase)} wichtig?"
@@ -7747,6 +8054,17 @@ def _build_question_topic_outline_headings(
         primary_keyword=primary_keyword,
         topic_signature=signature,
     )
+    use_generic_focus_questions = _focus_heading_needs_generic_question_templates(
+        focus_heading,
+        topic=topic,
+        topic_signature=signature,
+    )
+    detail_focus = _extract_topic_detail_focus_phrase(topic)
+    subject_question_context = (
+        _format_question_focus_context(detail_focus)
+        if use_generic_focus_questions and detail_focus
+        else _format_question_focus_context(subject_phrase) or subject_heading
+    )
     resolved_angle = article_angle or _infer_article_angle(
         topic=topic,
         intent_type=intent_type,
@@ -7787,7 +8105,7 @@ def _build_question_topic_outline_headings(
         return [
             (
                 f"{focus_heading}: Welche Unterlagen und Kennzahlen zaehlen zuerst?"
-                if focus_heading
+                if focus_heading and not use_generic_focus_questions
                 else "Welche Unterlagen und Kennzahlen zaehlen zuerst?"
             ),
             "Welche Fehler kosten dabei Zeit oder Geld?",
@@ -7798,7 +8116,7 @@ def _build_question_topic_outline_headings(
         return [
             (
                 f"{focus_heading}: Welche Kriterien sind entscheidend?"
-                if focus_heading
+                if focus_heading and not use_generic_focus_questions
                 else "Welche Kriterien sind bei der Auswahl entscheidend?"
             ),
             "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
@@ -7819,12 +8137,16 @@ def _build_question_topic_outline_headings(
     return [
         (
             f"{focus_heading}: Worauf kommt es wirklich an?"
-            if focus_heading
-            else f"Worauf kommt es bei {subject_heading} wirklich an?"
+            if focus_heading and not use_generic_focus_questions
+            else f"Worauf kommt es bei {subject_question_context} wirklich an?"
         ),
         "Welche Fehler sind im Alltag haeufig?",
         "Welche Kriterien helfen bei der Einordnung weiter?",
-        "Welche naechsten Schritte bringen in der Praxis am meisten?",
+        (
+            "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
+            if use_generic_focus_questions
+            else "Welche naechsten Schritte bringen in der Praxis am meisten?"
+        ),
     ]
 
 
@@ -9009,6 +9331,42 @@ def _is_editorial_llm_repairable_error(error: str) -> bool:
         or value.startswith("greeting_noise_detected")
         or value.startswith("spam_")
     )
+
+
+REPAIR_REGRESSION_GUARD_PREFIXES = {
+    "faq_missing",
+    "faq_question_count_too_low",
+    "faq_question_format_invalid",
+    "final_h2_not_faq",
+    "h1_not_required_title",
+    "h2_count_invalid",
+    "penultimate_h2_not_fazit",
+}
+
+
+def _error_family(error: str) -> str:
+    value = str(error or "").strip()
+    if not value:
+        return ""
+    return value.split(":", 1)[0]
+
+
+def _repair_attempt_introduced_regressions(
+    *,
+    baseline_errors: List[str],
+    candidate_errors: List[str],
+) -> List[str]:
+    baseline_families = {_error_family(error) for error in baseline_errors if error}
+    regressions: List[str] = []
+    for error in candidate_errors:
+        family = _error_family(error)
+        if not family:
+            continue
+        if error in baseline_errors or family in baseline_families:
+            continue
+        if family in REPAIR_REGRESSION_GUARD_PREFIXES or not _is_editorial_llm_repairable_error(error):
+            regressions.append(error)
+    return _dedupe_string_values(regressions)
 
 
 def _normalize_repaired_article_html(value: str) -> str:
@@ -11542,6 +11900,7 @@ def run_creator_pipeline(
                 [error for error in validation_errors if _is_editorial_llm_repairable_error(error)]
             )
             if validation_errors and repairable_errors and phase7_repair_attempts > 0:
+                baseline_validation_errors = list(validation_errors)
                 latest_errors = list(validation_errors)
                 repaired_success_payload: Optional[Dict[str, Any]] = None
                 for repair_attempt in range(1, phase7_repair_attempts + 1):
@@ -11619,6 +11978,25 @@ def run_creator_pipeline(
                         topic_signature=phase3.get("topic_signature"),
                         specificity_profile=phase3.get("specificity_profile"),
                     )
+                    introduced_regressions = _repair_attempt_introduced_regressions(
+                        baseline_errors=baseline_validation_errors,
+                        candidate_errors=latest_errors,
+                    )
+                    if introduced_regressions:
+                        _append_execution_trace_event(
+                            creator_trace,
+                            level="warning",
+                            phase="phase5",
+                            event="repair_attempt_reverted",
+                            message="LLM repair attempt introduced new structural regressions and was discarded.",
+                            details={
+                                "writer_attempt": attempt,
+                                "repair_attempt": repair_attempt,
+                                "introduced_errors": introduced_regressions,
+                            },
+                        )
+                        latest_errors = list(baseline_validation_errors)
+                        continue
                     if not latest_errors:
                         _append_execution_trace_event(
                             creator_trace,

@@ -11,10 +11,12 @@ from creator.api.pipeline import (
     _align_primary_keyword_to_topic,
     _build_deterministic_article_plan,
     _build_deterministic_title_package,
+    _build_faq_fallback_questions,
     _build_deterministic_meta_description,
     _build_deterministic_outline,
     _build_partial_creator_output,
     _build_pipeline_execution_policy,
+    _build_question_topic_outline_headings,
     _build_specificity_profile,
     _build_topic_phrase,
     _build_phase4_fallback_outline,
@@ -36,6 +38,7 @@ from creator.api.pipeline import (
     _evaluate_specificity,
     _evaluate_title_quality,
     _extract_keywords,
+    _faq_candidate_has_planning_noise,
     _fetch_google_de_suggestions,
     _generate_search_informed_faqs,
     _generate_article_by_sections,
@@ -48,6 +51,7 @@ from creator.api.pipeline import (
     _pair_fit_normalize_llm_payload,
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
+    _repair_attempt_introduced_regressions,
     _select_phase4_repair_topic,
     _render_article_from_plan,
     _run_pair_fit_reasoning,
@@ -538,7 +542,8 @@ def test_select_keywords_filters_brand_heavy_and_sibling_supplement_secondaries_
     assert result["primary_keyword"] == "greens produkte im nährwertvergleich"
     assert "orangefit pulver" not in result["secondary_keywords"]
     assert "kollagen pulver" not in result["secondary_keywords"]
-    assert any("greens" in item for item in result["secondary_keywords"])
+    assert any("greens" in item or "grüne pulver" in item for item in result["secondary_keywords"])
+    assert not any(item in {"grüne wirkung", "grüne anwendung", "inhaltsstoffe pulver"} for item in result["secondary_keywords"])
 
 
 def test_infer_topic_class_detects_nutrition_supplements_topics():
@@ -1284,6 +1289,55 @@ def test_ensure_faq_candidates_rebuilds_noisy_greens_subject_questions():
     assert not any("grüne pulver und superfood drinks" in question.lower() for question in questions)
     assert not any("orangefit" in question.lower() for question in questions)
     assert any("greens" in question.lower() or "auswahl" in question.lower() for question in questions)
+    assert not any("was ist grüne pulver" in question.lower() for question in questions)
+
+
+def test_ensure_faq_candidates_avoids_noisy_secondary_support_focus_for_supplement_topics():
+    topic = "Grüne Pulver im Nährwertvergleich: Inhaltsstoffe, Wirkung und praktische Anwendung"
+    questions = _ensure_faq_candidates(
+        topic,
+        [],
+        topic_signature={
+            "subject_phrase": "grüne pulver im nährwertvergleich",
+            "primary_keyword": "grüne pulver im nährwertvergleich",
+            "topic_class": "nutrition_supplements",
+            "support_phrases": ["grüne wirkung", "grüne pulver im nährwertvergleich"],
+            "keyword_cluster_phrases": [],
+            "target_terms": [],
+            "target_support_phrases": [],
+        },
+    )
+
+    assert len(questions) == 3
+    assert not any("grüne wirkung" in question.lower() for question in questions)
+    assert any("qualitaetsunterschiede" in question.lower() for question in questions)
+    assert any("auswahl" in question.lower() or "inhaltsstoffe" in question.lower() for question in questions)
+
+
+def test_faq_candidate_has_planning_noise_rejects_action_led_self_reference():
+    assert _faq_candidate_has_planning_noise(
+        "Was ist wohnräume gestalten?",
+        topic_signature={
+            "subject_phrase": "wohnräume gestalten",
+            "primary_keyword": "wohnräume gestalten",
+        },
+    )
+
+
+def test_build_faq_fallback_questions_rewrites_action_led_home_topics():
+    questions = _build_faq_fallback_questions(
+        "Wohnräume gestalten: Praktische Tipps für Hausbesitzer zur Raumoptimierung",
+        topic_signature={
+            "subject_phrase": "wohnräume gestalten",
+            "primary_keyword": "wohnräume gestalten",
+            "topic_class": "home",
+        },
+    )
+
+    assert len(questions) == 3
+    assert questions[0] == "Welche Kriterien sind bei der Raumoptimierung entscheidend?"
+    assert questions[1] == "Welche Fehler sollte man in der Praxis vermeiden?"
+    assert questions[2] == "Wie laesst sich Raumoptimierung sinnvoll umsetzen?"
 
 
 def test_evaluate_title_quality_flags_family_duplicate_tokens():
@@ -2741,6 +2795,61 @@ def test_validate_seo_metadata_requires_exact_h1_and_metadata_quality():
     assert errors == []
 
 
+def test_validate_seo_metadata_accepts_umlaut_slug_transliteration():
+    meta_description = _build_deterministic_meta_description(
+        topic="Wohnräume gestalten: Praktische Tipps zur Raumoptimierung",
+        primary_keyword="wohnräume gestalten",
+        secondary_keywords=["raumoptimierung tipps", "wohnkomfort verbessern"],
+        structured_mode="none",
+    )
+    errors = _validate_seo_metadata(
+        article_html="""
+        <h1>Wohnräume gestalten: Praktische Tipps zur Raumoptimierung</h1>
+        <p>Einleitung mit ausreichend Kontext fuer Eigentuemer und konkrete Orientierung.</p>
+        <h2>Worauf kommt es bei der Raumoptimierung wirklich an?</h2>
+        <p>Text mit genug Substanz fuer den Test und sinnvollen Details zum Thema.</p>
+        <h2>Fazit</h2>
+        <p>Wohnräume gestalten gelingt besser, wenn Raumgroesse, Licht und Stauraum gemeinsam geplant werden.</p>
+        <h2>FAQ</h2>
+        <h3>Welche Kriterien sind entscheidend?</h3>
+        <p>Antwort mit ausreichend Woertern und konkreten Hinweisen fuer Eigentuemer im Alltag.</p>
+        <h3>Welche Fehler sollte man vermeiden?</h3>
+        <p>Antwort mit ausreichend Woertern und konkreten Hinweisen fuer Eigentuemer im Alltag.</p>
+        <h3>Wie laesst sich Raumoptimierung sinnvoll umsetzen?</h3>
+        <p>Antwort mit ausreichend Woertern und konkreten Hinweisen fuer Eigentuemer im Alltag.</p>
+        """,
+        primary_keyword="wohnräume gestalten",
+        required_h1="Wohnräume gestalten: Praktische Tipps zur Raumoptimierung",
+        meta_title="Wohnräume gestalten: Praktische Tipps zur Raumoptimierung",
+        meta_description=meta_description,
+        slug="wohnraeume-gestalten-praktische-tipps",
+        structured_mode="none",
+    )
+
+    assert "slug_missing_primary_keyword" not in errors
+
+
+def test_build_question_topic_outline_headings_avoids_action_led_heading_scaffolds():
+    headings = _build_question_topic_outline_headings(
+        topic="Wohnräume gestalten: Praktische Tipps für Hausbesitzer zur Raumoptimierung",
+        primary_keyword="wohnräume gestalten",
+        secondary_keywords=["raumoptimierung tipps"],
+        structured_mode="none",
+        intent_type="informational",
+        article_angle="practical_guidance",
+        topic_class="home",
+        topic_signature={
+            "subject_phrase": "wohnräume gestalten",
+            "primary_keyword": "wohnräume gestalten",
+            "topic_class": "home",
+        },
+    )
+
+    assert headings[0] == "Worauf kommt es bei der Raumoptimierung wirklich an?"
+    assert headings[-1] == "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
+    assert not any("wohnräume gestalten:" in heading.lower() for heading in headings)
+
+
 def test_derive_trend_query_family_groups_question_variant():
     assert _derive_trend_query_family("was ist baby vorbereiten checkliste") == "baby vorbereiten"
 
@@ -3162,6 +3271,28 @@ def test_repair_keyword_context_gaps_preserves_fazit_and_faq_structure():
     assert repaired.count("<h2>Fazit</h2>") == 1
     assert "Kinder sehprobleme erkennen:" in repaired
     assert "augenarzt termin mit kind vorbereiten" in repaired.lower()
+
+
+def test_repair_attempt_introduced_regressions_detects_new_structure_errors():
+    regressions = _repair_attempt_introduced_regressions(
+        baseline_errors=[
+            "heading_phrase_invalid:wohnräume gestalten worauf kommt es wirklich an",
+            "specificity_too_low:2",
+            "slug_missing_primary_keyword",
+        ],
+        candidate_errors=[
+            "final_h2_not_faq",
+            "penultimate_h2_not_fazit",
+            "faq_missing",
+            "heading_phrase_invalid:wohnräume gestalten worauf kommt es wirklich an",
+        ],
+    )
+
+    assert regressions == [
+        "final_h2_not_faq",
+        "penultimate_h2_not_fazit",
+        "faq_missing",
+    ]
 
 
 def test_pair_fit_reasoning_builds_bridge_topics_for_commercial_target():

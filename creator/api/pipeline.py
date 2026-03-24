@@ -1194,7 +1194,9 @@ def _heading_is_natural_core_question(heading: str) -> bool:
             "wann ist fachlicher rat",
             "wann lohnt sich",
             "wie laesst sich",
+            "wie lässt sich",
             "wie prueft man",
+            "wie prüft man",
             "wie vergleicht man",
             "worauf kommt es",
             "worauf sollte man",
@@ -8439,7 +8441,7 @@ def _build_question_topic_outline_headings(
                 if focus_heading
                 else f"Woran erkennt man erste Hinweise auf {subject_heading}?"
             ),
-            "Welche Ursachen oder Ausloeser sind haeufig?",
+            "Welche Ursachen oder Auslöser sind häufig?",
             "Welche Schritte helfen im Alltag zuerst?",
             (
                 f"{focus_heading}: Wann ist fachlicher Rat sinnvoll?"
@@ -8450,13 +8452,13 @@ def _build_question_topic_outline_headings(
     if resolved_angle in {"process_and_decision_factors", "process_and_next_steps"}:
         return [
             (
-                f"{focus_heading}: Welche Unterlagen und Kennzahlen zaehlen zuerst?"
+                f"{focus_heading}: Welche Unterlagen und Kennzahlen zählen zuerst?"
                 if focus_heading and not use_generic_focus_questions
-                else "Welche Unterlagen und Kennzahlen zaehlen zuerst?"
+                else "Welche Unterlagen und Kennzahlen zählen zuerst?"
             ),
             "Welche Fehler kosten dabei Zeit oder Geld?",
-            "Wann lohnt sich professionelle Unterstuetzung?",
-            "Wie laesst sich der Ablauf realistisch vorbereiten?",
+            "Wann lohnt sich professionelle Unterstützung?",
+            "Wie lässt sich der Ablauf realistisch vorbereiten?",
         ]
     if resolved_angle == "decision_criteria":
         return [
@@ -8469,20 +8471,20 @@ def _build_question_topic_outline_headings(
                     else "Welche Kriterien sind bei der Auswahl entscheidend?"
                 )
             ),
-            "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
-            "Welche Fehler fuehren bei der Auswahl haeufig zu Fehlkaeufen?",
+            "Woran erkennt man Qualitätsunterschiede in der Praxis?",
+            "Welche Fehler führen bei der Auswahl häufig zu Fehlkäufen?",
             (
-                "Wie laesst sich die Qualitaet sinnvoll vergleichen?"
+                "Wie lässt sich die Qualität sinnvoll vergleichen?"
                 if comparison_like_topic
-                else "Wie prueft man Qualitaet und Zusammensetzung im Alltag?"
+                else "Wie prüft man Qualität und Zusammensetzung im Alltag?"
             ),
         ]
     if intent_type == "navigational":
         return [
             f"Welche Informationen zu {subject_heading} braucht man zuerst?",
             "Welche Unterlagen oder Angaben sollte man bereithalten?",
-            "Welche Fehler fuehren am haeufigsten zu Rueckfragen?",
-            "Wie findet man die wichtigsten Naechsten Schritte schnell?",
+            "Welche Fehler führen am häufigsten zu Rückfragen?",
+            "Wie findet man die wichtigsten nächsten Schritte schnell?",
         ]
     return [
         (
@@ -8490,12 +8492,12 @@ def _build_question_topic_outline_headings(
             if focus_heading and not use_generic_focus_questions
             else f"Worauf kommt es bei {subject_question_context} wirklich an?"
         ),
-        "Welche Fehler sind im Alltag haeufig?",
+        "Welche Fehler sind im Alltag häufig?",
         "Welche Kriterien helfen bei der Einordnung weiter?",
         (
-            "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
+            "Wie lässt sich das in der Praxis sinnvoll umsetzen?"
             if use_generic_focus_questions
-            else "Welche naechsten Schritte bringen in der Praxis am meisten?"
+            else f"Wie lässt sich {subject_question_context} in der Praxis sinnvoll umsetzen?"
         ),
     ]
 
@@ -8505,35 +8507,55 @@ def _ensure_outline_heading_capacity(
     *,
     body_section_count: int,
     article_angle: str,
+    topic: str,
+    primary_keyword: str,
+    topic_signature: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     out = [str(item).strip() for item in headings if str(item).strip()]
+    signature = topic_signature or {}
+    subject_phrase = str(
+        signature.get("subject_phrase") or _build_topic_phrase(topic) or _build_topic_phrase(primary_keyword) or "dieses Thema"
+    ).strip()
+    focus_heading = _select_outline_focus_heading(
+        topic=topic,
+        primary_keyword=primary_keyword,
+        topic_signature=signature,
+    )
+    detail_focus = _extract_topic_detail_focus_phrase(topic)
+    anchored_context = (
+        _format_question_focus_context(detail_focus)
+        or _format_question_focus_context(subject_phrase)
+        or _format_question_focus_context(focus_heading)
+        or "dieser Auswahl"
+    )
+    anchored_label = focus_heading or _format_outline_heading(subject_phrase) or "Dieses Thema"
     fallback_map = {
         "recognition_and_next_steps": [
-            "Welche Warnzeichen sollte man nicht ignorieren?",
+            f"Welche Warnzeichen sollte man bei {anchored_context} nicht ignorieren?",
             "Wie dokumentiert man Beobachtungen sinnvoll?",
         ],
         "process_and_decision_factors": [
-            "Welche Kosten und Fristen sollte man frueh einplanen?",
-            "Wie priorisiert man die naechsten Schritte realistisch?",
+            f"Welche Kosten und Fristen sollte man bei {anchored_context} früh einplanen?",
+            f"Wie priorisiert man die nächsten Schritte bei {anchored_label} realistisch?",
         ],
         "process_and_next_steps": [
-            "Welche Kosten und Fristen sollte man frueh einplanen?",
-            "Wie priorisiert man die naechsten Schritte realistisch?",
+            f"Welche Kosten und Fristen sollte man bei {anchored_context} früh einplanen?",
+            f"Wie priorisiert man die nächsten Schritte bei {anchored_label} realistisch?",
         ],
         "decision_criteria": [
-            "Welche Punkte werden bei der Auswahl haeufig uebersehen?",
-            "Welche Fragen klaeren offene Unterschiede am schnellsten?",
+            f"Welche Unterschiede sollte man bei {anchored_context} genauer prüfen?",
+            f"Welche Fragen helfen bei {anchored_label} am schnellsten weiter?",
         ],
         "comparison_and_evaluation": [
-            "Welche Unterschiede sollte man direkt vergleichen?",
-            "Welche Fragen helfen bei der Bewertung weiter?",
+            f"Welche Unterschiede sollte man bei {anchored_context} direkt vergleichen?",
+            f"Welche Fragen helfen bei der Bewertung von {anchored_label} weiter?",
         ],
     }
     fallbacks = fallback_map.get(
         str(article_angle or "").strip(),
         [
-            "Welche Punkte werden haeufig uebersehen?",
-            "Welche naechsten Schritte helfen bei der Einordnung?",
+            f"Welche Unterschiede zeigen sich bei {anchored_context} in der Praxis?",
+            f"Wie lässt sich {anchored_context} systematisch einordnen?",
         ],
     )
     fallback_index = 0
@@ -9863,6 +9885,9 @@ def _apply_master_article_plan_to_phase_state(
         [str(item).strip() for item in deterministic_headings if str(item).strip()],
         body_section_count=body_section_count,
         article_angle=phase3.get("article_angle", ""),
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        topic_signature=phase3.get("topic_signature"),
     )
     deterministic_heading_index = 0
     converted_sections: List[Dict[str, Any]] = []

@@ -2740,7 +2740,7 @@ def test_build_deterministic_outline_filters_noisy_target_terms_and_uses_decisio
     assert all("Warenkorb" not in heading for heading in headings)
     assert all("Onlineshop" not in heading for heading in headings)
     assert headings[0] == "Sonnenschutz fuer die ganze familie: Welche Kriterien sind entscheidend?"
-    assert any("qualitaetsunterschiede" in heading.lower() for heading in headings)
+    assert any("qualitätsunterschiede" in heading.lower() for heading in headings)
     assert not any("Kinder sonnenbrillen" in heading for heading in headings)
     assert not any("Anzeichen, Ursachen" in heading for heading in headings)
 
@@ -2847,7 +2847,7 @@ def test_build_question_topic_outline_headings_avoids_action_led_heading_scaffol
     )
 
     assert headings[0] == "Worauf kommt es bei der Raumoptimierung wirklich an?"
-    assert headings[-1] == "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
+    assert headings[-1] == "Wie lässt sich das in der Praxis sinnvoll umsetzen?"
     assert not any("wohnräume gestalten:" in heading.lower() for heading in headings)
 
 

@@ -390,6 +390,8 @@ def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
     assert body_h2s[1] != "Fertighaus oder Massivbau: Welche Bauweise passt zu Ihrem Grundstück"
     assert body_h2s[2] != "Bauphasen koordinieren: Von der Grundsteinlegung bis zur Schlüsselübergabe"
     assert body_h2s[3] != "Schritt für Schritt: So erstellen Sie Ihren persönlichen Kostenplan"
+    assert "lässt" in body_h2s[3] or "häufig" in body_h2s[3] or "früh" in body_h2s[3] or "nächsten" in body_h2s[3]
+    assert "haeufig" not in body_h2s[3]
     assert not phase4["h1"].endswith(": Welche Schritte")
     assert phase4["sections"][-2]["h2"] == "Fazit"
     assert phase4["sections"][-1]["h2"] == "FAQ"

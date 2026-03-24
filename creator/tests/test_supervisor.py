@@ -155,3 +155,20 @@ def test_create_master_article_plan_calls_provider_with_expected_schema() -> Non
     assert "concrete homeowner examples" in " ".join(result.quality_requirements).lower()
     assert provider.calls[0]["request_label"] == "test_supervisor"
     assert "publishing_candidates" in provider.calls[0]["user_prompt"]
+
+
+def test_publishing_candidate_input_trims_internal_link_titles_to_limit() -> None:
+    candidate = PublishingCandidateInput(
+        site_url="https://publisher-three.example.com",
+        internal_link_titles=[
+            "Titel 1",
+            "Titel 2",
+            "Titel 3",
+            "Titel 4",
+            "Titel 5",
+            "Titel 6",
+        ],
+    )
+
+    assert len(candidate.internal_link_titles) == 5
+    assert candidate.internal_link_titles[-1] == "Titel 5"

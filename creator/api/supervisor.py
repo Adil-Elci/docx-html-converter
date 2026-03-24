@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, ValidationInfo, field_validator
 from pydantic import ValidationError
 
 from .decision_schemas import MasterArticlePlan
@@ -80,10 +80,15 @@ class PublishingCandidateInput(BaseModel):
 
     @field_validator("internal_link_titles", "notes", mode="before")
     @classmethod
-    def _clean_string_lists(cls, value: Any) -> List[str]:
+    def _clean_string_lists(cls, value: Any, info: ValidationInfo) -> List[str]:
         if not isinstance(value, list):
             return []
-        return [str(item).strip() for item in value if str(item).strip()]
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if info.field_name == "internal_link_titles":
+            return cleaned[:5]
+        if info.field_name == "notes":
+            return cleaned[:8]
+        return cleaned
 
     def prompt_payload(self) -> Dict[str, Any]:
         return {

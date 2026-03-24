@@ -9567,7 +9567,7 @@ def _build_supervisor_context_from_candidates(
                     str(item.get("title") or "").strip()
                     for item in inventory
                     if isinstance(item, dict) and str(item.get("title") or "").strip()
-                ][:8],
+                ][:5],
                 profile=candidate_record.get("publishing_profile") if isinstance(candidate_record.get("publishing_profile"), dict) else {},
                 notes=candidate_notes,
             )

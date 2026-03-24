@@ -1,4 +1,5 @@
 from creator.api.decision_schemas import DraftArticlePayload
+from creator.api.llm import LLMError
 from creator.api.supervisor import PublishingCandidateInput
 from creator.api.writer import CreatorWriter, WriterContext, build_writer_system_prompt, build_writer_user_prompt
 
@@ -25,6 +26,33 @@ class _StubWriterProvider:
                 "excerpt": "Konkrete Planungstipps für kleine Räume mit Fokus auf Stauraum, Licht und Laufwegen.",
             }
         )
+
+
+class _RetryingWriterProvider:
+    def __init__(self) -> None:
+        self.schema_calls = []
+        self.json_calls = []
+
+    def call_schema(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.schema_calls.append(kwargs)
+        raise LLMError("LLM returned invalid JSON.")
+
+    def call_json(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.json_calls.append(kwargs)
+        return {
+            "article_html": (
+                "<h1>Kleine Räume optimal nutzen: Worauf es bei der Planung ankommt</h1>"
+                "<p>Kleine Räume profitieren von klaren Laufwegen, wandhohem Stauraum und gezielter Beleuchtung.</p>"
+                "<h2>Welche Kriterien sind bei kleinen Räumen entscheidend?</h2>"
+                "<p>Eine Laufbreite von rund 90 cm, helle Lichtquellen und Regale bis knapp unter die Decke helfen bei der Raumplanung.</p>"
+                "<h2>Fazit</h2><p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger und funktionaler.</p>"
+                "<h2>FAQ</h2><h3>Welche Möbel sparen Platz?</h3><p>Klapp- und Mehrzweckmöbel helfen besonders in kleinen Grundrissen.</p>"
+            ),
+            "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
+            "meta_description": "Konkrete Tipps zu Stauraum, Laufbreite, Licht und Möbelwahl für kleine Räume mit praxisnaher Wohnraumplanung.",
+            "slug": "kleine-raeume-optimal-nutzen",
+            "excerpt": "Konkrete Planungstipps für kleine Räume mit Fokus auf Stauraum, Licht und Laufwegen.",
+        }
 
 
 def _sample_master_plan():  # type: ignore[no-untyped-def]
@@ -157,3 +185,24 @@ def test_writer_calls_provider_with_draft_schema() -> None:
     assert result.slug == "kleine-raeume-optimal-nutzen"
     assert provider.calls[0]["request_label"] == "writer_test"
     assert provider.calls[0]["schema_model"] is DraftArticlePayload
+
+
+def test_writer_retries_with_compact_json_prompt_after_invalid_json() -> None:
+    provider = _RetryingWriterProvider()
+    writer = CreatorWriter(provider=provider)
+    context = WriterContext(
+        target_site_url="https://www.eigenheim-blog.com/",
+        publishing_site_url="https://publisher-two.example.com",
+        master_plan=_sample_master_plan(),
+        validation_feedback=[],
+        content_brief="Practical homeowner advice with concrete layout examples.",
+        internal_link_titles=["Stauraum im Flur richtig planen"],
+    )
+
+    result = writer.write_article(context, request_label="writer_retry_test")
+
+    assert result.slug == "kleine-raeume-optimal-nutzen"
+    assert provider.schema_calls[0]["request_label"] == "writer_retry_test"
+    assert provider.json_calls[0]["request_label"] == "writer_retry_test_retry"
+    assert provider.json_calls[0]["allow_html_fallback"] is True
+    assert "previous response was invalid or incomplete" in provider.json_calls[0]["user_prompt"]

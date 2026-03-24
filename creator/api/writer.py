@@ -4,8 +4,10 @@ import json
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import ValidationError
 
 from .decision_schemas import DraftArticlePayload, MasterArticlePlan
+from .llm import LLMError
 from .llm_provider import CreatorLLMProvider, LLMRole, build_provider, schema_prompt_block
 
 
@@ -55,6 +57,7 @@ Requirements:
 - Do not include hyperlinks. The application inserts them later.
 - Avoid advertorial phrasing, generic filler, and repeated keyword stuffing.
 - Keep metadata aligned with the plan.
+- Keep JSON compact. Minify article_html inside the JSON string and do not add commentary outside the JSON object.
 - Return only valid JSON that matches the schema exactly.
 """
 
@@ -87,9 +90,31 @@ class CreatorWriter:
         *,
         request_label: str = "writer_draft_article",
     ) -> DraftArticlePayload:
-        return self.provider.call_schema(
-            schema_model=DraftArticlePayload,
-            system_prompt=build_writer_system_prompt(),
-            user_prompt=build_writer_user_prompt(context),
-            request_label=request_label,
-        )
+        system_prompt = build_writer_system_prompt()
+        user_prompt = build_writer_user_prompt(context)
+        try:
+            return self.provider.call_schema(
+                schema_model=DraftArticlePayload,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                request_label=request_label,
+            )
+        except (LLMError, ValidationError) as exc:
+            if not hasattr(self.provider, "call_json"):
+                raise
+            retry_prompt = (
+                user_prompt
+                + "\n\nYour previous response was invalid or incomplete."
+                + "\nReturn a smaller but still complete JSON object now."
+                + "\nRules for the retry:"
+                + "\n- Return JSON only."
+                + "\n- Keep article_html compact on a single line."
+                + "\n- Do not include any explanation before or after the JSON."
+            )
+            payload = self.provider.call_json(
+                system_prompt=system_prompt,
+                user_prompt=retry_prompt,
+                request_label=f"{request_label}_retry",
+                allow_html_fallback=True,
+            )
+            return DraftArticlePayload.model_validate(payload)

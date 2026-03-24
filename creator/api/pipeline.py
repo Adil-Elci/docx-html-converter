@@ -16,6 +16,14 @@ import requests
 from bs4 import BeautifulSoup
 
 from .llm import LLMError, call_llm_json, call_llm_text
+from .llm_provider import LLMRole, build_provider
+from .supervisor import (
+    CreatorSupervisor,
+    PublishingCandidateInput,
+    SupervisorContext,
+    build_supervisor_system_prompt,
+    build_supervisor_user_prompt,
+)
 from .trend_cache import (
     get_keyword_trend_cache_entry,
     get_keyword_trend_cache_family_entries,
@@ -36,6 +44,7 @@ from .web import (
     fetch_url,
     sanitize_html,
 )
+from .writer import CreatorWriter, WriterContext, build_writer_system_prompt, build_writer_user_prompt
 
 logger = logging.getLogger("creator.pipeline")
 
@@ -9337,6 +9346,256 @@ def _build_planner_prompt_trace_entry(
     }
 
 
+def _normalize_optional_fit_score(value: Any) -> Optional[float]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 1.0:
+        numeric = numeric / 100.0
+    if numeric < 0.0:
+        return 0.0
+    if numeric > 1.0:
+        return 1.0
+    return numeric
+
+
+def _build_supervisor_context_from_current_site(
+    *,
+    target_site_url: str,
+    publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    target_profile: Dict[str, Any],
+    publishing_profile: Dict[str, Any],
+    phase1: Dict[str, Any],
+    phase2: Dict[str, Any],
+    phase3: Dict[str, Any],
+    pair_fit: Dict[str, Any],
+    recent_titles: List[str],
+    exclude_topics: List[str],
+    anchor: Optional[str],
+    ranked_internal_link_inventory: List[Dict[str, Any]],
+) -> SupervisorContext:
+    candidate_notes = _merge_string_lists(
+        [str(item).strip() for item in (phase2.get("allowed_topics") or []) if str(item).strip()],
+        [str(item).strip() for item in (phase2.get("site_categories") or []) if str(item).strip()],
+        max_items=8,
+    )
+    candidate = PublishingCandidateInput(
+        site_url=publishing_site_url,
+        site_id=publishing_site_id,
+        fit_score=_normalize_optional_fit_score(pair_fit.get("fit_score")),
+        inventory_count=len(ranked_internal_link_inventory),
+        internal_link_titles=[
+            str(item.get("title") or "").strip()
+            for item in ranked_internal_link_inventory
+            if str(item.get("title") or "").strip()
+        ][:8],
+        profile=publishing_profile,
+        notes=candidate_notes,
+    )
+    target_context_notes = _merge_string_lists(
+        [str(item).strip() for item in (phase1.get("sample_page_titles") or []) if str(item).strip()],
+        [str(item).strip() for item in ((phase3.get("content_brief") or {}).get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in ((phase3.get("content_brief") or {}).get("overlap_terms") or []) if str(item).strip()],
+        max_items=10,
+    )
+    target_keyword_hints = _merge_string_lists(
+        [str(item).strip() for item in (phase1.get("keyword_cluster") or []) if str(item).strip()],
+        [str(item).strip() for item in (phase3.get("secondary_keywords") or []) if str(item).strip()],
+        [str(item).strip() for item in ((phase3.get("keyword_buckets") or {}).get("semantic_entities") or []) if str(item).strip()],
+        max_items=10,
+    )
+    return SupervisorContext(
+        target_site_url=target_site_url,
+        target_profile=target_profile,
+        publishing_candidates=[candidate],
+        requested_topic=str(phase3.get("final_article_topic") or "").strip() or None,
+        anchor_text=str(anchor or "").strip() or str(phase1.get("brand_name") or "").strip() or None,
+        exclude_topics=exclude_topics,
+        recent_article_titles=recent_titles,
+        target_keyword_hints=target_keyword_hints,
+        target_context_notes=target_context_notes,
+    )
+
+
+def _apply_master_article_plan_to_phase_state(
+    *,
+    master_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+) -> Dict[str, Any]:
+    keyword_strategy = master_plan.get("keyword_strategy") if isinstance(master_plan.get("keyword_strategy"), dict) else {}
+    title_package = master_plan.get("title_package") if isinstance(master_plan.get("title_package"), dict) else {}
+    backlink_plan = master_plan.get("backlink_plan") if isinstance(master_plan.get("backlink_plan"), dict) else {}
+    sections = master_plan.get("sections") if isinstance(master_plan.get("sections"), list) else []
+    faq_questions = [str(item).strip() for item in (master_plan.get("faq_questions") or []) if str(item).strip()]
+    phase3["final_article_topic"] = str(master_plan.get("topic") or phase3.get("final_article_topic") or "").strip()
+    phase3["search_intent_type"] = str(master_plan.get("intent_type") or phase3.get("search_intent_type") or "").strip()
+    phase3["article_angle"] = str(master_plan.get("article_angle") or phase3.get("article_angle") or "").strip()
+    phase3["primary_keyword"] = str(keyword_strategy.get("primary_keyword") or phase3.get("primary_keyword") or "").strip()
+    phase3["secondary_keywords"] = [
+        str(item).strip()
+        for item in (keyword_strategy.get("secondary_keywords") or [])
+        if str(item).strip()
+    ]
+    phase3["title_package"] = {
+        "h1": str(title_package.get("h1") or phase3.get("title_package", {}).get("h1") or "").strip(),
+        "meta_title": str(title_package.get("meta_title") or phase3.get("title_package", {}).get("meta_title") or "").strip(),
+        "slug": str(title_package.get("slug") or phase3.get("title_package", {}).get("slug") or "").strip(),
+    }
+    existing_style = phase3.get("style_profile") if isinstance(phase3.get("style_profile"), dict) else {}
+    phase3["style_profile"] = {
+        **existing_style,
+        "tone": str(master_plan.get("tone") or existing_style.get("tone") or "").strip(),
+        "audience": str(master_plan.get("audience") or existing_style.get("audience") or "").strip(),
+        "intent_type": phase3.get("search_intent_type", ""),
+        "article_angle": phase3.get("article_angle", ""),
+        "topic_class": phase3.get("topic_class", ""),
+    }
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
+    phase3["keyword_buckets"] = {
+        **keyword_buckets,
+        "primary_query": phase3.get("primary_keyword", ""),
+        "secondary_queries": phase3.get("secondary_keywords") or [],
+        "semantic_entities": [
+            str(item).strip() for item in (keyword_strategy.get("semantic_entities") or []) if str(item).strip()
+        ],
+    }
+    converted_sections: List[Dict[str, Any]] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        kind = str(section.get("kind") or "body").strip()
+        h2 = str(section.get("h2") or "").strip()
+        if not section_id or not h2:
+            continue
+        target_min = section.get("target_min_words")
+        target_max = section.get("target_max_words")
+        target_words: Dict[str, int] = {}
+        if isinstance(target_min, int):
+            target_words["min"] = target_min
+        if isinstance(target_max, int):
+            target_words["max"] = target_max
+        if kind == "faq":
+            faq_min = max(35, int(target_min or 35))
+            faq_max = max(faq_min, int(target_max or 55))
+            target_words = {"per_answer_min": faq_min, "per_answer_max": faq_max}
+        converted_sections.append(
+            {
+                "section_id": section_id,
+                "kind": kind,
+                "h2": h2,
+                "h3": faq_questions if kind == "faq" else [],
+                "goal": str(section.get("goal") or "").strip(),
+                "subquestion": h2 if kind != "faq" else "Welche Rückfragen bleiben offen?",
+                "target_words": target_words,
+                "required_terms": [str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+                "required_keywords": [],
+                "required_elements": [],
+            }
+        )
+    phase4 = {
+        "h1": phase3.get("title_package", {}).get("h1") or "",
+        "outline": [
+            {
+                "h2": section.get("h2"),
+                "h3": section.get("h3") or [],
+            }
+            for section in converted_sections
+        ],
+        "sections": converted_sections,
+        "faq_questions": faq_questions,
+        "backlink_placement": str(backlink_plan.get("placement_hint") or "section_2"),
+        "anchor_text_final": str(backlink_plan.get("anchor_text") or "Weitere Informationen").strip(),
+        "structured_mode": phase3.get("structured_content_mode", "none"),
+        "intent_type": phase3.get("search_intent_type", ""),
+        "article_angle": phase3.get("article_angle", ""),
+        "topic_class": phase3.get("topic_class", ""),
+        "style_profile": phase3.get("style_profile") or {},
+        "specificity_profile": phase3.get("specificity_profile") or {},
+        "supervisor_master_plan": master_plan,
+    }
+    return phase4
+
+
+def _generate_article_from_master_plan(
+    *,
+    master_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    phase4: Dict[str, Any],
+    target_site_url: str,
+    publishing_site_url: str,
+    backlink_url: str,
+    internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
+    min_internal_links: int,
+    max_internal_links: int,
+    validation_feedback: Optional[List[str]] = None,
+    prompt_trace: Optional[List[Dict[str, Any]]] = None,
+    usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    writer_context = WriterContext(
+        target_site_url=target_site_url,
+        publishing_site_url=publishing_site_url,
+        master_plan=master_plan,
+        validation_feedback=list(validation_feedback or []),
+        content_brief=_format_content_brief_prompt_text(phase3.get("content_brief") or {}),
+        internal_link_titles=[
+            _internal_anchor_text(value)
+            for value in internal_link_candidates[:8]
+        ],
+    )
+    provider = build_provider(LLMRole.WRITER, usage_collector=usage_collector)
+    writer = CreatorWriter(provider=provider)
+    request_label = "phase5_writer_attempt_1" if not validation_feedback else "phase5_writer_retry"
+    system_prompt = build_writer_system_prompt()
+    user_prompt = build_writer_user_prompt(writer_context)
+    if prompt_trace is not None:
+        prompt_trace.append(
+            {
+                "attempt": len(prompt_trace) + 1,
+                "request_label": request_label,
+                "model": provider.config.model,
+                "max_tokens": provider.config.max_tokens,
+                "validation_feedback": list(validation_feedback or []),
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+            }
+        )
+    raw_payload = writer.write_article(
+        writer_context,
+        request_label=request_label,
+    )
+    article_payload = raw_payload.model_dump(mode="json")
+    article_payload["article_html"] = _sanitize_generated_fragment_html(str(article_payload.get("article_html") or "").strip())
+    article_payload["article_html"] = _strip_all_links(article_payload["article_html"])
+    article_payload["article_html"] = _ensure_required_h1(article_payload["article_html"], str(phase4.get("h1") or ""))
+    article_payload["article_html"] = _ensure_primary_keyword_in_intro(
+        article_payload["article_html"],
+        phase3.get("primary_keyword", ""),
+    )
+    article_payload["article_html"] = _repair_link_constraints(
+        article_html=article_payload["article_html"],
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
+        min_internal_links=min_internal_links,
+        max_internal_links=max_internal_links,
+        backlink_placement=str(phase4.get("backlink_placement") or "intro"),
+        anchor_text=str(phase4.get("anchor_text_final") or "Weitere Informationen"),
+        required_h1=str(phase4.get("h1") or ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+    )
+    article_payload["article_html"] = _normalize_faq_section_questions(article_payload["article_html"])
+    article_payload["article_html"] = _strip_empty_blocks(article_payload["article_html"])
+    article_payload["article_html"] = _strip_leading_empty_blocks(article_payload["article_html"])
+    article_payload["article_html"] = _trim_article_to_word_limit(article_payload["article_html"], ARTICLE_MAX_WORDS)
+    article_payload["excerpt"] = str(article_payload.get("excerpt") or "").strip() or _extract_first_paragraph_text(article_payload["article_html"])[:200]
+    return article_payload
+
+
 def _build_execution_trace_event(
     *,
     level: str,
@@ -9431,6 +9690,7 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
     prompt_trace = debug.get("prompt_trace") if isinstance(debug.get("prompt_trace"), dict) else {}
     if not prompt_trace:
         prompt_trace = {
+            "supervisor_attempts": [],
             "planner": {
                 "mode": "deterministic",
                 "attempts": [],
@@ -9439,6 +9699,8 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
             "repair_attempts": [],
         }
         debug["prompt_trace"] = prompt_trace
+    if not isinstance(prompt_trace.get("supervisor_attempts"), list):
+        prompt_trace["supervisor_attempts"] = []
 
     planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else None
     if planner_trace is None:
@@ -11148,6 +11410,7 @@ def run_creator_pipeline(
         "tokens_by_phase": tokens_by_phase,
         "tokens_by_label": tokens_by_label,
         "prompt_trace": {
+            "supervisor_attempts": [],
             "planner": {
                 "mode": "deterministic",
                 "attempts": [],
@@ -11173,6 +11436,7 @@ def run_creator_pipeline(
 
     execution_policy = _build_pipeline_execution_policy()
     strict_failure_mode = bool(execution_policy["strict_failure_mode"])
+    supervisor_pipeline_enabled = _read_bool_env("CREATOR_SUPERVISOR_PIPELINE_ENABLED", False)
     http_timeout = _read_int_env("CREATOR_HTTP_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
     http_retries = _read_non_negative_int_env("CREATOR_HTTP_RETRIES", DEFAULT_HTTP_RETRIES)
     site_analysis_max_pages = max(1, _read_int_env("CREATOR_SITE_ANALYSIS_MAX_PAGES", DEFAULT_SITE_ANALYSIS_MAX_PAGES))
@@ -11226,6 +11490,7 @@ def run_creator_pipeline(
     debug["keyword_trends_enabled"] = keyword_trends_enabled
     debug["keyword_trend_cache_ttl_seconds"] = keyword_trend_cache_ttl_seconds
     debug["strict_failure_mode"] = strict_failure_mode
+    debug["supervisor_pipeline_enabled"] = supervisor_pipeline_enabled
     provided_internal_link_inventory = _coerce_internal_link_inventory(internal_link_inventory)
     target_profile = _coerce_site_profile_payload(target_profile_payload)
     publishing_profile = _coerce_site_profile_payload(publishing_profile_payload)
@@ -11772,34 +12037,149 @@ def run_creator_pipeline(
         if isinstance(debug.get("prompt_trace"), dict)
         else None
     )
-    if isinstance(planner_prompt_trace, dict):
-        planner_attempts = planner_prompt_trace.setdefault("attempts", [])
-        if isinstance(planner_attempts, list):
-            planner_attempts.append(
+    supervisor_prompt_trace = (
+        (debug.get("prompt_trace") or {}).get("supervisor_attempts")
+        if isinstance(debug.get("prompt_trace"), dict)
+        else None
+    )
+    if supervisor_pipeline_enabled:
+        supervisor_context = _build_supervisor_context_from_current_site(
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            publishing_site_id=publishing_site_id,
+            target_profile=target_profile,
+            publishing_profile=publishing_profile,
+            phase1=phase1,
+            phase2=phase2,
+            phase3=phase3,
+            pair_fit=pair_fit,
+            recent_titles=safe_recent_titles,
+            exclude_topics=safe_exclude,
+            anchor=anchor,
+            ranked_internal_link_inventory=ranked_internal_link_inventory,
+        )
+        supervisor_provider = build_provider(LLMRole.SUPERVISOR, usage_collector=_collect_llm_usage)
+        supervisor = CreatorSupervisor(provider=supervisor_provider)
+        supervisor_system_prompt = build_supervisor_system_prompt()
+        supervisor_user_prompt = build_supervisor_user_prompt(supervisor_context)
+        if isinstance(supervisor_prompt_trace, list):
+            supervisor_prompt_trace.append(
                 {
-                    "attempt": len(planner_attempts) + 1,
-                    "input_packet": {
-                        "topic": phase3.get("final_article_topic", ""),
-                        "primary_keyword": phase3.get("primary_keyword", ""),
-                        "secondary_keywords": phase3.get("secondary_keywords") or [],
-                        "keyword_buckets": phase3.get("keyword_buckets") or {},
-                        "keyword_provenance": phase3.get("keyword_provenance") or {},
-                        "intent_type": phase3.get("search_intent_type", ""),
-                        "article_angle": phase3.get("article_angle", ""),
-                        "topic_class": phase3.get("topic_class", ""),
-                        "style_profile": phase3.get("style_profile") or {},
-                        "specificity_profile": phase3.get("specificity_profile") or {},
-                        "title_package": phase3.get("title_package") or {},
-                        "content_brief": phase3.get("content_brief") or {},
-                        "faq_candidates": phase3.get("faq_candidates") or [],
-                        "recent_article_titles": safe_recent_titles[:8],
-                        "internal_link_candidates": internal_links_prompt_entries[:8],
-                    },
-                    "plan": phase4,
-                    "planning_quality": plan_quality,
+                    "attempt": len(supervisor_prompt_trace) + 1,
+                    "request_label": "phase4_supervisor_master_article_plan",
+                    "model": supervisor_provider.config.model,
+                    "max_tokens": supervisor_provider.config.max_tokens,
+                    "system_prompt": supervisor_system_prompt,
+                    "user_prompt": supervisor_user_prompt,
                 }
             )
+        master_plan_model = supervisor.create_master_article_plan(
+            supervisor_context,
+            request_label="phase4_supervisor_master_article_plan",
+        )
+        master_plan = master_plan_model.model_dump(mode="json")
+        selected_publishing_site = str((master_plan.get("publishing_site") or {}).get("site_url") or "").strip()
+        if _normalize_url(selected_publishing_site) != _normalize_url(publishing_site_url):
+            _append_execution_trace_event(
+                creator_trace,
+                level="error",
+                phase="phase4",
+                event="supervisor_selected_unavailable_site",
+                message="Supervisor selected a publishing site that is not available in the current pipeline payload.",
+                details={
+                    "selected_publishing_site": selected_publishing_site,
+                    "current_publishing_site": publishing_site_url,
+                },
+            )
+            raise CreatorError(
+                "Supervisor selected a publishing site that is not available in the current pipeline payload."
+            )
+        phase4 = _apply_master_article_plan_to_phase_state(
+            master_plan=master_plan,
+            phase3=phase3,
+        )
+        plan_quality = _evaluate_plan_quality(
+            title=str(phase4.get("h1") or "").strip(),
+            headings=[str(item.get("h2") or "").strip() for item in (phase4.get("outline") or []) if str(item.get("h2") or "").strip()],
+            primary_keyword=phase3.get("primary_keyword", ""),
+            topic=phase3.get("final_article_topic", ""),
+            intent_type=phase3.get("search_intent_type", ""),
+            article_angle=phase3.get("article_angle", ""),
+            topic_signature=phase3.get("topic_signature"),
+            specificity_profile=phase3.get("specificity_profile"),
+            recent_titles=safe_recent_titles,
+        )
+        if isinstance(planner_prompt_trace, dict):
+            planner_prompt_trace["mode"] = "supervisor"
+            planner_attempts = planner_prompt_trace.setdefault("attempts", [])
+            if isinstance(planner_attempts, list):
+                planner_attempts.append(
+                    {
+                        "attempt": len(planner_attempts) + 1,
+                        "input_packet": supervisor_context.prompt_payload(),
+                        "plan": phase4,
+                        "planning_quality": plan_quality,
+                    }
+                )
+        debug["supervisor_master_plan"] = master_plan
+    else:
+        if isinstance(planner_prompt_trace, dict):
+            planner_attempts = planner_prompt_trace.setdefault("attempts", [])
+            if isinstance(planner_attempts, list):
+                planner_attempts.append(
+                    {
+                        "attempt": len(planner_attempts) + 1,
+                        "input_packet": {
+                            "topic": phase3.get("final_article_topic", ""),
+                            "primary_keyword": phase3.get("primary_keyword", ""),
+                            "secondary_keywords": phase3.get("secondary_keywords") or [],
+                            "keyword_buckets": phase3.get("keyword_buckets") or {},
+                            "keyword_provenance": phase3.get("keyword_provenance") or {},
+                            "intent_type": phase3.get("search_intent_type", ""),
+                            "article_angle": phase3.get("article_angle", ""),
+                            "topic_class": phase3.get("topic_class", ""),
+                            "style_profile": phase3.get("style_profile") or {},
+                            "specificity_profile": phase3.get("specificity_profile") or {},
+                            "title_package": phase3.get("title_package") or {},
+                            "content_brief": phase3.get("content_brief") or {},
+                            "faq_candidates": phase3.get("faq_candidates") or [],
+                            "recent_article_titles": safe_recent_titles[:8],
+                            "internal_link_candidates": internal_links_prompt_entries[:8],
+                        },
+                        "plan": phase4,
+                        "planning_quality": plan_quality,
+                    }
+                )
     if plan_quality["errors"]:
+        if supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict):
+            _append_execution_trace_event(
+                creator_trace,
+                level="error",
+                phase="phase4",
+                event="plan_invalid",
+                message="Supervisor master article plan failed validation.",
+                details={"errors": plan_quality["errors"]},
+            )
+            partial_output = _build_partial_creator_output(
+                target_site_url=target_site_url,
+                publishing_site_url=publishing_site_url,
+                phase1=phase1,
+                phase1_cache_meta=phase1_cache_meta,
+                phase2=phase2,
+                phase2_cache_meta=phase2_cache_meta,
+                phase3=phase3,
+                phase4=phase4,
+                warnings=warnings,
+                debug={
+                    **debug,
+                    "planning_quality": plan_quality,
+                },
+                rejection_reason=plan_quality["errors"],
+            )
+            raise CreatorError(
+                f"Phase 4 plan invalid: {plan_quality['errors']}",
+                details={"creator_output": partial_output},
+            )
         warnings.append("phase4_plan_regenerated")
         _append_execution_trace_event(
             creator_trace,
@@ -12012,28 +12392,45 @@ def run_creator_pipeline(
             details={"attempt": attempt},
         )
         try:
-            writer_max_tokens = max(
-                phase5_max_tokens_attempt1 if attempt == 1 else phase5_max_tokens_retry,
-                writer_token_floor,
-            )
-            article_payload = _generate_article_from_plan(
-                article_plan=phase4,
-                phase3=phase3,
-                backlink_url=backlink_url,
-                publishing_site_url=publishing_site_url,
-                internal_link_candidates=internal_link_candidates,
-                internal_link_anchor_map=internal_link_anchor_map,
-                min_internal_links=effective_internal_min,
-                max_internal_links=effective_internal_max,
-                llm_api_key=llm_api_key,
-                llm_base_url=llm_base_url,
-                llm_model=writing_model,
-                http_timeout=http_timeout,
-                max_tokens=writer_max_tokens,
-                validation_feedback=writer_feedback if writer_feedback else None,
-                prompt_trace=((debug.get("prompt_trace") or {}).get("writer_attempts") if isinstance(debug.get("prompt_trace"), dict) else None),
-                usage_collector=_collect_llm_usage,
-            )
+            if supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict):
+                article_payload = _generate_article_from_master_plan(
+                    master_plan=phase4.get("supervisor_master_plan") or {},
+                    phase3=phase3,
+                    phase4=phase4,
+                    target_site_url=target_site_url,
+                    publishing_site_url=publishing_site_url,
+                    backlink_url=backlink_url,
+                    internal_link_candidates=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                    validation_feedback=writer_feedback if writer_feedback else None,
+                    prompt_trace=((debug.get("prompt_trace") or {}).get("writer_attempts") if isinstance(debug.get("prompt_trace"), dict) else None),
+                    usage_collector=_collect_llm_usage,
+                )
+            else:
+                writer_max_tokens = max(
+                    phase5_max_tokens_attempt1 if attempt == 1 else phase5_max_tokens_retry,
+                    writer_token_floor,
+                )
+                article_payload = _generate_article_from_plan(
+                    article_plan=phase4,
+                    phase3=phase3,
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    internal_link_candidates=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                    llm_api_key=llm_api_key,
+                    llm_base_url=llm_base_url,
+                    llm_model=writing_model,
+                    http_timeout=http_timeout,
+                    max_tokens=writer_max_tokens,
+                    validation_feedback=writer_feedback if writer_feedback else None,
+                    prompt_trace=((debug.get("prompt_trace") or {}).get("writer_attempts") if isinstance(debug.get("prompt_trace"), dict) else None),
+                    usage_collector=_collect_llm_usage,
+                )
         except LLMError as exc:
             if strict_failure_mode:
                 _append_execution_trace_event(

@@ -52,6 +52,7 @@ from creator.api.pipeline import (
     _pair_fit_cache_payload_is_usable,
     _repair_keyword_context_gaps,
     _repair_attempt_introduced_regressions,
+    _finalize_secondary_keywords,
     _select_phase4_repair_topic,
     _render_article_from_plan,
     _run_pair_fit_reasoning,
@@ -2848,6 +2849,61 @@ def test_build_question_topic_outline_headings_avoids_action_led_heading_scaffol
     assert headings[0] == "Worauf kommt es bei der Raumoptimierung wirklich an?"
     assert headings[-1] == "Wie laesst sich das in der Praxis sinnvoll umsetzen?"
     assert not any("wohnräume gestalten:" in heading.lower() for heading in headings)
+
+
+def test_build_deterministic_title_package_builds_full_meta_title_for_home_topics():
+    title_package = _build_deterministic_title_package(
+        topic="Kleine Räume optimal nutzen: Praktische Tipps für clevere Wohnraumplanung",
+        primary_keyword="kleine räume optimal nutzen",
+        secondary_keywords=["wohnraumplanung stauraum", "wohnraumplanung beleuchtung"],
+        search_intent_type="commercial_investigation",
+        structured_mode="none",
+        current_year=2026,
+        article_angle="decision_criteria",
+        topic_class="home",
+    )
+
+    assert len(title_package["meta_title"]) >= 40
+    assert "kleine räume optimal nutzen" in title_package["meta_title"].lower()
+    assert ":" in title_package["meta_title"]
+
+
+def test_finalize_secondary_keywords_refines_home_topic_fragments():
+    keywords = _finalize_secondary_keywords(
+        topic="Kleine Räume optimal nutzen: Praktische Tipps für clevere Wohnraumplanung",
+        primary_keyword="kleine räume optimal nutzen",
+        secondary_keywords=["kleine auswahl", "kleine entscheidung", "kleine vergleich"],
+        keyword_cluster=["wohnraumplanung", "stauraum", "beleuchtung", "grundriss"],
+        allowed_topics=[],
+        topic_signature={
+            "subject_phrase": "kleine räume optimal nutzen",
+            "primary_keyword": "kleine räume optimal nutzen",
+            "topic_class": "home",
+            "target_terms": ["wohnraumplanung", "stauraum"],
+        },
+    )
+
+    assert not any(item in {"kleine auswahl", "kleine entscheidung", "kleine vergleich"} for item in keywords)
+    assert any("wohnraumplanung" in item for item in keywords)
+    assert any(any(term in item for term in ("stauraum", "beleuchtung", "grundriss")) for item in keywords)
+
+
+def test_evaluate_specificity_accepts_concrete_home_details():
+    evaluation = _evaluate_specificity(
+        article_html="""
+        <h1>Kleine Räume optimal nutzen</h1>
+        <p>Wandhohe Regale ab 220 cm schaffen mehr Stauraum, waehrend zwischen Moebeln mindestens 90 cm Laufbreite bleiben sollten.</p>
+        <p>Mehrere Lichtquellen mit 2700 bis 3000 Kelvin, ein Teppich mit 60 cm Ueberstand und stabile Scharniere verbessern Wohnkomfort und Raumwirkung.</p>
+        """,
+        specificity_profile=_build_specificity_profile(
+            topic="Kleine Räume optimal nutzen: Praktische Tipps für clevere Wohnraumplanung",
+            topic_class="home",
+            intent_type="commercial_investigation",
+        ),
+    )
+
+    assert evaluation["errors"] == []
+    assert len(evaluation["hits"]) >= 3
 
 
 def test_derive_trend_query_family_groups_question_variant():

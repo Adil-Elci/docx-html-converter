@@ -286,14 +286,15 @@ TOPIC_CLASS_KEYWORDS = {
 SPECIFICITY_SIGNAL_BUCKETS = {
     "home": {
         "space_planning": {
-            "bewegungsflaeche", "einbaumoebel", "flaeche", "grundriss", "moebel", "moeblierung",
-            "proportion", "raumgroesse", "stauraum",
+            "bewegungsflaeche", "einbaumoebel", "flaeche", "grundriss", "klapptisch", "laufbreite",
+            "moebel", "moeblierung", "proportion", "raumgroesse", "regal", "regale", "schubladen",
+            "schrank", "schraenke", "schränke", "stauraum", "transport",
         },
         "light_color": {
-            "beleuchtung", "farbton", "farbe", "kelvin", "licht", "tageslicht", "wandfarbe",
+            "beleuchtung", "farbton", "farbe", "kelvin", "licht", "lichtquellen", "tageslicht", "wandfarbe",
         },
         "materials_comfort": {
-            "akustik", "boden", "material", "teppich", "textilien", "vorhaenge", "wohnkomfort",
+            "akustik", "boden", "material", "scharniere", "teppich", "teppiche", "textilien", "vorhaenge", "wohnkomfort",
         },
     },
     "real_estate": {
@@ -406,12 +407,23 @@ GENERIC_AUDIENCE_TOKENS = {
 }
 EDITORIAL_DESCRIPTOR_TOKENS = {
     "alltagsnahe",
+    "clevere",
+    "cleveren",
     "kompakte",
     "konkrete",
+    "effiziente",
+    "effizienten",
+    "moderne",
+    "modernen",
+    "optimal",
+    "optimale",
+    "optimalen",
     "praktische",
     "praktischer",
     "praktischen",
     "praktischem",
+    "smarte",
+    "smarten",
     "sinnvolle",
     "sinnvollen",
     "wertvolle",
@@ -1019,6 +1031,113 @@ def _derive_title_support_clause_variants(
     return _dedupe_string_values([item for item in candidates if str(item or "").strip()])
 
 
+def _derive_compact_meta_support_clause(topic: str) -> str:
+    detail_focus = _format_question_focus_context(_extract_topic_detail_focus_phrase(topic))
+    if not detail_focus:
+        return ""
+    if detail_focus.startswith("der "):
+        return f"Tipps zur {detail_focus[4:].strip()}"
+    if detail_focus.startswith("die "):
+        return f"Tipps zur {detail_focus[4:].strip()}"
+    if detail_focus.startswith("das "):
+        return f"Tipps zum {detail_focus[4:].strip()}"
+    return f"Tipps zu {detail_focus}"
+
+
+def _derive_compact_meta_support_variants(*, article_angle: str, intent_type: str, structured_mode: str) -> List[str]:
+    candidates: List[str] = []
+    if article_angle == "recognition_and_next_steps":
+        candidates.extend(["Chancen und Risiken", "Signale und Einordnung"])
+    elif article_angle in {"process_and_decision_factors", "process_and_next_steps"}:
+        candidates.extend(["Wichtige Schritte", "Ablauf und Unterlagen"])
+    elif article_angle == "decision_criteria" or structured_mode == "table":
+        candidates.extend(["Wichtige Kriterien", "Auswahl und Qualität"])
+    elif intent_type == "navigational":
+        candidates.extend(["Die wichtigsten Infos", "Schneller Überblick"])
+    else:
+        candidates.extend(["Praxis und Auswahl", "Wichtige Fragen"])
+    return _dedupe_string_values(candidates)
+
+
+def _build_deterministic_meta_title(
+    *,
+    h1: str,
+    topic: str,
+    primary_keyword: str,
+    subject_title: str,
+    question_title: str,
+    support_clause_variants: List[str],
+    article_angle: str,
+    intent_type: str,
+    structured_mode: str,
+) -> str:
+    primary_title = _format_title_case(_sanitize_editorial_phrase(primary_keyword))
+    compact_clause = _derive_compact_meta_support_clause(topic)
+    raw_candidates: List[str] = []
+
+    def _push_candidate(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+        if not cleaned or cleaned in raw_candidates:
+            return
+        raw_candidates.append(cleaned)
+
+    _push_candidate(h1)
+    _push_candidate(subject_title)
+    _push_candidate(question_title)
+    if primary_title:
+        _push_candidate(primary_title)
+    if compact_clause and primary_title:
+        _push_candidate(f"{primary_title}: {compact_clause}")
+    if compact_clause and subject_title:
+        _push_candidate(f"{subject_title}: {compact_clause}")
+    for clause in _derive_compact_meta_support_variants(
+        article_angle=article_angle,
+        intent_type=intent_type,
+        structured_mode=structured_mode,
+    ):
+        if primary_title:
+            _push_candidate(f"{primary_title}: {clause}")
+        if subject_title and subject_title != primary_title:
+            _push_candidate(f"{subject_title}: {clause}")
+    for clause in support_clause_variants[:3]:
+        if primary_title:
+            _push_candidate(f"{primary_title}: {clause}")
+        if subject_title and subject_title != primary_title:
+            _push_candidate(f"{subject_title}: {clause}")
+
+    best_title = _truncate_title(h1, max_chars=SEO_TITLE_MAX_CHARS)
+    best_score = float("-inf")
+    for raw_candidate in raw_candidates:
+        candidate = _truncate_title(raw_candidate, max_chars=SEO_TITLE_MAX_CHARS)
+        if not candidate:
+            continue
+        quality = _evaluate_title_quality(
+            title=candidate,
+            primary_keyword=primary_keyword,
+            topic=topic,
+            max_chars=SEO_TITLE_MAX_CHARS,
+        )
+        score = float(quality["score"])
+        if len(candidate) < SEO_TITLE_MIN_CHARS:
+            score -= 18
+        if primary_keyword and not _title_carries_keyword_phrase(candidate, primary_keyword):
+            score -= 12
+        if primary_title and _title_carries_keyword_phrase(candidate, primary_title):
+            score += 4
+        if (
+            primary_title
+            and _normalize_keyword_phrase(candidate) == _normalize_keyword_phrase(primary_title)
+            and len(candidate) >= SEO_TITLE_MIN_CHARS
+        ):
+            score += 8
+        if ":" in candidate and len(candidate) >= SEO_TITLE_MIN_CHARS:
+            score += 2
+        if score > best_score:
+            best_title = candidate
+            best_score = score
+    return best_title
+
+
 def _heading_generic_penalty(heading: str) -> int:
     normalized = _normalize_keyword_phrase(heading)
     penalty = 0
@@ -1248,6 +1367,11 @@ def _title_has_dangling_suffix_fragment(value: str) -> bool:
     tail_tokens = tail.split()
     if not tail_tokens:
         return False
+    if len(tail_tokens) <= 2 and all(
+        token in {"auswahl", "einordnung", "kriterien", "praxis", "qualitaet", "qualität", "tipps", "vergleich"}
+        for token in tail_tokens
+    ):
+        return True
     if len(tail_tokens) <= 3 and (
         tail_tokens[0] in GERMAN_QUESTION_PREFIXES
         or any(token in ABSTRACT_QUERY_TOKENS for token in tail_tokens)
@@ -1591,8 +1715,18 @@ def _extract_topic_detail_focus_phrase(topic: str) -> str:
     return cleaned
 
 
-def _format_question_focus_context(value: str) -> str:
+def _normalize_context_focus_phrase(value: str) -> str:
     normalized = _sanitize_editorial_phrase(value, allow_single_token=True)
+    if not normalized:
+        return ""
+    words = normalized.split()
+    while len(words) > 1 and words[0] in EDITORIAL_DESCRIPTOR_TOKENS:
+        words.pop(0)
+    return " ".join(words).strip()
+
+
+def _format_question_focus_context(value: str) -> str:
+    normalized = _normalize_context_focus_phrase(value)
     if not normalized:
         return ""
     words = normalized.split()
@@ -1614,6 +1748,7 @@ def _focus_heading_needs_generic_question_templates(
     topic_signature: Optional[Dict[str, Any]] = None,
 ) -> bool:
     normalized_focus = _normalize_keyword_phrase(focus_heading)
+    detail_focus = _normalize_keyword_phrase(_normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(topic)))
     if not normalized_focus:
         return True
     if _topic_phrase_is_action_led(normalized_focus):
@@ -1621,7 +1756,13 @@ def _focus_heading_needs_generic_question_templates(
     if _keyword_candidate_has_subject_noise(normalized_focus):
         return True
     subject_phrase = str((topic_signature or {}).get("subject_phrase") or _extract_topic_subject_phrase(topic) or "").strip()
-    detail_focus = _extract_topic_detail_focus_phrase(topic)
+    if (
+        detail_focus
+        and _topic_phrase_is_action_led(subject_phrase)
+        and normalized_focus == detail_focus
+        and len(normalized_focus.split()) <= 2
+    ):
+        return True
     if (
         detail_focus
         and _keyword_similarity(normalized_focus, _normalize_keyword_phrase(subject_phrase or topic)) >= 0.82
@@ -1638,8 +1779,10 @@ def _select_outline_focus_heading(
     topic_signature: Optional[Dict[str, Any]] = None,
 ) -> str:
     signature = topic_signature or {}
+    detail_focus = _normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(topic))
     candidates = [
         str(signature.get("question_phrase") or "").strip(),
+        detail_focus,
         str(signature.get("subject_phrase") or "").strip(),
         _extract_topic_subject_phrase(topic),
         _build_topic_phrase(topic),
@@ -1923,7 +2066,17 @@ def _build_deterministic_title_package(
         )["score_penalty"]
         if fallback_score >= current_score:
             h1 = natural_fallback
-    meta_title = _truncate_title(h1)
+    meta_title = _build_deterministic_meta_title(
+        h1=h1,
+        topic=topic,
+        primary_keyword=primary_keyword,
+        subject_title=_format_title_case(subject_title or primary_keyword or topic or ""),
+        question_title=_format_sentence_start(question_title),
+        support_clause_variants=support_clause_variants,
+        article_angle=article_angle,
+        intent_type=search_intent_type,
+        structured_mode=structured_mode,
+    )
     slug_seed = primary_keyword or topic
     slug = _derive_slug(slug_seed)[:SEO_SLUG_MAX_CHARS]
     return {"h1": h1, "meta_title": meta_title, "slug": slug}
@@ -3304,6 +3457,10 @@ def _fill_article_metadata(article_payload: Dict[str, Any], fallback_title: str)
     if not excerpt:
         excerpt = _infer_meta_description(html)[:200]
     meta_title = str(article_payload.get("meta_title") or "").strip() or fallback_title
+    if len(meta_title) < SEO_TITLE_MIN_CHARS or len(meta_title) > SEO_TITLE_MAX_CHARS:
+        fallback_meta_title = _truncate_title(fallback_title, max_chars=SEO_TITLE_MAX_CHARS)
+        if fallback_meta_title:
+            meta_title = fallback_meta_title
     meta_description = str(article_payload.get("meta_description") or "").strip() or _infer_meta_description(html)
     slug = str(article_payload.get("slug") or "").strip() or _derive_slug(meta_title or fallback_title)
     article_payload["meta_title"] = meta_title
@@ -3917,11 +4074,32 @@ def _keyword_candidate_is_query_like(
     candidate_domain_tokens = _keyword_query_core_tokens(normalized)
     if not candidate_domain_tokens:
         return False
+    topic_class = str((topic_signature or {}).get("topic_class") or _infer_topic_class_from_keyword_signals(topic, primary_keyword, reference_phrase)).strip()
+    detail_focus_tokens = _keyword_query_core_tokens(_normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(topic)))
+    specificity_profile = _build_specificity_profile(topic=topic, topic_class=topic_class or "general", intent_type="informational")
+    specificity_tokens = {
+        token
+        for bucket_tokens in (specificity_profile.get("buckets") or {}).values()
+        for token in [str(item).strip() for item in bucket_tokens if str(item).strip()]
+    }
     family_domain_overlap = {
         token
         for token in candidate_domain_tokens
         if _token_matches_reference_family(token, reference_domain_tokens, allow_prefix_match=False)
     }
+    detail_focus_overlap = {
+        token
+        for token in candidate_domain_tokens
+        if token in detail_focus_tokens
+        or any(_token_matches_reference_family(token, detail_token, allow_prefix_match=False) for detail_token in detail_focus_tokens)
+    }
+    if (
+        detail_focus_tokens
+        and topic_class in {"home", "nutrition_supplements", "real_estate"}
+        and detail_focus_overlap
+        and (candidate_domain_tokens & specificity_tokens)
+    ):
+        return True
     if (
         reference_domain_tokens
         and not (candidate_domain_tokens & reference_domain_tokens)
@@ -6258,6 +6436,92 @@ def _refine_supplement_secondary_keywords(
     return refined[:KEYWORD_MAX_SECONDARY]
 
 
+def _refine_home_secondary_keywords(
+    *,
+    topic: str,
+    primary_keyword: str,
+    secondary_keywords: List[str],
+    keyword_cluster: List[str],
+    topic_signature: Optional[Dict[str, Any]],
+) -> List[str]:
+    signature = topic_signature or {}
+    cleaned_existing = [
+        candidate
+        for candidate in _dedupe_keyword_phrases(secondary_keywords)
+        if not _secondary_keyword_has_fragment_noise(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        )
+    ]
+    detail_focus = _normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(topic))
+    subject_seed = detail_focus or _normalize_context_focus_phrase(
+        str(signature.get("subject_phrase") or primary_keyword or topic)
+    )
+    if not subject_seed:
+        return cleaned_existing[:KEYWORD_MAX_SECONDARY]
+
+    existing_topic_tokens = set(_ordered_topic_query_tokens(f"{topic} {primary_keyword}"))
+    subject_seed_tokens = _keyword_query_core_tokens(subject_seed)
+    profile = _build_specificity_profile(topic=topic, topic_class="home", intent_type="informational")
+    relation_terms: List[str] = []
+    for bucket_name in ("space_planning", "light_color", "materials_comfort"):
+        for raw_value in (profile.get("buckets") or {}).get(bucket_name, []):
+            normalized = _normalize_keyword_phrase(str(raw_value).strip())
+            if not normalized or normalized in existing_topic_tokens:
+                continue
+            if normalized in ABSTRACT_QUERY_TOKENS or normalized in EDITORIAL_ACTION_TOKENS:
+                continue
+            if normalized in EDITORIAL_DESCRIPTOR_TOKENS or len(normalized) < 5:
+                continue
+            if normalized not in relation_terms:
+                relation_terms.append(normalized)
+    relation_token_set = set(relation_terms)
+
+    refined = list(cleaned_existing)
+    home_candidates = [f"{subject_seed} {relation}" for relation in relation_terms[:8]]
+    cluster_entities = [
+        _normalize_context_focus_phrase(value)
+        for value in _merge_string_lists(keyword_cluster, [str(item).strip() for item in (signature.get("target_terms") or []) if str(item).strip()], max_items=8)
+    ]
+    for entity in cluster_entities:
+        normalized_entity = _sanitize_editorial_phrase(entity, allow_single_token=True)
+        if not normalized_entity or normalized_entity in existing_topic_tokens:
+            continue
+        for relation in relation_terms[:4]:
+            home_candidates.append(f"{normalized_entity} {relation}")
+
+    for candidate in _dedupe_keyword_phrases(home_candidates):
+        if len(refined) >= KEYWORD_MAX_SECONDARY:
+            break
+        if _keyword_similarity(candidate, primary_keyword) >= 0.75:
+            continue
+        if _keyword_redundant_with_topic(candidate, topic):
+            continue
+        candidate_tokens = _keyword_query_core_tokens(candidate)
+        usable = _keyword_candidate_is_query_like(
+            candidate,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            topic_signature=signature,
+        )
+        if (
+            not usable
+            and subject_seed_tokens
+            and len(candidate.split()) <= KEYWORD_QUERY_MAX_WORDS
+            and (candidate_tokens & subject_seed_tokens)
+            and (candidate_tokens & relation_token_set)
+        ):
+            usable = True
+        if not usable:
+            continue
+        if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in refined):
+            continue
+        refined.append(candidate)
+    return refined[:KEYWORD_MAX_SECONDARY]
+
+
 def _finalize_secondary_keywords(
     *,
     topic: str,
@@ -6308,13 +6572,27 @@ def _finalize_secondary_keywords(
         if any(_keyword_similarity(candidate, existing) >= 0.75 for existing in finalized):
             continue
         finalized.append(candidate)
-    return _refine_supplement_secondary_keywords(
+    refined = _refine_supplement_secondary_keywords(
         topic=topic,
         primary_keyword=primary_keyword,
         secondary_keywords=finalized[:KEYWORD_MAX_SECONDARY],
         keyword_cluster=keyword_cluster,
         topic_signature=topic_signature,
     )
+    topic_class = str((topic_signature or {}).get("topic_class") or "").strip() or _infer_topic_class_from_keyword_signals(
+        topic,
+        primary_keyword,
+        str((topic_signature or {}).get("subject_phrase") or ""),
+    )
+    if topic_class == "home":
+        return _refine_home_secondary_keywords(
+            topic=topic,
+            primary_keyword=primary_keyword,
+            secondary_keywords=refined,
+            keyword_cluster=keyword_cluster,
+            topic_signature=topic_signature,
+        )
+    return refined
 
 
 def _faq_candidate_has_planning_noise(
@@ -8117,7 +8395,11 @@ def _build_question_topic_outline_headings(
             (
                 f"{focus_heading}: Welche Kriterien sind entscheidend?"
                 if focus_heading and not use_generic_focus_questions
-                else "Welche Kriterien sind bei der Auswahl entscheidend?"
+                else (
+                    f"Welche Kriterien sind bei {subject_question_context} entscheidend?"
+                    if subject_question_context
+                    else "Welche Kriterien sind bei der Auswahl entscheidend?"
+                )
             ),
             "Woran erkennt man Qualitaetsunterschiede in der Praxis?",
             "Welche Fehler fuehren bei der Auswahl haeufig zu Fehlkaeufen?",

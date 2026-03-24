@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -40,6 +41,54 @@ class WriterContext(BaseModel):
             "internal_link_titles": self.internal_link_titles,
             "master_plan": self.master_plan.model_dump(mode="json"),
         }
+
+
+def _strip_html_tags(value: str) -> str:
+    return re.sub(r"<[^>]+>", " ", value or "").strip()
+
+
+def _extract_first_paragraph_text(value: str) -> str:
+    match = re.search(r"<p[^>]*>(.*?)</p>", value or "", flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return re.sub(r"\s+", " ", _strip_html_tags(match.group(1))).strip()
+    return re.sub(r"\s+", " ", _strip_html_tags(value)).strip()
+
+
+def _normalize_meta_description(value: str, *, fallback_text: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip()).strip()
+    if len(text) >= 80:
+        return text[:160].rstrip()
+    fallback = re.sub(r"\s+", " ", str(fallback_text or "").strip()).strip()
+    combined = f"{text} {fallback}".strip() if text else fallback
+    combined = re.sub(r"\s+", " ", combined).strip()
+    if len(combined) < 80:
+        combined = (combined + " Konkrete Kriterien, alltagsnahe Einordnung und klare nächste Schritte für Leserinnen und Leser.").strip()
+    return combined[:160].rstrip()
+
+
+def _normalize_draft_payload(payload: dict[str, object], context: WriterContext) -> dict[str, object]:
+    normalized = dict(payload or {})
+    title_package = context.master_plan.title_package
+    article_html = str(normalized.get("article_html") or "").strip()
+    excerpt = re.sub(r"\s+", " ", str(normalized.get("excerpt") or "").strip()).strip()
+    if len(excerpt) < 40:
+        excerpt = _extract_first_paragraph_text(article_html)[:200]
+    normalized["article_html"] = article_html
+    normalized["meta_title"] = str(normalized.get("meta_title") or "").strip() or title_package.meta_title
+    normalized["slug"] = str(normalized.get("slug") or "").strip() or title_package.slug
+    normalized["excerpt"] = excerpt
+    fallback_meta_text = " ".join(
+        part for part in [
+            excerpt,
+            _extract_first_paragraph_text(article_html),
+            context.master_plan.topic,
+        ] if part
+    )
+    normalized["meta_description"] = _normalize_meta_description(
+        str(normalized.get("meta_description") or "").strip(),
+        fallback_text=fallback_meta_text,
+    )
+    return normalized
 
 
 WRITER_SYSTEM_PROMPT = """You are the writer for German SEO guest posts.
@@ -117,4 +166,4 @@ class CreatorWriter:
                 request_label=f"{request_label}_retry",
                 allow_html_fallback=True,
             )
-            return DraftArticlePayload.model_validate(payload)
+            return DraftArticlePayload.model_validate(_normalize_draft_payload(payload, context))

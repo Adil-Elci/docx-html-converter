@@ -48,10 +48,10 @@ class _RetryingWriterProvider:
                 "<h2>Fazit</h2><p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger und funktionaler.</p>"
                 "<h2>FAQ</h2><h3>Welche Möbel sparen Platz?</h3><p>Klapp- und Mehrzweckmöbel helfen besonders in kleinen Grundrissen.</p>"
             ),
-            "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
-            "meta_description": "Konkrete Tipps zu Stauraum, Laufbreite, Licht und Möbelwahl für kleine Räume mit praxisnaher Wohnraumplanung.",
-            "slug": "kleine-raeume-optimal-nutzen",
-            "excerpt": "Konkrete Planungstipps für kleine Räume mit Fokus auf Stauraum, Licht und Laufwegen.",
+            "meta_title": "",
+            "meta_description": "",
+            "slug": "",
+            "excerpt": "",
         }
 
 
@@ -202,6 +202,9 @@ def test_writer_retries_with_compact_json_prompt_after_invalid_json() -> None:
     result = writer.write_article(context, request_label="writer_retry_test")
 
     assert result.slug == "kleine-raeume-optimal-nutzen"
+    assert result.meta_title == "Kleine Räume optimal nutzen: Planung, Licht und Stauraum"
+    assert len(result.meta_description) >= 80
+    assert len(result.excerpt) >= 40
     assert provider.schema_calls[0]["request_label"] == "writer_retry_test"
     assert provider.json_calls[0]["request_label"] == "writer_retry_test_retry"
     assert provider.json_calls[0]["allow_html_fallback"] is True

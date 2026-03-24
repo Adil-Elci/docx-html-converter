@@ -10010,9 +10010,29 @@ def _apply_master_article_plan_to_phase_state(
     resolved_h1 = str(title_package.get("h1") or phase3.get("title_package", {}).get("h1") or "").strip()
     resolved_meta_title = str(title_package.get("meta_title") or phase3.get("title_package", {}).get("meta_title") or "").strip()
     resolved_slug = str(title_package.get("slug") or phase3.get("title_package", {}).get("slug") or "").strip()
-    if not resolved_h1 or _title_has_dangling_suffix_fragment(resolved_h1):
+    resolved_h1_quality = _evaluate_title_quality(
+        title=resolved_h1,
+        primary_keyword=phase3.get("primary_keyword", ""),
+        topic=phase3.get("final_article_topic", ""),
+        max_chars=SEO_H1_MAX_CHARS,
+    )
+    resolved_meta_quality = _evaluate_title_quality(
+        title=resolved_meta_title,
+        primary_keyword=phase3.get("primary_keyword", ""),
+        topic=phase3.get("final_article_topic", ""),
+        max_chars=SEO_TITLE_MAX_CHARS,
+    )
+    if (
+        not resolved_h1
+        or _title_has_dangling_suffix_fragment(resolved_h1)
+        or "title_length_invalid" in (resolved_h1_quality.get("errors") or [])
+    ):
         resolved_h1 = str(fallback_title_package.get("h1") or resolved_h1).strip()
-    if not resolved_meta_title or _title_has_dangling_suffix_fragment(resolved_meta_title):
+    if (
+        not resolved_meta_title
+        or _title_has_dangling_suffix_fragment(resolved_meta_title)
+        or "title_length_invalid" in (resolved_meta_quality.get("errors") or [])
+    ):
         resolved_meta_title = str(fallback_title_package.get("meta_title") or resolved_meta_title).strip()
     if not resolved_slug or phase3.get("primary_keyword", "") not in _normalize_keyword_phrase(resolved_slug).replace("-", " "):
         resolved_slug = str(fallback_title_package.get("slug") or resolved_slug).strip()

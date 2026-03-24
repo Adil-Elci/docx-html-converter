@@ -8500,6 +8500,52 @@ def _build_question_topic_outline_headings(
     ]
 
 
+def _ensure_outline_heading_capacity(
+    headings: List[str],
+    *,
+    body_section_count: int,
+    article_angle: str,
+) -> List[str]:
+    out = [str(item).strip() for item in headings if str(item).strip()]
+    fallback_map = {
+        "recognition_and_next_steps": [
+            "Welche Warnzeichen sollte man nicht ignorieren?",
+            "Wie dokumentiert man Beobachtungen sinnvoll?",
+        ],
+        "process_and_decision_factors": [
+            "Welche Kosten und Fristen sollte man frueh einplanen?",
+            "Wie priorisiert man die naechsten Schritte realistisch?",
+        ],
+        "process_and_next_steps": [
+            "Welche Kosten und Fristen sollte man frueh einplanen?",
+            "Wie priorisiert man die naechsten Schritte realistisch?",
+        ],
+        "decision_criteria": [
+            "Welche Punkte werden bei der Auswahl haeufig uebersehen?",
+            "Welche Fragen klaeren offene Unterschiede am schnellsten?",
+        ],
+        "comparison_and_evaluation": [
+            "Welche Unterschiede sollte man direkt vergleichen?",
+            "Welche Fragen helfen bei der Bewertung weiter?",
+        ],
+    }
+    fallbacks = fallback_map.get(
+        str(article_angle or "").strip(),
+        [
+            "Welche Punkte werden haeufig uebersehen?",
+            "Welche naechsten Schritte helfen bei der Einordnung?",
+        ],
+    )
+    fallback_index = 0
+    while len(out) < body_section_count:
+        candidate = fallbacks[min(fallback_index, len(fallbacks) - 1)]
+        fallback_index += 1
+        if any(_keyword_similarity(candidate, existing) >= 0.82 for existing in out):
+            candidate = f"{candidate.rstrip('?')} konkret?"
+        out.append(candidate)
+    return out
+
+
 def _build_deterministic_outline(
     *,
     topic: str,
@@ -9759,10 +9805,30 @@ def _apply_master_article_plan_to_phase_state(
         for item in (keyword_strategy.get("secondary_keywords") or [])
         if str(item).strip()
     ]
+    fallback_title_package = _build_deterministic_title_package(
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        search_intent_type=phase3.get("search_intent_type", ""),
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        current_year=datetime.datetime.now().year,
+        article_angle=phase3.get("article_angle", ""),
+        topic_class=phase3.get("topic_class", "general"),
+        recent_titles=[],
+    )
+    resolved_h1 = str(title_package.get("h1") or phase3.get("title_package", {}).get("h1") or "").strip()
+    resolved_meta_title = str(title_package.get("meta_title") or phase3.get("title_package", {}).get("meta_title") or "").strip()
+    resolved_slug = str(title_package.get("slug") or phase3.get("title_package", {}).get("slug") or "").strip()
+    if not resolved_h1 or _title_has_dangling_suffix_fragment(resolved_h1):
+        resolved_h1 = str(fallback_title_package.get("h1") or resolved_h1).strip()
+    if not resolved_meta_title or _title_has_dangling_suffix_fragment(resolved_meta_title):
+        resolved_meta_title = str(fallback_title_package.get("meta_title") or resolved_meta_title).strip()
+    if not resolved_slug or phase3.get("primary_keyword", "") not in _normalize_keyword_phrase(resolved_slug).replace("-", " "):
+        resolved_slug = str(fallback_title_package.get("slug") or resolved_slug).strip()
     phase3["title_package"] = {
-        "h1": str(title_package.get("h1") or phase3.get("title_package", {}).get("h1") or "").strip(),
-        "meta_title": str(title_package.get("meta_title") or phase3.get("title_package", {}).get("meta_title") or "").strip(),
-        "slug": str(title_package.get("slug") or phase3.get("title_package", {}).get("slug") or "").strip(),
+        "h1": resolved_h1,
+        "meta_title": resolved_meta_title,
+        "slug": resolved_slug,
     }
     existing_style = phase3.get("style_profile") if isinstance(phase3.get("style_profile"), dict) else {}
     phase3["style_profile"] = {
@@ -9792,7 +9858,12 @@ def _apply_master_article_plan_to_phase_state(
         topic_class=phase3.get("topic_class", "general"),
         topic_signature=phase3.get("topic_signature"),
     )
-    deterministic_body_headings = [str(item).strip() for item in deterministic_headings if str(item).strip()]
+    body_section_count = sum(1 for section in sections if isinstance(section, dict) and str(section.get("kind") or "body").strip() == "body")
+    deterministic_body_headings = _ensure_outline_heading_capacity(
+        [str(item).strip() for item in deterministic_headings if str(item).strip()],
+        body_section_count=body_section_count,
+        article_angle=phase3.get("article_angle", ""),
+    )
     deterministic_heading_index = 0
     converted_sections: List[Dict[str, Any]] = []
     for section in sections:

@@ -312,8 +312,8 @@ def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
             "semantic_entities": ["grundstück", "hausbau"],
         },
         "title_package": {
-            "h1": "Rohgrundstück kaufen: Welche Schritte vor dem Hausbau wichtig sind",
-            "meta_title": "Rohgrundstück kaufen: Wichtige Schritte vor dem Hausbau",
+            "h1": "Rohgrundstück kaufen: Welche Schritte",
+            "meta_title": "Rohgrundstück kaufen: Welche Schritte",
             "slug": "rohgrundstueck-kaufen-schritte",
         },
         "backlink_plan": {
@@ -355,6 +355,15 @@ def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
             },
             {
                 "section_id": "section_4",
+                "kind": "body",
+                "h2": "Schritt für Schritt: So erstellen Sie Ihren persönlichen Kostenplan",
+                "goal": "Explain cost planning.",
+                "required_terms": ["kosten"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            },
+            {
+                "section_id": "section_5",
                 "kind": "fazit",
                 "h2": "Zusammenfassung",
                 "goal": "Summarize.",
@@ -363,7 +372,7 @@ def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
                 "target_max_words": 100,
             },
             {
-                "section_id": "section_5",
+                "section_id": "section_6",
                 "kind": "faq",
                 "h2": "Häufige Fragen",
                 "goal": "Answer follow-up questions.",
@@ -380,5 +389,7 @@ def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
     assert body_h2s[0] != "Grundstück prüfen: Was vor dem Kauf eines Rohgrundstücks zu klären ist"
     assert body_h2s[1] != "Fertighaus oder Massivbau: Welche Bauweise passt zu Ihrem Grundstück"
     assert body_h2s[2] != "Bauphasen koordinieren: Von der Grundsteinlegung bis zur Schlüsselübergabe"
+    assert body_h2s[3] != "Schritt für Schritt: So erstellen Sie Ihren persönlichen Kostenplan"
+    assert not phase4["h1"].endswith(": Welche Schritte")
     assert phase4["sections"][-2]["h2"] == "Fazit"
     assert phase4["sections"][-1]["h2"] == "FAQ"

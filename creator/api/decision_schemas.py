@@ -200,6 +200,43 @@ class DraftArticlePayload(SchemaBackedModel):
     excerpt: str = Field(..., min_length=40, description="Short excerpt or standfirst.")
 
 
+class SectionBodyPayload(SchemaBackedModel):
+    section_id: str = Field(..., min_length=3, description="Stable section identifier from the approved plan.")
+    body_html: str = Field(
+        default="",
+        description="HTML body content for this section only. Do not include H2 headings.",
+    )
+
+
+class FAQAnswerPayload(SchemaBackedModel):
+    question: str = Field(..., min_length=3, description="FAQ question from the approved plan.")
+    answer_html: str = Field(
+        default="",
+        description="HTML answer body for this FAQ question only. Do not include H3 headings.",
+    )
+
+
+class DraftArticleSlotsPayload(SchemaBackedModel):
+    intro_html: str = Field(
+        default="",
+        description="HTML introduction content that appears between the H1 and the first H2.",
+    )
+    section_bodies: List[SectionBodyPayload] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Section body HTML keyed by approved section ids. Do not include H2 headings.",
+    )
+    faq_answers: List[FAQAnswerPayload] = Field(
+        default_factory=list,
+        max_length=8,
+        description="FAQ answers keyed by the approved FAQ questions. Do not include H3 headings.",
+    )
+    meta_title: str = Field(..., min_length=35, description="SEO meta title.")
+    meta_description: str = Field(..., min_length=80, description="SEO meta description.")
+    slug: str = Field(..., min_length=3, description="URL slug.")
+    excerpt: str = Field(..., min_length=40, description="Short excerpt or standfirst.")
+
+
 class CriticIssue(SchemaBackedModel):
     code: str = Field(..., min_length=3, description="Stable issue code.")
     severity: str = Field(..., min_length=3, description="Issue severity such as low, medium, or high.")
@@ -234,6 +271,7 @@ class CriticReview(SchemaBackedModel):
 SCHEMA_REGISTRY: Dict[str, Type[SchemaBackedModel]] = {
     "master_article_plan": MasterArticlePlan,
     "draft_article_payload": DraftArticlePayload,
+    "draft_article_slots_payload": DraftArticleSlotsPayload,
     "critic_review": CriticReview,
 }
 

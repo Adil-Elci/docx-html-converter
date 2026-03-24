@@ -9090,6 +9090,146 @@ def _render_article_from_plan(
     return "".join(parts)
 
 
+def _coerce_slot_section_body_map(slot_payload: Dict[str, Any]) -> Dict[str, str]:
+    raw_items = slot_payload.get("section_bodies")
+    if not isinstance(raw_items, list):
+        return {}
+    normalized: Dict[str, str] = {}
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        section_id = str(item.get("section_id") or "").strip()
+        if not section_id:
+            continue
+        normalized[section_id] = _strip_all_links(
+            _normalize_writer_html_fragment(str(item.get("body_html") or "").strip())
+        )
+    return normalized
+
+
+def _coerce_slot_faq_items(
+    *,
+    slot_payload: Dict[str, Any],
+    article_plan: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    raw_items = slot_payload.get("faq_answers")
+    if not isinstance(raw_items, list):
+        return []
+    expected_questions = [
+        str(item).strip()
+        for item in (article_plan.get("faq_questions") or [])
+        if str(item).strip()
+    ]
+    normalized: List[Dict[str, str]] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        if not question and index < len(expected_questions):
+            question = expected_questions[index]
+        if not question:
+            continue
+        normalized.append(
+            {
+                "question": question,
+                "answer_html": _strip_all_links(
+                    _normalize_writer_html_fragment(str(item.get("answer_html") or "").strip())
+                ),
+            }
+        )
+    return normalized
+
+
+def _assemble_article_payload_from_slots(
+    *,
+    slot_payload: Dict[str, Any],
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    backlink_url: str,
+    publishing_site_url: str,
+    internal_link_candidates: List[str],
+    internal_link_anchor_map: Optional[Dict[str, str]],
+    min_internal_links: int,
+    max_internal_links: int,
+) -> Dict[str, Any]:
+    intro_html = _strip_all_links(_normalize_writer_html_fragment(str(slot_payload.get("intro_html") or "").strip()))
+    if not intro_html:
+        intro_html = _wrap_paragraphs(
+            f"{_format_sentence_start(str(phase3.get('final_article_topic') or phase3.get('primary_keyword') or 'Dieses Thema'))} "
+            "wird mit konkreten Kriterien, typischen Fehlern und klaren nächsten Schritten eingeordnet."
+        )
+    section_bodies = _coerce_slot_section_body_map(slot_payload)
+    for section in article_plan.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        kind = str(section.get("kind") or "body").strip()
+        if not section_id or section_bodies.get(section_id):
+            continue
+        if kind == "faq":
+            continue
+        if kind == "fazit":
+            section_bodies[section_id] = _build_deterministic_fazit_html(
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+            )
+            continue
+        section_bodies[section_id] = _build_deterministic_body_section_html(
+            heading=str(section.get("h2") or "").strip(),
+            goal=str(section.get("goal") or "").strip(),
+            topic=str(phase3.get("final_article_topic") or ""),
+            primary_keyword=str(phase3.get("primary_keyword") or ""),
+            required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+        )
+
+    faq_items = _ensure_faq_items_complete(
+        article_plan=article_plan,
+        phase3=phase3,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=_coerce_generated_faqs(
+            _coerce_slot_faq_items(slot_payload=slot_payload, article_plan=article_plan)
+        ),
+    )
+    article_html = _render_article_from_plan(
+        article_plan=article_plan,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=faq_items,
+    )
+    article_html = _ensure_required_h1(article_html, str(article_plan.get("h1") or ""))
+    article_html = _ensure_primary_keyword_in_intro(
+        article_html,
+        phase3.get("primary_keyword", ""),
+    )
+    article_html = _repair_link_constraints(
+        article_html=article_html,
+        backlink_url=backlink_url,
+        publishing_site_url=publishing_site_url,
+        internal_links=internal_link_candidates,
+        internal_link_anchor_map=internal_link_anchor_map,
+        min_internal_links=min_internal_links,
+        max_internal_links=max_internal_links,
+        backlink_placement=str(article_plan.get("backlink_placement") or "intro"),
+        anchor_text=str(article_plan.get("anchor_text_final") or "Weitere Informationen"),
+        required_h1=str(article_plan.get("h1") or ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+    )
+    article_html = _normalize_faq_section_questions(article_html)
+    article_html = _strip_empty_blocks(article_html)
+    article_html = _strip_leading_empty_blocks(article_html)
+    article_html = _trim_article_to_word_limit(article_html, ARTICLE_MAX_WORDS)
+    excerpt = str(slot_payload.get("excerpt") or "").strip() or _extract_first_paragraph_text(article_html)[:200]
+    return {
+        "article_html": article_html,
+        "meta_title": str(slot_payload.get("meta_title") or "").strip(),
+        "meta_description": str(slot_payload.get("meta_description") or "").strip(),
+        "slug": str(slot_payload.get("slug") or "").strip(),
+        "excerpt": excerpt,
+    }
+
+
 def _extract_article_intro_and_h2_sections(article_html: str) -> tuple[str, List[Dict[str, str]]]:
     html = str(article_html or "").strip()
     if not html:
@@ -10206,36 +10346,17 @@ def _generate_article_from_master_plan(
         writer_context,
         request_label=request_label,
     )
-    article_payload = raw_payload.model_dump(mode="json")
-    article_payload["article_html"] = _sanitize_generated_fragment_html(str(article_payload.get("article_html") or "").strip())
-    article_payload["article_html"] = _strip_all_links(article_payload["article_html"])
-    article_payload["article_html"] = _enforce_article_plan_structure(
-        article_html=article_payload["article_html"],
+    article_payload = _assemble_article_payload_from_slots(
+        slot_payload=raw_payload.model_dump(mode="json"),
         article_plan=phase4,
         phase3=phase3,
-    )
-    article_payload["article_html"] = _ensure_required_h1(article_payload["article_html"], str(phase4.get("h1") or ""))
-    article_payload["article_html"] = _ensure_primary_keyword_in_intro(
-        article_payload["article_html"],
-        phase3.get("primary_keyword", ""),
-    )
-    article_payload["article_html"] = _repair_link_constraints(
-        article_html=article_payload["article_html"],
         backlink_url=backlink_url,
         publishing_site_url=publishing_site_url,
-        internal_links=internal_link_candidates,
+        internal_link_candidates=internal_link_candidates,
         internal_link_anchor_map=internal_link_anchor_map,
         min_internal_links=min_internal_links,
         max_internal_links=max_internal_links,
-        backlink_placement=str(phase4.get("backlink_placement") or "intro"),
-        anchor_text=str(phase4.get("anchor_text_final") or "Weitere Informationen"),
-        required_h1=str(phase4.get("h1") or ""),
-        primary_keyword=phase3.get("primary_keyword", ""),
     )
-    article_payload["article_html"] = _normalize_faq_section_questions(article_payload["article_html"])
-    article_payload["article_html"] = _strip_empty_blocks(article_payload["article_html"])
-    article_payload["article_html"] = _strip_leading_empty_blocks(article_payload["article_html"])
-    article_payload["article_html"] = _trim_article_to_word_limit(article_payload["article_html"], ARTICLE_MAX_WORDS)
     article_payload["excerpt"] = str(article_payload.get("excerpt") or "").strip() or _extract_first_paragraph_text(article_payload["article_html"])[:200]
     return article_payload
 
@@ -13890,34 +14011,21 @@ def run_creator_pipeline(
                         details={"repair_attempt": repair_attempt, "error": latest_repair_error},
                     )
                     continue
-                repaired_phase5 = _apply_deterministic_article_metadata(
-                    repair_payload_model.model_dump(mode="json"),
+                repaired_phase5 = _assemble_article_payload_from_slots(
+                    slot_payload=repair_payload_model.model_dump(mode="json"),
+                    article_plan=phase4,
                     phase3=phase3,
-                    phase4=phase4,
-                )
-                repaired_phase5["article_html"] = _repair_link_constraints(
-                    article_html=repaired_phase5["article_html"],
                     backlink_url=backlink_url,
                     publishing_site_url=publishing_site_url,
-                    internal_links=internal_link_candidates,
+                    internal_link_candidates=internal_link_candidates,
                     internal_link_anchor_map=internal_link_anchor_map,
                     min_internal_links=effective_internal_min,
                     max_internal_links=effective_internal_max,
-                    backlink_placement=phase4["backlink_placement"],
-                    anchor_text=phase4["anchor_text_final"],
-                    required_h1=phase4["h1"],
-                    primary_keyword=phase3.get("primary_keyword", ""),
                 )
-                repaired_phase5["article_html"] = _normalize_faq_section_questions(repaired_phase5["article_html"])
-                repaired_phase5["article_html"] = _strip_empty_blocks(repaired_phase5["article_html"])
-                repaired_phase5["article_html"] = _strip_leading_empty_blocks(repaired_phase5["article_html"])
-                repaired_phase5["article_html"] = _trim_article_to_word_limit(
-                    repaired_phase5["article_html"],
-                    ARTICLE_MAX_WORDS,
-                )
-                repaired_phase5["excerpt"] = (
-                    str(repaired_phase5.get("excerpt") or "").strip()
-                    or _extract_first_paragraph_text(repaired_phase5["article_html"])[:200]
+                repaired_phase5 = _apply_deterministic_article_metadata(
+                    repaired_phase5,
+                    phase3=phase3,
+                    phase4=phase4,
                 )
                 phase5 = repaired_phase5
                 critic_errors = []

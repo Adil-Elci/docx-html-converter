@@ -1,4 +1,4 @@
-from creator.api.decision_schemas import DraftArticlePayload
+from creator.api.decision_schemas import DraftArticleSlotsPayload
 from creator.api.llm import LLMError
 from creator.api.supervisor import PublishingCandidateInput
 from creator.api.writer import CreatorWriter, WriterContext, build_writer_system_prompt, build_writer_user_prompt
@@ -10,16 +10,25 @@ class _StubWriterProvider:
 
     def call_schema(self, **kwargs):  # type: ignore[no-untyped-def]
         self.calls.append(kwargs)
-        return DraftArticlePayload.model_validate(
+        return DraftArticleSlotsPayload.model_validate(
             {
-                "article_html": (
-                    "<h1>Kleine Räume optimal nutzen: Worauf es bei der Planung ankommt</h1>"
-                    "<p>Kleine Räume profitieren von klaren Laufwegen, wandhohem Stauraum und gezielter Beleuchtung.</p>"
-                    "<h2>Welche Kriterien sind bei kleinen Räumen entscheidend?</h2>"
-                    "<p>Eine Laufbreite von rund 90 cm, helle Lichtquellen und Regale bis knapp unter die Decke helfen bei der Raumplanung.</p>"
-                    "<h2>Fazit</h2><p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger und funktionaler.</p>"
-                    "<h2>FAQ</h2><h3>Welche Möbel sparen Platz?</h3><p>Klapp- und Mehrzweckmöbel helfen besonders in kleinen Grundrissen.</p>"
-                ),
+                "intro_html": "<p>Kleine Räume profitieren von klaren Laufwegen, wandhohem Stauraum und gezielter Beleuchtung.</p>",
+                "section_bodies": [
+                    {
+                        "section_id": "section_1",
+                        "body_html": "<p>Eine Laufbreite von rund 90 cm, helle Lichtquellen und Regale bis knapp unter die Decke helfen bei der Raumplanung.</p>",
+                    },
+                    {
+                        "section_id": "section_2",
+                        "body_html": "<p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger und funktionaler.</p>",
+                    },
+                ],
+                "faq_answers": [
+                    {
+                        "question": "Welche Möbel sparen Platz?",
+                        "answer_html": "<p>Klapp- und Mehrzweckmöbel helfen besonders in kleinen Grundrissen.</p>",
+                    }
+                ],
                 "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
                 "meta_description": "Konkrete Tipps zu Stauraum, Laufbreite, Licht und Möbelwahl für kleine Räume mit praxisnaher Wohnraumplanung.",
                 "slug": "kleine-raeume-optimal-nutzen",
@@ -146,8 +155,8 @@ def _sample_master_plan():  # type: ignore[no-untyped-def]
 def test_build_writer_system_prompt_mentions_draft_schema() -> None:
     prompt = build_writer_system_prompt()
 
-    assert "draftarticlepayload" in prompt.lower()
-    assert "article_html" in prompt
+    assert "draftarticleslotspayload" in prompt.lower()
+    assert "section_bodies" in prompt
 
 
 def test_build_writer_user_prompt_embeds_master_plan() -> None:
@@ -184,7 +193,7 @@ def test_writer_calls_provider_with_draft_schema() -> None:
 
     assert result.slug == "kleine-raeume-optimal-nutzen"
     assert provider.calls[0]["request_label"] == "writer_test"
-    assert provider.calls[0]["schema_model"] is DraftArticlePayload
+    assert provider.calls[0]["schema_model"] is DraftArticleSlotsPayload
 
 
 def test_writer_retries_with_compact_json_prompt_after_invalid_json() -> None:
@@ -202,6 +211,7 @@ def test_writer_retries_with_compact_json_prompt_after_invalid_json() -> None:
     result = writer.write_article(context, request_label="writer_retry_test")
 
     assert result.slug == "kleine-raeume-optimal-nutzen"
+    assert result.section_bodies[0].section_id == "section_1"
     assert result.meta_title == "Kleine Räume optimal nutzen: Planung, Licht und Stauraum"
     assert len(result.meta_description) >= 80
     assert len(result.excerpt) >= 40

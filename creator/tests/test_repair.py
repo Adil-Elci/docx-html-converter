@@ -1,4 +1,4 @@
-from creator.api.decision_schemas import CriticReview, DraftArticlePayload
+from creator.api.decision_schemas import CriticReview, DraftArticleSlotsPayload
 from creator.api.repair import CreatorRepair, RepairContext, build_repair_system_prompt, build_repair_user_prompt
 from creator.tests.test_critic import _sample_draft, _sample_master_plan
 
@@ -9,16 +9,25 @@ class _StubRepairProvider:
 
     def call_schema(self, **kwargs):  # type: ignore[no-untyped-def]
         self.calls.append(kwargs)
-        return DraftArticlePayload.model_validate(
+        return DraftArticleSlotsPayload.model_validate(
             {
-                "article_html": (
-                    "<h1>Kleine Räume optimal nutzen: Worauf es bei der Planung ankommt</h1>"
-                    "<p>Konkrete Planungshinweise mit Laufbreite, Licht und Stauraum.</p>"
-                    "<h2>Welche Kriterien helfen bei kleinen Räumen wirklich?</h2>"
-                    "<p>Wandhohe Regale, klare Laufwege und mehrere Lichtquellen verbessern die Nutzung.</p>"
-                    "<h2>Fazit</h2><p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger.</p>"
-                    "<h2>FAQ</h2><h3>Welche Möbel sparen Platz?</h3><p>Klapp- und Mehrzweckmöbel helfen.</p>"
-                ),
+                "intro_html": "<p>Konkrete Planungshinweise mit Laufbreite, Licht und Stauraum.</p>",
+                "section_bodies": [
+                    {
+                        "section_id": "section_1",
+                        "body_html": "<p>Wandhohe Regale, klare Laufwege und mehrere Lichtquellen verbessern die Nutzung.</p>",
+                    },
+                    {
+                        "section_id": "section_2",
+                        "body_html": "<p>Mit klaren Maßen und Stauraumplanung wirken kleine Räume ruhiger.</p>",
+                    },
+                ],
+                "faq_answers": [
+                    {
+                        "question": "Welche Möbel sparen Platz?",
+                        "answer_html": "<p>Klapp- und Mehrzweckmöbel helfen.</p>",
+                    }
+                ],
                 "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
                 "meta_description": "Konkrete Tipps zu Stauraum, Laufbreite, Licht und Möbelwahl für kleine Räume mit klaren Planungsbeispielen.",
                 "slug": "kleine-raeume-optimal-nutzen",
@@ -61,7 +70,7 @@ def _sample_review() -> CriticReview:
 def test_build_repair_system_prompt_mentions_draft_schema() -> None:
     prompt = build_repair_system_prompt()
 
-    assert "draftarticlepayload" in prompt.lower()
+    assert "draftarticleslotspayload" in prompt.lower()
     assert "Do not add hyperlinks" in prompt
 
 
@@ -102,4 +111,4 @@ def test_repair_calls_provider_with_draft_schema() -> None:
 
     assert result.slug == "kleine-raeume-optimal-nutzen"
     assert provider.calls[0]["request_label"] == "repair_test"
-    assert provider.calls[0]["schema_model"] is DraftArticlePayload
+    assert provider.calls[0]["schema_model"] is DraftArticleSlotsPayload

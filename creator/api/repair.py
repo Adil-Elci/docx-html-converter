@@ -4,9 +4,12 @@ import json
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import ValidationError
 
-from .decision_schemas import CriticReview, DraftArticlePayload, MasterArticlePlan
+from .decision_schemas import CriticReview, DraftArticlePayload, DraftArticleSlotsPayload, MasterArticlePlan
+from .llm import LLMError
 from .llm_provider import CreatorLLMProvider, LLMRole, build_provider, schema_prompt_block
+from .writer import _normalize_slot_payload
 
 
 class RepairContext(BaseModel):
@@ -51,13 +54,14 @@ Your task is to repair an existing draft that is already close to publishable.
 Requirements:
 - Rewrite only what is needed to satisfy the critic review and deterministic validation errors.
 - Keep the same article topic, publishing-site choice, and overall section order from the master_article_plan.
-- Preserve exactly one H1.
-- Treat the existing H1, H2, and FAQ question structure as fixed scaffolding.
-- The final two H2 sections must remain Fazit and FAQ.
-- FAQ must answer the listed questions directly using H3 question headings.
+- Treat the H1, H2, Fazit, and FAQ question structure as fixed scaffolding owned by the approved plan.
+- Do not return a full article HTML document.
+- Return only revised content slots: intro_html, section_bodies, faq_answers, and metadata.
+- section_bodies must contain body HTML only and must never change section ids or order.
+- faq_answers must contain answer HTML only and must never invent new FAQ questions.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not add hyperlinks. The application inserts them later.
-- Improve heading naturalness, FAQ usefulness, specificity, metadata alignment, and plan adherence.
+- Improve specificity, answer quality, metadata alignment, and plan adherence.
 - Return only valid JSON that matches the schema exactly.
 """
 
@@ -66,7 +70,7 @@ def build_repair_system_prompt() -> str:
     return (
         REPAIR_SYSTEM_PROMPT.strip()
         + "\n\nReturn JSON that matches this schema:\n"
-        + schema_prompt_block(DraftArticlePayload)
+        + schema_prompt_block(DraftArticleSlotsPayload)
     )
 
 
@@ -75,8 +79,9 @@ def build_repair_user_prompt(context: RepairContext) -> str:
     return (
         "Repair this draft strictly against the master_article_plan and critic_review.\n"
         "Do not change the topic or publishing site choice.\n"
-        "article_html must be full HTML that includes one H1 and all planned H2/H3 sections.\n"
-        "Revise section bodies only unless a heading is clearly broken; do not reorder or remove sections.\n"
+        "Do not return a full article_html field.\n"
+        "Revise only intro_html, section_bodies, faq_answers, and metadata.\n"
+        "Do not reorder, remove, rename, or add sections.\n"
         "Do not add links.\n\n"
         f"{payload}"
     )
@@ -91,10 +96,32 @@ class CreatorRepair:
         context: RepairContext,
         *,
         request_label: str = "repair_rewrite_article",
-    ) -> DraftArticlePayload:
-        return self.provider.call_schema(
-            schema_model=DraftArticlePayload,
-            system_prompt=build_repair_system_prompt(),
-            user_prompt=build_repair_user_prompt(context),
-            request_label=request_label,
-        )
+    ) -> DraftArticleSlotsPayload:
+        system_prompt = build_repair_system_prompt()
+        user_prompt = build_repair_user_prompt(context)
+        try:
+            return self.provider.call_schema(
+                schema_model=DraftArticleSlotsPayload,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                request_label=request_label,
+            )
+        except (LLMError, ValidationError):
+            if not hasattr(self.provider, "call_json"):
+                raise
+            retry_prompt = (
+                user_prompt
+                + "\n\nYour previous repair response was invalid or incomplete."
+                + "\nReturn a smaller but still complete JSON object now."
+                + "\nRules for the retry:"
+                + "\n- Return JSON only."
+                + "\n- Keep HTML fragments compact on a single line."
+                + "\n- Do not include any explanation before or after the JSON."
+            )
+            payload = self.provider.call_json(
+                system_prompt=system_prompt,
+                user_prompt=retry_prompt,
+                request_label=f"{request_label}_retry",
+                allow_html_fallback=True,
+            )
+            return DraftArticleSlotsPayload.model_validate(_normalize_slot_payload(payload, context))

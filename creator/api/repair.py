@@ -52,6 +52,7 @@ Requirements:
 - Rewrite only what is needed to satisfy the critic review and deterministic validation errors.
 - Keep the same article topic, publishing-site choice, and overall section order from the master_article_plan.
 - Preserve exactly one H1.
+- Treat the existing H1, H2, and FAQ question structure as fixed scaffolding.
 - The final two H2 sections must remain Fazit and FAQ.
 - FAQ must answer the listed questions directly using H3 question headings.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
@@ -75,6 +76,7 @@ def build_repair_user_prompt(context: RepairContext) -> str:
         "Repair this draft strictly against the master_article_plan and critic_review.\n"
         "Do not change the topic or publishing site choice.\n"
         "article_html must be full HTML that includes one H1 and all planned H2/H3 sections.\n"
+        "Revise section bodies only unless a heading is clearly broken; do not reorder or remove sections.\n"
         "Do not add links.\n\n"
         f"{payload}"
     )

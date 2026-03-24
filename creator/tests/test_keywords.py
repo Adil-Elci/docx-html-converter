@@ -29,6 +29,7 @@ from creator.api.pipeline import (
     _insert_backlink,
     _trim_article_to_word_limit,
     _discover_keyword_candidates,
+    _enforce_article_plan_structure,
     _derive_trend_query_family,
     _ensure_faq_candidates,
     _ensure_faq_items_complete,
@@ -3327,6 +3328,79 @@ def test_repair_keyword_context_gaps_preserves_fazit_and_faq_structure():
     assert repaired.count("<h2>Fazit</h2>") == 1
     assert "Kinder sehprobleme erkennen:" in repaired
     assert "augenarzt termin mit kind vorbereiten" in repaired.lower()
+
+
+def test_enforce_article_plan_structure_rebuilds_fazit_and_faq_from_plan():
+    article_plan = {
+        "h1": "Hausbau vorbereiten: Worauf Eigentümer vor dem Start achten sollten",
+        "faq_questions": [
+            "Welche Unterlagen sind zuerst wichtig?",
+            "Wie plant man die wichtigsten Kosten realistisch?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Schritte sind vor dem Baustart entscheidend?",
+                "goal": "Erkläre die ersten Schritte konkret.",
+                "required_terms": ["unterlagen"],
+            },
+            {
+                "section_id": "section_2",
+                "kind": "body",
+                "h2": "Wie lassen sich Kosten und Fristen realistisch einordnen?",
+                "goal": "Erkläre Kosten, Puffer und Zeitplanung.",
+                "required_terms": ["kosten", "fristen"],
+            },
+            {
+                "section_id": "section_3",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["hausbau"],
+            },
+            {
+                "section_id": "section_4",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": [
+                    "Welche Unterlagen sind zuerst wichtig?",
+                    "Wie plant man die wichtigsten Kosten realistisch?",
+                    "Wann lohnt sich fachliche Unterstützung?",
+                ],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+            },
+        ],
+    }
+    phase3 = {
+        "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+        "primary_keyword": "hausbau vorbereiten",
+        "keyword_buckets": {"semantic_entities": ["unterlagen", "kostenplan"]},
+        "content_brief": {"target_signals": ["Baugenehmigung", "Kostenplan"]},
+    }
+    raw_html = """
+    <h1>Falscher Titel</h1>
+    <p>Vor dem Baustart sollten Bauherren zuerst Unterlagen, Budget und Prioritäten ordnen.</p>
+    <h2>Erdarbeiten und Fundament: häufige Fehler</h2>
+    <p>Konkrete Hinweise zu Bodenprüfung, Vermessung und Pufferkosten.</p>
+    <h2>Rohbau und Dach richtig einordnen</h2>
+    <p>Praxisnahe Hinweise zu Ablauf, Gewerken und Zeitreserven.</p>
+    """
+
+    rebuilt = _enforce_article_plan_structure(
+        article_html=raw_html,
+        article_plan=article_plan,
+        phase3=phase3,
+    )
+
+    assert rebuilt.count("<h2>Fazit</h2>") == 1
+    assert rebuilt.count("<h2>FAQ</h2>") == 1
+    assert "Welche Schritte sind vor dem Baustart entscheidend?" in rebuilt
+    assert "Wie lassen sich Kosten und Fristen realistisch einordnen?" in rebuilt
+    assert "Welche Unterlagen sind zuerst wichtig?" in rebuilt
+    assert "Wann lohnt sich fachliche Unterstützung?" in rebuilt
 
 
 def test_repair_attempt_introduced_regressions_detects_new_structure_errors():

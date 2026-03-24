@@ -9090,6 +9090,175 @@ def _render_article_from_plan(
     return "".join(parts)
 
 
+def _extract_article_intro_and_h2_sections(article_html: str) -> tuple[str, List[Dict[str, str]]]:
+    html = str(article_html or "").strip()
+    if not html:
+        return "", []
+    h1_match = re.search(r"<h1[^>]*>.*?</h1>", html, flags=re.IGNORECASE | re.DOTALL)
+    content_start = h1_match.end() if h1_match else 0
+    h2_matches = list(re.finditer(r"<h2[^>]*>(.*?)</h2>", html, flags=re.IGNORECASE | re.DOTALL))
+    intro_end = h2_matches[0].start() if h2_matches else len(html)
+    intro_html = html[content_start:intro_end].strip()
+    sections: List[Dict[str, str]] = []
+    for index, match in enumerate(h2_matches):
+        start = match.end()
+        end = h2_matches[index + 1].start() if index + 1 < len(h2_matches) else len(html)
+        sections.append(
+            {
+                "heading": _strip_html_tags(match.group(1)).strip(),
+                "body_html": html[start:end].strip(),
+            }
+        )
+    return intro_html, sections
+
+
+def _extract_faq_items_from_section_html(section_html: str) -> List[Dict[str, str]]:
+    html = str(section_html or "").strip()
+    if not html:
+        return []
+    matches = list(re.finditer(r"<h3[^>]*>(.*?)</h3>", html, flags=re.IGNORECASE | re.DOTALL))
+    if not matches:
+        return []
+    items: List[Dict[str, str]] = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(html)
+        question = _format_faq_question(_strip_html_tags(match.group(1)).strip()) or _strip_html_tags(match.group(1)).strip()
+        answer_html = _normalize_writer_html_fragment(html[start:end])
+        if not question or not answer_html:
+            continue
+        items.append({"question": question, "answer_html": answer_html})
+    return items
+
+
+def _build_deterministic_fazit_html(
+    *,
+    topic: str,
+    primary_keyword: str,
+    required_terms: List[str],
+) -> str:
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    terms = [str(item).strip() for item in required_terms if str(item).strip()]
+    support = ""
+    if terms:
+        support = ", ".join(terms[:2])
+    sentence = f"Bei {topic_phrase} helfen konkrete Kriterien, typische Fehler und realistische nächste Schritte bei einer belastbaren Einordnung."
+    if support:
+        sentence += f" Besonders wichtig bleiben dabei {support}."
+    sentence += " Wer diese Punkte zusammen bewertet, trifft Entscheidungen fundierter und praxisnäher."
+    return _wrap_paragraphs(sentence) or "<p></p>"
+
+
+def _build_deterministic_body_section_html(
+    *,
+    heading: str,
+    goal: str,
+    topic: str,
+    primary_keyword: str,
+    required_terms: List[str],
+) -> str:
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    heading_phrase = str(heading or "").strip().rstrip(":.!? ") or "diesem Abschnitt"
+    goal_text = re.sub(r"\s+", " ", str(goal or "").strip())
+    terms = [str(item).strip() for item in required_terms if str(item).strip()]
+    support = ", ".join(terms[:3])
+    first_sentence = (
+        f"Bei {topic_phrase} sollte {heading_phrase[:1].lower() + heading_phrase[1:] if heading_phrase else 'dieser Abschnitt'} "
+        "an konkreten Kriterien, typischen Fehlern und alltagsnahen Entscheidungshilfen erklärt werden."
+    )
+    second_sentence = (
+        f"Dazu gehören belastbare Hinweise zu {support}, klare Prioritäten im Ablauf und eine praktische Einordnung, "
+        "damit aus allgemeinen Informationen eine wirklich nutzbare Orientierung wird."
+        if support
+        else "Dazu gehören belastbare Hinweise zu typischen Risiken, klare Prioritäten im Ablauf und eine praktische Einordnung, "
+        "damit aus allgemeinen Informationen eine wirklich nutzbare Orientierung wird."
+    )
+    third_sentence = (
+        f"Der Abschnitt sollte deshalb {goal_text[:1].lower() + goal_text[1:] if goal_text else 'das Thema greifbar machen'} "
+        "und die wichtigsten nächsten Schritte nachvollziehbar zusammenführen."
+    )
+    return _wrap_paragraphs(f"{first_sentence} {second_sentence} {third_sentence}") or "<p></p>"
+
+
+def _enforce_article_plan_structure(
+    *,
+    article_html: str,
+    article_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+) -> str:
+    intro_html, extracted_sections = _extract_article_intro_and_h2_sections(article_html)
+    normalized_extracted: List[Dict[str, str]] = []
+    faq_items: List[Dict[str, str]] = []
+    fazit_html = ""
+    for section in extracted_sections:
+        heading = str(section.get("heading") or "").strip()
+        body_html = _normalize_writer_html_fragment(section.get("body_html") or "")
+        if not heading:
+            continue
+        normalized_heading = _normalize_keyword_phrase(heading)
+        if normalized_heading == "faq":
+            faq_items = _extract_faq_items_from_section_html(body_html)
+            continue
+        if normalized_heading == "fazit":
+            fazit_html = body_html
+            continue
+        normalized_extracted.append({"heading": heading, "body_html": body_html})
+
+    planned_sections = article_plan.get("sections") or []
+    section_bodies: Dict[str, str] = {}
+    body_index = 0
+    for section in planned_sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        kind = str(section.get("kind") or "body").strip()
+        if not section_id:
+            continue
+        if kind == "body":
+            selected_html = ""
+            planned_h2 = str(section.get("h2") or "").strip()
+            for candidate_index in range(body_index, len(normalized_extracted)):
+                candidate = normalized_extracted[candidate_index]
+                if _keyword_similarity(str(candidate.get("heading") or ""), planned_h2) >= 0.72:
+                    selected_html = str(candidate.get("body_html") or "").strip()
+                    normalized_extracted.pop(candidate_index)
+                    break
+            if not selected_html and body_index < len(normalized_extracted):
+                selected_html = str(normalized_extracted.pop(body_index).get("body_html") or "").strip()
+            if not selected_html:
+                selected_html = _build_deterministic_body_section_html(
+                    heading=planned_h2,
+                    goal=str(section.get("goal") or "").strip(),
+                    topic=str(phase3.get("final_article_topic") or ""),
+                    primary_keyword=str(phase3.get("primary_keyword") or ""),
+                    required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+                )
+            section_bodies[section_id] = selected_html
+        elif kind == "fazit":
+            if not fazit_html and normalized_extracted:
+                fazit_html = str(normalized_extracted.pop(-1).get("body_html") or "").strip()
+            section_bodies[section_id] = fazit_html or _build_deterministic_fazit_html(
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+            )
+
+    faq_items = _ensure_faq_items_complete(
+        article_plan=article_plan,
+        phase3=phase3,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=_coerce_generated_faqs(faq_items),
+    )
+    rebuilt_html = _render_article_from_plan(
+        article_plan=article_plan,
+        intro_html=intro_html,
+        section_bodies=section_bodies,
+        faq_items=faq_items,
+    )
+    return _normalize_faq_section_questions(rebuilt_html)
+
+
 def _split_plain_text_sentences(value: str) -> List[str]:
     return [
         part.strip()
@@ -10020,6 +10189,11 @@ def _generate_article_from_master_plan(
     article_payload = raw_payload.model_dump(mode="json")
     article_payload["article_html"] = _sanitize_generated_fragment_html(str(article_payload.get("article_html") or "").strip())
     article_payload["article_html"] = _strip_all_links(article_payload["article_html"])
+    article_payload["article_html"] = _enforce_article_plan_structure(
+        article_html=article_payload["article_html"],
+        article_plan=phase4,
+        phase3=phase3,
+    )
     article_payload["article_html"] = _ensure_required_h1(article_payload["article_html"], str(phase4.get("h1") or ""))
     article_payload["article_html"] = _ensure_primary_keyword_in_intro(
         article_payload["article_html"],
@@ -10447,7 +10621,7 @@ def _build_repair_prompt_request(
         "- Return one full HTML article only. No markdown, no JSON, no explanations.\n"
         "- Keep exactly one <h1> and preserve the overall section order.\n"
         "- Keep the FAQ and Fazit sections at the end.\n"
-        "- You may rewrite H2/H3 wording only if needed to fix heading quality or topical drift.\n"
+        "- Revise section bodies first; keep H2/H3 wording and section order unchanged unless a heading is clearly broken.\n"
         "- Do not add, remove, or move major sections.\n"
         "- Do not add hyperlinks. The application will reinsert links after repair.\n"
         "- Remove generic filler, advertorial phrasing, and repeated keyword stuffing.\n"
@@ -10525,6 +10699,11 @@ def _repair_article_with_llm(
     repaired_html = _normalize_repaired_article_html(raw_text)
     if not repaired_html:
         raise LLMError("Repair output empty.")
+    repaired_html = _enforce_article_plan_structure(
+        article_html=repaired_html,
+        article_plan=article_plan,
+        phase3=phase3,
+    )
     repaired_html = _ensure_required_h1(repaired_html, str(article_plan.get("h1") or ""))
     repaired_html = _ensure_primary_keyword_in_intro(repaired_html, phase3.get("primary_keyword", ""))
     repaired_html = _repair_link_constraints(

@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 from .llm import LLMError, call_llm_json, call_llm_text
 from .critic import CreatorCritic, CriticContext, build_critic_system_prompt, build_critic_user_prompt
 from .llm_provider import LLMRole, build_provider
+from .repair import CreatorRepair, RepairContext, build_repair_system_prompt, build_repair_user_prompt
 from .supervisor import (
     CreatorSupervisor,
     PublishingCandidateInput,
@@ -13395,6 +13396,7 @@ def run_creator_pipeline(
             if isinstance(debug.get("prompt_trace"), dict)
             else None
         )
+        critic_review: Dict[str, Any] = {}
         critic_context = CriticContext(
             target_site_url=target_site_url,
             publishing_site_url=publishing_site_url,
@@ -13429,7 +13431,120 @@ def run_creator_pipeline(
         critic_review = critic_review_model.model_dump(mode="json")
         debug["critic_review"] = critic_review
         critic_errors = _critic_review_to_errors(critic_review)
-        if critic_errors:
+        critic_verdict = str(critic_review.get("verdict") or "").strip().lower()
+        if critic_verdict == "repair_needed" and phase7_repair_attempts > 0:
+            repair_prompt_trace = (
+                (debug.get("prompt_trace") or {}).get("repair_attempts")
+                if isinstance(debug.get("prompt_trace"), dict)
+                else None
+            )
+            repaired_phase5: Optional[Dict[str, Any]] = None
+            latest_repair_error: Optional[str] = None
+            for repair_attempt in range(1, phase7_repair_attempts + 1):
+                repair_context = RepairContext(
+                    target_site_url=target_site_url,
+                    publishing_site_url=publishing_site_url,
+                    master_plan=phase4.get("supervisor_master_plan") or {},
+                    draft_article=phase5,
+                    critic_review=critic_review,
+                    deterministic_validation_errors=[],
+                    content_brief=_format_content_brief_prompt_text(phase3.get("content_brief") or {}),
+                    internal_link_titles=[_internal_anchor_text(value) for value in internal_link_candidates[:8]],
+                )
+                repair_provider = build_provider(LLMRole.REPAIR, usage_collector=_collect_llm_usage)
+                repair_writer = CreatorRepair(provider=repair_provider)
+                repair_system_prompt = build_repair_system_prompt()
+                repair_user_prompt = build_repair_user_prompt(repair_context)
+                if isinstance(repair_prompt_trace, list):
+                    repair_prompt_trace.append(
+                        {
+                            "attempt": len(repair_prompt_trace) + 1,
+                            "request_label": f"phase7_critic_repair_attempt_{repair_attempt}",
+                            "model": repair_provider.config.model,
+                            "max_tokens": repair_provider.config.max_tokens,
+                            "critic_verdict": critic_verdict,
+                            "critic_issue_codes": [
+                                str(item.get("code") or "").strip()
+                                for item in (critic_review.get("issues") or [])
+                                if isinstance(item, dict) and str(item.get("code") or "").strip()
+                            ],
+                            "system_prompt": repair_system_prompt,
+                            "user_prompt": repair_user_prompt,
+                        }
+                    )
+                try:
+                    repair_payload_model = repair_writer.repair_article(
+                        repair_context,
+                        request_label=f"phase7_critic_repair_attempt_{repair_attempt}",
+                    )
+                except LLMError as exc:
+                    latest_repair_error = str(exc)
+                    _append_execution_trace_event(
+                        creator_trace,
+                        level="warning",
+                        phase="phase7",
+                        event="critic_repair_failed",
+                        message="Critic-requested repair call failed.",
+                        details={"repair_attempt": repair_attempt, "error": latest_repair_error},
+                    )
+                    continue
+                repaired_phase5 = _apply_deterministic_article_metadata(
+                    repair_payload_model.model_dump(mode="json"),
+                    phase3=phase3,
+                    phase4=phase4,
+                )
+                repaired_phase5["article_html"] = _repair_link_constraints(
+                    article_html=repaired_phase5["article_html"],
+                    backlink_url=backlink_url,
+                    publishing_site_url=publishing_site_url,
+                    internal_links=internal_link_candidates,
+                    internal_link_anchor_map=internal_link_anchor_map,
+                    min_internal_links=effective_internal_min,
+                    max_internal_links=effective_internal_max,
+                    backlink_placement=phase4["backlink_placement"],
+                    anchor_text=phase4["anchor_text_final"],
+                    required_h1=phase4["h1"],
+                    primary_keyword=phase3.get("primary_keyword", ""),
+                )
+                repaired_phase5["article_html"] = _normalize_faq_section_questions(repaired_phase5["article_html"])
+                repaired_phase5["article_html"] = _strip_empty_blocks(repaired_phase5["article_html"])
+                repaired_phase5["article_html"] = _strip_leading_empty_blocks(repaired_phase5["article_html"])
+                repaired_phase5["article_html"] = _trim_article_to_word_limit(
+                    repaired_phase5["article_html"],
+                    ARTICLE_MAX_WORDS,
+                )
+                repaired_phase5["excerpt"] = (
+                    str(repaired_phase5.get("excerpt") or "").strip()
+                    or _extract_first_paragraph_text(repaired_phase5["article_html"])[:200]
+                )
+                phase5 = repaired_phase5
+                critic_errors = []
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="info",
+                    phase="phase7",
+                    event="critic_repair_applied",
+                    message="Applied critic-requested repair before final validation.",
+                    details={"repair_attempt": repair_attempt},
+                )
+                break
+            if critic_errors:
+                if latest_repair_error:
+                    critic_errors = _dedupe_string_values(critic_errors + [f"critic_repair_call_failed:{latest_repair_error}"])
+                phase7_errors.extend(critic_errors)
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="warning",
+                    phase="phase7",
+                    event="critic_review_flagged_draft",
+                    message="Critic review flagged the draft before final validation.",
+                    details={
+                        "verdict": critic_review.get("verdict"),
+                        "errors": critic_errors,
+                        "overall_score": critic_review.get("overall_score"),
+                    },
+                )
+        elif critic_errors:
             phase7_errors.extend(critic_errors)
             _append_execution_trace_event(
                 creator_trace,

@@ -410,6 +410,23 @@ def _resolve_or_auto_select_publishing_site(
                 "details": top_reason,
             },
         )
+    if _read_bool_env("CREATOR_SUPERVISOR_PIPELINE_ENABLED", False):
+        provisional = ranked[0]
+        provisional_site = next((site for site in candidate_sites if str(site.id) == str(provisional.get("site_id"))), None)
+        if provisional_site is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Provisional publishing site could not be resolved.",
+            )
+        logger.info(
+            "automation.webhook.provisional_supervisor_site client_id=%s site_id=%s score=%s target=%s candidate_count=%s",
+            client.id,
+            provisional_site.id,
+            provisional.get("score") or 0,
+            target_url,
+            len(ranked),
+        )
+        return provisional_site
     target_profile_payload = dict(target_profile or {})
     selected_pair, evaluated = _select_best_accepted_pair(
         creator_endpoint=creator_endpoint,

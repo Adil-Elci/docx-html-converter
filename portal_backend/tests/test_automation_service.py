@@ -541,3 +541,116 @@ def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatc
     )
 
     assert calls["create_post"]["clean_html"] == "<p>Einleitung.</p><h2>Abschnitt</h2><p>Text.</p>"
+
+
+def test_run_create_article_pipeline_publishes_to_creator_selected_candidate(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    creator_calls: dict[str, object] = {}
+
+    def fake_call_creator_service(**kwargs):
+        creator_calls.update(kwargs)
+        return {
+            "host_site_url": "https://publisher-two.example.com",
+            "phase5": {
+                "meta_title": "Wohnraumplanung fuer kleine Räume",
+                "excerpt": "Kurzbeschreibung",
+                "slug": "wohnraumplanung-kleine-raeume",
+                "article_html": "<p>Artikelinhalt</p>",
+            },
+            "phase6": {"featured_image": {"prompt": "x", "alt_text": "x"}},
+            "images": [],
+        }
+
+    def fake_create_post(**kwargs):
+        captured.update(kwargs)
+        return {"id": 999, "link": "https://publisher-two.example.com/draft"}
+
+    monkeypatch.setattr(automation_service, "call_creator_service", fake_call_creator_service)
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create_post)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_media_item",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected media upload")),
+    )
+
+    result = automation_service.run_create_article_pipeline(
+        creator_endpoint="http://creator.test",
+        target_site_url="https://target.example.com",
+        publishing_site_url="https://publisher-one.example.com",
+        publishing_site_id="site-1",
+        client_target_site_id="target-id",
+        anchor="Wohnraumplanung",
+        topic=None,
+        exclude_topics=[],
+        recent_article_titles=[],
+        internal_link_inventory=[],
+        publishing_candidates=[
+            {
+                "site_url": "https://publisher-one.example.com",
+                "site_id": "site-1",
+                "fit_score": 62,
+                "notes": ["home"],
+                "internal_link_inventory": [],
+                "publishing_profile_payload": {"normalized_url": "https://publisher-one.example.com"},
+                "publishing_profile_content_hash": "hash-1",
+                "wp_rest_base": "/wp-json/wp/v2",
+                "wp_username": "user-1",
+                "wp_app_password": "pass-1",
+                "category_ids": [11],
+                "category_candidates": [{"id": 11, "name": "Wohnen", "slug": "wohnen"}],
+            },
+            {
+                "site_url": "https://publisher-two.example.com",
+                "site_id": "site-2",
+                "fit_score": 81,
+                "notes": ["home"],
+                "internal_link_inventory": [],
+                "publishing_profile_payload": {"normalized_url": "https://publisher-two.example.com"},
+                "publishing_profile_content_hash": "hash-2",
+                "wp_rest_base": "/wp-json/wp/v2",
+                "wp_username": "user-2",
+                "wp_app_password": "pass-2",
+                "category_ids": [22],
+                "category_candidates": [{"id": 22, "name": "Haus", "slug": "haus"}],
+            },
+        ],
+        phase1_cache_payload=None,
+        phase1_cache_content_hash="",
+        phase2_cache_payload=None,
+        phase2_cache_content_hash="",
+        target_profile_payload=None,
+        target_profile_content_hash="",
+        publishing_profile_payload={"normalized_url": "https://publisher-one.example.com"},
+        publishing_profile_content_hash="hash-1",
+        site_url="https://publisher-one.example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="user-1",
+        wp_app_password="pass-1",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=7,
+        category_ids=[11],
+        category_candidates=[{"id": 11, "name": "Wohnen", "slug": "wohnen"}],
+        timeout_seconds=5,
+        creator_timeout_seconds=5,
+        poll_timeout_seconds=5,
+        poll_interval_seconds=1,
+        image_width=1024,
+        image_height=576,
+        leonardo_api_key="",
+        leonardo_base_url="https://leonardo.example.com",
+        leonardo_model_id="model-id",
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="",
+        category_llm_model="",
+        category_llm_max_categories=1,
+        category_llm_confidence_threshold=0.5,
+    )
+
+    assert len(creator_calls["publishing_candidates"]) == 2
+    assert captured["site_url"] == "https://publisher-two.example.com"
+    assert captured["wp_username"] == "user-2"
+    assert captured["category_ids"] == [22]
+    assert result["selected_site_id"] == "site-2"
+    assert result["selected_site_url"] == "https://publisher-two.example.com"

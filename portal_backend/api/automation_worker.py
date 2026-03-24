@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import logging
 import threading
@@ -46,6 +47,7 @@ from .site_profiles import (
     get_combined_target_profile,
     get_latest_site_profile,
     normalize_site_profile_url,
+    top_ranked_publishing_sites_for_target,
 )
 from .site_analysis_cache import (
     PHASE1_TARGET_ANALYSIS_CACHE_KIND,
@@ -275,6 +277,7 @@ class AutomationJobWorker:
             payload_copy = dict(normalized_payload)
             payload_copy.setdefault("ok", False)
             payload_copy["error"] = error_message
+            _sync_site_selection_from_creator_output(session, job=job, submission=submission, creator_output=payload_copy)
             session.add(
                 CreatorOutput(
                     submission_id=submission.id,
@@ -477,6 +480,7 @@ class AutomationJobWorker:
                     exclude_topics=payload.get("exclude_topics") or [],
                     recent_article_titles=payload.get("recent_article_titles") or [],
                     internal_link_inventory=payload.get("internal_link_inventory") or [],
+                    publishing_candidates=payload.get("publishing_candidates") or [],
                     phase1_cache_payload=payload.get("phase1_cache_payload"),
                     phase1_cache_content_hash=payload.get("phase1_cache_content_hash"),
                     phase2_cache_payload=payload.get("phase2_cache_payload"),
@@ -539,6 +543,8 @@ class AutomationJobWorker:
                     post_event_type=pipeline_result["post_event_type"],
                     selected_category_ids=pipeline_result["selected_category_ids"],
                     leonardo_model_id=run_config["leonardo_model_id"],
+                    selected_site_id=pipeline_result.get("selected_site_id"),
+                    selected_site_url=pipeline_result.get("selected_site_url"),
                     backend_trace=backend_trace,
                 )
                 logger.info("automation.worker.creator_succeeded job_id=%s", job_id)
@@ -689,6 +695,7 @@ class AutomationJobWorker:
                     target_site_id = None
             anchor = parsed_notes.get("anchor")
             topic = parsed_notes.get("topic")
+            auto_selected_site = parsed_notes.get("auto_selected_site", "").lower() == "true"
 
             credential_author_id_raw = credential.author_id
             credential_author_id = None
@@ -895,6 +902,7 @@ class AutomationJobWorker:
                 )
 
             internal_link_inventory: List[Dict[str, Any]] = []
+            publishing_candidates: List[Dict[str, Any]] = []
             if creator_mode:
                 try:
                     run_internal_link_inventory_sync(
@@ -955,6 +963,147 @@ class AutomationJobWorker:
                         message="Live internal-link inventory fetch failed; using the DB snapshot instead.",
                         details={"publishing_site_url": site.site_url},
                     )
+                if auto_selected_site and _read_bool_env("CREATOR_SUPERVISOR_PIPELINE_ENABLED", False):
+                    priority_weights = _parse_auto_site_priority_weights()
+                    target_root_url = ""
+                    if target_site_id:
+                        target_row = session.query(ClientTargetSite).filter(ClientTargetSite.id == target_site_id).first()
+                        if target_row is not None:
+                            target_root_url = str(target_row.target_site_root_url or "").strip()
+                    eligible_sites = (
+                        session.query(Site)
+                        .filter(Site.status == "active")
+                        .order_by(Site.name.asc(), Site.created_at.asc())
+                        .all()
+                    )
+                    try:
+                        _, _, ranked_candidates = top_ranked_publishing_sites_for_target(
+                            session,
+                            target_site_url=target_site_url,
+                            target_site_root_url=target_root_url or None,
+                            candidate_sites=eligible_sites,
+                            client_target_site_id=target_site_id,
+                            timeout_seconds=10,
+                            max_pages=3,
+                            min_score=max(10, _read_int_env("AUTOMATION_AUTO_SITE_MIN_SCORE", 18)),
+                            limit=max(1, _read_int_env("AUTOMATION_AUTO_SITE_TOP_K", 5)),
+                            business_priority_weights=priority_weights,
+                        )
+                    except Exception:
+                        ranked_candidates = []
+                        logger.warning("automation.worker.publishing_candidates_rank_failed job_id=%s", job_id, exc_info=True)
+                        append_execution_trace_event(
+                            trace,
+                            level="warning",
+                            phase="publishing_candidates",
+                            event="ranking_failed",
+                            message="Publishing candidate ranking failed; falling back to the provisional site.",
+                            details={"target_site_url": target_site_url},
+                        )
+                    site_by_id = {str(row.id): row for row in eligible_sites}
+                    for ranked_candidate in ranked_candidates:
+                        site_id_str = str(ranked_candidate.get("site_id") or "").strip()
+                        candidate_site = site_by_id.get(site_id_str)
+                        if candidate_site is None:
+                            continue
+                        candidate_credential = (
+                            session.query(SiteCredential)
+                            .filter(SiteCredential.site_id == candidate_site.id, SiteCredential.enabled.is_(True))
+                            .order_by(SiteCredential.created_at.desc())
+                            .first()
+                        )
+                        if candidate_credential is None:
+                            continue
+                        candidate_category_ids = [
+                            int(row.wp_category_id)
+                            for row in (
+                                session.query(SiteDefaultCategory)
+                                .filter(
+                                    SiteDefaultCategory.site_id == candidate_site.id,
+                                    SiteDefaultCategory.enabled.is_(True),
+                                )
+                                .order_by(
+                                    SiteDefaultCategory.position.asc(),
+                                    SiteDefaultCategory.created_at.asc(),
+                                )
+                                .all()
+                            )
+                            if row.wp_category_id is not None and int(row.wp_category_id) > 0
+                        ]
+                        seen_candidate_category_ids: set[int] = set()
+                        ordered_candidate_category_ids: list[int] = []
+                        for category_id in candidate_category_ids:
+                            if category_id in seen_candidate_category_ids:
+                                continue
+                            seen_candidate_category_ids.add(category_id)
+                            ordered_candidate_category_ids.append(category_id)
+                        candidate_category_candidates: List[Dict[str, Any]] = []
+                        for row in (
+                            session.query(SiteCategory)
+                            .filter(
+                                SiteCategory.site_id == candidate_site.id,
+                                SiteCategory.enabled.is_(True),
+                            )
+                            .order_by(
+                                SiteCategory.name.asc(),
+                                SiteCategory.wp_category_id.asc(),
+                            )
+                            .all()
+                        ):
+                            raw_id = row.wp_category_id
+                            if raw_id is None:
+                                continue
+                            category_id = int(raw_id)
+                            if category_id <= 0:
+                                continue
+                            candidate_category_candidates.append(
+                                {
+                                    "id": category_id,
+                                    "name": (row.name or "").strip(),
+                                    "slug": (row.slug or "").strip(),
+                                }
+                            )
+                        if candidate_site.id == site.id and internal_link_inventory:
+                            candidate_inventory = list(internal_link_inventory)
+                        else:
+                            candidate_inventory = build_creator_internal_link_inventory(
+                                session,
+                                site_id=candidate_site.id,
+                                limit=max(50, _read_int_env("INTERNAL_LINK_INVENTORY_LIMIT", 250)),
+                            )
+                        candidate_notes = []
+                        details = ranked_candidate.get("details") if isinstance(ranked_candidate.get("details"), dict) else {}
+                        fit_reason = str(details.get("reason") or details.get("publishing_primary_context") or "").strip()
+                        if fit_reason:
+                            candidate_notes.append(fit_reason)
+                        for key in ("primary_context",):
+                            value = str((ranked_candidate.get("profile") or {}).get(key) or "").strip()
+                            if value:
+                                candidate_notes.append(value)
+                        publishing_candidates.append(
+                            {
+                                "site_url": candidate_site.site_url,
+                                "site_id": str(candidate_site.id),
+                                "fit_score": int(ranked_candidate.get("score") or 0),
+                                "notes": candidate_notes[:6],
+                                "internal_link_inventory": candidate_inventory,
+                                "publishing_profile_payload": dict(ranked_candidate.get("profile") or {}),
+                                "publishing_profile_content_hash": str(ranked_candidate.get("content_hash") or "").strip(),
+                                "wp_rest_base": candidate_site.wp_rest_base,
+                                "wp_username": candidate_credential.wp_username,
+                                "wp_app_password": candidate_credential.wp_app_password,
+                                "category_ids": ordered_candidate_category_ids,
+                                "category_candidates": candidate_category_candidates,
+                            }
+                        )
+                    append_execution_trace_event(
+                        trace,
+                        level="info",
+                        phase="publishing_candidates",
+                        event="loaded",
+                        message="Loaded publishing candidates for creator supervisor selection.",
+                        details={"count": len(publishing_candidates)},
+                    )
 
             append_execution_trace_event(
                 trace,
@@ -966,6 +1115,7 @@ class AutomationJobWorker:
                     "creator_mode": bool(creator_mode),
                     "publishing_site_url": site.site_url,
                     "target_site_url": target_site_url,
+                    "publishing_candidates_count": len(publishing_candidates),
                 },
             )
 
@@ -989,6 +1139,7 @@ class AutomationJobWorker:
                 "exclude_topics": exclude_topics,
                 "recent_article_titles": recent_article_titles,
                 "internal_link_inventory": internal_link_inventory,
+                "publishing_candidates": publishing_candidates,
                 "target_site_id": str(target_site_id) if target_site_id else "",
                 "publishing_site_id": str(site.id),
                 "phase1_cache_payload": phase1_cache_payload,
@@ -1107,6 +1258,8 @@ class AutomationJobWorker:
         post_event_type: str,
         selected_category_ids: List[int],
         leonardo_model_id: str,
+        selected_site_id: Optional[str] = None,
+        selected_site_url: Optional[str] = None,
         backend_trace: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         with self._sessionmaker() as session:
@@ -1117,6 +1270,23 @@ class AutomationJobWorker:
             submission = session.query(Submission).filter(Submission.id == job.submission_id).first()
             if not submission:
                 return
+            if selected_site_id or selected_site_url:
+                sync_payload = {"host_site_url": selected_site_url or ""}
+                if selected_site_id:
+                    try:
+                        selected_uuid = UUID(str(selected_site_id))
+                    except ValueError:
+                        selected_uuid = None
+                    if selected_uuid is not None:
+                        selected_site = session.query(Site).filter(Site.id == selected_uuid).first()
+                        if selected_site is not None:
+                            sync_payload["host_site_url"] = selected_site.site_url
+                _sync_site_selection_from_creator_output(
+                    session,
+                    job=job,
+                    submission=submission,
+                    creator_output=sync_payload,
+                )
 
             wp_post_id = post_payload.get("id")
             wp_post_url = post_payload.get("link")
@@ -1324,6 +1494,58 @@ def _read_int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _parse_auto_site_priority_weights() -> Dict[str, int]:
+    raw = (os.getenv("AUTOMATION_AUTO_SITE_PRIORITY_WEIGHTS") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        logger.warning("automation.worker.auto_site_priority_weights_invalid")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, value in parsed.items():
+        try:
+            out[str(key).strip()] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _sync_site_selection_from_creator_output(
+    session: Session,
+    *,
+    job: Job,
+    submission: Submission,
+    creator_output: Dict[str, Any],
+) -> None:
+    selected_site_url = str(creator_output.get("host_site_url") or "").strip()
+    if not selected_site_url:
+        return
+    normalized_selected = normalize_site_profile_url(selected_site_url)
+    current_site = session.query(Site).filter(Site.id == submission.site_id).first()
+    if current_site is not None and normalized_selected == normalize_site_profile_url(current_site.site_url):
+        return
+    selected_site = None
+    for row in session.query(Site).filter(Site.status == "active").all():
+        if normalize_site_profile_url(row.site_url) == normalized_selected:
+            selected_site = row
+            break
+    if selected_site is None:
+        return
+    submission.site_id = selected_site.id
+    job.site_id = selected_site.id
+    session.add(submission)
+    session.add(job)
 
 
 def _safe_int(value: Optional[str], default: int) -> int:

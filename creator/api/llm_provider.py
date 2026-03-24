@@ -16,6 +16,7 @@ DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_SUPERVISOR_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_WRITER_MODEL = "claude-sonnet-4-6"
 DEFAULT_CRITIC_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_REPAIR_MODEL = "claude-sonnet-4-6"
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_MAX_TOKENS = 3200
 DEFAULT_TEMPERATURE = 0.2
@@ -144,6 +145,8 @@ def _default_model_for_role(role: LLMRole) -> str:
         return DEFAULT_WRITER_MODEL
     if role == LLMRole.CRITIC:
         return DEFAULT_CRITIC_MODEL
+    if role == LLMRole.REPAIR:
+        return DEFAULT_REPAIR_MODEL
     return DEFAULT_SUPERVISOR_MODEL
 
 

@@ -119,6 +119,62 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _normalize_site_selection_url(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    parsed = urlparse(cleaned if "://" in cleaned else f"https://{cleaned}")
+    scheme = parsed.scheme or "https"
+    host = (parsed.netloc or parsed.path or "").strip().lower().rstrip("/")
+    path = (parsed.path or "").strip()
+    if host and path and path != "/":
+        return f"{scheme}://{host}{path.rstrip('/')}"
+    if host:
+        return f"{scheme}://{host}"
+    return cleaned.rstrip("/")
+
+
+def _extract_creator_selected_site_url(creator_output: Dict[str, Any], fallback_site_url: str) -> str:
+    direct = str(creator_output.get("host_site_url") or "").strip()
+    if direct:
+        return direct
+    debug = creator_output.get("debug") if isinstance(creator_output.get("debug"), dict) else {}
+    supervisor_master_plan = (
+        debug.get("supervisor_master_plan")
+        if isinstance(debug.get("supervisor_master_plan"), dict)
+        else {}
+    )
+    publishing_site = (
+        supervisor_master_plan.get("publishing_site")
+        if isinstance(supervisor_master_plan.get("publishing_site"), dict)
+        else {}
+    )
+    selected = str(publishing_site.get("site_url") or "").strip()
+    return selected or fallback_site_url
+
+
+def _select_publish_target(
+    *,
+    creator_output: Dict[str, Any],
+    fallback_target: Dict[str, Any],
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    selected_site_url = _extract_creator_selected_site_url(
+        creator_output,
+        str(fallback_target.get("site_url") or ""),
+    )
+    selected_key = _normalize_site_selection_url(selected_site_url)
+    candidate_map: Dict[str, Dict[str, Any]] = {}
+    for candidate in publishing_candidates or []:
+        if not isinstance(candidate, dict):
+            continue
+        site_url = str(candidate.get("site_url") or "").strip()
+        if not site_url:
+            continue
+        candidate_map[_normalize_site_selection_url(site_url)] = candidate
+    return dict(candidate_map.get(selected_key) or fallback_target)
+
+
 def _strip_html_to_text(value: str) -> str:
     if not value:
         return ""
@@ -762,6 +818,7 @@ def call_creator_service(
     exclude_topics: Optional[List[str]] = None,
     recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
+    publishing_candidates: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
@@ -794,6 +851,29 @@ def call_creator_service(
         body["recent_article_titles"] = recent_article_titles
     if internal_link_inventory:
         body["internal_link_inventory"] = internal_link_inventory
+    if publishing_candidates:
+        body["publishing_candidates"] = [
+            {
+                "site_url": str(candidate.get("site_url") or "").strip(),
+                "site_id": str(candidate.get("site_id") or "").strip() or None,
+                "fit_score": candidate.get("fit_score"),
+                "notes": [
+                    str(item).strip()
+                    for item in (candidate.get("notes") or [])
+                    if str(item).strip()
+                ],
+                "internal_link_inventory": list(candidate.get("internal_link_inventory") or []),
+                "publishing_profile": {
+                    "content_hash": str(candidate.get("publishing_profile_content_hash") or "").strip(),
+                    "payload": dict(candidate.get("publishing_profile_payload") or {}),
+                },
+            }
+            for candidate in publishing_candidates
+            if isinstance(candidate, dict)
+            and str(candidate.get("site_url") or "").strip()
+            and isinstance(candidate.get("publishing_profile_payload"), dict)
+            and str(candidate.get("publishing_profile_content_hash") or "").strip()
+        ]
     if phase1_cache_payload and phase1_cache_content_hash:
         body["phase1_cache"] = {
             "content_hash": phase1_cache_content_hash,
@@ -964,6 +1044,7 @@ def run_create_article_pipeline(
     exclude_topics: Optional[List[str]] = None,
     recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
+    publishing_candidates: Optional[List[Dict[str, Any]]] = None,
     phase1_cache_payload: Optional[Dict[str, Any]] = None,
     phase1_cache_content_hash: Optional[str] = None,
     phase2_cache_payload: Optional[Dict[str, Any]] = None,
@@ -1015,7 +1096,11 @@ def run_create_article_pipeline(
         "creator",
         "request_started",
         "Calling creator service.",
-        {"target_site_url": target_site_url, "publishing_site_url": publishing_site_url},
+        {
+            "target_site_url": target_site_url,
+            "publishing_site_url": publishing_site_url,
+            "publishing_candidates_count": len(publishing_candidates or []),
+        },
     )
     creator_output = call_creator_service(
         creator_endpoint=creator_endpoint,
@@ -1028,6 +1113,7 @@ def run_create_article_pipeline(
         exclude_topics=exclude_topics,
         recent_article_titles=recent_article_titles,
         internal_link_inventory=internal_link_inventory,
+        publishing_candidates=publishing_candidates,
         phase1_cache_payload=phase1_cache_payload,
         phase1_cache_content_hash=phase1_cache_content_hash,
         phase2_cache_payload=phase2_cache_payload,
@@ -1042,6 +1128,38 @@ def run_create_article_pipeline(
     )
     _trace("info", "creator", "response_received", "Creator service returned a response.")
     creator_output = ensure_prompt_trace_in_creator_output(creator_output)
+    selected_publish_target = _select_publish_target(
+        creator_output=creator_output,
+        fallback_target={
+            "site_url": site_url,
+            "site_id": publishing_site_id,
+            "wp_rest_base": wp_rest_base,
+            "wp_username": wp_username,
+            "wp_app_password": wp_app_password,
+            "category_ids": list(category_ids or []),
+            "category_candidates": list(category_candidates or []),
+        },
+        publishing_candidates=publishing_candidates,
+    )
+    selected_publish_site_url = str(selected_publish_target.get("site_url") or site_url).strip() or site_url
+    selected_publish_site_id = str(selected_publish_target.get("site_id") or publishing_site_id or "").strip() or None
+    selected_wp_rest_base = str(selected_publish_target.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
+    selected_wp_username = str(selected_publish_target.get("wp_username") or wp_username).strip() or wp_username
+    selected_wp_app_password = str(selected_publish_target.get("wp_app_password") or wp_app_password).strip() or wp_app_password
+    selected_category_ids = list(selected_publish_target.get("category_ids") or category_ids or [])
+    selected_category_candidates = list(selected_publish_target.get("category_candidates") or category_candidates or [])
+    if _normalize_site_selection_url(selected_publish_site_url) != _normalize_site_selection_url(site_url):
+        _trace(
+            "info",
+            "creator",
+            "publishing_site_switched",
+            "Creator selected a different publishing site from the candidate shortlist.",
+            {
+                "provisional_site_url": site_url,
+                "selected_site_url": selected_publish_site_url,
+                "selected_site_id": selected_publish_site_id,
+            },
+        )
     phase5 = creator_output.get("phase5") or {}
     phase6 = creator_output.get("phase6") or {}
     images = creator_output.get("images") or []
@@ -1057,15 +1175,14 @@ def run_create_article_pipeline(
         raise AutomationError("Creator output missing article_html.")
     article_html = _strip_leading_h1_from_article_html(article_html)
 
-    selected_category_ids = list(category_ids or [])
-    if category_llm_enabled and category_candidates:
+    if category_llm_enabled and selected_category_candidates:
         if category_llm_api_key:
             try:
                 llm_selected_ids = _select_categories_with_llm(
                     title=title or "Generated Draft",
                     excerpt=excerpt,
                     clean_html=article_html,
-                    category_candidates=category_candidates,
+                    category_candidates=selected_category_candidates,
                     api_key=category_llm_api_key,
                     base_url=category_llm_base_url,
                     model=category_llm_model,
@@ -1113,10 +1230,10 @@ def run_create_article_pipeline(
             timeout_seconds=timeout_seconds,
         )
         media_payload = wp_create_media_item(
-            site_url=site_url,
-            wp_rest_base=wp_rest_base,
-            wp_username=wp_username,
-            wp_app_password=wp_app_password,
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
             data=image_bytes,
             file_name=file_name,
             content_type=content_type,
@@ -1135,10 +1252,10 @@ def run_create_article_pipeline(
                 timeout_seconds=timeout_seconds,
             )
             in_media_payload = wp_create_media_item(
-                site_url=site_url,
-                wp_rest_base=wp_rest_base,
-                wp_username=wp_username,
-                wp_app_password=wp_app_password,
+                site_url=selected_publish_site_url,
+                wp_rest_base=selected_wp_rest_base,
+                wp_username=selected_wp_username,
+                wp_app_password=selected_wp_app_password,
                 data=in_bytes,
                 file_name=in_name,
                 content_type=in_type,
@@ -1167,10 +1284,10 @@ def run_create_article_pipeline(
         featured_media_id = 0
     if existing_wp_post_id:
         post_payload = wp_update_post(
-            site_url=site_url,
-            wp_rest_base=wp_rest_base,
-            wp_username=wp_username,
-            wp_app_password=wp_app_password,
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
             post_id=existing_wp_post_id,
             title=title,
             clean_html=article_html,
@@ -1185,10 +1302,10 @@ def run_create_article_pipeline(
         post_event_type = "wp_post_updated"
     else:
         post_payload = wp_create_post(
-            site_url=site_url,
-            wp_rest_base=wp_rest_base,
-            wp_username=wp_username,
-            wp_app_password=wp_app_password,
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
             title=title,
             clean_html=article_html,
             excerpt=excerpt,
@@ -1221,6 +1338,8 @@ def run_create_article_pipeline(
         "post_payload": post_payload,
         "post_event_type": post_event_type,
         "selected_category_ids": selected_category_ids,
+        "selected_site_id": selected_publish_site_id,
+        "selected_site_url": selected_publish_site_url,
     }
 
 

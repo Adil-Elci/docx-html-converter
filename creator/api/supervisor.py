@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, ValidationInfo, field_validator
@@ -61,6 +62,131 @@ def _compact_profile_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         if values:
             compact[key] = values
     return compact
+
+
+def _ensure_string_list(value: Any, *, max_items: int = 8) -> List[str]:
+    if isinstance(value, list):
+        return _trim_string_list(value, max_items=max_items, max_chars=160)
+    text = _trim_text(value, max_chars=160)
+    return [text] if text else []
+
+
+def _normalize_article_angle(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {
+        "decision_criteria",
+        "process_and_decision_factors",
+        "process_and_next_steps",
+        "recognition_and_next_steps",
+        "comparison_and_evaluation",
+        "explainer",
+    }:
+        return text
+    if any(token in text for token in ("schritt", "ablauf", "next", "naechst")):
+        return "process_and_next_steps"
+    if any(token in text for token in ("vergleich", "vergleichend", "bewertung", "evaluation")):
+        return "comparison_and_evaluation"
+    if any(token in text for token in ("erkennen", "warnzeichen", "hinweis")):
+        return "recognition_and_next_steps"
+    if any(token in text for token in ("kriter", "auswahl", "worauf")):
+        return "decision_criteria"
+    if any(token in text for token in ("faktor", "entscheidung")):
+        return "process_and_decision_factors"
+    return "explainer"
+
+
+def _normalize_backlink_strategy(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"secondary_resource", "supporting_context", "evidence_support"}:
+        return text
+    if any(token in text for token in ("evidence", "beleg", "quelle", "studie")):
+        return "evidence_support"
+    if any(token in text for token in ("secondary", "sekund", "weiterf", "resource")):
+        return "secondary_resource"
+    return "supporting_context"
+
+
+def _normalize_section_id(value: Any, index: int) -> str:
+    text = str(value or "").strip().lower()
+    match = re.fullmatch(r"s(?:ection)?[_-]?(\d+)", text)
+    if match:
+        return f"section_{int(match.group(1))}"
+    if len(text) >= 3:
+        return text
+    return f"section_{index}"
+
+
+def _normalize_master_plan_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized = dict(payload)
+    normalized["article_angle"] = _normalize_article_angle(payload.get("article_angle"))
+
+    publishing_site = payload.get("publishing_site")
+    if isinstance(publishing_site, dict):
+        normalized_publishing_site = dict(publishing_site)
+        fit_reason = _trim_text(publishing_site.get("fit_reason"), max_chars=220)
+        inventory_rationale = _trim_text(publishing_site.get("inventory_rationale"), max_chars=220)
+        if len(fit_reason) < 12:
+            fit_reason = "Strong topical and editorial fit for the requested article."
+        if len(inventory_rationale) < 12:
+            inventory_rationale = "Existing inventory supports relevant internal-link opportunities."
+        normalized_publishing_site["fit_reason"] = fit_reason
+        normalized_publishing_site["inventory_rationale"] = inventory_rationale
+        normalized["publishing_site"] = normalized_publishing_site
+
+    backlink_plan = payload.get("backlink_plan")
+    if isinstance(backlink_plan, dict):
+        normalized_backlink = dict(backlink_plan)
+        normalized_backlink["strategy"] = _normalize_backlink_strategy(backlink_plan.get("strategy"))
+        normalized["backlink_plan"] = normalized_backlink
+
+    sections = payload.get("sections")
+    if isinstance(sections, list):
+        normalized_sections: List[Dict[str, Any]] = []
+        for index, section in enumerate(sections, start=1):
+            if not isinstance(section, dict):
+                continue
+            item = dict(section)
+            item["section_id"] = _normalize_section_id(section.get("section_id"), index)
+            h2 = _trim_text(section.get("h2"), max_chars=140)
+            if not h2:
+                h2 = "FAQ" if str(section.get("kind") or "").strip().lower() == "faq" else f"Abschnitt {index}"
+            item["h2"] = h2
+            goal = _trim_text(section.get("goal"), max_chars=220)
+            item["goal"] = goal or f"Behandle den Abschnitt {index} konkret und nutzerorientiert."
+            item["key_points"] = _ensure_string_list(section.get("key_points"), max_items=6)
+            item["required_terms"] = _ensure_string_list(section.get("required_terms"), max_items=8)
+            normalized_sections.append(item)
+        normalized["sections"] = normalized_sections
+
+    for key, max_items in (
+        ("risk_notes", 6),
+        ("warnings", 8),
+        ("quality_requirements", 10),
+        ("forbidden_phrases", 12),
+        ("internal_link_titles", 5),
+    ):
+        if key in payload:
+            normalized[key] = _ensure_string_list(payload.get(key), max_items=max_items)
+
+    faq_questions = _ensure_string_list(payload.get("faq_questions"), max_items=5)
+    while len(faq_questions) < 3:
+        fallback_index = len(faq_questions) + 1
+        faq_questions.append(f"Welche praktischen Punkte sind bei diesem Thema besonders wichtig {fallback_index}?")
+    normalized["faq_questions"] = faq_questions[:5]
+
+    keyword_strategy = payload.get("keyword_strategy")
+    if isinstance(keyword_strategy, dict):
+        normalized_keyword_strategy = dict(keyword_strategy)
+        for key, max_items in (
+            ("secondary_keywords", 6),
+            ("semantic_entities", 10),
+        ):
+            normalized_keyword_strategy[key] = _ensure_string_list(keyword_strategy.get(key), max_items=max_items)
+        normalized["keyword_strategy"] = normalized_keyword_strategy
+
+    return normalized
 
 
 class PublishingCandidateInput(BaseModel):
@@ -224,23 +350,33 @@ class CreatorSupervisor:
     ) -> MasterArticlePlan:
         system_prompt = build_supervisor_system_prompt()
         user_prompt = build_supervisor_user_prompt(context)
+        last_error: Optional[Exception] = None
         try:
             payload = self.provider.call_json(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 request_label=request_label,
             )
+            payload = _normalize_master_plan_payload(payload)
             return MasterArticlePlan.model_validate(payload)
         except (LLMError, ValidationError) as exc:
+            last_error = exc
             repair_prompt = (
                 user_prompt
                 + "\n\nYour previous response was invalid or incomplete."
                 + f"\nValidation issue: {_trim_text(exc, max_chars=300)}"
                 + "\nReturn a smaller, fully valid JSON object now."
             )
+        try:
             payload = self.provider.call_json(
                 system_prompt=system_prompt,
                 user_prompt=repair_prompt,
                 request_label=f"{request_label}_retry",
             )
+            payload = _normalize_master_plan_payload(payload)
             return MasterArticlePlan.model_validate(payload)
+        except (LLMError, ValidationError) as exc:
+            message = _trim_text(exc, max_chars=500)
+            if last_error is not None:
+                message = _trim_text(f"first_error={last_error}; retry_error={exc}", max_chars=500)
+            raise LLMError(f"Supervisor returned invalid master_article_plan: {message}") from exc

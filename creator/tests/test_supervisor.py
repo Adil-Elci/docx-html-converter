@@ -97,6 +97,91 @@ class _StubProvider:
         }
 
 
+class _LooseSupervisorProvider:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def call_json(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append(kwargs)
+        return {
+            "publishing_site": {
+                "site_id": "site-2",
+                "site_url": "https://publisher-two.example.com",
+                "fit_reason": "Strong fit.",
+                "inventory_rationale": "Good inventory support.",
+                "confidence": 0.8,
+            },
+            "topic": "Hausbau planen: Welche Schritte zuerst wichtig sind",
+            "intent_type": "informational",
+            "article_angle": "Schritt-für-Schritt-Leitfaden für Eigentümer",
+            "audience": "Bauherren",
+            "tone": "practical_informational",
+            "differentiator": "Focuses on sequence and practical decisions.",
+            "title_package": {
+                "h1": "Hausbau planen: Welche Schritte zuerst wichtig sind",
+                "meta_title": "Hausbau planen: Die wichtigsten ersten Schritte",
+                "slug": "hausbau-planen-erste-schritte",
+            },
+            "keyword_strategy": {
+                "primary_keyword": "hausbau planen",
+                "secondary_keywords": "hausbau schritte",
+                "semantic_entities": "bauantrag",
+                "keyword_intent_note": "Matches readers planning their first decisions.",
+            },
+            "backlink_plan": {
+                "strategy": "Contextual editorial link in the first body section",
+                "anchor_text": "mehr zum Hausbau",
+                "placement_hint": "section_2",
+                "rationale": "Natural support link.",
+            },
+            "image_strategy": {
+                "featured_prompt": "Editorial image of early-stage house planning with documents and site plan.",
+                "featured_alt": "Unterlagen für die Hausbauplanung",
+                "include_in_content": False,
+                "in_content_prompt": "",
+                "in_content_alt": "",
+            },
+            "faq_questions": "Was kommt beim Hausbau zuerst?",
+            "internal_link_titles": "Hausbaukosten richtig planen",
+            "sections": [
+                {
+                    "section_id": "s1",
+                    "kind": "body",
+                    "h2": "Welche Schritte kommen zuerst?",
+                    "goal": "Explain the first steps.",
+                    "key_points": "Grundstück, Budget",
+                    "required_terms": "budget",
+                    "target_min_words": 100,
+                    "target_max_words": 140,
+                },
+                {
+                    "section_id": "s2",
+                    "kind": "faq",
+                    "h2": "FAQ",
+                    "goal": "Answer follow-up questions.",
+                    "key_points": [],
+                    "required_terms": [],
+                    "target_min_words": 90,
+                    "target_max_words": 140,
+                },
+                {
+                    "section_id": "s3",
+                    "kind": "fazit",
+                    "h2": "Fazit",
+                    "goal": "Summarize the takeaway.",
+                    "key_points": [],
+                    "required_terms": [],
+                    "target_min_words": 70,
+                    "target_max_words": 100,
+                },
+            ],
+            "forbidden_phrases": "hier erfahren Sie alles",
+            "quality_requirements": "use practical steps",
+            "risk_notes": "Do not overpromise timelines.",
+            "warnings": "Local regulations may vary.",
+        }
+
+
 def _sample_context() -> SupervisorContext:
     return SupervisorContext(
         target_site_url="https://www.eigenheim-blog.com/",
@@ -172,3 +257,16 @@ def test_publishing_candidate_input_trims_internal_link_titles_to_limit() -> Non
 
     assert len(candidate.internal_link_titles) == 5
     assert candidate.internal_link_titles[-1] == "Titel 5"
+
+
+def test_supervisor_normalizes_loose_plan_fields() -> None:
+    provider = _LooseSupervisorProvider()
+    supervisor = CreatorSupervisor(provider=provider)
+
+    result = supervisor.create_master_article_plan(_sample_context(), request_label="normalize_supervisor")
+
+    assert result.article_angle == "process_and_next_steps"
+    assert result.backlink_plan.strategy == "supporting_context"
+    assert result.sections[0].section_id == "section_1"
+    assert result.risk_notes == ["Do not overpromise timelines."]
+    assert result.warnings == ["Local regulations may vary."]

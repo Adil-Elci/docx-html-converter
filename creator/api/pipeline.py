@@ -7910,7 +7910,7 @@ def _validate_forbidden_phrases(
         return errors
     combined_text = " ".join(
         [
-            _html_to_text(article_html),
+            _strip_html_tags(article_html),
             str(meta_title or "").strip(),
             str(meta_description or "").strip(),
         ]

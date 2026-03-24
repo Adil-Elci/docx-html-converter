@@ -35,6 +35,13 @@ def _sample_review() -> CriticReview:
             "plan_alignment_score": 81,
             "editorial_quality_score": 72,
             "seo_quality_score": 69,
+            "title_quality_score": 71,
+            "heading_quality_score": 67,
+            "intent_consistency_score": 78,
+            "backlink_naturalness_score": 74,
+            "specificity_score": 66,
+            "spam_risk_score": 17,
+            "coherence_score": 79,
             "strengths": ["Useful body details."],
             "issues": [
                 {

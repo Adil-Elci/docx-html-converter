@@ -6,6 +6,7 @@ def test_master_article_plan_schema_exports_sections_and_keywords() -> None:
     definitions = schema.get("$defs") or {}
 
     assert "KeywordStrategy" in definitions
+    assert "ImageStrategy" in definitions
     assert "SectionPlan" in definitions
     assert schema["properties"]["sections"]["minItems"] == 3
 
@@ -50,6 +51,13 @@ def test_schema_models_validate_expected_payloads() -> None:
                 "placement_hint": "section_2",
                 "rationale": "The backlink supports a comparison point without turning the section promotional.",
             },
+            "image_strategy": {
+                "featured_prompt": "Editorial hero image of a compact, well-planned living room with layered lighting and smart storage.",
+                "featured_alt": "Kompakter Wohnraum mit durchdachter Stauraumplanung",
+                "include_in_content": False,
+                "in_content_prompt": "",
+                "in_content_alt": "",
+            },
             "faq_questions": [
                 "Welche Möbel funktionieren in kleinen Räumen am besten?",
                 "Wie viel Laufbreite sollte zwischen Möbeln bleiben?",
@@ -88,7 +96,10 @@ def test_schema_models_validate_expected_payloads() -> None:
                     "target_max_words": 140,
                 },
             ],
+            "forbidden_phrases": ["hier erfahren Sie alles", "revolutionäre Lösung"],
+            "quality_requirements": ["Use concrete measurements where helpful.", "Keep headings natural and specific."],
             "risk_notes": ["Avoid generic lifestyle phrasing."],
+            "warnings": ["Avoid repeating recent homeowner-planning angles too closely."],
         }
     )
     review = CriticReview.model_validate(
@@ -98,6 +109,13 @@ def test_schema_models_validate_expected_payloads() -> None:
             "plan_alignment_score": 82,
             "editorial_quality_score": 70,
             "seo_quality_score": 69,
+            "title_quality_score": 72,
+            "heading_quality_score": 67,
+            "intent_consistency_score": 80,
+            "backlink_naturalness_score": 74,
+            "specificity_score": 64,
+            "spam_risk_score": 18,
+            "coherence_score": 78,
             "strengths": ["Concrete space-planning examples."],
             "issues": [
                 {

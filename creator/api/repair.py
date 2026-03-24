@@ -54,6 +54,7 @@ Requirements:
 - Preserve exactly one H1.
 - The final two H2 sections must remain Fazit and FAQ.
 - FAQ must answer the listed questions directly using H3 question headings.
+- Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not add hyperlinks. The application inserts them later.
 - Improve heading naturalness, FAQ usefulness, specificity, metadata alignment, and plan adherence.
 - Return only valid JSON that matches the schema exactly.

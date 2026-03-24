@@ -15,6 +15,13 @@ class _StubCriticProvider:
                 "plan_alignment_score": 82,
                 "editorial_quality_score": 71,
                 "seo_quality_score": 68,
+                "title_quality_score": 70,
+                "heading_quality_score": 66,
+                "intent_consistency_score": 79,
+                "backlink_naturalness_score": 73,
+                "specificity_score": 64,
+                "spam_risk_score": 19,
+                "coherence_score": 77,
                 "strengths": ["The body contains concrete homeowner examples."],
                 "issues": [
                     {
@@ -66,6 +73,13 @@ def _sample_master_plan():  # type: ignore[no-untyped-def]
                 "placement_hint": "section_2",
                 "rationale": "The backlink supports a planning comparison naturally.",
             },
+            "image_strategy": {
+                "featured_prompt": "Editorial image of a compact room with storage and layered lighting.",
+                "featured_alt": "Kleiner Raum mit Stauraum und Lichtplanung",
+                "include_in_content": False,
+                "in_content_prompt": "",
+                "in_content_alt": "",
+            },
             "faq_questions": [
                 "Welche Möbel sparen Platz?",
                 "Wie viel Laufbreite sollte bleiben?",
@@ -104,7 +118,10 @@ def _sample_master_plan():  # type: ignore[no-untyped-def]
                     "target_max_words": 140,
                 },
             ],
+            "forbidden_phrases": ["hier erfahren Sie alles"],
+            "quality_requirements": ["Use concrete layout examples.", "Keep headings natural and useful."],
             "risk_notes": ["Avoid generic lifestyle phrasing."],
+            "warnings": [],
         }
     )
 
@@ -151,6 +168,7 @@ def test_build_critic_user_prompt_embeds_plan_and_draft() -> None:
     assert "specificity_too_low:2" in prompt
     assert "publisher-two.example.com" in prompt
     assert "Kleine Räume optimal nutzen" in prompt
+    assert "draft_article" in prompt
 
 
 def test_critic_calls_provider_with_review_schema() -> None:

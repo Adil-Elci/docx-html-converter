@@ -12,81 +12,89 @@ class _StubProvider:
     def __init__(self) -> None:
         self.calls = []
 
-    def call_schema(self, **kwargs):  # type: ignore[no-untyped-def]
+    def call_json(self, **kwargs):  # type: ignore[no-untyped-def]
         self.calls.append(kwargs)
-        return MasterArticlePlan.model_validate(
-            {
-                "publishing_site": {
-                    "site_id": "site-2",
-                    "site_url": "https://publisher-two.example.com",
-                    "fit_reason": "The site has stronger home-planning relevance and cleaner internal-link support.",
-                    "inventory_rationale": "Its existing articles cover layout, storage, and room-planning topics that support the draft naturally.",
-                    "confidence": 0.87,
+        return {
+            "publishing_site": {
+                "site_id": "site-2",
+                "site_url": "https://publisher-two.example.com",
+                "fit_reason": "The site has stronger home-planning relevance and cleaner internal-link support.",
+                "inventory_rationale": "Its existing articles cover layout, storage, and room-planning topics that support the draft naturally.",
+                "confidence": 0.87,
+            },
+            "topic": "Kleine Räume optimal nutzen: So gelingt clevere Wohnraumplanung",
+            "intent_type": "commercial_investigation",
+            "article_angle": "decision_criteria",
+            "audience": "Hausbesitzerinnen und Hausbesitzer",
+            "tone": "practical_informational",
+            "differentiator": "The plan focuses on layout tradeoffs, storage constraints, and lighting instead of generic inspiration.",
+            "title_package": {
+                "h1": "Kleine Räume optimal nutzen: Worauf es bei der Planung ankommt",
+                "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
+                "slug": "kleine-raeume-optimal-nutzen",
+            },
+            "keyword_strategy": {
+                "primary_keyword": "kleine räume optimal nutzen",
+                "secondary_keywords": ["wohnraumplanung stauraum", "kleine räume beleuchtung"],
+                "semantic_entities": ["grundriss", "laufbreite", "regal"],
+                "keyword_intent_note": "The keyword strategy serves readers who want concrete planning criteria before making layout choices.",
+            },
+            "backlink_plan": {
+                "strategy": "supporting_context",
+                "anchor_text": "mehr zur Raumplanung",
+                "placement_hint": "section_2",
+                "rationale": "The backlink supports a comparison point and stays editorial instead of promotional.",
+            },
+            "image_strategy": {
+                "featured_prompt": "Editorial image of a compact living room with layered lighting and custom storage.",
+                "featured_alt": "Kleiner Wohnraum mit Stauraum und guter Lichtplanung",
+                "include_in_content": False,
+                "in_content_prompt": "",
+                "in_content_alt": "",
+            },
+            "faq_questions": [
+                "Welche Möbel sparen in kleinen Räumen wirklich Platz?",
+                "Wie viel Laufbreite sollte zwischen Möbeln bleiben?",
+                "Welche Beleuchtung hilft kleinen Räumen?",
+            ],
+            "internal_link_titles": ["Stauraum im Flur richtig planen"],
+            "sections": [
+                {
+                    "section_id": "section_1",
+                    "kind": "body",
+                    "h2": "Welche Kriterien sind bei kleinen Räumen entscheidend?",
+                    "goal": "Explain the main layout criteria with concrete homeowner examples.",
+                    "key_points": ["Laufbreite", "Stauraum", "Licht"],
+                    "required_terms": ["grundriss", "stauraum"],
+                    "target_min_words": 100,
+                    "target_max_words": 140,
                 },
-                "topic": "Kleine Räume optimal nutzen: So gelingt clevere Wohnraumplanung",
-                "intent_type": "commercial_investigation",
-                "article_angle": "decision_criteria",
-                "audience": "Hausbesitzerinnen und Hausbesitzer",
-                "tone": "practical_informational",
-                "differentiator": "The plan focuses on layout tradeoffs, storage constraints, and lighting instead of generic inspiration.",
-                "title_package": {
-                    "h1": "Kleine Räume optimal nutzen: Worauf es bei der Planung ankommt",
-                    "meta_title": "Kleine Räume optimal nutzen: Planung, Licht und Stauraum",
-                    "slug": "kleine-raeume-optimal-nutzen",
+                {
+                    "section_id": "section_2",
+                    "kind": "body",
+                    "h2": "Welche Möbel und Stauraumlösungen funktionieren wirklich?",
+                    "goal": "Compare furniture choices and explain tradeoffs.",
+                    "key_points": ["Tiefe", "Klappmechanik"],
+                    "required_terms": ["regal"],
+                    "target_min_words": 100,
+                    "target_max_words": 140,
                 },
-                "keyword_strategy": {
-                    "primary_keyword": "kleine räume optimal nutzen",
-                    "secondary_keywords": ["wohnraumplanung stauraum", "kleine räume beleuchtung"],
-                    "semantic_entities": ["grundriss", "laufbreite", "regal"],
-                    "keyword_intent_note": "The keyword strategy serves readers who want concrete planning criteria before making layout choices.",
+                {
+                    "section_id": "section_3",
+                    "kind": "faq",
+                    "h2": "FAQ",
+                    "goal": "Answer the top follow-up questions directly.",
+                    "key_points": ["Kurz", "Präzise"],
+                    "required_terms": [],
+                    "target_min_words": 90,
+                    "target_max_words": 140,
                 },
-                "backlink_plan": {
-                    "strategy": "supporting_context",
-                    "anchor_text": "mehr zur Raumplanung",
-                    "placement_hint": "section_2",
-                    "rationale": "The backlink supports a comparison point and stays editorial instead of promotional.",
-                },
-                "faq_questions": [
-                    "Welche Möbel sparen in kleinen Räumen wirklich Platz?",
-                    "Wie viel Laufbreite sollte zwischen Möbeln bleiben?",
-                    "Welche Beleuchtung hilft kleinen Räumen?",
-                ],
-                "internal_link_titles": ["Stauraum im Flur richtig planen"],
-                "sections": [
-                    {
-                        "section_id": "section_1",
-                        "kind": "body",
-                        "h2": "Welche Kriterien sind bei kleinen Räumen entscheidend?",
-                        "goal": "Explain the main layout criteria with concrete homeowner examples.",
-                        "key_points": ["Laufbreite", "Stauraum", "Licht"],
-                        "required_terms": ["grundriss", "stauraum"],
-                        "target_min_words": 100,
-                        "target_max_words": 140,
-                    },
-                    {
-                        "section_id": "section_2",
-                        "kind": "body",
-                        "h2": "Welche Möbel und Stauraumlösungen funktionieren wirklich?",
-                        "goal": "Compare furniture choices and explain tradeoffs.",
-                        "key_points": ["Tiefe", "Klappmechanik"],
-                        "required_terms": ["regal"],
-                        "target_min_words": 100,
-                        "target_max_words": 140,
-                    },
-                    {
-                        "section_id": "section_3",
-                        "kind": "faq",
-                        "h2": "FAQ",
-                        "goal": "Answer the top follow-up questions directly.",
-                        "key_points": ["Kurz", "Präzise"],
-                        "required_terms": [],
-                        "target_min_words": 90,
-                        "target_max_words": 140,
-                    },
-                ],
-                "risk_notes": ["Avoid generic lifestyle phrasing."],
-            }
-        )
+            ],
+            "forbidden_phrases": ["hier erfahren Sie alles"],
+            "quality_requirements": ["Use concrete homeowner examples.", "Keep headings natural and non-promotional."],
+            "risk_notes": ["Avoid generic lifestyle phrasing."],
+            "warnings": ["Avoid repeating the recent room-planning angle too closely."],
+        }
 
 
 def _sample_context() -> SupervisorContext:
@@ -126,6 +134,7 @@ def test_build_supervisor_system_prompt_mentions_master_plan_schema() -> None:
     assert "master article plan" in prompt.lower()
     assert "publishing_site" in prompt
     assert "keyword_strategy" in prompt
+    assert "image_strategy" in prompt
 
 
 def test_build_supervisor_user_prompt_embeds_candidate_context() -> None:
@@ -143,5 +152,6 @@ def test_create_master_article_plan_calls_provider_with_expected_schema() -> Non
     result = supervisor.create_master_article_plan(_sample_context(), request_label="test_supervisor")
 
     assert result.publishing_site.site_url == "https://publisher-two.example.com"
+    assert "concrete homeowner examples" in " ".join(result.quality_requirements).lower()
     assert provider.calls[0]["request_label"] == "test_supervisor"
-    assert provider.calls[0]["schema_model"] is MasterArticlePlan
+    assert "publishing_candidates" in provider.calls[0]["user_prompt"]

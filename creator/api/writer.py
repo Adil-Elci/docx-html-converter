@@ -51,6 +51,7 @@ Requirements:
 - Follow the plan's section order exactly.
 - The final two H2 sections must be Fazit and FAQ.
 - FAQ must answer the listed questions directly using H3 question headings.
+- Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not include hyperlinks. The application inserts them later.
 - Avoid advertorial phrasing, generic filler, and repeated keyword stuffing.
 - Keep metadata aligned with the plan.

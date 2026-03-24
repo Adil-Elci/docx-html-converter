@@ -93,6 +93,31 @@ class BacklinkPlan(SchemaBackedModel):
     rationale: str = Field(..., min_length=12, description="Why this backlink placement feels natural.")
 
 
+class ImageStrategy(SchemaBackedModel):
+    featured_prompt: str = Field(
+        ...,
+        min_length=12,
+        description="Editorial image intent for the featured image.",
+    )
+    featured_alt: str = Field(
+        ...,
+        min_length=3,
+        description="Featured image alt text.",
+    )
+    include_in_content: bool = Field(
+        default=False,
+        description="Whether an additional in-content image should be generated.",
+    )
+    in_content_prompt: str = Field(
+        default="",
+        description="Editorial image intent for an optional in-content image.",
+    )
+    in_content_alt: str = Field(
+        default="",
+        description="Alt text for an optional in-content image.",
+    )
+
+
 class SectionPlan(SchemaBackedModel):
     section_id: str = Field(..., min_length=3, description="Stable section identifier.")
     kind: str = Field(..., min_length=3, description="Section type such as body, fazit, or faq.")
@@ -127,6 +152,7 @@ class MasterArticlePlan(SchemaBackedModel):
     title_package: TitlePackage
     keyword_strategy: KeywordStrategy
     backlink_plan: BacklinkPlan
+    image_strategy: ImageStrategy
     faq_questions: List[str] = Field(
         default_factory=list,
         min_length=3,
@@ -144,10 +170,25 @@ class MasterArticlePlan(SchemaBackedModel):
         max_length=8,
         description="Strict article structure the writer must follow.",
     )
+    forbidden_phrases: List[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Phrases the writer should avoid because they are spammy, repetitive, or off-brand.",
+    )
+    quality_requirements: List[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="High-level editorial requirements the draft must satisfy.",
+    )
     risk_notes: List[str] = Field(
         default_factory=list,
         max_length=6,
         description="Known risks the writer and critic should watch for.",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Supervisor warnings about fragile fit, duplication risk, or weak context.",
     )
 
 
@@ -173,6 +214,13 @@ class CriticReview(SchemaBackedModel):
     plan_alignment_score: int = Field(..., ge=0, le=100, description="How well the draft follows the master plan.")
     editorial_quality_score: int = Field(..., ge=0, le=100, description="Naturalness and usefulness of the writing.")
     seo_quality_score: int = Field(..., ge=0, le=100, description="Quality of titles, headings, and keyword handling.")
+    title_quality_score: int = Field(..., ge=0, le=100, description="Quality of the H1 and metadata title.")
+    heading_quality_score: int = Field(..., ge=0, le=100, description="Naturalness and usefulness of the H2/H3 structure.")
+    intent_consistency_score: int = Field(..., ge=0, le=100, description="How consistently the draft holds one search intent.")
+    backlink_naturalness_score: int = Field(..., ge=0, le=100, description="How editorial and contextually natural the backlink feels.")
+    specificity_score: int = Field(..., ge=0, le=100, description="Level of concrete, topic-specific detail.")
+    spam_risk_score: int = Field(..., ge=0, le=100, description="Spam or over-optimization risk, where lower is better.")
+    coherence_score: int = Field(..., ge=0, le=100, description="How coherent the article remains from intro to FAQ.")
     strengths: List[str] = Field(default_factory=list, max_length=6, description="Strong points in the article.")
     issues: List[CriticIssue] = Field(default_factory=list, max_length=10, description="Problems that need attention.")
     repair_instructions: List[str] = Field(

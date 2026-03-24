@@ -3512,6 +3512,26 @@ def _build_deterministic_image_prompts(topic: str) -> Dict[str, Any]:
     }
 
 
+def _build_image_prompts_from_master_plan(master_plan: Optional[Dict[str, Any]], topic: str) -> Dict[str, Any]:
+    if isinstance(master_plan, dict):
+        image_strategy = master_plan.get("image_strategy")
+        if isinstance(image_strategy, dict):
+            featured_prompt = str(image_strategy.get("featured_prompt") or "").strip()
+            featured_alt = str(image_strategy.get("featured_alt") or "").strip()
+            include_in_content = bool(image_strategy.get("include_in_content"))
+            in_content_prompt = str(image_strategy.get("in_content_prompt") or "").strip()
+            in_content_alt = str(image_strategy.get("in_content_alt") or "").strip()
+            if featured_prompt and featured_alt:
+                return {
+                    "featured_prompt": featured_prompt,
+                    "featured_alt": featured_alt,
+                    "include_in_content": include_in_content and bool(in_content_prompt),
+                    "in_content_prompt": in_content_prompt,
+                    "in_content_alt": in_content_alt or in_content_prompt,
+                }
+    return _build_deterministic_image_prompts(topic)
+
+
 def _extract_keywords(text: str, max_terms: int = 10) -> List[str]:
     words = re.findall(r"\b[a-zA-Z][a-zA-Z-]{2,}\b", (text or "").lower())
     counts: Dict[str, int] = {}
@@ -7786,6 +7806,7 @@ def _collect_article_validation_errors(
     article_angle: str = "practical_guidance",
     topic_signature: Optional[Dict[str, Any]] = None,
     specificity_profile: Optional[Dict[str, Any]] = None,
+    forbidden_phrases: Optional[List[str]] = None,
 ) -> List[str]:
     errors: List[str] = []
     for check in (
@@ -7817,6 +7838,14 @@ def _collect_article_validation_errors(
     errors.extend(_validate_phrase_integrity(article_html))
     errors.extend(_validate_contextual_alignment(article_html, content_brief))
     errors.extend(_validate_keyword_coverage(article_html, primary_keyword, secondary_keywords))
+    errors.extend(
+        _validate_forbidden_phrases(
+            article_html=article_html,
+            meta_title=meta_title,
+            meta_description=meta_description,
+            forbidden_phrases=forbidden_phrases or [],
+        )
+    )
     title_eval = _evaluate_title_quality(title=meta_title or required_h1, primary_keyword=primary_keyword, topic=topic)
     if title_eval["score"] < 70:
         errors.extend(title_eval["errors"] or ["title_quality_low"])
@@ -7864,6 +7893,34 @@ def _collect_article_validation_errors(
         )
     )
     return errors
+
+
+def _validate_forbidden_phrases(
+    *,
+    article_html: str,
+    meta_title: str,
+    meta_description: str,
+    forbidden_phrases: List[str],
+) -> List[str]:
+    errors: List[str] = []
+    cleaned_phrases = [str(item).strip() for item in forbidden_phrases if str(item).strip()]
+    if not cleaned_phrases:
+        return errors
+    combined_text = " ".join(
+        [
+            _html_to_text(article_html),
+            str(meta_title or "").strip(),
+            str(meta_description or "").strip(),
+        ]
+    )
+    normalized_text = _normalize_keyword_phrase(combined_text)
+    for phrase in cleaned_phrases:
+        normalized_phrase = _normalize_keyword_phrase(phrase)
+        if not normalized_phrase:
+            continue
+        if normalized_phrase in normalized_text:
+            errors.append(f"forbidden_phrase_present:{normalized_phrase}")
+    return _dedupe_string_values(errors)
 
 
 def _contains_generic_conclusion(text: str) -> bool:
@@ -9669,6 +9726,17 @@ def _build_phase3_from_master_plan(
         for item in (master_plan.get("faq_questions") or [])
         if str(item).strip()
     ]
+    phase3["forbidden_phrases"] = [
+        str(item).strip()
+        for item in (master_plan.get("forbidden_phrases") or [])
+        if str(item).strip()
+    ]
+    phase3["quality_requirements"] = [
+        str(item).strip()
+        for item in (master_plan.get("quality_requirements") or [])
+        if str(item).strip()
+    ]
+    phase3["image_strategy"] = master_plan.get("image_strategy") if isinstance(master_plan.get("image_strategy"), dict) else {}
     return phase3
 
 
@@ -9767,6 +9835,18 @@ def _apply_master_article_plan_to_phase_state(
         "topic_class": phase3.get("topic_class", ""),
         "style_profile": phase3.get("style_profile") or {},
         "specificity_profile": phase3.get("specificity_profile") or {},
+        "forbidden_phrases": [
+            str(item).strip()
+            for item in (master_plan.get("forbidden_phrases") or [])
+            if str(item).strip()
+        ],
+        "quality_requirements": [
+            str(item).strip()
+            for item in (master_plan.get("quality_requirements") or [])
+            if str(item).strip()
+        ],
+        "image_strategy": master_plan.get("image_strategy") if isinstance(master_plan.get("image_strategy"), dict) else {},
+        "plan_warnings": [str(item).strip() for item in (master_plan.get("warnings") or []) if str(item).strip()],
         "supervisor_master_plan": master_plan,
     }
     return phase4
@@ -12921,6 +13001,7 @@ def run_creator_pipeline(
             article_angle=phase3.get("article_angle", ""),
             topic_signature=phase3.get("topic_signature"),
             specificity_profile=phase3.get("specificity_profile"),
+            forbidden_phrases=phase3.get("forbidden_phrases") or phase4.get("forbidden_phrases") or [],
         )
 
         if validation_errors:
@@ -12985,6 +13066,7 @@ def run_creator_pipeline(
                         article_angle=phase3.get("article_angle", ""),
                         topic_signature=phase3.get("topic_signature"),
                         specificity_profile=phase3.get("specificity_profile"),
+                        forbidden_phrases=phase3.get("forbidden_phrases") or phase4.get("forbidden_phrases") or [],
                     )
             repairable_errors = _dedupe_string_values(
                 [error for error in validation_errors if _is_editorial_llm_repairable_error(error)]
@@ -13067,6 +13149,7 @@ def run_creator_pipeline(
                         article_angle=phase3.get("article_angle", ""),
                         topic_signature=phase3.get("topic_signature"),
                         specificity_profile=phase3.get("specificity_profile"),
+                        forbidden_phrases=phase3.get("forbidden_phrases") or phase4.get("forbidden_phrases") or [],
                     )
                     introduced_regressions = _repair_attempt_introduced_regressions(
                         baseline_errors=baseline_validation_errors,
@@ -13231,7 +13314,10 @@ def run_creator_pipeline(
         "in_content_image": {},
     }
 
-    image_prompts = _build_deterministic_image_prompts(phase3["final_article_topic"])
+    image_prompts = _build_image_prompts_from_master_plan(
+        phase4.get("supervisor_master_plan") if isinstance(phase4.get("supervisor_master_plan"), dict) else None,
+        phase3["final_article_topic"],
+    )
 
     featured_prompt = (image_prompts.get("featured_prompt") or "").strip()
     featured_alt = (image_prompts.get("featured_alt") or "").strip()
@@ -13542,6 +13628,9 @@ def run_creator_pipeline(
                         "verdict": critic_review.get("verdict"),
                         "errors": critic_errors,
                         "overall_score": critic_review.get("overall_score"),
+                        "title_quality_score": critic_review.get("title_quality_score"),
+                        "heading_quality_score": critic_review.get("heading_quality_score"),
+                        "specificity_score": critic_review.get("specificity_score"),
                     },
                 )
         elif critic_errors:
@@ -13556,6 +13645,9 @@ def run_creator_pipeline(
                     "verdict": critic_review.get("verdict"),
                     "errors": critic_errors,
                     "overall_score": critic_review.get("overall_score"),
+                    "title_quality_score": critic_review.get("title_quality_score"),
+                    "heading_quality_score": critic_review.get("heading_quality_score"),
+                    "specificity_score": critic_review.get("specificity_score"),
                 },
             )
         else:
@@ -13570,6 +13662,13 @@ def run_creator_pipeline(
                     "plan_alignment_score": critic_review.get("plan_alignment_score"),
                     "editorial_quality_score": critic_review.get("editorial_quality_score"),
                     "seo_quality_score": critic_review.get("seo_quality_score"),
+                    "title_quality_score": critic_review.get("title_quality_score"),
+                    "heading_quality_score": critic_review.get("heading_quality_score"),
+                    "intent_consistency_score": critic_review.get("intent_consistency_score"),
+                    "backlink_naturalness_score": critic_review.get("backlink_naturalness_score"),
+                    "specificity_score": critic_review.get("specificity_score"),
+                    "spam_risk_score": critic_review.get("spam_risk_score"),
+                    "coherence_score": critic_review.get("coherence_score"),
                 },
             )
     allowed_topics = [t.lower() for t in phase2.get("allowed_topics") or [] if isinstance(t, str)]

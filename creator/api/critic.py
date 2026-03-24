@@ -49,6 +49,7 @@ Your task is to review a finished draft against the approved master_article_plan
 Requirements:
 - Evaluate whether the draft follows the plan, reads naturally, and is publishable.
 - Consider title quality, heading naturalness, FAQ usefulness, specificity, internal-link readiness, and overall coherence.
+- Score title quality, heading quality, intent consistency, backlink naturalness, specificity, spam risk, and coherence explicitly.
 - Respect deterministic_validation_errors as hard evidence, but still score the draft globally.
 - Use verdict:
   - pass: publishable without further LLM rewriting

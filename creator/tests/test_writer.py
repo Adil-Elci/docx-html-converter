@@ -62,6 +62,13 @@ def _sample_master_plan():  # type: ignore[no-untyped-def]
                 "placement_hint": "section_2",
                 "rationale": "The backlink supports a planning comparison naturally.",
             },
+            "image_strategy": {
+                "featured_prompt": "Editorial image of a compact room with layered lighting and space-saving storage.",
+                "featured_alt": "Kleiner Raum mit guter Stauraumplanung",
+                "include_in_content": False,
+                "in_content_prompt": "",
+                "in_content_alt": "",
+            },
             "faq_questions": [
                 "Welche Möbel sparen Platz?",
                 "Wie viel Laufbreite sollte bleiben?",
@@ -100,7 +107,10 @@ def _sample_master_plan():  # type: ignore[no-untyped-def]
                     "target_max_words": 140,
                 },
             ],
+            "forbidden_phrases": ["hier erfahren Sie alles"],
+            "quality_requirements": ["Use concrete measures where relevant.", "Keep headings natural and useful."],
             "risk_notes": ["Avoid generic lifestyle phrasing."],
+            "warnings": [],
         }
     )
 
@@ -127,6 +137,7 @@ def test_build_writer_user_prompt_embeds_master_plan() -> None:
     assert "specificity_too_low:2" in prompt
     assert "publisher-two.example.com" in prompt
     assert "Kleine Räume optimal nutzen" in prompt
+    assert "forbidden_phrases" in prompt
 
 
 def test_writer_calls_provider_with_draft_schema() -> None:

@@ -9782,13 +9782,34 @@ def _apply_master_article_plan_to_phase_state(
             str(item).strip() for item in (keyword_strategy.get("semantic_entities") or []) if str(item).strip()
         ],
     }
+    deterministic_headings = _build_question_topic_outline_headings(
+        topic=phase3.get("final_article_topic", ""),
+        primary_keyword=phase3.get("primary_keyword", ""),
+        secondary_keywords=phase3.get("secondary_keywords") or [],
+        structured_mode=phase3.get("structured_content_mode", "none"),
+        intent_type=phase3.get("search_intent_type", ""),
+        article_angle=phase3.get("article_angle", ""),
+        topic_class=phase3.get("topic_class", "general"),
+        topic_signature=phase3.get("topic_signature"),
+    )
+    deterministic_body_headings = [str(item).strip() for item in deterministic_headings if str(item).strip()]
+    deterministic_heading_index = 0
     converted_sections: List[Dict[str, Any]] = []
     for section in sections:
         if not isinstance(section, dict):
             continue
         section_id = str(section.get("section_id") or "").strip()
         kind = str(section.get("kind") or "body").strip()
-        h2 = str(section.get("h2") or "").strip()
+        raw_h2 = str(section.get("h2") or "").strip()
+        if kind == "body" and deterministic_heading_index < len(deterministic_body_headings):
+            h2 = deterministic_body_headings[deterministic_heading_index]
+            deterministic_heading_index += 1
+        elif kind == "fazit":
+            h2 = "Fazit"
+        elif kind == "faq":
+            h2 = "FAQ"
+        else:
+            h2 = raw_h2
         if not section_id or not h2:
             continue
         target_min = section.get("target_min_words")

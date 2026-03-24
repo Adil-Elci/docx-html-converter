@@ -6,6 +6,7 @@ from creator.api.supervisor import (
     build_supervisor_system_prompt,
     build_supervisor_user_prompt,
 )
+from creator.api.pipeline import _apply_master_article_plan_to_phase_state
 
 
 class _StubProvider:
@@ -270,3 +271,114 @@ def test_supervisor_normalizes_loose_plan_fields() -> None:
     assert result.sections[0].section_id == "section_1"
     assert result.risk_notes == ["Do not overpromise timelines."]
     assert result.warnings == ["Local regulations may vary."]
+
+
+def test_apply_master_article_plan_rewrites_noisy_body_headings() -> None:
+    phase3 = {
+        "final_article_topic": "Rohgrundstück kaufen: Welche Schritte vor dem Hausbau wirklich wichtig sind",
+        "search_intent_type": "informational",
+        "article_angle": "process_and_next_steps",
+        "primary_keyword": "rohgrundstück kaufen",
+        "secondary_keywords": ["hausbau grundstück", "erschließungskosten grundstück"],
+        "structured_content_mode": "none",
+        "topic_class": "real_estate",
+        "topic_signature": {
+            "subject_phrase": "rohgrundstück kaufen",
+            "question_phrase": "welche schritte vor dem hausbau wirklich wichtig sind",
+            "semantic_entities": ["grundstück", "hausbau", "erschließung"],
+            "support_topics_for_internal_links": [],
+        },
+        "specificity_profile": {
+            "topic": "Rohgrundstück kaufen",
+            "topic_class": "real_estate",
+            "intent_type": "informational",
+            "min_specifics": 3,
+            "buckets": {
+                "documents_process": ["grundbuch", "notar", "erschließung"],
+            },
+        },
+        "style_profile": {},
+        "keyword_buckets": {},
+    }
+    master_plan = {
+        "topic": phase3["final_article_topic"],
+        "intent_type": phase3["search_intent_type"],
+        "article_angle": phase3["article_angle"],
+        "tone": "practical_informational",
+        "audience": "Hauskäufer",
+        "keyword_strategy": {
+            "primary_keyword": phase3["primary_keyword"],
+            "secondary_keywords": phase3["secondary_keywords"],
+            "semantic_entities": ["grundstück", "hausbau"],
+        },
+        "title_package": {
+            "h1": "Rohgrundstück kaufen: Welche Schritte vor dem Hausbau wichtig sind",
+            "meta_title": "Rohgrundstück kaufen: Wichtige Schritte vor dem Hausbau",
+            "slug": "rohgrundstueck-kaufen-schritte",
+        },
+        "backlink_plan": {
+            "placement_hint": "section_2",
+            "anchor_text": "mehr zum Hausbau",
+        },
+        "faq_questions": [
+            "Welche Unterlagen braucht man zuerst?",
+            "Wann entstehen Erschließungskosten?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Grundstück prüfen: Was vor dem Kauf eines Rohgrundstücks zu klären ist",
+                "goal": "Explain the first checks.",
+                "required_terms": ["grundstück"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            },
+            {
+                "section_id": "section_2",
+                "kind": "body",
+                "h2": "Fertighaus oder Massivbau: Welche Bauweise passt zu Ihrem Grundstück",
+                "goal": "Compare options.",
+                "required_terms": ["hausbau"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            },
+            {
+                "section_id": "section_3",
+                "kind": "body",
+                "h2": "Bauphasen koordinieren: Von der Grundsteinlegung bis zur Schlüsselübergabe",
+                "goal": "Explain preparation.",
+                "required_terms": ["erschließung"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            },
+            {
+                "section_id": "section_4",
+                "kind": "fazit",
+                "h2": "Zusammenfassung",
+                "goal": "Summarize.",
+                "required_terms": [],
+                "target_min_words": 70,
+                "target_max_words": 100,
+            },
+            {
+                "section_id": "section_5",
+                "kind": "faq",
+                "h2": "Häufige Fragen",
+                "goal": "Answer follow-up questions.",
+                "required_terms": [],
+                "target_min_words": 90,
+                "target_max_words": 140,
+            },
+        ],
+    }
+
+    phase4 = _apply_master_article_plan_to_phase_state(master_plan=master_plan, phase3=phase3)
+
+    body_h2s = [section["h2"] for section in phase4["sections"] if section["kind"] == "body"]
+    assert body_h2s[0] != "Grundstück prüfen: Was vor dem Kauf eines Rohgrundstücks zu klären ist"
+    assert body_h2s[1] != "Fertighaus oder Massivbau: Welche Bauweise passt zu Ihrem Grundstück"
+    assert body_h2s[2] != "Bauphasen koordinieren: Von der Grundsteinlegung bis zur Schlüsselübergabe"
+    assert phase4["sections"][-2]["h2"] == "Fazit"
+    assert phase4["sections"][-1]["h2"] == "FAQ"

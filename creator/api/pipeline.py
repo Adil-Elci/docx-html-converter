@@ -16,6 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .llm import LLMError, call_llm_json, call_llm_text
+from .critic import CreatorCritic, CriticContext, build_critic_system_prompt, build_critic_user_prompt
 from .llm_provider import LLMRole, build_provider
 from .supervisor import (
     CreatorSupervisor,
@@ -9596,6 +9597,23 @@ def _generate_article_from_master_plan(
     return article_payload
 
 
+def _critic_review_to_errors(review: Dict[str, Any]) -> List[str]:
+    verdict = str(review.get("verdict") or "").strip().lower()
+    issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+    issue_codes = [
+        f"critic_issue:{str(item.get('code') or '').strip()}"
+        for item in issues
+        if isinstance(item, dict) and str(item.get("code") or "").strip()
+    ]
+    if verdict == "pass":
+        return []
+    if verdict == "repair_needed":
+        return _dedupe_string_values(["critic_repair_needed"] + issue_codes)
+    if verdict == "fail":
+        return _dedupe_string_values(["critic_fail"] + issue_codes)
+    return _dedupe_string_values(["critic_invalid_verdict"] + issue_codes)
+
+
 def _build_execution_trace_event(
     *,
     level: str,
@@ -9696,11 +9714,14 @@ def ensure_prompt_trace_in_creator_output(creator_output: Dict[str, Any]) -> Dic
                 "attempts": [],
             },
             "writer_attempts": [],
+            "critic_attempts": [],
             "repair_attempts": [],
         }
         debug["prompt_trace"] = prompt_trace
     if not isinstance(prompt_trace.get("supervisor_attempts"), list):
         prompt_trace["supervisor_attempts"] = []
+    if not isinstance(prompt_trace.get("critic_attempts"), list):
+        prompt_trace["critic_attempts"] = []
 
     planner_trace = prompt_trace.get("planner") if isinstance(prompt_trace.get("planner"), dict) else None
     if planner_trace is None:
@@ -11416,6 +11437,7 @@ def run_creator_pipeline(
                 "attempts": [],
             },
             "writer_attempts": [],
+            "critic_attempts": [],
             "repair_attempts": [],
         },
     }
@@ -12979,6 +13001,74 @@ def run_creator_pipeline(
         phase3=phase3,
         phase4=phase4,
     )
+    if supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict):
+        critic_prompt_trace = (
+            (debug.get("prompt_trace") or {}).get("critic_attempts")
+            if isinstance(debug.get("prompt_trace"), dict)
+            else None
+        )
+        critic_context = CriticContext(
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            master_plan=phase4.get("supervisor_master_plan") or {},
+            draft_article=phase5,
+            deterministic_validation_errors=[],
+            content_brief=_format_content_brief_prompt_text(phase3.get("content_brief") or {}),
+            internal_link_titles=[
+                _internal_anchor_text(value)
+                for value in internal_link_candidates[:8]
+            ],
+        )
+        critic_provider = build_provider(LLMRole.CRITIC, usage_collector=_collect_llm_usage)
+        critic = CreatorCritic(provider=critic_provider)
+        critic_system_prompt = build_critic_system_prompt()
+        critic_user_prompt = build_critic_user_prompt(critic_context)
+        if isinstance(critic_prompt_trace, list):
+            critic_prompt_trace.append(
+                {
+                    "attempt": len(critic_prompt_trace) + 1,
+                    "request_label": "phase7_critic_review",
+                    "model": critic_provider.config.model,
+                    "max_tokens": critic_provider.config.max_tokens,
+                    "system_prompt": critic_system_prompt,
+                    "user_prompt": critic_user_prompt,
+                }
+            )
+        critic_review_model = critic.review_article(
+            critic_context,
+            request_label="phase7_critic_review",
+        )
+        critic_review = critic_review_model.model_dump(mode="json")
+        debug["critic_review"] = critic_review
+        critic_errors = _critic_review_to_errors(critic_review)
+        if critic_errors:
+            phase7_errors.extend(critic_errors)
+            _append_execution_trace_event(
+                creator_trace,
+                level="warning",
+                phase="phase7",
+                event="critic_review_flagged_draft",
+                message="Critic review flagged the draft before final validation.",
+                details={
+                    "verdict": critic_review.get("verdict"),
+                    "errors": critic_errors,
+                    "overall_score": critic_review.get("overall_score"),
+                },
+            )
+        else:
+            _append_execution_trace_event(
+                creator_trace,
+                level="info",
+                phase="phase7",
+                event="critic_review_passed",
+                message="Critic review passed the draft.",
+                details={
+                    "overall_score": critic_review.get("overall_score"),
+                    "plan_alignment_score": critic_review.get("plan_alignment_score"),
+                    "editorial_quality_score": critic_review.get("editorial_quality_score"),
+                    "seo_quality_score": critic_review.get("seo_quality_score"),
+                },
+            )
     allowed_topics = [t.lower() for t in phase2.get("allowed_topics") or [] if isinstance(t, str)]
     if allowed_topics:
         topic_lower = (phase3["final_article_topic"] or "").lower()

@@ -87,6 +87,18 @@ async def create(request: Request) -> JSONResponse:
             target_site_url=str(payload.target_site_url),
             publishing_site_url=str(payload.publishing_site_url) if payload.publishing_site_url else "",
             publishing_site_id=payload.publishing_site_id,
+            publishing_candidates=[
+                {
+                    "site_url": str(candidate.site_url),
+                    "site_id": candidate.site_id,
+                    "fit_score": candidate.fit_score,
+                    "notes": list(candidate.notes),
+                    "internal_link_inventory": [item.dict() for item in candidate.internal_link_inventory],
+                    "publishing_profile_payload": candidate.publishing_profile.payload,
+                    "publishing_profile_content_hash": candidate.publishing_profile.content_hash,
+                }
+                for candidate in payload.publishing_candidates
+            ],
             client_target_site_id=payload.client_target_site_id,
             anchor=payload.anchor,
             topic=payload.topic,
@@ -135,6 +147,18 @@ async def create_stream(request: Request) -> EventSourceResponse:
                 target_site_url=str(payload.target_site_url),
                 publishing_site_url=str(payload.publishing_site_url) if payload.publishing_site_url else "",
                 publishing_site_id=payload.publishing_site_id,
+                publishing_candidates=[
+                    {
+                        "site_url": str(candidate.site_url),
+                        "site_id": candidate.site_id,
+                        "fit_score": candidate.fit_score,
+                        "notes": list(candidate.notes),
+                        "internal_link_inventory": [item.dict() for item in candidate.internal_link_inventory],
+                        "publishing_profile_payload": candidate.publishing_profile.payload,
+                        "publishing_profile_content_hash": candidate.publishing_profile.content_hash,
+                    }
+                    for candidate in payload.publishing_candidates
+                ],
                 client_target_site_id=payload.client_target_site_id,
                 anchor=payload.anchor,
                 topic=payload.topic,

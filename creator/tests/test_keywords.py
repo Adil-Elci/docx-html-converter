@@ -2873,6 +2873,27 @@ def test_build_question_topic_outline_headings_rewrites_action_led_outdoor_topic
     assert not any("rasen neu anlegen worauf kommt es wirklich an" in heading.lower() for heading in headings)
 
 
+def test_build_question_topic_outline_headings_rejects_question_like_focus_phrases() -> None:
+    headings = _build_question_topic_outline_headings(
+        topic="Rasenpflege im Garten: Welche Methoden wirklich funktionieren",
+        primary_keyword="rasenpflege im garten",
+        secondary_keywords=["schattenrasen pflege"],
+        structured_mode="none",
+        intent_type="informational",
+        article_angle="practical_guidance",
+        topic_class="home",
+        topic_signature={
+            "subject_phrase": "rasenpflege im garten",
+            "question_phrase": "welche methoden wirklich funktionieren",
+            "primary_keyword": "rasenpflege im garten",
+            "topic_class": "home",
+        },
+    )
+
+    assert headings[0] != "Welche Methoden wirklich funktionieren: Worauf kommt es wirklich an?"
+    assert not any("welche methoden wirklich funktionieren worauf kommt es wirklich an" in heading.lower() for heading in headings)
+
+
 def test_build_deterministic_title_package_builds_full_meta_title_for_home_topics():
     title_package = _build_deterministic_title_package(
         topic="Kleine Räume optimal nutzen: Praktische Tipps für clevere Wohnraumplanung",

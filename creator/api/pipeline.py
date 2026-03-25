@@ -1685,6 +1685,8 @@ def _compress_heading_focus_phrase(value: str) -> str:
     normalized = _sanitize_editorial_phrase(value, allow_single_token=True)
     if not normalized:
         return ""
+    if _looks_like_question_phrase(normalized):
+        return ""
     words = normalized.split()
     if " und " in normalized and len(words) >= 5 and len(_keyword_query_core_tokens(normalized)) >= 4:
         return ""
@@ -10562,6 +10564,19 @@ def _derive_specificity_terms_for_section(
             selected.extend(bucket_matches[:2])
         if len(selected) >= max_items:
             break
+    if len(selected) < min(2, max_items):
+        for bucket_tokens in buckets.values():
+            if not isinstance(bucket_tokens, (list, tuple, set)):
+                continue
+            for token in [str(item).strip() for item in bucket_tokens if str(item).strip()]:
+                if token in selected:
+                    continue
+                if token in semantic_terms or any(_token_matches_reference_family(token, ref, allow_prefix_match=False) for ref in semantic_terms):
+                    selected.append(token)
+                if len(selected) >= max_items:
+                    break
+            if len(selected) >= max_items:
+                break
     return _merge_string_lists(existing_terms, selected, max_items=max_items)
 
 

@@ -61,6 +61,7 @@ Requirements:
 - faq_answers must contain answer HTML only and must never invent new FAQ questions.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not add hyperlinks. The application inserts them later.
+- Do not repeat target brand names, domain names, or anchor text in prose unless the approved plan explicitly requires it.
 - Improve specificity, answer quality, metadata alignment, and plan adherence.
 - Return only valid JSON that matches the schema exactly.
 """

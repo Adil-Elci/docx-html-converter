@@ -244,6 +244,7 @@ Requirements:
 - faq_answers must contain only answer HTML keyed by the approved FAQ questions. Do not include H3 headings.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not include hyperlinks. The application inserts them later.
+- Do not repeat target brand names, domain names, or anchor text in prose unless the approved plan explicitly requires it.
 - Avoid advertorial phrasing, generic filler, and repeated keyword stuffing.
 - Keep metadata aligned with the plan.
 - Keep JSON compact. Minify HTML fragments inside the JSON string and do not add commentary outside the JSON object.

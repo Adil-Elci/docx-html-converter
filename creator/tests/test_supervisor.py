@@ -260,6 +260,87 @@ def test_publishing_candidate_input_trims_internal_link_titles_to_limit() -> Non
     assert candidate.internal_link_titles[-1] == "Titel 5"
 
 
+def test_apply_master_article_plan_normalizes_keyword_structure_and_backlink_defaults() -> None:
+    phase3 = {
+        "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+        "search_intent_type": "commercial_investigation",
+        "article_angle": "process_and_decision_factors",
+        "primary_keyword": "welche methode passt wirklich worauf kommt es wirklich an",
+        "secondary_keywords": ["hausbau eigenheim blog", "baukosten"],
+        "structured_content_mode": "none",
+        "topic_class": "home",
+        "style_profile": {"tone": "practical_informational", "audience": "Bauherren"},
+        "specificity_profile": {"buckets": {"planning": ["unterlagen", "kostenplan"]}, "min_specifics": 2},
+        "title_package": {"h1": "", "meta_title": "", "slug": ""},
+        "keyword_buckets": {"semantic_entities": ["hausbau", "unterlagen", "kostenplan"]},
+        "content_brief": {"overlap_terms": ["rohbau", "hausanschlüsse"]},
+        "topic_signature": {
+            "topic_class": "home",
+            "subject_phrase": "hausbau vorbereiten",
+            "target_terms": ["hausbau", "unterlagen", "kostenplan"],
+            "target_support_phrases": ["baukosten planen"],
+            "semantic_entities": ["hausbau", "unterlagen", "kostenplan"],
+        },
+        "faq_candidates": [
+            "Welche Unterlagen sind zuerst wichtig?",
+            "Wie plant man die wichtigsten Kosten realistisch?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+    }
+    master_plan = {
+        "topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+        "intent_type": "commercial_investigation",
+        "article_angle": "process_and_decision_factors",
+        "audience": "Bauherren",
+        "tone": "practical_informational",
+        "title_package": {
+            "h1": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+            "meta_title": "Hausbau vorbereiten: Schritte, Unterlagen und Kostenplan",
+            "slug": "hausbau-vorbereiten-schritte",
+        },
+        "keyword_strategy": {
+            "primary_keyword": "welche methode passt wirklich worauf kommt es wirklich an",
+            "secondary_keywords": ["eigenheim blog", "baukosten hausbau"],
+            "semantic_entities": ["hausbau", "unterlagen", "kostenplan"],
+            "keyword_intent_note": "Practical query set for early planning.",
+        },
+        "backlink_plan": {
+            "strategy": "supporting_context",
+            "anchor_text": "Eigenheim-Blog",
+            "placement_hint": "section_5",
+            "rationale": "Contextual support link.",
+        },
+        "faq_questions": [
+            "Welche Unterlagen sind zuerst wichtig?",
+            "Wie plant man die wichtigsten Kosten realistisch?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Irgendeine freie Überschrift",
+                "goal": "Erkläre die ersten Schritte.",
+                "required_terms": ["unterlagen"],
+                "target_min_words": 90,
+                "target_max_words": 200,
+            }
+        ],
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "warnings": [],
+    }
+
+    phase4 = _apply_master_article_plan_to_phase_state(master_plan=master_plan, phase3=phase3)
+
+    assert phase3["primary_keyword"] == "hausbau vorbereiten"
+    assert all("eigenheim blog" not in keyword for keyword in phase3["secondary_keywords"])
+    assert len(phase4["sections"]) == 4
+    assert phase4["sections"][-2]["kind"] == "fazit"
+    assert phase4["sections"][-1]["kind"] == "faq"
+    assert phase4["backlink_placement"] == "section_2"
+
+
 def test_supervisor_normalizes_loose_plan_fields() -> None:
     provider = _LooseSupervisorProvider()
     supervisor = CreatorSupervisor(provider=provider)

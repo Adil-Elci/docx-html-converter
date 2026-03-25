@@ -9140,6 +9140,19 @@ def _coerce_slot_faq_items(
     return normalized
 
 
+def _trim_section_html_to_target(section_html: str, target_words: Dict[str, Any]) -> str:
+    if not isinstance(target_words, dict):
+        return section_html
+    max_words = target_words.get("max")
+    try:
+        max_words_int = int(max_words)
+    except (TypeError, ValueError):
+        return section_html
+    if max_words_int <= 0:
+        return section_html
+    return _trim_article_to_word_limit(section_html, max_words_int)
+
+
 def _assemble_article_payload_from_slots(
     *,
     slot_payload: Dict[str, Any],
@@ -9182,6 +9195,16 @@ def _assemble_article_payload_from_slots(
             primary_keyword=str(phase3.get("primary_keyword") or ""),
             required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
         )
+    for section in article_plan.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id") or "").strip()
+        if not section_id or section_id not in section_bodies:
+            continue
+        section_bodies[section_id] = _trim_section_html_to_target(
+            section_bodies[section_id],
+            section.get("target_words") if isinstance(section.get("target_words"), dict) else {},
+        )
 
     faq_items = _ensure_faq_items_complete(
         article_plan=article_plan,
@@ -9192,6 +9215,23 @@ def _assemble_article_payload_from_slots(
             _coerce_slot_faq_items(slot_payload=slot_payload, article_plan=article_plan)
         ),
     )
+    faq_section = next(
+        (section for section in (article_plan.get("sections") or []) if isinstance(section, dict) and str(section.get("kind") or "").strip() == "faq"),
+        {},
+    )
+    faq_max_words = 55
+    if isinstance(faq_section.get("target_words"), dict):
+        try:
+            faq_max_words = max(35, int(faq_section["target_words"].get("per_answer_max") or 55))
+        except (TypeError, ValueError):
+            faq_max_words = 55
+    faq_items = [
+        {
+            **item,
+            "answer_html": _trim_article_to_word_limit(str(item.get("answer_html") or "").strip(), faq_max_words),
+        }
+        for item in faq_items
+    ]
     article_html = _render_article_from_plan(
         article_plan=article_plan,
         intro_html=intro_html,
@@ -10130,12 +10170,39 @@ def _apply_master_article_plan_to_phase_state(
     phase3["final_article_topic"] = str(master_plan.get("topic") or phase3.get("final_article_topic") or "").strip()
     phase3["search_intent_type"] = str(master_plan.get("intent_type") or phase3.get("search_intent_type") or "").strip()
     phase3["article_angle"] = str(master_plan.get("article_angle") or phase3.get("article_angle") or "").strip()
-    phase3["primary_keyword"] = str(keyword_strategy.get("primary_keyword") or phase3.get("primary_keyword") or "").strip()
-    phase3["secondary_keywords"] = [
+    raw_primary_keyword = str(keyword_strategy.get("primary_keyword") or phase3.get("primary_keyword") or "").strip()
+    keyword_cluster = _merge_string_lists(
+        [str(item).strip() for item in (phase3.get("keyword_buckets", {}).get("semantic_entities") or []) if str(item).strip()],
+        [str(item).strip() for item in ((phase3.get("content_brief") or {}).get("overlap_terms") or []) if str(item).strip()],
+        max_items=8,
+    )
+    aligned_primary_keyword = _align_primary_keyword_to_topic(
+        topic=phase3["final_article_topic"],
+        current_primary=raw_primary_keyword,
+        trend_candidates=[],
+        keyword_cluster=keyword_cluster,
+    )
+    if (
+        not _is_valid_keyword_phrase(aligned_primary_keyword)
+        or _keyword_candidate_has_subject_noise(aligned_primary_keyword)
+        or _keyword_candidate_is_brand_heavy(aligned_primary_keyword, phase3.get("topic_signature"))
+    ):
+        fallback_primary = _build_topic_phrase(phase3["final_article_topic"]) or _topic_head_keyword(phase3["final_article_topic"])
+        aligned_primary_keyword = fallback_primary or aligned_primary_keyword
+    phase3["primary_keyword"] = str(aligned_primary_keyword or "").strip()
+    raw_secondary_keywords = [
         str(item).strip()
         for item in (keyword_strategy.get("secondary_keywords") or [])
         if str(item).strip()
     ]
+    phase3["secondary_keywords"] = _finalize_secondary_keywords(
+        topic=phase3["final_article_topic"],
+        primary_keyword=phase3["primary_keyword"],
+        secondary_keywords=raw_secondary_keywords,
+        keyword_cluster=keyword_cluster,
+        allowed_topics=[str(section.get("h2") or "").strip() for section in sections if isinstance(section, dict)],
+        topic_signature=phase3.get("topic_signature"),
+    )
     fallback_title_package = _build_deterministic_title_package(
         topic=phase3.get("final_article_topic", ""),
         primary_keyword=phase3.get("primary_keyword", ""),
@@ -10209,7 +10276,12 @@ def _apply_master_article_plan_to_phase_state(
         topic_class=phase3.get("topic_class", "general"),
         topic_signature=phase3.get("topic_signature"),
     )
-    body_section_count = sum(1 for section in sections if isinstance(section, dict) and str(section.get("kind") or "body").strip() == "body")
+    raw_body_sections = [
+        section
+        for section in sections
+        if isinstance(section, dict) and str(section.get("kind") or "body").strip() == "body"
+    ]
+    body_section_count = min(max(2, len(raw_body_sections)), ARTICLE_MAX_H2 - 2)
     deterministic_body_headings = _ensure_outline_heading_capacity(
         [str(item).strip() for item in deterministic_headings if str(item).strip()],
         body_section_count=body_section_count,
@@ -10219,49 +10291,73 @@ def _apply_master_article_plan_to_phase_state(
         topic_signature=phase3.get("topic_signature"),
     )
     deterministic_heading_index = 0
+    normalized_body_sources = raw_body_sections[:body_section_count]
+    while len(normalized_body_sources) < body_section_count:
+        normalized_body_sources.append({})
+    fazit_source = next(
+        (section for section in sections if isinstance(section, dict) and str(section.get("kind") or "").strip() == "fazit"),
+        {},
+    )
+    faq_source = next(
+        (section for section in sections if isinstance(section, dict) and str(section.get("kind") or "").strip() == "faq"),
+        {},
+    )
     converted_sections: List[Dict[str, Any]] = []
-    for section in sections:
-        if not isinstance(section, dict):
-            continue
-        section_id = str(section.get("section_id") or "").strip()
-        kind = str(section.get("kind") or "body").strip()
-        raw_h2 = str(section.get("h2") or "").strip()
-        if kind == "body" and deterministic_heading_index < len(deterministic_body_headings):
-            h2 = deterministic_body_headings[deterministic_heading_index]
-            deterministic_heading_index += 1
-        elif kind == "fazit":
-            h2 = "Fazit"
-        elif kind == "faq":
-            h2 = "FAQ"
-        else:
-            h2 = raw_h2
-        if not section_id or not h2:
-            continue
-        target_min = section.get("target_min_words")
-        target_max = section.get("target_max_words")
-        target_words: Dict[str, int] = {}
-        if isinstance(target_min, int):
-            target_words["min"] = target_min
-        if isinstance(target_max, int):
-            target_words["max"] = target_max
-        if kind == "faq":
-            faq_min = max(35, int(target_min or 35))
-            faq_max = max(faq_min, int(target_max or 55))
-            target_words = {"per_answer_min": faq_min, "per_answer_max": faq_max}
+    for source_section in normalized_body_sources:
+        h2 = deterministic_body_headings[deterministic_heading_index]
+        deterministic_heading_index += 1
         converted_sections.append(
             {
-                "section_id": section_id,
-                "kind": kind,
+                "section_id": f"section_{len(converted_sections) + 1}",
+                "kind": "body",
                 "h2": h2,
-                "h3": faq_questions if kind == "faq" else [],
-                "goal": str(section.get("goal") or "").strip(),
-                "subquestion": h2 if kind != "faq" else "Welche Rückfragen bleiben offen?",
-                "target_words": target_words,
-                "required_terms": [str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+                "h3": [],
+                "goal": str(source_section.get("goal") or "").strip() or _section_goal_from_heading(h2, section_kind="body", topic=phase3["final_article_topic"]),
+                "subquestion": h2,
+                "target_words": {
+                    "min": max(90, int(source_section.get("target_min_words") or 100)),
+                    "max": min(170, max(110, int(source_section.get("target_max_words") or 140))),
+                },
+                "required_terms": [str(item).strip() for item in (source_section.get("required_terms") or []) if str(item).strip()],
                 "required_keywords": [],
                 "required_elements": [],
             }
         )
+    converted_sections.append(
+        {
+            "section_id": f"section_{len(converted_sections) + 1}",
+            "kind": "fazit",
+            "h2": "Fazit",
+            "h3": [],
+            "goal": str(fazit_source.get("goal") or "").strip() or _section_goal_from_heading("Fazit", section_kind="fazit", topic=phase3["final_article_topic"]),
+            "subquestion": "Was sind die wichtigsten Entscheidungen und naechsten Schritte?",
+            "target_words": {
+                "min": max(65, int(fazit_source.get("target_min_words") or 70)),
+                "max": min(110, max(75, int(fazit_source.get("target_max_words") or 95))),
+            },
+            "required_terms": [str(item).strip() for item in (fazit_source.get("required_terms") or []) if str(item).strip()],
+            "required_keywords": [],
+            "required_elements": [],
+        }
+    )
+    converted_sections.append(
+        {
+            "section_id": f"section_{len(converted_sections) + 1}",
+            "kind": "faq",
+            "h2": "FAQ",
+            "h3": faq_questions,
+            "goal": str(faq_source.get("goal") or "").strip() or _section_goal_from_heading("FAQ", section_kind="faq", topic=phase3["final_article_topic"]),
+            "subquestion": "Welche Rückfragen bleiben offen?",
+            "target_words": {
+                "per_answer_min": max(35, int(faq_source.get("target_min_words") or 35)),
+                "per_answer_max": max(45, min(65, int(faq_source.get("target_max_words") or 55))),
+            },
+            "required_terms": [],
+            "required_keywords": [],
+            "required_elements": [],
+        }
+    )
+    backlink_placement = "section_2" if body_section_count >= 2 else "intro"
     phase4 = {
         "h1": phase3.get("title_package", {}).get("h1") or "",
         "outline": [
@@ -10273,7 +10369,7 @@ def _apply_master_article_plan_to_phase_state(
         ],
         "sections": converted_sections,
         "faq_questions": faq_questions,
-        "backlink_placement": str(backlink_plan.get("placement_hint") or "section_2"),
+        "backlink_placement": backlink_placement,
         "anchor_text_final": str(backlink_plan.get("anchor_text") or "Weitere Informationen").strip(),
         "structured_mode": phase3.get("structured_content_mode", "none"),
         "intent_type": phase3.get("search_intent_type", ""),

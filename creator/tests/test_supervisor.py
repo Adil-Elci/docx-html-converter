@@ -547,3 +547,65 @@ def test_apply_master_article_plan_replaces_short_supervisor_titles() -> None:
     assert len(phase3["title_package"]["meta_title"]) >= 45
     assert phase4["h1"] != "Zu kurz"
     assert phase3["title_package"]["meta_title"] != "Kurz"
+
+
+def test_apply_master_article_plan_rebuilds_signature_after_primary_cleanup() -> None:
+    phase3 = {
+        "final_article_topic": "Rasenpflege im Garten: Wie sich kahle Stellen, Hanglagen und Schattenrasen gezielt behandeln lassen",
+        "search_intent_type": "informational",
+        "article_angle": "decision_criteria",
+        "primary_keyword": "welche methode passt wirklich worauf kommt es wirklich an",
+        "secondary_keywords": ["rasen pflege", "schattenrasen tipps"],
+        "structured_content_mode": "none",
+        "topic_class": "home",
+        "style_profile": {},
+        "title_package": {"h1": "", "meta_title": "", "slug": ""},
+        "keyword_buckets": {"semantic_entities": ["rasen", "hanglagen", "schattenrasen"]},
+        "content_brief": {"overlap_terms": ["boden", "drainage"]},
+        "pair_fit": {"overlap_terms": ["boden", "drainage"]},
+        "topic_signature": {
+            "subject_phrase": "kahle stellen hanglagen und schattenrasen",
+            "target_terms": ["rasen", "boden", "drainage"],
+        },
+    }
+    master_plan = {
+        "topic": phase3["final_article_topic"],
+        "intent_type": "informational",
+        "article_angle": "decision_criteria",
+        "audience": "Hausbesitzer",
+        "tone": "practical_informational",
+        "title_package": {
+            "h1": "Kahle Stellen, Hanglagen und Schattenrasen",
+            "meta_title": "Kahle Stellen, Hanglagen und Schattenrasen",
+            "slug": "rasenpflege-garten",
+        },
+        "keyword_strategy": {
+            "primary_keyword": "kahle stellen hanglagen schattenrasen worauf kommt es wirklich an",
+            "secondary_keywords": ["rasen pflege", "schattenrasen tipps"],
+            "semantic_entities": ["rasen", "hanglagen", "schattenrasen"],
+        },
+        "backlink_plan": {"placement_hint": "section_2", "anchor_text": "mehr zur Rasenpflege"},
+        "faq_questions": [
+            "Woran erkennt man Bodenprobleme früh?",
+            "Wann hilft Nachsaat statt kompletter Neuanlage?",
+            "Wie lässt sich Schattenrasen sinnvoll pflegen?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Kahle Stellen, Hanglagen und Schattenrasen: Worauf kommt es wirklich an?",
+                "goal": "Erkläre die wichtigsten Kriterien.",
+                "required_terms": ["boden", "drainage"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            }
+        ],
+    }
+
+    phase4 = _apply_master_article_plan_to_phase_state(master_plan=master_plan, phase3=phase3)
+
+    assert phase3["primary_keyword"] == "rasenpflege im garten"
+    assert phase3["topic_signature"]["subject_phrase"] == "rasenpflege im garten"
+    first_h2 = next(section["h2"] for section in phase4["sections"] if section["kind"] == "body")
+    assert "kahle stellen hanglagen" not in first_h2.lower()

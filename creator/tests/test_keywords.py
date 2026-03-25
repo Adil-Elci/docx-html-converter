@@ -2908,6 +2908,24 @@ def test_evaluate_specificity_accepts_concrete_home_details():
     assert len(evaluation["hits"]) >= 3
 
 
+def test_evaluate_specificity_accepts_concrete_outdoor_home_details() -> None:
+    evaluation = _evaluate_specificity(
+        article_html="""
+        <h1>Rasenpflege im Garten</h1>
+        <p>Bei Hanglagen helfen eine Bodenprobe, lockerer Sand-Humus-Ausgleich und gezielte Drainage, damit Wasser nicht stehen bleibt und kahle Stellen nicht zurückkommen.</p>
+        <p>Für Schattenrasen sind passende Rasensamen, Nachsaat im Frühjahr und ein höherer Schnitt beim Mähen wichtig, damit die Fläche dichter und belastbarer wird.</p>
+        """,
+        specificity_profile=_build_specificity_profile(
+            topic="Rasenpflege im Garten: Wie sich kahle Stellen, Hanglagen und Schattenrasen gezielt behandeln lassen",
+            topic_class="home",
+            intent_type="informational",
+        ),
+    )
+
+    assert evaluation["errors"] == []
+    assert len(evaluation["hits"]) >= 2
+
+
 def test_derive_trend_query_family_groups_question_variant():
     assert _derive_trend_query_family("was ist baby vorbereiten checkliste") == "baby vorbereiten"
 
@@ -3495,6 +3513,89 @@ def test_assemble_article_payload_from_slots_preserves_plan_structure():
     assert "Wie lassen sich Kosten und Fristen realistisch einordnen?" in assembled["article_html"]
     assert "Wann lohnt sich fachliche Unterstützung?" in assembled["article_html"]
     assert 'href="https://www.eigenheim-blog.com/hausbau/"' in assembled["article_html"]
+
+
+def test_assemble_article_payload_from_slots_trims_oversized_intro_html() -> None:
+    article_plan = {
+        "h1": "Rasenpflege im Garten: Worauf es bei Problemflächen ankommt",
+        "backlink_placement": "section_2",
+        "anchor_text_final": "mehr zur Rasenpflege",
+        "faq_questions": [
+            "Woran erkennt man Bodenprobleme früh?",
+            "Wann hilft Nachsaat statt kompletter Neuanlage?",
+            "Wie lässt sich Schattenrasen sinnvoll pflegen?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Ursachen sollte man zuerst prüfen?",
+                "goal": "Erkläre Boden, Wasser und Licht.",
+                "required_terms": ["boden", "drainage"],
+            },
+            {
+                "section_id": "section_2",
+                "kind": "body",
+                "h2": "Welche Maßnahmen helfen auf Dauer?",
+                "goal": "Erkläre Nachsaat, Schnitt und Pflege.",
+                "required_terms": ["nachsaat", "schnitt"],
+            },
+            {
+                "section_id": "section_3",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["rasenpflege"],
+            },
+            {
+                "section_id": "section_4",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": [
+                    "Woran erkennt man Bodenprobleme früh?",
+                    "Wann hilft Nachsaat statt kompletter Neuanlage?",
+                    "Wie lässt sich Schattenrasen sinnvoll pflegen?",
+                ],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+            },
+        ],
+    }
+    phase3 = {
+        "final_article_topic": "Rasenpflege im Garten: Wie sich kahle Stellen, Hanglagen und Schattenrasen gezielt behandeln lassen",
+        "primary_keyword": "rasenpflege im garten",
+        "keyword_buckets": {"semantic_entities": ["rasen", "hanglagen", "schattenrasen"]},
+        "content_brief": {"target_signals": ["Drainage", "Nachsaat"]},
+    }
+    long_sentence = "Rasenpflege im Garten braucht eine klare Analyse von Boden, Wasser, Licht und Nutzung, damit Problemflächen nicht nur kurzfristig besser aussehen, sondern dauerhaft stabil bleiben."
+    slot_payload = {
+        "intro_html": "<p>" + " ".join([long_sentence] * 14) + "</p>",
+        "section_bodies": [
+            {"section_id": "section_1", "body_html": "<p>Bodenprobe, Drainage und Lichtverhältnisse zeigen, warum sich kahle Stellen wiederholen.</p>"},
+            {"section_id": "section_2", "body_html": "<p>Nachsaat, angepasster Schnitt und passende Rasensamen stabilisieren die Fläche langfristig.</p>"},
+        ],
+        "faq_answers": [],
+        "meta_title": "Rasenpflege im Garten: Ursachen und Maßnahmen bei Problemflächen",
+        "meta_description": "Konkrete Hinweise zu Boden, Wasser, Nachsaat und Schnitt bei kahlen Stellen, Hanglagen und Schattenrasen im Garten.",
+        "slug": "rasenpflege-im-garten-problemflaechen",
+        "excerpt": "Konkrete Hinweise zu Boden, Wasser und Nachsaat bei Problemflächen im Garten.",
+    }
+
+    assembled = _assemble_article_payload_from_slots(
+        slot_payload=slot_payload,
+        article_plan=article_plan,
+        phase3=phase3,
+        backlink_url="https://www.eigenheim-blog.com/hausbau/",
+        publishing_site_url="https://1thingtodo.de/",
+        internal_link_candidates=[],
+        internal_link_anchor_map=None,
+        min_internal_links=0,
+        max_internal_links=0,
+    )
+
+    intro_text = assembled["article_html"].split("</h1>", 1)[1].split("<h2", 1)[0]
+    assert word_count_from_html(intro_text) <= 120
+    assert "Welche Maßnahmen helfen auf Dauer?" in assembled["article_html"]
 
 
 def test_repair_attempt_introduced_regressions_detects_new_structure_errors():

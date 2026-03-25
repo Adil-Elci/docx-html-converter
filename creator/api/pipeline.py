@@ -307,6 +307,18 @@ SPECIFICITY_SIGNAL_BUCKETS = {
         "materials_comfort": {
             "akustik", "boden", "material", "scharniere", "teppich", "teppiche", "textilien", "vorhaenge", "wohnkomfort",
         },
+        "soil_and_water": {
+            "boden", "bodenanalyse", "bodenprobe", "drainage", "humus", "kalk", "sand", "staunaesse",
+            "verdichtung", "wasser", "wurzel", "wurzelraum",
+        },
+        "lawn_selection": {
+            "garten", "gras", "grasmischung", "hanglage", "hanglagen", "nachsaat", "rasen", "rasenflaeche",
+            "rasenmischung", "rasensamen", "saatgut", "schattenrasen",
+        },
+        "lawn_maintenance": {
+            "duenger", "dünger", "kahle", "maehen", "mähen", "nachsaeen", "nachsäen", "schnitt",
+            "uebersaat", "übersaat", "vertikutieren",
+        },
     },
     "real_estate": {
         "market_context": {"lage", "markt", "marktwert", "nachfrage", "preis", "preise", "stadtteil", "zins"},
@@ -371,6 +383,7 @@ FAQ_MIN_QUESTIONS = 3
 FAQ_MIN_WORDS = 80
 ARTICLE_MIN_WORDS = 500
 ARTICLE_MAX_WORDS = 1200
+ARTICLE_INTRO_MAX_WORDS = 120
 KEYWORD_LOW_SIGNAL_TOKENS = {
     "aktuell", "aktuelle", "aktuellen", "allgemein", "beitrag", "beitraege", "beliebt", "beliebte",
     "entdecken", "ganze", "hilfe", "hilfreich", "infos", "magazin", "mehr", "ratgeber", "spannend", "spannende",
@@ -1671,6 +1684,8 @@ def _compress_heading_focus_phrase(value: str) -> str:
     if not normalized:
         return ""
     words = normalized.split()
+    if " und " in normalized and len(words) >= 5 and len(_keyword_query_core_tokens(normalized)) >= 4:
+        return ""
     action_positions = [
         index
         for index, word in enumerate(words)
@@ -1694,6 +1709,14 @@ def _compress_heading_focus_phrase(value: str) -> str:
     if len(words) > 5:
         return ""
     if (set(words) & (EDITORIAL_ACTION_TOKENS | PROCESS_ACTION_TOKENS)) and len(words) >= 3:
+        return ""
+    relational_tokens = {"als", "auf", "aus", "bei", "fuer", "für", "im", "in", "mit", "nach", "ueber", "über", "von", "vor", "zu", "zum", "zur"}
+    if (
+        len(words) >= 4
+        and len(_keyword_query_core_tokens(normalized)) >= 4
+        and not (set(words) & (EDITORIAL_ACTION_TOKENS | PROCESS_ACTION_TOKENS))
+        and not (set(words) & relational_tokens)
+    ):
         return ""
     if _keyword_candidate_has_subject_noise(normalized) and len(_keyword_query_core_tokens(normalized)) <= 2:
         return ""
@@ -7566,6 +7589,20 @@ def _trim_article_to_word_limit(html: str, max_words: int) -> str:
     return result
 
 
+def _trim_html_fragment_to_word_limit(html: str, max_words: int) -> str:
+    fragment_html = str(html or "").strip()
+    if not fragment_html or word_count_from_html(fragment_html) <= max_words:
+        return fragment_html
+    soup = BeautifulSoup(fragment_html, "lxml")
+    body = soup.body or soup
+    text = re.sub(r"\s+", " ", body.get_text(" ")).strip()
+    words = re.findall(r"\b\w+\b", text)
+    trimmed_text = " ".join(words[:max_words]).strip()
+    if trimmed_text and trimmed_text[-1] not in ".!?":
+        trimmed_text += "."
+    return _wrap_paragraphs(trimmed_text) or fragment_html
+
+
 def _validate_keyword_coverage(article_html: str, primary_keyword: str, secondary_keywords: List[str]) -> List[str]:
     errors: List[str] = []
     primary = _normalize_keyword_phrase(primary_keyword)
@@ -9171,6 +9208,7 @@ def _assemble_article_payload_from_slots(
             f"{_format_sentence_start(str(phase3.get('final_article_topic') or phase3.get('primary_keyword') or 'Dieses Thema'))} "
             "wird mit konkreten Kriterien, typischen Fehlern und klaren nächsten Schritten eingeordnet."
         )
+    intro_html = _trim_html_fragment_to_word_limit(intro_html, ARTICLE_INTRO_MAX_WORDS)
     section_bodies = _coerce_slot_section_body_map(slot_payload)
     for section in article_plan.get("sections") or []:
         if not isinstance(section, dict):
@@ -10171,8 +10209,10 @@ def _apply_master_article_plan_to_phase_state(
     phase3["search_intent_type"] = str(master_plan.get("intent_type") or phase3.get("search_intent_type") or "").strip()
     phase3["article_angle"] = str(master_plan.get("article_angle") or phase3.get("article_angle") or "").strip()
     raw_primary_keyword = str(keyword_strategy.get("primary_keyword") or phase3.get("primary_keyword") or "").strip()
+    current_signature = phase3.get("topic_signature") if isinstance(phase3.get("topic_signature"), dict) else {}
     keyword_cluster = _merge_string_lists(
         [str(item).strip() for item in (phase3.get("keyword_buckets", {}).get("semantic_entities") or []) if str(item).strip()],
+        [str(item).strip() for item in (keyword_strategy.get("semantic_entities") or []) if str(item).strip()],
         [str(item).strip() for item in ((phase3.get("content_brief") or {}).get("overlap_terms") or []) if str(item).strip()],
         max_items=8,
     )
@@ -10185,11 +10225,61 @@ def _apply_master_article_plan_to_phase_state(
     if (
         not _is_valid_keyword_phrase(aligned_primary_keyword)
         or _keyword_candidate_has_subject_noise(aligned_primary_keyword)
-        or _keyword_candidate_is_brand_heavy(aligned_primary_keyword, phase3.get("topic_signature"))
+        or _keyword_candidate_is_brand_heavy(aligned_primary_keyword, current_signature)
     ):
         fallback_primary = _build_topic_phrase(phase3["final_article_topic"]) or _topic_head_keyword(phase3["final_article_topic"])
         aligned_primary_keyword = fallback_primary or aligned_primary_keyword
     phase3["primary_keyword"] = str(aligned_primary_keyword or "").strip()
+    signature_overlap_terms = [
+        str(item).strip()
+        for item in (
+            ((phase3.get("pair_fit") or {}).get("overlap_terms") or [])
+            if isinstance(phase3.get("pair_fit"), dict)
+            else []
+        )
+        if str(item).strip()
+    ]
+    signature_target_terms = [
+        str(item).strip()
+        for item in (current_signature.get("target_terms") or [])
+        if str(item).strip()
+    ]
+    signature_topic = phase3.get("final_article_topic", "")
+    signature_primary = phase3.get("primary_keyword", "")
+    rebuilt_signature = _build_topic_signature(
+        topic=signature_topic,
+        primary_keyword=signature_primary,
+        secondary_keywords=[
+            str(item).strip()
+            for item in (keyword_strategy.get("secondary_keywords") or phase3.get("secondary_keywords") or [])
+            if str(item).strip()
+        ],
+        target_terms=signature_target_terms,
+        overlap_terms=signature_overlap_terms,
+        trend_candidates=[],
+        keyword_cluster=keyword_cluster,
+        internal_link_inventory=[],
+    )
+    rebuilt_subject_phrase = str(rebuilt_signature.get("subject_phrase") or "").strip()
+    if rebuilt_subject_phrase and not _compress_heading_focus_phrase(rebuilt_subject_phrase):
+        preserved_question_phrase = _extract_topic_question_phrase(signature_topic)
+        rebuilt_signature = _build_topic_signature(
+            topic=signature_primary,
+            primary_keyword=signature_primary,
+            secondary_keywords=[
+                str(item).strip()
+                for item in (keyword_strategy.get("secondary_keywords") or phase3.get("secondary_keywords") or [])
+                if str(item).strip()
+            ],
+            target_terms=signature_target_terms,
+            overlap_terms=signature_overlap_terms,
+            trend_candidates=[],
+            keyword_cluster=keyword_cluster,
+            internal_link_inventory=[],
+        )
+        if preserved_question_phrase:
+            rebuilt_signature["question_phrase"] = preserved_question_phrase
+    phase3["topic_signature"] = rebuilt_signature
     raw_secondary_keywords = [
         str(item).strip()
         for item in (keyword_strategy.get("secondary_keywords") or [])

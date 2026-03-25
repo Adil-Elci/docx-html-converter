@@ -2853,6 +2853,26 @@ def test_build_question_topic_outline_headings_avoids_action_led_heading_scaffol
     assert not any("wohnräume gestalten:" in heading.lower() for heading in headings)
 
 
+def test_build_question_topic_outline_headings_rewrites_action_led_outdoor_topics() -> None:
+    headings = _build_question_topic_outline_headings(
+        topic="Rasen neu anlegen: Worauf kommt es wirklich an?",
+        primary_keyword="rasen neu anlegen",
+        secondary_keywords=["schattenrasen pflege"],
+        structured_mode="none",
+        intent_type="informational",
+        article_angle="practical_guidance",
+        topic_class="home",
+        topic_signature={
+            "subject_phrase": "rasen neu anlegen",
+            "primary_keyword": "rasen neu anlegen",
+            "topic_class": "home",
+        },
+    )
+
+    assert headings[0] == "Worauf kommt es bei der Neuanlage von Rasen wirklich an?"
+    assert not any("rasen neu anlegen worauf kommt es wirklich an" in heading.lower() for heading in headings)
+
+
 def test_build_deterministic_title_package_builds_full_meta_title_for_home_topics():
     title_package = _build_deterministic_title_package(
         topic="Kleine Räume optimal nutzen: Praktische Tipps für clevere Wohnraumplanung",

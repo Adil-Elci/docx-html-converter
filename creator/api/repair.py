@@ -59,6 +59,7 @@ Requirements:
 - Return only revised content slots: intro_html, section_bodies, faq_answers, and metadata.
 - section_bodies must contain body HTML only and must never change section ids or order.
 - faq_answers must contain answer HTML only and must never invent new FAQ questions.
+- In each body section, restore at least two concrete specifics from that section's key_points or required_terms when they are available.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not add hyperlinks. The application inserts them later.
 - Do not repeat target brand names, domain names, or anchor text in prose unless the approved plan explicitly requires it.

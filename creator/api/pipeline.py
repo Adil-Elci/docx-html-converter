@@ -270,6 +270,7 @@ NAVIGATIONAL_CUES = {
     "standort",
 }
 PROCESS_ACTION_TOKENS = {
+    "anlegen",
     "beantragen",
     "beauftragen",
     "checkliste",
@@ -1694,6 +1695,8 @@ def _compress_heading_focus_phrase(value: str) -> str:
     ]
     if action_positions:
         first_action = action_positions[0]
+        if first_action == len(words) - 1 and len(words) <= 3:
+            return ""
         if first_action >= 2:
             normalized = " ".join(words[:first_action]).strip()
     if " als " in normalized and len(normalized.split()) >= 4:
@@ -1769,6 +1772,31 @@ def _format_question_focus_context(value: str) -> str:
     words = normalized.split()
     if not words:
         return ""
+    if _topic_phrase_is_action_led(normalized):
+        action_nominalizations = {
+            "anlegen": "Neuanlage",
+            "beantragen": "Beantragung",
+            "beauftragen": "Beauftragung",
+            "gestalten": "Gestaltung",
+            "organisieren": "Organisation",
+            "planen": "Planung",
+            "pruefen": "Prüfung",
+            "prüfen": "Prüfung",
+            "umbauen": "Umbau",
+            "umsetzen": "Umsetzung",
+            "verkaufen": "Verkauf",
+            "vorbereiten": "Vorbereitung",
+        }
+        verb_index = next(
+            (index for index, word in enumerate(words) if word in action_nominalizations),
+            None,
+        )
+        if verb_index is not None and verb_index >= 1:
+            object_words = [word for word in words[:verb_index] if word not in {"neu", "erneut"}]
+            if object_words:
+                object_phrase = _format_outline_heading(" ".join(object_words))
+                nominal = action_nominalizations[words[verb_index]]
+                return f"der {nominal} von {object_phrase}"
     if words[0] in {"der", "die", "das", "dem", "den", "des"}:
         head = words[0]
         tail = _format_outline_heading(" ".join(words[1:])) if len(words) > 1 else ""

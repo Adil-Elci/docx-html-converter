@@ -13508,7 +13508,10 @@ def run_creator_pipeline(
             repairable_errors = _dedupe_string_values(
                 [error for error in validation_errors if _is_editorial_llm_repairable_error(error)]
             )
-            if validation_errors and repairable_errors and phase7_repair_attempts > 0:
+            legacy_phase5_repair_allowed = not (
+                supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict)
+            )
+            if validation_errors and repairable_errors and phase7_repair_attempts > 0 and legacy_phase5_repair_allowed:
                 baseline_validation_errors = list(validation_errors)
                 latest_errors = list(validation_errors)
                 repaired_success_payload: Optional[Dict[str, Any]] = None
@@ -13637,6 +13640,15 @@ def run_creator_pipeline(
                     article_payload = repaired_success_payload
                     break
                 validation_errors = latest_errors
+            elif validation_errors and repairable_errors and not legacy_phase5_repair_allowed:
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="info",
+                    phase="phase5",
+                    event="legacy_repair_skipped",
+                    message="Legacy phase-5 freeform repair was skipped for the supervisor pipeline.",
+                    details={"attempt": attempt, "errors": repairable_errors},
+                )
             if not validation_errors:
                 article_payload = phase5_candidate
                 break

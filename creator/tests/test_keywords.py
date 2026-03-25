@@ -2951,6 +2951,25 @@ def test_finalize_secondary_keywords_refines_home_topic_fragments():
     assert any(any(term in item for term in ("stauraum", "beleuchtung", "grundriss")) for item in keywords)
 
 
+def test_finalize_secondary_keywords_rejects_instructional_support_phrases():
+    keywords = _finalize_secondary_keywords(
+        topic="Rasen neu anlegen: Bodenanalyse, Saatgut und Hanglagen richtig einordnen",
+        primary_keyword="rasen neu anlegen",
+        secondary_keywords=["schritt für schritt anleitung", "rasensamen hanglage", "bodenanalyse rasen"],
+        keyword_cluster=["rasen", "rasensamen", "bodenanalyse", "hanglage", "bewässerung"],
+        allowed_topics=[],
+        topic_signature={
+            "subject_phrase": "rasen neu anlegen",
+            "primary_keyword": "rasen neu anlegen",
+            "topic_class": "home",
+            "target_terms": ["bodenanalyse", "rasensamen", "hanglage"],
+        },
+    )
+
+    assert not any("anleitung" in item for item in keywords)
+    assert any(any(term in item for term in ("rasensamen", "bodenanalyse", "hanglage", "saatgut")) for item in keywords)
+
+
 def test_evaluate_specificity_accepts_concrete_home_details():
     evaluation = _evaluate_specificity(
         article_html="""
@@ -2985,6 +3004,24 @@ def test_evaluate_specificity_accepts_concrete_outdoor_home_details() -> None:
 
     assert evaluation["errors"] == []
     assert len(evaluation["hits"]) >= 2
+
+
+def test_evaluate_specificity_counts_topic_detail_focus_for_home_topics() -> None:
+    evaluation = _evaluate_specificity(
+        article_html="""
+        <h1>Kahle Stellen im Rasen gezielt behandeln</h1>
+        <p>Bei Hanglagen helfen passende Rasensamen, eine Bodenanalyse vor der Nachsaat und regelmaessige Bewaesserung deutlich weiter.</p>
+        <p>Gerade Schattenrasen braucht lockeren Boden und eine abgestimmte Nachsaat, damit kahle Stellen nicht sofort wieder aufbrechen.</p>
+        """,
+        specificity_profile=_build_specificity_profile(
+            topic="Kahle Stellen, Hanglagen und Schattenrasen gezielt behandeln",
+            topic_class="home",
+            intent_type="commercial_investigation",
+        ),
+    )
+
+    assert evaluation["errors"] == []
+    assert "topic detail focus" in evaluation["hits"]
 
 
 def test_derive_trend_query_family_groups_question_variant():

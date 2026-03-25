@@ -391,6 +391,23 @@ KEYWORD_LOW_SIGNAL_TOKENS = {
     "entdecken", "ganze", "hilfe", "hilfreich", "infos", "magazin", "mehr", "ratgeber", "spannend", "spannende",
     "thema", "themen", "tipps", "wissen", "wertvolle", "amp", "ideen", "richtig", "fuer", "jeden", "wirklich",
 }
+INSTRUCTIONAL_SUPPORT_TOKENS = {
+    "anleitung",
+    "antworten",
+    "checkliste",
+    "einordnung",
+    "hilfe",
+    "leitfaden",
+    "orientierung",
+    "ratgeber",
+    "schritt",
+    "schritte",
+    "tipps",
+    "ueberblick",
+    "überblick",
+    "uebersicht",
+    "übersicht",
+}
 
 GERMAN_KEYWORD_MODIFIERS = (
     "tipps",
@@ -3844,6 +3861,7 @@ FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS = _fold_token_set(GENERIC_TOPIC_CATEGORY_TO
 FOLDED_GENERIC_AUDIENCE_TOKENS = _fold_token_set(GENERIC_AUDIENCE_TOKENS)
 FOLDED_EDITORIAL_DESCRIPTOR_TOKENS = _fold_token_set(EDITORIAL_DESCRIPTOR_TOKENS)
 FOLDED_TOPIC_DETAIL_RELATION_TOKENS = _fold_token_set(TOPIC_DETAIL_RELATION_TOKENS)
+FOLDED_INSTRUCTIONAL_SUPPORT_TOKENS = _fold_token_set(INSTRUCTIONAL_SUPPORT_TOKENS)
 
 
 def _keyword_token_set(value: str) -> set[str]:
@@ -3943,6 +3961,8 @@ def _is_low_signal_keyword_phrase(value: str) -> bool:
     normalized = _normalize_keyword_phrase(value)
     if not normalized:
         return True
+    if _keyword_candidate_is_instructional_support_noise(normalized):
+        return True
     tokens = [token for token in _keyword_token_set(normalized) if token]
     if not tokens:
         return True
@@ -3950,6 +3970,35 @@ def _is_low_signal_keyword_phrase(value: str) -> bool:
     if low_signal_hits >= len(tokens):
         return True
     if len(tokens) >= 3 and low_signal_hits >= len(tokens) - 1:
+        return True
+    return False
+
+
+def _keyword_candidate_is_instructional_support_noise(candidate: str) -> bool:
+    normalized = _normalize_keyword_phrase(candidate)
+    if not normalized:
+        return True
+    folded_tokens = {
+        _normalize_keyword_phrase(_fold_keyword_text(token))
+        for token in _keyword_token_set(normalized)
+        if token
+    }
+    folded_tokens.discard("")
+    if not folded_tokens:
+        return True
+    instructional_hits = folded_tokens & FOLDED_INSTRUCTIONAL_SUPPORT_TOKENS
+    if not instructional_hits:
+        return False
+    core_tokens = {
+        _normalize_keyword_phrase(_fold_keyword_text(token))
+        for token in _keyword_query_core_tokens(normalized)
+        if _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_INSTRUCTIONAL_SUPPORT_TOKENS
+    }
+    if not core_tokens:
+        return True
+    if len(instructional_hits) >= max(2, len(folded_tokens) - 1) and len(core_tokens) <= 1:
+        return True
+    if len(folded_tokens) >= 4 and len(instructional_hits) >= len(folded_tokens) - 1 and len(core_tokens) <= 2:
         return True
     return False
 
@@ -4163,6 +4212,8 @@ def _keyword_candidate_is_query_like(
     normalized = _sanitize_editorial_phrase(candidate)
     if not normalized or _keyword_candidate_has_question_noise(normalized):
         return False
+    if _keyword_candidate_is_instructional_support_noise(normalized):
+        return False
     if _keyword_candidate_is_brand_heavy(normalized, topic_signature):
         return False
     if _phrase_has_same_family_duplicate_tokens(normalized):
@@ -4245,6 +4296,8 @@ def _primary_keyword_candidate_is_usable(
 ) -> bool:
     normalized = _sanitize_editorial_phrase(candidate)
     if not normalized or _phrase_has_same_family_duplicate_tokens(normalized):
+        return False
+    if _keyword_candidate_is_instructional_support_noise(normalized):
         return False
     if len(_keyword_query_core_tokens(normalized)) < 1:
         return False
@@ -10736,8 +10789,23 @@ def _derive_specificity_terms_for_section(
             and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_ABSTRACT_QUERY_TOKENS
             and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_EDITORIAL_ACTION_TOKENS
             and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS
+            and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_INSTRUCTIONAL_SUPPORT_TOKENS
         ]
-    return _merge_string_lists(existing_terms, selected, supplemental_terms, max_items=max_items)
+    detail_focus_terms = [
+        token
+        for token in _keyword_query_core_tokens(
+            " ".join(
+                [
+                    _normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(topic)),
+                    topic,
+                    *semantic_terms,
+                ]
+            )
+        )
+        if len(token) >= 4
+        and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_INSTRUCTIONAL_SUPPORT_TOKENS
+    ]
+    return _merge_string_lists(existing_terms, selected, detail_focus_terms, supplemental_terms, max_items=max_items)
 
 
 def _build_supervisor_approved_master_plan(
@@ -11648,7 +11716,19 @@ def _evaluate_specificity(
         overlap = tokens & bucket_token_set
         if len(overlap) >= 2 or (overlap and re.search(r"\d", plain_text)):
             hits.append(str(bucket_name))
-    if re.search(r"\b\d+(?:[.,]\d+)?\s*(?:%|prozent|euro|eur|jahre|jahr|tage|tage|wochen|monate|qm)\b", normalized_text):
+    detail_focus_tokens = _keyword_query_core_tokens(
+        _normalize_context_focus_phrase(_extract_topic_detail_focus_phrase(str(profile.get("topic") or "")))
+        or str(profile.get("topic") or "")
+    )
+    detail_focus_overlap = {
+        token
+        for token in tokens
+        if token in detail_focus_tokens
+        or any(_token_matches_reference_family(token, ref, allow_prefix_match=False) for ref in detail_focus_tokens)
+    }
+    if len(detail_focus_overlap) >= 2 or (detail_focus_overlap and re.search(r"\d", plain_text)):
+        hits.append("topic_detail_focus")
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*(?:%|prozent|euro|eur|jahre|jahr|tage|tage|wochen|monate|qm|m2|m²|cm|mm|meter|metern|liter|l|kg|g|stunden|stunde|minuten|minute)\b", normalized_text):
         hits.append("numeric_detail")
     if re.search(r"\b(?:uv ?400|ce|en iso|iso|din|kategorie \d|klasse \d)\b", normalized_text):
         hits.append("standard_detail")

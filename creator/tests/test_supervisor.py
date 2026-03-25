@@ -923,6 +923,113 @@ def test_build_supervisor_approved_master_plan_preserves_required_elements() -> 
     assert approved.sections[0].required_elements == ["table"]
 
 
+def test_build_supervisor_approved_master_plan_backfills_specific_terms_from_topic_tokens() -> None:
+    phase3 = {
+        "final_article_topic": "Sprührasen auf schwierigen Flächen: Anwendung, Vorbereitung und typische Fehler",
+        "search_intent_type": "informational",
+        "article_angle": "explainer",
+        "primary_keyword": "sprührasen auf schwierigen flächen",
+        "secondary_keywords": ["hanglagen rasen", "boden vorbereiten"],
+        "keyword_buckets": {"semantic_entities": ["sprührasen", "hanglagen"]},
+        "content_brief": {"target_signals": ["Bodenkontakt"], "overlap_terms": ["Keimung"]},
+        "style_profile": {"audience": "Gartenbesitzer", "tone": "practical_informational"},
+        "title_package": {
+            "h1": "Sprührasen auf schwierigen Flächen: Worauf es in der Praxis ankommt",
+            "meta_title": "Sprührasen auf schwierigen Flächen: Vorbereitung und typische Fehler",
+            "slug": "spruehrasen-schwierige-flaechen",
+        },
+    }
+    master_plan = {
+        "publishing_site": {
+            "site_url": "https://publisher-two.example.com",
+            "fit_reason": "Strong fit for garden improvement topics.",
+            "inventory_rationale": "Good supporting inventory.",
+            "confidence": 0.8,
+        },
+        "topic": phase3["final_article_topic"],
+        "intent_type": phase3["search_intent_type"],
+        "article_angle": phase3["article_angle"],
+        "audience": "Gartenbesitzer",
+        "tone": "practical_informational",
+        "differentiator": "Focuses on surface preparation and difficult lawn conditions.",
+        "title_package": phase3["title_package"],
+        "keyword_strategy": {
+            "primary_keyword": phase3["primary_keyword"],
+            "secondary_keywords": phase3["secondary_keywords"],
+            "semantic_entities": ["sprührasen", "hanglagen"],
+            "keyword_intent_note": "Matches practical treatment intent.",
+        },
+        "backlink_plan": {
+            "strategy": "supporting_context",
+            "anchor_text": "mehr zur Rasenpflege",
+            "placement_hint": "section_2",
+            "rationale": "Contextual support link.",
+        },
+        "image_strategy": {
+            "featured_prompt": "Editorial image of lawn preparation on uneven ground.",
+            "featured_alt": "Vorbereitung von Sprührasen auf schwierigen Flächen",
+            "include_in_content": False,
+            "in_content_prompt": "",
+            "in_content_alt": "",
+        },
+        "faq_questions": [
+            "Wann hält Sprührasen auf Hanglagen dauerhaft?",
+            "Wie wichtig ist die Bodenvorbereitung?",
+            "Welche Fehler bremsen die Keimung?",
+        ],
+        "sections": [],
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "risk_notes": [],
+        "warnings": [],
+    }
+    phase4 = {
+        "faq_questions": master_plan["faq_questions"],
+        "backlink_placement": "section_2",
+        "anchor_text_final": "mehr zur Rasenpflege",
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "plan_warnings": [],
+        "specificity_profile": {
+            "buckets": {
+                "outdoor": ["hanglagen", "keimung", "bodenkontakt"],
+            },
+            "min_specifics": 2,
+        },
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Worauf kommt es bei Sprührasen auf schwierigen Flächen wirklich an?",
+                "goal": "Erkläre Vorbereitung, Untergrund und typische Fehler.",
+                "required_terms": ["sprührasen"],
+                "target_words": {"min": 100, "max": 140},
+            },
+            {
+                "section_id": "section_2",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["sprührasen"],
+                "target_words": {"min": 70, "max": 95},
+            },
+            {
+                "section_id": "section_3",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": master_plan["faq_questions"],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+                "target_words": {"per_answer_min": 35, "per_answer_max": 55},
+            },
+        ],
+    }
+
+    approved = _build_supervisor_approved_master_plan(master_plan=master_plan, phase3=phase3, phase4=phase4)
+
+    assert "hanglagen" in approved.sections[0].required_terms
+
+
 def test_apply_master_article_plan_replaces_titles_missing_primary_keyword() -> None:
     phase3 = {
         "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",

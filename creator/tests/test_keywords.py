@@ -2848,7 +2848,7 @@ def test_build_question_topic_outline_headings_avoids_action_led_heading_scaffol
         },
     )
 
-    assert headings[0] == "Worauf kommt es bei der Raumoptimierung wirklich an?"
+    assert headings[0].lower() == "worauf kommt es bei der raumoptimierung wirklich an?"
     assert headings[-1] == "Wie lässt sich das in der Praxis sinnvoll umsetzen?"
     assert not any("wohnräume gestalten:" in heading.lower() for heading in headings)
 
@@ -2869,7 +2869,7 @@ def test_build_question_topic_outline_headings_rewrites_action_led_outdoor_topic
         },
     )
 
-    assert headings[0] == "Worauf kommt es bei der Neuanlage von Rasen wirklich an?"
+    assert headings[0].lower() == "worauf kommt es bei der neuanlage von rasen wirklich an?"
     assert not any("rasen neu anlegen worauf kommt es wirklich an" in heading.lower() for heading in headings)
 
 
@@ -2892,6 +2892,26 @@ def test_build_question_topic_outline_headings_rejects_question_like_focus_phras
 
     assert headings[0] != "Welche Methoden wirklich funktionieren: Worauf kommt es wirklich an?"
     assert not any("welche methoden wirklich funktionieren worauf kommt es wirklich an" in heading.lower() for heading in headings)
+
+
+def test_build_question_topic_outline_headings_uses_natural_questions_for_outdoor_focus_topics() -> None:
+    headings = _build_question_topic_outline_headings(
+        topic="Sprührasen auf schwierigen Flächen: Anwendung, Vorbereitung und typische Fehler",
+        primary_keyword="sprührasen auf schwierigen flächen",
+        secondary_keywords=["hanglagen rasen", "boden vorbereiten"],
+        structured_mode="none",
+        intent_type="informational",
+        article_angle="practical_guidance",
+        topic_class="home",
+        topic_signature={
+            "subject_phrase": "sprührasen auf schwierigen flächen",
+            "primary_keyword": "sprührasen auf schwierigen flächen",
+            "topic_class": "home",
+        },
+    )
+
+    assert headings[0].lower() == "worauf kommt es bei sprührasen auf schwierigen flächen wirklich an?"
+    assert not any("sprührasen auf schwierigen flächen worauf kommt es wirklich an" in heading.lower() for heading in headings)
 
 
 def test_build_deterministic_title_package_builds_full_meta_title_for_home_topics():

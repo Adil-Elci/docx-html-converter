@@ -8579,16 +8579,16 @@ def _build_question_topic_outline_headings(
         ]
     return [
         (
-            f"{focus_heading}: Worauf kommt es wirklich an?"
-            if focus_heading and not use_generic_focus_questions
-            else f"Worauf kommt es bei {subject_question_context} wirklich an?"
+            f"Worauf kommt es bei {_format_outline_heading(subject_question_context)} wirklich an?"
+            if subject_question_context
+            else "Worauf kommt es wirklich an?"
         ),
         "Welche Fehler sind im Alltag häufig?",
         "Welche Kriterien helfen bei der Einordnung weiter?",
         (
             "Wie lässt sich das in der Praxis sinnvoll umsetzen?"
             if use_generic_focus_questions
-            else f"Wie lässt sich {subject_question_context} in der Praxis sinnvoll umsetzen?"
+            else f"Wie lässt sich {_format_outline_heading(subject_question_context)} in der Praxis sinnvoll umsetzen?"
         ),
     ]
 
@@ -10716,7 +10716,28 @@ def _derive_specificity_terms_for_section(
                     break
             if len(selected) >= max_items:
                 break
-    return _merge_string_lists(existing_terms, selected, max_items=max_items)
+    supplemental_terms: List[str] = []
+    if len(selected) < min(3, max_items):
+        supplemental_terms = [
+            token
+            for token in _keyword_query_core_tokens(
+                " ".join(
+                    [
+                        heading,
+                        goal,
+                        topic,
+                        primary_keyword,
+                        *semantic_terms,
+                        *existing_terms,
+                    ]
+                )
+            )
+            if len(token) >= 5
+            and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_ABSTRACT_QUERY_TOKENS
+            and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_EDITORIAL_ACTION_TOKENS
+            and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS
+        ]
+    return _merge_string_lists(existing_terms, selected, supplemental_terms, max_items=max_items)
 
 
 def _build_supervisor_approved_master_plan(

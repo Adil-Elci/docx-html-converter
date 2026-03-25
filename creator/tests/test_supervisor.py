@@ -6,7 +6,7 @@ from creator.api.supervisor import (
     build_supervisor_system_prompt,
     build_supervisor_user_prompt,
 )
-from creator.api.pipeline import _apply_master_article_plan_to_phase_state
+from creator.api.pipeline import _apply_master_article_plan_to_phase_state, _build_supervisor_approved_master_plan
 
 
 class _StubProvider:
@@ -609,3 +609,117 @@ def test_apply_master_article_plan_rebuilds_signature_after_primary_cleanup() ->
     assert phase3["topic_signature"]["subject_phrase"] == "rasenpflege im garten"
     first_h2 = next(section["h2"] for section in phase4["sections"] if section["kind"] == "body")
     assert "kahle stellen hanglagen" not in first_h2.lower()
+
+
+def test_build_supervisor_approved_master_plan_uses_normalized_phase4_contract() -> None:
+    phase3 = {
+        "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+        "search_intent_type": "commercial_investigation",
+        "article_angle": "process_and_decision_factors",
+        "primary_keyword": "hausbau vorbereiten",
+        "secondary_keywords": ["baukosten planen", "baustart unterlagen"],
+        "keyword_buckets": {"semantic_entities": ["unterlagen", "kostenplan", "baustart"]},
+        "content_brief": {"target_signals": ["Baugenehmigung", "Kostenplan"], "overlap_terms": ["hausanschlüsse"]},
+        "style_profile": {"audience": "Bauherren", "tone": "practical_informational"},
+        "title_package": {
+            "h1": "Hausbau vorbereiten: Worauf Eigentümer vor dem Start achten sollten",
+            "meta_title": "Hausbau vorbereiten: Schritte, Unterlagen und Kostenplan",
+            "slug": "hausbau-vorbereiten-schritte",
+        },
+    }
+    master_plan = {
+        "publishing_site": {
+            "site_url": "https://publisher-two.example.com",
+            "fit_reason": "Strong fit for homeowners.",
+            "inventory_rationale": "Good supporting inventory.",
+            "confidence": 0.8,
+        },
+        "topic": phase3["final_article_topic"],
+        "intent_type": phase3["search_intent_type"],
+        "article_angle": phase3["article_angle"],
+        "audience": "Bauherren",
+        "tone": "practical_informational",
+        "differentiator": "Focuses on practical preparation decisions.",
+        "title_package": {
+            "h1": "Alte, freie Überschrift",
+            "meta_title": "Alte, freie Meta",
+            "slug": "alt",
+        },
+        "keyword_strategy": {
+            "primary_keyword": "freie supervisor phrase",
+            "secondary_keywords": ["freie phrase"],
+            "semantic_entities": ["unterlagen"],
+            "keyword_intent_note": "Practical search coverage.",
+        },
+        "backlink_plan": {
+            "strategy": "supporting_context",
+            "anchor_text": "mehr zum Hausbau",
+            "placement_hint": "section_1",
+            "rationale": "Contextual support link.",
+        },
+        "image_strategy": {
+            "featured_prompt": "Editorial house-planning image.",
+            "featured_alt": "Unterlagen für die Hausbauplanung",
+            "include_in_content": False,
+            "in_content_prompt": "",
+            "in_content_alt": "",
+        },
+        "faq_questions": [
+            "Welche Unterlagen sind zuerst wichtig?",
+            "Wie plant man Kosten realistisch?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+        "internal_link_titles": ["Hausbaukosten richtig planen"],
+        "sections": [],
+        "forbidden_phrases": ["hier erfahren Sie alles"],
+        "quality_requirements": ["Use concrete examples."],
+        "risk_notes": ["Do not overpromise timelines."],
+        "warnings": [],
+    }
+    phase4 = {
+        "faq_questions": master_plan["faq_questions"],
+        "backlink_placement": "section_2",
+        "anchor_text_final": "mehr zum Hausbau",
+        "forbidden_phrases": ["hier erfahren Sie alles"],
+        "quality_requirements": ["Use concrete examples."],
+        "plan_warnings": [],
+        "specificity_profile": {
+            "buckets": {"planning": ["unterlagen", "kostenplan", "baustart"]},
+            "min_specifics": 2,
+        },
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Schritte sind vor dem Baustart entscheidend?",
+                "goal": "Erkläre die ersten Schritte konkret.",
+                "required_terms": ["unterlagen"],
+                "target_words": {"min": 100, "max": 140},
+            },
+            {
+                "section_id": "section_2",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["hausbau"],
+                "target_words": {"min": 70, "max": 95},
+            },
+            {
+                "section_id": "section_3",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": master_plan["faq_questions"],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+                "target_words": {"per_answer_min": 35, "per_answer_max": 55},
+            },
+        ],
+    }
+
+    approved = _build_supervisor_approved_master_plan(master_plan=master_plan, phase3=phase3, phase4=phase4)
+
+    assert approved.title_package.h1 == phase3["title_package"]["h1"]
+    assert approved.keyword_strategy.primary_keyword == phase3["primary_keyword"]
+    assert approved.backlink_plan.placement_hint == "section_2"
+    assert approved.sections[0].h2 == "Welche Schritte sind vor dem Baustart entscheidend?"
+    assert "kostenplan" in approved.sections[0].required_terms

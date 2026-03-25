@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .decision_schemas import MasterArticlePlan
 from .llm import LLMError, call_llm_json, call_llm_text
 from .critic import CreatorCritic, CriticContext, build_critic_system_prompt, build_critic_user_prompt
 from .llm_provider import LLMRole, build_provider
@@ -10484,6 +10485,142 @@ def _apply_master_article_plan_to_phase_state(
     return phase4
 
 
+def _derive_specificity_terms_for_section(
+    *,
+    heading: str,
+    goal: str,
+    topic: str,
+    primary_keyword: str,
+    specificity_profile: Optional[Dict[str, Any]],
+    semantic_terms: List[str],
+    existing_terms: List[str],
+    max_items: int = 4,
+) -> List[str]:
+    profile = specificity_profile or {}
+    buckets = profile.get("buckets") if isinstance(profile.get("buckets"), dict) else {}
+    reference_tokens = _filter_keyword_focus_tokens(
+        _keyword_focus_tokens(
+            " ".join(
+                [
+                    heading,
+                    goal,
+                    topic,
+                    primary_keyword,
+                    *semantic_terms,
+                    *existing_terms,
+                ]
+            )
+        )
+    )
+    if not reference_tokens:
+        return _merge_string_lists(existing_terms, max_items=max_items)
+    selected: List[str] = []
+    for bucket_tokens in buckets.values():
+        if not isinstance(bucket_tokens, (list, tuple, set)):
+            continue
+        bucket_matches = [
+            token
+            for token in [str(item).strip() for item in bucket_tokens if str(item).strip()]
+            if token in reference_tokens
+            or any(_token_matches_reference_family(token, ref, allow_prefix_match=False) for ref in reference_tokens)
+        ]
+        if bucket_matches:
+            selected.extend(bucket_matches[:2])
+        if len(selected) >= max_items:
+            break
+    return _merge_string_lists(existing_terms, selected, max_items=max_items)
+
+
+def _build_supervisor_approved_master_plan(
+    *,
+    master_plan: Dict[str, Any],
+    phase3: Dict[str, Any],
+    phase4: Dict[str, Any],
+) -> MasterArticlePlan:
+    keyword_buckets = phase3.get("keyword_buckets") if isinstance(phase3.get("keyword_buckets"), dict) else {}
+    content_brief = phase3.get("content_brief") if isinstance(phase3.get("content_brief"), dict) else {}
+    semantic_terms = _merge_string_lists(
+        [str(item).strip() for item in (keyword_buckets.get("semantic_entities") or []) if str(item).strip()],
+        [str(item).strip() for item in ((content_brief or {}).get("target_signals") or []) if str(item).strip()],
+        [str(item).strip() for item in ((content_brief or {}).get("overlap_terms") or []) if str(item).strip()],
+        _topic_focus_terms(str(phase3.get("final_article_topic") or ""), max_terms=3),
+        max_items=10,
+    )
+    sections_payload: List[Dict[str, Any]] = []
+    for section in (phase4.get("sections") or []):
+        if not isinstance(section, dict):
+            continue
+        target_words = section.get("target_words") if isinstance(section.get("target_words"), dict) else {}
+        existing_terms = [str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()]
+        derived_terms = (
+            _derive_specificity_terms_for_section(
+                heading=str(section.get("h2") or "").strip(),
+                goal=str(section.get("goal") or "").strip(),
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                specificity_profile=phase4.get("specificity_profile") if isinstance(phase4.get("specificity_profile"), dict) else {},
+                semantic_terms=semantic_terms,
+                existing_terms=existing_terms,
+            )
+            if str(section.get("kind") or "body").strip() == "body"
+            else existing_terms
+        )
+        sections_payload.append(
+            {
+                "section_id": str(section.get("section_id") or "").strip(),
+                "kind": str(section.get("kind") or "").strip() or "body",
+                "h2": str(section.get("h2") or "").strip(),
+                "goal": str(section.get("goal") or "").strip(),
+                "key_points": derived_terms[:3],
+                "required_terms": derived_terms,
+                "target_min_words": target_words.get("min") or target_words.get("per_answer_min"),
+                "target_max_words": target_words.get("max") or target_words.get("per_answer_max"),
+            }
+        )
+    original_keyword_strategy = master_plan.get("keyword_strategy") if isinstance(master_plan.get("keyword_strategy"), dict) else {}
+    original_backlink_plan = master_plan.get("backlink_plan") if isinstance(master_plan.get("backlink_plan"), dict) else {}
+    approved_payload = {
+        "publishing_site": master_plan.get("publishing_site") or {
+            "site_url": "",
+            "fit_reason": "Approved publishing site from normalized creator plan.",
+            "inventory_rationale": "Approved publishing site inventory supports the normalized article.",
+            "confidence": 0.5,
+        },
+        "topic": str(phase3.get("final_article_topic") or master_plan.get("topic") or "").strip(),
+        "intent_type": str(phase3.get("search_intent_type") or master_plan.get("intent_type") or "informational").strip(),
+        "article_angle": str(phase3.get("article_angle") or master_plan.get("article_angle") or "explainer").strip(),
+        "audience": str(master_plan.get("audience") or (phase3.get("style_profile") or {}).get("audience") or "Leserinnen und Leser").strip(),
+        "tone": str(master_plan.get("tone") or (phase3.get("style_profile") or {}).get("tone") or "practical_informational").strip(),
+        "differentiator": str(master_plan.get("differentiator") or "The approved plan focuses on one coherent topic nucleus and practical specifics.").strip(),
+        "title_package": {
+            "h1": str((phase3.get("title_package") or {}).get("h1") or "").strip(),
+            "meta_title": str((phase3.get("title_package") or {}).get("meta_title") or "").strip(),
+            "slug": str((phase3.get("title_package") or {}).get("slug") or "").strip(),
+        },
+        "keyword_strategy": {
+            "primary_keyword": str(phase3.get("primary_keyword") or "").strip(),
+            "secondary_keywords": [str(item).strip() for item in (phase3.get("secondary_keywords") or []) if str(item).strip()],
+            "semantic_entities": [str(item).strip() for item in (keyword_buckets.get("semantic_entities") or []) if str(item).strip()],
+            "keyword_intent_note": str(original_keyword_strategy.get("keyword_intent_note") or "The approved keyword set matches the normalized topic and intent.").strip(),
+        },
+        "backlink_plan": {
+            "strategy": str(original_backlink_plan.get("strategy") or "supporting_context").strip(),
+            "anchor_text": str(phase4.get("anchor_text_final") or original_backlink_plan.get("anchor_text") or "Weitere Informationen").strip(),
+            "placement_hint": str(phase4.get("backlink_placement") or original_backlink_plan.get("placement_hint") or "section_2").strip(),
+            "rationale": str(original_backlink_plan.get("rationale") or "The backlink should support the approved article context naturally.").strip(),
+        },
+        "image_strategy": master_plan.get("image_strategy") if isinstance(master_plan.get("image_strategy"), dict) else {},
+        "faq_questions": [str(item).strip() for item in (phase4.get("faq_questions") or master_plan.get("faq_questions") or []) if str(item).strip()],
+        "internal_link_titles": [str(item).strip() for item in (master_plan.get("internal_link_titles") or []) if str(item).strip()],
+        "sections": sections_payload,
+        "forbidden_phrases": [str(item).strip() for item in (phase4.get("forbidden_phrases") or master_plan.get("forbidden_phrases") or []) if str(item).strip()],
+        "quality_requirements": [str(item).strip() for item in (phase4.get("quality_requirements") or master_plan.get("quality_requirements") or []) if str(item).strip()],
+        "risk_notes": [str(item).strip() for item in (master_plan.get("risk_notes") or []) if str(item).strip()],
+        "warnings": [str(item).strip() for item in (phase4.get("plan_warnings") or master_plan.get("warnings") or []) if str(item).strip()],
+    }
+    return MasterArticlePlan.model_validate(approved_payload)
+
+
 def _generate_article_from_master_plan(
     *,
     master_plan: Dict[str, Any],
@@ -10500,10 +10637,15 @@ def _generate_article_from_master_plan(
     prompt_trace: Optional[List[Dict[str, Any]]] = None,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    approved_master_plan = _build_supervisor_approved_master_plan(
+        master_plan=master_plan,
+        phase3=phase3,
+        phase4=phase4,
+    )
     writer_context = WriterContext(
         target_site_url=target_site_url,
         publishing_site_url=publishing_site_url,
-        master_plan=master_plan,
+        master_plan=approved_master_plan,
         validation_feedback=list(validation_feedback or []),
         content_brief=_format_content_brief_prompt_text(phase3.get("content_brief") or {}),
         internal_link_titles=[
@@ -14128,6 +14270,11 @@ def run_creator_pipeline(
         phase4=phase4,
     )
     if supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict):
+        approved_master_plan = _build_supervisor_approved_master_plan(
+            master_plan=phase4.get("supervisor_master_plan") or {},
+            phase3=phase3,
+            phase4=phase4,
+        )
         critic_prompt_trace = (
             (debug.get("prompt_trace") or {}).get("critic_attempts")
             if isinstance(debug.get("prompt_trace"), dict)
@@ -14137,7 +14284,7 @@ def run_creator_pipeline(
         critic_context = CriticContext(
             target_site_url=target_site_url,
             publishing_site_url=publishing_site_url,
-            master_plan=phase4.get("supervisor_master_plan") or {},
+            master_plan=approved_master_plan,
             draft_article=phase5,
             deterministic_validation_errors=[],
             content_brief=_format_content_brief_prompt_text(phase3.get("content_brief") or {}),
@@ -14181,7 +14328,7 @@ def run_creator_pipeline(
                 repair_context = RepairContext(
                     target_site_url=target_site_url,
                     publishing_site_url=publishing_site_url,
-                    master_plan=phase4.get("supervisor_master_plan") or {},
+                    master_plan=approved_master_plan,
                     draft_article=phase5,
                     critic_review=critic_review,
                     deterministic_validation_errors=[],

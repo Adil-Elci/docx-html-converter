@@ -793,3 +793,4 @@ def test_apply_master_article_plan_replaces_titles_missing_primary_keyword() -> 
 
     assert "hausbau vorbereiten" in phase4["h1"].lower()
     assert "hausbau vorbereiten" in phase3["title_package"]["meta_title"].lower()
+

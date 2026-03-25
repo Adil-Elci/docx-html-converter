@@ -10326,6 +10326,7 @@ def _apply_master_article_plan_to_phase_state(
         not resolved_h1
         or _title_has_dangling_suffix_fragment(resolved_h1)
         or "title_length_invalid" in (resolved_h1_quality.get("errors") or [])
+        or "title_too_close_to_primary_keyword" in (resolved_h1_quality.get("errors") or [])
         or not _keyword_present_relaxed(resolved_h1, phase3.get("primary_keyword", ""))
     ):
         resolved_h1 = str(fallback_title_package.get("h1") or resolved_h1).strip()
@@ -10333,6 +10334,7 @@ def _apply_master_article_plan_to_phase_state(
         not resolved_meta_title
         or _title_has_dangling_suffix_fragment(resolved_meta_title)
         or "title_length_invalid" in (resolved_meta_quality.get("errors") or [])
+        or "title_too_close_to_primary_keyword" in (resolved_meta_quality.get("errors") or [])
         or not _keyword_present_relaxed(resolved_meta_title, phase3.get("primary_keyword", ""))
     ):
         resolved_meta_title = str(fallback_title_package.get("meta_title") or resolved_meta_title).strip()

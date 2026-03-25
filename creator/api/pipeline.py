@@ -9357,13 +9357,15 @@ def _build_deterministic_fazit_html(
     required_terms: List[str],
 ) -> str:
     topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    primary_phrase = _format_title_case(primary_keyword or _build_topic_phrase(topic) or "dieses Thema")
     terms = [str(item).strip() for item in required_terms if str(item).strip()]
     support = ""
     if terms:
         support = ", ".join(terms[:2])
-    sentence = f"Bei {topic_phrase} helfen konkrete Kriterien, typische Fehler und realistische nächste Schritte bei einer belastbaren Einordnung."
+    sentence = f"Bei {primary_phrase} helfen konkrete Kriterien, typische Fehler und realistische nächste Schritte für eine belastbare Einordnung."
     if support:
         sentence += f" Besonders wichtig bleiben dabei {support}."
+    sentence += f" So bleibt {topic_phrase} fachlich greifbar statt allgemein."
     sentence += " Wer diese Punkte zusammen bewertet, trifft Entscheidungen fundierter und praxisnäher."
     return _wrap_paragraphs(sentence) or "<p></p>"
 
@@ -10324,12 +10326,14 @@ def _apply_master_article_plan_to_phase_state(
         not resolved_h1
         or _title_has_dangling_suffix_fragment(resolved_h1)
         or "title_length_invalid" in (resolved_h1_quality.get("errors") or [])
+        or not _keyword_present_relaxed(resolved_h1, phase3.get("primary_keyword", ""))
     ):
         resolved_h1 = str(fallback_title_package.get("h1") or resolved_h1).strip()
     if (
         not resolved_meta_title
         or _title_has_dangling_suffix_fragment(resolved_meta_title)
         or "title_length_invalid" in (resolved_meta_quality.get("errors") or [])
+        or not _keyword_present_relaxed(resolved_meta_title, phase3.get("primary_keyword", ""))
     ):
         resolved_meta_title = str(fallback_title_package.get("meta_title") or resolved_meta_title).strip()
     if not resolved_slug or phase3.get("primary_keyword", "") not in _normalize_keyword_phrase(resolved_slug).replace("-", " "):
@@ -10552,6 +10556,7 @@ def _build_supervisor_approved_master_plan(
             continue
         target_words = section.get("target_words") if isinstance(section.get("target_words"), dict) else {}
         existing_terms = [str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()]
+        section_kind = str(section.get("kind") or "body").strip()
         derived_terms = (
             _derive_specificity_terms_for_section(
                 heading=str(section.get("h2") or "").strip(),
@@ -10562,13 +10567,21 @@ def _build_supervisor_approved_master_plan(
                 semantic_terms=semantic_terms,
                 existing_terms=existing_terms,
             )
-            if str(section.get("kind") or "body").strip() == "body"
+            if section_kind == "body"
             else existing_terms
         )
+        if section_kind == "fazit":
+            derived_terms = _merge_string_lists(
+                existing_terms,
+                [str(phase3.get("primary_keyword") or "").strip()],
+                _topic_focus_terms(str(phase3.get("final_article_topic") or ""), max_terms=2),
+                semantic_terms[:2],
+                max_items=5,
+            )
         sections_payload.append(
             {
                 "section_id": str(section.get("section_id") or "").strip(),
-                "kind": str(section.get("kind") or "").strip() or "body",
+                "kind": section_kind or "body",
                 "h2": str(section.get("h2") or "").strip(),
                 "goal": str(section.get("goal") or "").strip(),
                 "key_points": derived_terms[:3],

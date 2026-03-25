@@ -723,3 +723,73 @@ def test_build_supervisor_approved_master_plan_uses_normalized_phase4_contract()
     assert approved.backlink_plan.placement_hint == "section_2"
     assert approved.sections[0].h2 == "Welche Schritte sind vor dem Baustart entscheidend?"
     assert "kostenplan" in approved.sections[0].required_terms
+    assert phase3["primary_keyword"] in approved.sections[1].required_terms
+
+
+def test_apply_master_article_plan_replaces_titles_missing_primary_keyword() -> None:
+    phase3 = {
+        "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
+        "search_intent_type": "informational",
+        "primary_keyword": "hausbau vorbereiten",
+        "secondary_keywords": ["baustart unterlagen", "hausbau kosten planen"],
+        "structured_content_mode": "none",
+        "article_angle": "process_and_next_steps",
+        "topic_class": "home",
+        "title_package": {"h1": "", "meta_title": "", "slug": ""},
+    }
+    master_plan = {
+        "topic": phase3["final_article_topic"],
+        "intent_type": "informational",
+        "article_angle": "process_and_next_steps",
+        "audience": "Bauherren",
+        "tone": "practical_informational",
+        "title_package": {
+            "h1": "Wichtige Schritte vor dem Start",
+            "meta_title": "Wichtige Schritte vor dem Start eines Bauprojekts",
+            "slug": "hausbau-vorbereiten",
+        },
+        "keyword_strategy": {
+            "primary_keyword": "hausbau vorbereiten",
+            "secondary_keywords": ["baustart unterlagen", "hausbau kosten planen"],
+            "semantic_entities": ["unterlagen", "kostenplan"],
+        },
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Unterlagen sind wichtig?",
+                "goal": "Explain the first steps.",
+                "required_terms": ["unterlagen"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            },
+            {
+                "section_id": "section_2",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Summarize.",
+                "required_terms": ["hausbau"],
+                "target_min_words": 70,
+                "target_max_words": 100,
+            },
+            {
+                "section_id": "section_3",
+                "kind": "faq",
+                "h2": "FAQ",
+                "goal": "Answer follow-up questions.",
+                "required_terms": [],
+                "target_min_words": 90,
+                "target_max_words": 140,
+            },
+        ],
+        "faq_questions": [
+            "Welche Unterlagen sind zuerst wichtig?",
+            "Wie plant man die wichtigsten Kosten realistisch?",
+            "Wann lohnt sich fachliche Unterstützung?",
+        ],
+    }
+
+    phase4 = _apply_master_article_plan_to_phase_state(master_plan=master_plan, phase3=phase3)
+
+    assert "hausbau vorbereiten" in phase4["h1"].lower()
+    assert "hausbau vorbereiten" in phase3["title_package"]["meta_title"].lower()

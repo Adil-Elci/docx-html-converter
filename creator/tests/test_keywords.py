@@ -3077,6 +3077,18 @@ def test_validate_keyword_coverage_allows_phrase_repetition_below_twelve_occurre
     assert not any(error.startswith("keyword_overused:augenschutz im sommerurlaub") for error in errors)
 
 
+def test_align_primary_keyword_to_topic_rejects_editorial_summary_phrases():
+    aligned = _align_primary_keyword_to_topic(
+        topic="Gräser im Vergleich: Anwendung, Kosten und Ergebnisse im praktischen Überblick",
+        current_primary="anwendung kosten und ergebnisse im praktischen überblick",
+        trend_candidates=[],
+        keyword_cluster=["gräser", "rasen", "vergleich"],
+    )
+
+    assert aligned != "anwendung kosten und ergebnisse im praktischen überblick"
+    assert "überblick" not in aligned
+
+
 def test_validate_language_and_conclusion_requires_fazit_then_faq():
     html = """
     <h1>Eltern Sucht Schwangerschaft: Auswirkungen und Hilfe</h1>
@@ -3637,6 +3649,84 @@ def test_assemble_article_payload_from_slots_trims_oversized_intro_html() -> Non
     intro_text = assembled["article_html"].split("</h1>", 1)[1].split("<h2", 1)[0]
     assert word_count_from_html(intro_text) <= 120
     assert "Welche Maßnahmen helfen auf Dauer?" in assembled["article_html"]
+
+
+def test_assemble_article_payload_from_slots_restores_required_table() -> None:
+    article_plan = {
+        "h1": "Hausbaukosten einordnen: Worauf Bauherren vor dem Start achten sollten",
+        "backlink_placement": "section_2",
+        "anchor_text_final": "mehr zu Hausbaukosten",
+        "faq_questions": [
+            "Welche Kosten werden oft unterschätzt?",
+            "Wie groß sollte der Puffer sein?",
+            "Wann hilft eine externe Prüfung?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Kostenpositionen sollte man zuerst prüfen?",
+                "goal": "Ordne die wichtigsten Positionen ein.",
+                "required_terms": ["baunebenkosten", "kostenpuffer"],
+                "required_elements": ["table"],
+            },
+            {
+                "section_id": "section_2",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["hausbaukosten"],
+                "required_elements": [],
+            },
+            {
+                "section_id": "section_3",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": [
+                    "Welche Kosten werden oft unterschätzt?",
+                    "Wie groß sollte der Puffer sein?",
+                    "Wann hilft eine externe Prüfung?",
+                ],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+                "required_elements": [],
+            },
+        ],
+    }
+    phase3 = {
+        "final_article_topic": "Hausbaukosten einordnen: Welche Positionen vor dem Baustart realistisch zu prüfen sind",
+        "primary_keyword": "hausbaukosten einordnen",
+        "keyword_buckets": {"semantic_entities": ["baunebenkosten", "kostenpuffer"]},
+        "content_brief": {"target_signals": ["Baunebenkosten", "Kostenpuffer"]},
+    }
+    slot_payload = {
+        "intro_html": "<p>Hausbaukosten einordnen heißt, Baunebenkosten, Puffer und Reihenfolge früh realistisch zu prüfen.</p>",
+        "section_bodies": [
+            {
+                "section_id": "section_1",
+                "body_html": "<p>Baunebenkosten, Eigenkapital und ein belastbarer Kostenpuffer sollten vor dem Baustart sauber gegliedert werden.</p>",
+            }
+        ],
+        "faq_answers": [],
+        "meta_title": "Hausbaukosten einordnen: Baunebenkosten und Puffer realistisch planen",
+        "meta_description": "Konkrete Hinweise zu Baunebenkosten, Kostenpuffer und nächsten Schritten vor dem Baustart eines Hauses.",
+        "slug": "hausbaukosten-einordnen",
+        "excerpt": "Konkrete Hinweise zu Baunebenkosten und Kostenpuffer vor dem Baustart.",
+    }
+
+    assembled = _assemble_article_payload_from_slots(
+        slot_payload=slot_payload,
+        article_plan=article_plan,
+        phase3=phase3,
+        backlink_url="https://www.eigenheim-blog.com/hausbau/",
+        publishing_site_url="https://1thingtodo.de/",
+        internal_link_candidates=[],
+        internal_link_anchor_map=None,
+        min_internal_links=0,
+        max_internal_links=0,
+    )
+
+    assert "<table" in assembled["article_html"]
 
 
 def test_repair_attempt_introduced_regressions_detects_new_structure_errors():

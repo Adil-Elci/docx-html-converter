@@ -243,6 +243,7 @@ Requirements:
 - section_bodies must contain only body HTML keyed by approved section_id values. Do not include H2 headings.
 - faq_answers must contain only answer HTML keyed by the approved FAQ questions. Do not include H3 headings.
 - In each body section, use at least two concrete specifics from that section's key_points or required_terms when they are available.
+- Honor each section's required_elements exactly. If a section requires a table or list, include that HTML structure in that section body.
 - Respect forbidden_phrases and quality_requirements from the master_article_plan.
 - Do not include hyperlinks. The application inserts them later.
 - Do not repeat target brand names, domain names, or anchor text in prose unless the approved plan explicitly requires it.
@@ -270,6 +271,7 @@ def build_writer_user_prompt(context: WriterContext) -> str:
         "Each section_bodies item must use a section_id from the plan and contain only that section's body HTML.\n"
         "Each faq_answers item must answer one listed FAQ question and contain only the answer HTML.\n"
         "For each body section, cover at least two of that section's concrete key_points/required_terms when provided.\n"
+        "If a section has required_elements, include those exact structures in that section body.\n"
         "Do not add links.\n\n"
         f"{payload}"
     )

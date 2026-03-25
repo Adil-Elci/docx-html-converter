@@ -416,7 +416,7 @@ EDITORIAL_ACTION_TOKENS = {
 }
 ABSTRACT_QUERY_TOKENS = {
     "anzeichen", "aspekte", "ausloeser", "chancen", "fehler", "fragen", "hinweise", "kriterien",
-    "orientierung", "signale", "schritte", "ueberblick", "ursachen", "warnzeichen",
+    "orientierung", "signale", "schritte", "ueberblick", "überblick", "ursachen", "warnzeichen", "ergebnis", "ergebnisse",
 }
 GENERIC_AUDIENCE_TOKENS = {
     "gesundheitsbewusste",
@@ -3830,6 +3830,22 @@ def _fold_keyword_text(value: str) -> str:
     )
 
 
+def _fold_token_set(tokens: set[str]) -> set[str]:
+    return {
+        _normalize_keyword_phrase(_fold_keyword_text(token))
+        for token in tokens
+        if _normalize_keyword_phrase(_fold_keyword_text(token))
+    }
+
+
+FOLDED_ABSTRACT_QUERY_TOKENS = _fold_token_set(ABSTRACT_QUERY_TOKENS)
+FOLDED_EDITORIAL_ACTION_TOKENS = _fold_token_set(EDITORIAL_ACTION_TOKENS)
+FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS = _fold_token_set(GENERIC_TOPIC_CATEGORY_TOKENS)
+FOLDED_GENERIC_AUDIENCE_TOKENS = _fold_token_set(GENERIC_AUDIENCE_TOKENS)
+FOLDED_EDITORIAL_DESCRIPTOR_TOKENS = _fold_token_set(EDITORIAL_DESCRIPTOR_TOKENS)
+FOLDED_TOPIC_DETAIL_RELATION_TOKENS = _fold_token_set(TOPIC_DETAIL_RELATION_TOKENS)
+
+
 def _keyword_token_set(value: str) -> set[str]:
     tokens = _tokenize_words(_normalize_keyword_phrase(value))
     return {
@@ -3861,11 +3877,11 @@ def _keyword_query_core_tokens(value: str) -> set[str]:
     return {
         token
         for token in _filter_keyword_focus_tokens(_keyword_focus_tokens(value))
-        if token not in ABSTRACT_QUERY_TOKENS
-        and token not in EDITORIAL_ACTION_TOKENS
-        and token not in GENERIC_TOPIC_CATEGORY_TOKENS
-        and token not in GENERIC_AUDIENCE_TOKENS
-        and token not in EDITORIAL_DESCRIPTOR_TOKENS
+        if _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_ABSTRACT_QUERY_TOKENS
+        and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_EDITORIAL_ACTION_TOKENS
+        and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS
+        and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_GENERIC_AUDIENCE_TOKENS
+        and _normalize_keyword_phrase(_fold_keyword_text(token)) not in FOLDED_EDITORIAL_DESCRIPTOR_TOKENS
     }
 
 
@@ -3878,14 +3894,21 @@ def _keyword_candidate_has_subject_noise(candidate: str) -> bool:
     if not focus_tokens:
         return True
     core_tokens = _keyword_query_core_tokens(normalized)
-    audience_hits = focus_tokens & GENERIC_AUDIENCE_TOKENS
-    descriptor_hits = focus_tokens & EDITORIAL_DESCRIPTOR_TOKENS
-    generic_hits = focus_tokens & GENERIC_TOPIC_CATEGORY_TOKENS
+    folded_focus_tokens = _fold_token_set(focus_tokens)
+    audience_hits = folded_focus_tokens & FOLDED_GENERIC_AUDIENCE_TOKENS
+    descriptor_hits = folded_focus_tokens & FOLDED_EDITORIAL_DESCRIPTOR_TOKENS
+    generic_hits = folded_focus_tokens & FOLDED_GENERIC_TOPIC_CATEGORY_TOKENS
+    relation_hits = folded_focus_tokens & FOLDED_TOPIC_DETAIL_RELATION_TOKENS
+    abstract_hits = folded_focus_tokens & FOLDED_ABSTRACT_QUERY_TOKENS
     if len(words) >= 7 and len(core_tokens) <= 1:
         return True
     if audience_hits and len(core_tokens) <= 2:
         return True
     if descriptor_hits and len(core_tokens) <= 2:
+        return True
+    if len(words) >= 5 and len(core_tokens) <= 2 and len(descriptor_hits | relation_hits | abstract_hits) >= 2:
+        return True
+    if len(words) >= 5 and _normalize_keyword_phrase(_fold_keyword_text(words[-1])) in FOLDED_ABSTRACT_QUERY_TOKENS and len(core_tokens) <= 2:
         return True
     if generic_hits and (audience_hits or descriptor_hits) and len(core_tokens) <= 2:
         return True
@@ -9270,6 +9293,14 @@ def _assemble_article_payload_from_slots(
         section_id = str(section.get("section_id") or "").strip()
         if not section_id or section_id not in section_bodies:
             continue
+        section_bodies[section_id] = _enforce_required_section_elements(
+            section_html=section_bodies[section_id],
+            required_elements=[str(item).strip() for item in (section.get("required_elements") or []) if str(item).strip()],
+            heading=str(section.get("h2") or "").strip(),
+            topic=str(phase3.get("final_article_topic") or ""),
+            primary_keyword=str(phase3.get("primary_keyword") or ""),
+            required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+        )
         section_bodies[section_id] = _trim_section_html_to_target(
             section_bodies[section_id],
             section.get("target_words") if isinstance(section.get("target_words"), dict) else {},
@@ -9431,6 +9462,94 @@ def _build_deterministic_body_section_html(
     return _wrap_paragraphs(f"{first_sentence} {second_sentence} {third_sentence}") or "<p></p>"
 
 
+def _build_deterministic_section_table_html(
+    *,
+    heading: str,
+    topic: str,
+    primary_keyword: str,
+    required_terms: List[str],
+) -> str:
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    row_terms = _merge_string_lists(
+        [str(item).strip() for item in required_terms if str(item).strip()],
+        _topic_focus_terms(topic, max_terms=3),
+        max_items=3,
+    )
+    if not row_terms:
+        row_terms = ["Kriterien", "Praxisbezug", "Einordnung"]
+    heading_phrase = str(heading or "").strip() or topic_phrase
+    rows: List[str] = []
+    for term in row_terms[:3]:
+        label = _format_sentence_start(term)
+        rows.append(
+            "<tr>"
+            f"<td>{label}</td>"
+            f"<td>Worauf man bei {heading_phrase.lower()} konkret achten sollte</td>"
+            f"<td>Hilft, {topic_phrase.lower()} nachvollziehbar und praxisnah einzuordnen.</td>"
+            "</tr>"
+        )
+    return (
+        "<table>"
+        "<thead><tr><th>Prüfpunkt</th><th>Worauf achten?</th><th>Praxisnutzen</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _build_deterministic_section_list_html(
+    *,
+    heading: str,
+    topic: str,
+    primary_keyword: str,
+    required_terms: List[str],
+) -> str:
+    topic_phrase = _format_title_case(_build_topic_phrase(topic) or primary_keyword or "dieses Thema")
+    items = _merge_string_lists(
+        [str(item).strip() for item in required_terms if str(item).strip()],
+        _topic_focus_terms(topic, max_terms=3),
+        max_items=3,
+    )
+    if not items:
+        items = [heading or topic_phrase, "Praktische Einordnung", "Nächste Schritte"]
+    rendered_items = []
+    for item in items[:3]:
+        label = _format_sentence_start(item)
+        rendered_items.append(
+            f"<li><strong>{label}:</strong> hilft, {topic_phrase.lower()} konkreter und alltagsnah zu bewerten.</li>"
+        )
+    return f"<ul>{''.join(rendered_items)}</ul>"
+
+
+def _enforce_required_section_elements(
+    *,
+    section_html: str,
+    required_elements: List[str],
+    heading: str,
+    topic: str,
+    primary_keyword: str,
+    required_terms: List[str],
+) -> str:
+    normalized_elements = [str(item).strip().lower() for item in required_elements if str(item).strip()]
+    if not normalized_elements:
+        return section_html
+    enforced = str(section_html or "").strip()
+    if "table" in normalized_elements and not re.search(r"<table\b", enforced, flags=re.IGNORECASE):
+        enforced += _build_deterministic_section_table_html(
+            heading=heading,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            required_terms=required_terms,
+        )
+    if "list" in normalized_elements and not re.search(r"<(?:ul|ol)\b", enforced, flags=re.IGNORECASE):
+        enforced += _build_deterministic_section_list_html(
+            heading=heading,
+            topic=topic,
+            primary_keyword=primary_keyword,
+            required_terms=required_terms,
+        )
+    return enforced
+
+
 def _enforce_article_plan_structure(
     *,
     article_html: str,
@@ -9489,6 +9608,15 @@ def _enforce_article_plan_structure(
             if not fazit_html and normalized_extracted:
                 fazit_html = str(normalized_extracted.pop(-1).get("body_html") or "").strip()
             section_bodies[section_id] = fazit_html or _build_deterministic_fazit_html(
+                topic=str(phase3.get("final_article_topic") or ""),
+                primary_keyword=str(phase3.get("primary_keyword") or ""),
+                required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
+            )
+        if section_id in section_bodies:
+            section_bodies[section_id] = _enforce_required_section_elements(
+                section_html=section_bodies[section_id],
+                required_elements=[str(item).strip() for item in (section.get("required_elements") or []) if str(item).strip()],
+                heading=str(section.get("h2") or "").strip(),
                 topic=str(phase3.get("final_article_topic") or ""),
                 primary_keyword=str(phase3.get("primary_keyword") or ""),
                 required_terms=[str(item).strip() for item in (section.get("required_terms") or []) if str(item).strip()],
@@ -10433,6 +10561,17 @@ def _apply_master_article_plan_to_phase_state(
     for source_section in normalized_body_sources:
         h2 = deterministic_body_headings[deterministic_heading_index]
         deterministic_heading_index += 1
+        required_elements = [
+            str(item).strip().lower()
+            for item in (source_section.get("required_elements") or [])
+            if str(item).strip()
+        ]
+        if not required_elements and len(converted_sections) == 0:
+            structured_mode = str(phase3.get("structured_content_mode") or "none").strip().lower()
+            if structured_mode == "table":
+                required_elements = ["table"]
+            elif structured_mode == "list":
+                required_elements = ["list"]
         converted_sections.append(
             {
                 "section_id": f"section_{len(converted_sections) + 1}",
@@ -10447,7 +10586,7 @@ def _apply_master_article_plan_to_phase_state(
                 },
                 "required_terms": [str(item).strip() for item in (source_section.get("required_terms") or []) if str(item).strip()],
                 "required_keywords": [],
-                "required_elements": [],
+                "required_elements": required_elements,
             }
         )
     converted_sections.append(
@@ -10631,6 +10770,11 @@ def _build_supervisor_approved_master_plan(
                 "goal": str(section.get("goal") or "").strip(),
                 "key_points": derived_terms[:3],
                 "required_terms": derived_terms,
+                "required_elements": [
+                    str(item).strip().lower()
+                    for item in (section.get("required_elements") or [])
+                    if str(item).strip()
+                ],
                 "target_min_words": target_words.get("min") or target_words.get("per_answer_min"),
                 "target_max_words": target_words.get("max") or target_words.get("per_answer_max"),
             }

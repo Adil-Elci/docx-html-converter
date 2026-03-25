@@ -133,6 +133,11 @@ class SectionPlan(SchemaBackedModel):
         max_length=8,
         description="Terms that should naturally appear in the section.",
     )
+    required_elements: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Structural elements such as table or list that must appear in the section.",
+    )
     target_min_words: Optional[int] = Field(default=None, ge=20, le=400, description="Minimum target word count.")
     target_max_words: Optional[int] = Field(default=None, ge=20, le=500, description="Maximum target word count.")
 

@@ -341,6 +341,97 @@ def test_apply_master_article_plan_normalizes_keyword_structure_and_backlink_def
     assert phase4["backlink_placement"] == "section_2"
 
 
+def test_apply_master_article_plan_preserves_required_elements_from_structured_mode() -> None:
+    phase3 = {
+        "final_article_topic": "Hausbaukosten einordnen: Welche Positionen vor dem Baustart realistisch zu prüfen sind",
+        "search_intent_type": "commercial_investigation",
+        "article_angle": "decision_criteria",
+        "primary_keyword": "hausbaukosten einordnen",
+        "secondary_keywords": ["baukosten planen", "kostenpuffer hausbau"],
+        "structured_content_mode": "table",
+        "topic_class": "real_estate",
+        "topic_signature": {
+            "subject_phrase": "hausbaukosten einordnen",
+            "question_phrase": "welche positionen vor dem baustart realistisch zu pruefen sind",
+            "semantic_entities": ["hausbaukosten", "kostenpuffer", "baunebenkosten"],
+            "support_topics_for_internal_links": [],
+        },
+        "specificity_profile": {
+            "topic": "Hausbaukosten einordnen",
+            "topic_class": "real_estate",
+            "intent_type": "commercial_investigation",
+            "min_specifics": 3,
+            "buckets": {
+                "costs": ["baunebenkosten", "eigenkapital", "kostenpuffer"],
+            },
+        },
+        "style_profile": {"audience": "Bauherren", "tone": "practical_informational"},
+        "title_package": {
+            "h1": "Hausbaukosten einordnen: Worauf Bauherren vor dem Start achten sollten",
+            "meta_title": "Hausbaukosten einordnen: Baunebenkosten und Puffer realistisch planen",
+            "slug": "hausbaukosten-einordnen",
+        },
+    }
+    master_plan = {
+        "publishing_site": {
+            "site_url": "https://publisher-two.example.com",
+            "fit_reason": "Strong fit for homeowners.",
+            "inventory_rationale": "Good supporting inventory.",
+            "confidence": 0.8,
+        },
+        "topic": phase3["final_article_topic"],
+        "intent_type": phase3["search_intent_type"],
+        "article_angle": phase3["article_angle"],
+        "audience": "Bauherren",
+        "tone": "practical_informational",
+        "differentiator": "Focuses on concrete cost positions instead of generic budgeting advice.",
+        "title_package": phase3["title_package"],
+        "keyword_strategy": {
+            "primary_keyword": "hausbaukosten einordnen",
+            "secondary_keywords": ["baukosten planen"],
+            "semantic_entities": ["baunebenkosten"],
+            "keyword_intent_note": "Matches practical cost-comparison intent.",
+        },
+        "backlink_plan": {
+            "strategy": "supporting_context",
+            "anchor_text": "mehr zu Hausbaukosten",
+            "placement_hint": "section_2",
+            "rationale": "Contextual support link.",
+        },
+        "image_strategy": {
+            "featured_prompt": "Editorial image of house-planning documents and a cost spreadsheet.",
+            "featured_alt": "Kostenplanung vor dem Hausbau",
+            "include_in_content": False,
+            "in_content_prompt": "",
+            "in_content_alt": "",
+        },
+        "faq_questions": [
+            "Welche Kosten werden oft unterschätzt?",
+            "Wie groß sollte der Puffer sein?",
+            "Wann hilft eine externe Prüfung?",
+        ],
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Kostenpositionen sollte man zuerst prüfen?",
+                "goal": "Ordne die wichtigsten Positionen ein.",
+                "required_terms": ["baunebenkosten", "kostenpuffer"],
+                "required_elements": ["table"],
+                "target_min_words": 100,
+                "target_max_words": 140,
+            }
+        ],
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "warnings": [],
+    }
+
+    phase4 = _apply_master_article_plan_to_phase_state(master_plan=master_plan, phase3=phase3)
+
+    assert "table" in phase4["sections"][0]["required_elements"]
+
+
 def test_supervisor_normalizes_loose_plan_fields() -> None:
     provider = _LooseSupervisorProvider()
     supervisor = CreatorSupervisor(provider=provider)
@@ -726,6 +817,112 @@ def test_build_supervisor_approved_master_plan_uses_normalized_phase4_contract()
     assert phase3["primary_keyword"] in approved.sections[1].required_terms
 
 
+def test_build_supervisor_approved_master_plan_preserves_required_elements() -> None:
+    phase3 = {
+        "final_article_topic": "Hausbaukosten einordnen: Welche Positionen vor dem Baustart realistisch zu prüfen sind",
+        "search_intent_type": "commercial_investigation",
+        "article_angle": "decision_criteria",
+        "primary_keyword": "hausbaukosten einordnen",
+        "secondary_keywords": ["baukosten planen"],
+        "keyword_buckets": {"semantic_entities": ["baunebenkosten", "kostenpuffer"]},
+        "content_brief": {"target_signals": ["Baunebenkosten"], "overlap_terms": ["Kostenpuffer"]},
+        "style_profile": {"audience": "Bauherren", "tone": "practical_informational"},
+        "title_package": {
+            "h1": "Hausbaukosten einordnen: Worauf Bauherren vor dem Start achten sollten",
+            "meta_title": "Hausbaukosten einordnen: Baunebenkosten und Puffer realistisch planen",
+            "slug": "hausbaukosten-einordnen",
+        },
+    }
+    master_plan = {
+        "publishing_site": {
+            "site_url": "https://publisher-two.example.com",
+            "fit_reason": "Strong fit for homeowners.",
+            "inventory_rationale": "Good supporting inventory.",
+            "confidence": 0.8,
+        },
+        "topic": phase3["final_article_topic"],
+        "intent_type": phase3["search_intent_type"],
+        "article_angle": phase3["article_angle"],
+        "audience": "Bauherren",
+        "tone": "practical_informational",
+        "differentiator": "Focuses on practical cost positions.",
+        "title_package": phase3["title_package"],
+        "keyword_strategy": {
+            "primary_keyword": "hausbaukosten einordnen",
+            "secondary_keywords": ["baukosten planen"],
+            "semantic_entities": ["baunebenkosten"],
+            "keyword_intent_note": "Matches practical cost-comparison intent.",
+        },
+        "backlink_plan": {
+            "strategy": "supporting_context",
+            "anchor_text": "mehr zu Hausbaukosten",
+            "placement_hint": "section_2",
+            "rationale": "Contextual support link.",
+        },
+        "image_strategy": {
+            "featured_prompt": "Editorial image of house-planning documents and a cost spreadsheet.",
+            "featured_alt": "Kostenplanung vor dem Hausbau",
+            "include_in_content": False,
+            "in_content_prompt": "",
+            "in_content_alt": "",
+        },
+        "faq_questions": [
+            "Welche Kosten werden oft unterschätzt?",
+            "Wie groß sollte der Puffer sein?",
+            "Wann hilft eine externe Prüfung?",
+        ],
+        "sections": [],
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "risk_notes": [],
+        "warnings": [],
+    }
+    phase4 = {
+        "faq_questions": master_plan["faq_questions"],
+        "backlink_placement": "section_2",
+        "anchor_text_final": "mehr zu Hausbaukosten",
+        "forbidden_phrases": [],
+        "quality_requirements": [],
+        "plan_warnings": [],
+        "specificity_profile": {
+            "buckets": {"costs": ["baunebenkosten", "kostenpuffer"]},
+            "min_specifics": 2,
+        },
+        "sections": [
+            {
+                "section_id": "section_1",
+                "kind": "body",
+                "h2": "Welche Kostenpositionen sollte man zuerst prüfen?",
+                "goal": "Ordne die wichtigsten Positionen ein.",
+                "required_terms": ["baunebenkosten", "kostenpuffer"],
+                "required_elements": ["table"],
+                "target_words": {"min": 100, "max": 140},
+            },
+            {
+                "section_id": "section_2",
+                "kind": "fazit",
+                "h2": "Fazit",
+                "goal": "Ziehe ein konkretes Fazit.",
+                "required_terms": ["hausbaukosten"],
+                "target_words": {"min": 70, "max": 95},
+            },
+            {
+                "section_id": "section_3",
+                "kind": "faq",
+                "h2": "FAQ",
+                "h3": master_plan["faq_questions"],
+                "goal": "Beantworte Rückfragen knapp und konkret.",
+                "required_terms": [],
+                "target_words": {"per_answer_min": 35, "per_answer_max": 55},
+            },
+        ],
+    }
+
+    approved = _build_supervisor_approved_master_plan(master_plan=master_plan, phase3=phase3, phase4=phase4)
+
+    assert approved.sections[0].required_elements == ["table"]
+
+
 def test_apply_master_article_plan_replaces_titles_missing_primary_keyword() -> None:
     phase3 = {
         "final_article_topic": "Hausbau vorbereiten: Was vor dem Baustart konkret zu klären ist",
@@ -793,4 +990,3 @@ def test_apply_master_article_plan_replaces_titles_missing_primary_keyword() -> 
 
     assert "hausbau vorbereiten" in phase4["h1"].lower()
     assert "hausbau vorbereiten" in phase3["title_package"]["meta_title"].lower()
-

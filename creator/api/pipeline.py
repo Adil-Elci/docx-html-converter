@@ -13451,7 +13451,12 @@ def run_creator_pipeline(
                 details={"attempt": attempt, "errors": validation_errors},
             )
             repaired_html = phase5_candidate["article_html"]
-            if any(_is_keyword_context_repairable_error(error) for error in validation_errors):
+            allow_legacy_keyword_context_repair = not (
+                supervisor_pipeline_enabled and isinstance(phase4.get("supervisor_master_plan"), dict)
+            )
+            if allow_legacy_keyword_context_repair and any(
+                _is_keyword_context_repairable_error(error) for error in validation_errors
+            ):
                 repaired_html = _repair_keyword_context_gaps(
                     article_html=repaired_html,
                     errors=validation_errors,
@@ -13505,6 +13510,17 @@ def run_creator_pipeline(
                         specificity_profile=phase3.get("specificity_profile"),
                         forbidden_phrases=phase3.get("forbidden_phrases") or phase4.get("forbidden_phrases") or [],
                     )
+            elif validation_errors and not allow_legacy_keyword_context_repair and any(
+                _is_keyword_context_repairable_error(error) for error in validation_errors
+            ):
+                _append_execution_trace_event(
+                    creator_trace,
+                    level="info",
+                    phase="phase5",
+                    event="legacy_keyword_repair_skipped",
+                    message="Legacy keyword-context repair was skipped for the supervisor pipeline.",
+                    details={"attempt": attempt},
+                )
             repairable_errors = _dedupe_string_values(
                 [error for error in validation_errors if _is_editorial_llm_repairable_error(error)]
             )

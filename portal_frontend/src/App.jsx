@@ -5312,6 +5312,17 @@ function WorkflowBoardPanel({
   const [editorOpen, setEditorOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
   const [columnDrafts, setColumnDrafts] = useState({});
+  const [collapsedColumnIds, setCollapsedColumnIds] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem("workflow_collapsed_columns_v1") || "[]");
+      return Array.isArray(parsed) ? parsed.map((item) => String(item || "")).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [openColumnMenuId, setOpenColumnMenuId] = useState("");
+  const [openCardMenuId, setOpenCardMenuId] = useState("");
 
   useEffect(() => {
     const nextDrafts = {};
@@ -5327,6 +5338,55 @@ function WorkflowBoardPanel({
     const created = await onCreateColumn(normalizedName);
     if (created) setNewColumnName("");
   };
+
+  useEffect(() => {
+    const allowedIds = new Set(columns.map((column) => String(column.id || "")));
+    setCollapsedColumnIds((current) => current.filter((columnId) => allowedIds.has(columnId)));
+  }, [columns]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("workflow_collapsed_columns_v1", JSON.stringify(collapsedColumnIds));
+  }, [collapsedColumnIds]);
+
+  const toggleColumnCollapsed = (columnId) => {
+    const normalizedColumnId = String(columnId || "");
+    if (!normalizedColumnId) return;
+    setCollapsedColumnIds((current) => (
+      current.includes(normalizedColumnId)
+        ? current.filter((item) => item !== normalizedColumnId)
+        : [...current, normalizedColumnId]
+    ));
+    setOpenColumnMenuId("");
+  };
+
+  const renameColumnFromMenu = async (column) => {
+    const currentName = String(column?.name || "").trim();
+    const nextName = window.prompt(t("workflowRenameColumnPrompt"), currentName);
+    if (nextName === null) return;
+    const normalizedName = nextName.trim();
+    if (!normalizedName || normalizedName === currentName) {
+      setOpenColumnMenuId("");
+      return;
+    }
+    await onRenameColumn(column.id, normalizedName);
+    setOpenColumnMenuId("");
+  };
+
+  const deleteColumnFromMenu = async (column) => {
+    const confirmed = window.confirm(
+      t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
+    );
+    if (!confirmed) return;
+    await onDeleteColumn(column.id);
+    setOpenColumnMenuId("");
+  };
+
+  const gridTemplateColumns = columns
+    .map((column) => (
+      collapsedColumnIds.includes(String(column.id || "")) ? "72px" : "minmax(280px, 1fr)"
+    ))
+    .join(" ");
 
   return (
     <div className="panel form-panel workflow-board-panel">
@@ -5473,12 +5533,16 @@ function WorkflowBoardPanel({
       {columns.length > 0 ? (
         <div
           className="workflow-board-columns"
-          style={{ "--workflow-column-count": String(Math.max(columns.length, 1)) }}
+          style={{ gridTemplateColumns: gridTemplateColumns || "minmax(280px, 1fr)" }}
         >
           {columns.map((column) => (
+            (() => {
+              const columnId = String(column.id || "");
+              const isCollapsed = collapsedColumnIds.includes(columnId);
+              return (
             <section
               key={column.id}
-              className="workflow-column"
+              className={`workflow-column ${isCollapsed ? "collapsed" : ""}`.trim()}
               onDragOver={(event) => {
                 event.preventDefault();
               }}
@@ -5499,54 +5563,155 @@ function WorkflowBoardPanel({
                     </span>
                   </div>
                 </div>
-                <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
+                <div className="workflow-column-header-actions">
+                  <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
+                  <div className="workflow-column-menu-wrap">
+                    <button
+                      className="workflow-menu-btn"
+                      type="button"
+                      onClick={() => setOpenColumnMenuId((current) => current === columnId ? "" : columnId)}
+                      aria-label={t("workflowColumnMenu")}
+                    >
+                      <span />
+                      <span />
+                      <span />
+                    </button>
+                    {openColumnMenuId === columnId ? (
+                      <div className="workflow-inline-menu">
+                        <button
+                          type="button"
+                          onClick={() => toggleColumnCollapsed(column.id)}
+                        >
+                          {isCollapsed ? t("workflowColumnExpand") : t("workflowColumnCollapse")}
+                        </button>
+                        {canManageColumns ? (
+                          <button type="button" onClick={() => renameColumnFromMenu(column)}>
+                            {t("workflowColumnRename")}
+                          </button>
+                        ) : null}
+                        {canManageColumns && !column.is_system ? (
+                          <button type="button" className="danger" onClick={() => deleteColumnFromMenu(column)}>
+                            {t("workflowColumnDelete")}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
 
               <div className="workflow-column-cards">
                 {(column.cards || []).map((card) => (
-                  <article
-                    key={card.id}
-                    className={`workflow-card ${(movingCardId && movingCardId === String(card.id)) ? "moving" : ""} ${(draggingCardId && draggingCardId === String(card.id)) ? "dragging" : ""}`.trim()}
-                    draggable={!movingCardId}
-                    onDragStart={(event) => {
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData("text/workflow-card-id", String(card.id));
-                      onDragStart(card.id);
-                    }}
-                    onDragEnd={onDragEnd}
-                  >
-                    <div className="workflow-card-top">
-                      <span className={`workflow-card-kind ${card.request_kind === "create_article" ? "create" : "submit"}`}>
-                        {card.request_kind === "create_article" ? t("workflowKindCreate") : t("workflowKindSubmit")}
-                      </span>
-                      <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
-                    </div>
-                    <strong className="workflow-card-title">{card.title}</strong>
-                    <div className="workflow-card-stack">
-                      <div className="workflow-card-meta">
-                        <span className="workflow-card-label">{t("workflowClientLabel")}</span>
-                        <span>{card.client_name}</span>
-                      </div>
-                      <div className="workflow-card-meta">
-                        <span className="workflow-card-label">{t("workflowSiteLabel")}</span>
-                        <span>{card.site_name || card.site_url}</span>
-                      </div>
-                    </div>
-                    <div className="workflow-card-footer">
-                      <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
-                      {card.wp_post_url ? (
-                        <a className="workflow-card-link" href={card.wp_post_url} target="_blank" rel="noreferrer">
-                          {t("viewPost")}
-                        </a>
-                      ) : null}
-                    </div>
-                    {card.last_error ? (
-                      <p className="workflow-card-error">{card.last_error}</p>
-                    ) : null}
-                  </article>
+                  (() => {
+                    const cardId = String(card.id || "");
+                    const columnIndex = columns.findIndex((item) => String(item.id || "") === columnId);
+                    const previousColumn = columnIndex > 0 ? columns[columnIndex - 1] : null;
+                    const nextColumn = columnIndex >= 0 && columnIndex < columns.length - 1 ? columns[columnIndex + 1] : null;
+                    return (
+                      <article
+                        key={card.id}
+                        className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""}`.trim()}
+                        draggable={!movingCardId}
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/workflow-card-id", String(card.id));
+                          onDragStart(card.id);
+                        }}
+                        onDragEnd={onDragEnd}
+                      >
+                        <div className="workflow-card-top">
+                          <span className={`workflow-card-kind ${card.request_kind === "create_article" ? "create" : "submit"}`}>
+                            {card.request_kind === "create_article" ? t("workflowKindCreate") : t("workflowKindSubmit")}
+                          </span>
+                          <div className="workflow-card-top-actions">
+                            <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
+                            <div className="workflow-card-menu-wrap">
+                              <button
+                                className="workflow-menu-btn"
+                                type="button"
+                                onClick={() => setOpenCardMenuId((current) => current === cardId ? "" : cardId)}
+                                aria-label={t("workflowCardActions")}
+                              >
+                                <span />
+                                <span />
+                                <span />
+                              </button>
+                              {openCardMenuId === cardId ? (
+                                <div className="workflow-inline-menu card-menu">
+                                  {previousColumn ? (
+                                    <button type="button" onClick={() => {
+                                      onMoveCard(card.id, previousColumn.id);
+                                      setOpenCardMenuId("");
+                                    }}>
+                                      {t("workflowCardMoveLeft")}
+                                    </button>
+                                  ) : null}
+                                  {nextColumn ? (
+                                    <button type="button" onClick={() => {
+                                      onMoveCard(card.id, nextColumn.id);
+                                      setOpenCardMenuId("");
+                                    }}>
+                                      {t("workflowCardMoveRight")}
+                                    </button>
+                                  ) : null}
+                                  {card.wp_post_url ? (
+                                    <a href={card.wp_post_url} target="_blank" rel="noreferrer">
+                                      {t("viewPost")}
+                                    </a>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                        <strong className="workflow-card-title">{card.title}</strong>
+                        <div className="workflow-card-stack">
+                          <div className="workflow-card-meta">
+                            <span className="workflow-card-label">{t("workflowClientLabel")}</span>
+                            <span>{card.client_name}</span>
+                          </div>
+                          <div className="workflow-card-meta">
+                            <span className="workflow-card-label">{t("workflowSiteLabel")}</span>
+                            <span>{card.site_name || card.site_url}</span>
+                          </div>
+                        </div>
+                        <div className="workflow-card-quick-actions">
+                          <button
+                            className="workflow-quick-action"
+                            type="button"
+                            onClick={() => previousColumn && onMoveCard(card.id, previousColumn.id)}
+                            disabled={!previousColumn || Boolean(movingCardId)}
+                          >
+                            {t("workflowCardMoveLeft")}
+                          </button>
+                          <button
+                            className="workflow-quick-action"
+                            type="button"
+                            onClick={() => nextColumn && onMoveCard(card.id, nextColumn.id)}
+                            disabled={!nextColumn || Boolean(movingCardId)}
+                          >
+                            {t("workflowCardMoveRight")}
+                          </button>
+                          {card.wp_post_url ? (
+                            <a className="workflow-quick-action link" href={card.wp_post_url} target="_blank" rel="noreferrer">
+                              {t("viewPost")}
+                            </a>
+                          ) : null}
+                        </div>
+                        <div className="workflow-card-footer">
+                          <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
+                        </div>
+                        {card.last_error ? (
+                          <p className="workflow-card-error">{card.last_error}</p>
+                        ) : null}
+                      </article>
+                    );
+                  })()
                 ))}
               </div>
             </section>
+              );
+            })()
           ))}
         </div>
       ) : null}

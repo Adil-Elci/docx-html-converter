@@ -5308,6 +5308,7 @@ function WorkflowBoardPanel({
   const openCardCount = Number(board?.open_card_count || 0);
   const completedCardCount = Number(board?.completed_card_count || 0);
   const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
+  const totalCardCount = openCardCount + completedCardCount;
   const [editorOpen, setEditorOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
   const [columnDrafts, setColumnDrafts] = useState({});
@@ -5330,74 +5331,85 @@ function WorkflowBoardPanel({
   return (
     <div className="panel form-panel workflow-board-panel">
       <div className="workflow-board-header">
-        <div>
+        <div className="workflow-board-heading">
           <h2>{t("workflowTitle")}</h2>
           <p className="muted-text">{t("workflowDescription")}</p>
         </div>
-        <button className="btn secondary small" type="button" onClick={onRefresh} disabled={loading || Boolean(movingCardId)}>
-          {loading ? t("loading") : t("refresh")}
-        </button>
-      </div>
-
-      <div className="workflow-board-meta">
-        <span>{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
-        <span>{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
-        <span>{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
-      </div>
-
-      {canManageColumns ? (
-        <div className="workflow-column-editor">
-          <div className="workflow-column-editor-header">
-            <div>
-              <h3>{t("workflowEditColumns")}</h3>
-              <p className="muted-text">{t("workflowEditColumnsDescription")}</p>
-            </div>
+        <div className="workflow-board-actions">
+          {canManageColumns ? (
             <button
-              className="btn secondary small"
+              className={`btn secondary small ${editorOpen ? "active" : ""}`.trim()}
               type="button"
               onClick={() => setEditorOpen((current) => !current)}
               disabled={loading || Boolean(movingCardId)}
             >
               {editorOpen ? t("workflowHideColumnEditor") : t("workflowEditColumns")}
             </button>
+          ) : null}
+          <button className="btn secondary small" type="button" onClick={onRefresh} disabled={loading || Boolean(movingCardId)}>
+            {loading ? t("loading") : t("refresh")}
+          </button>
+        </div>
+      </div>
+
+      <div className="workflow-board-toolbar">
+        <div className="workflow-board-meta">
+          <span className="workflow-meta-pill">{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
+          <span className="workflow-meta-pill">{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
+          <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(columns.length))}</span>
+          <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
+        </div>
+        <span className="workflow-updated-label">{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
+      </div>
+
+      {canManageColumns && editorOpen ? (
+        <div className="workflow-column-editor">
+          <div className="workflow-column-editor-header">
+            <div>
+              <h3>{t("workflowEditColumns")}</h3>
+              <p className="muted-text">{t("workflowEditColumnsDescription")}</p>
+            </div>
           </div>
 
-          {editorOpen ? (
-            <div className="workflow-column-editor-body">
-              <div className="workflow-column-editor-add">
-                <input
-                  type="text"
-                  value={newColumnName}
-                  onChange={(event) => setNewColumnName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      submitNewColumn();
-                    }
-                  }}
-                  placeholder={t("workflowColumnAddPlaceholder")}
-                  maxLength={80}
-                />
-                <button
-                  className="btn secondary small"
-                  type="button"
-                  onClick={submitNewColumn}
-                  disabled={columnCreating || !newColumnName.trim()}
-                >
-                  {columnCreating ? t("loading") : t("workflowAddColumn")}
-                </button>
-              </div>
+          <div className="workflow-column-editor-body">
+            <div className="workflow-column-editor-add">
+              <input
+                type="text"
+                value={newColumnName}
+                onChange={(event) => setNewColumnName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitNewColumn();
+                  }
+                }}
+                placeholder={t("workflowColumnAddPlaceholder")}
+                maxLength={80}
+              />
+              <button
+                className="btn small"
+                type="button"
+                onClick={submitNewColumn}
+                disabled={columnCreating || !newColumnName.trim()}
+              >
+                {columnCreating ? t("loading") : t("workflowAddColumn")}
+              </button>
+            </div>
 
-              <div className="workflow-column-editor-list">
-                {columns.map((column) => {
-                  const columnId = String(column.id || "");
-                  const draftName = String(columnDrafts[column.id] ?? column.name ?? "");
-                  const normalizedDraftName = draftName.trim();
-                  const normalizedCurrentName = String(column.name || "").trim();
-                  const saveDisabled = !normalizedDraftName || normalizedDraftName === normalizedCurrentName;
-                  const rowBusy = columnSavingId === columnId || columnDeletingId === columnId;
-                  return (
-                    <div key={column.id} className="workflow-column-editor-row">
+            <div className="workflow-column-editor-list">
+              {columns.map((column) => {
+                const columnId = String(column.id || "");
+                const draftName = String(columnDrafts[column.id] ?? column.name ?? "");
+                const normalizedDraftName = draftName.trim();
+                const normalizedCurrentName = String(column.name || "").trim();
+                const saveDisabled = !normalizedDraftName || normalizedDraftName === normalizedCurrentName;
+                const rowBusy = columnSavingId === columnId || columnDeletingId === columnId;
+                return (
+                  <div key={column.id} className="workflow-column-editor-row">
+                    <div className="workflow-column-editor-row-copy">
+                      <span className="workflow-column-editor-chip">
+                        {Array.isArray(column.cards) ? column.cards.length : 0}
+                      </span>
                       <input
                         type="text"
                         value={draftName}
@@ -5412,39 +5424,39 @@ function WorkflowBoardPanel({
                         disabled={rowBusy}
                         aria-label={t("workflowColumnName")}
                       />
-                      <div className="workflow-column-editor-actions">
-                        <button
-                          className="btn secondary small"
-                          type="button"
-                          onClick={() => onRenameColumn(column.id, normalizedDraftName)}
-                          disabled={rowBusy || saveDisabled}
-                        >
-                          {columnSavingId === columnId ? t("loading") : t("workflowColumnSave")}
-                        </button>
-                        {column.is_system ? (
-                          <span className="workflow-column-editor-locked">{t("workflowSystemColumnLocked")}</span>
-                        ) : (
-                          <button
-                            className="btn ghost small danger"
-                            type="button"
-                            onClick={() => {
-                              const confirmed = window.confirm(
-                                t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
-                              );
-                              if (confirmed) onDeleteColumn(column.id);
-                            }}
-                            disabled={rowBusy}
-                          >
-                            {columnDeletingId === columnId ? t("loading") : t("workflowColumnDelete")}
-                          </button>
-                        )}
-                      </div>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="workflow-column-editor-actions">
+                      <button
+                        className="btn secondary small"
+                        type="button"
+                        onClick={() => onRenameColumn(column.id, normalizedDraftName)}
+                        disabled={rowBusy || saveDisabled}
+                      >
+                        {columnSavingId === columnId ? t("loading") : t("workflowColumnSave")}
+                      </button>
+                      {column.is_system ? (
+                        <span className="workflow-column-editor-locked">{t("workflowSystemColumnLocked")}</span>
+                      ) : (
+                        <button
+                          className="btn ghost small danger"
+                          type="button"
+                          onClick={() => {
+                            const confirmed = window.confirm(
+                              t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
+                            );
+                            if (confirmed) onDeleteColumn(column.id);
+                          }}
+                          disabled={rowBusy}
+                        >
+                          {columnDeletingId === columnId ? t("loading") : t("workflowColumnDelete")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -5464,7 +5476,7 @@ function WorkflowBoardPanel({
           style={{ "--workflow-column-count": String(Math.max(columns.length, 1)) }}
         >
           {columns.map((column) => (
-            <div
+            <section
               key={column.id}
               className="workflow-column"
               onDragOver={(event) => {
@@ -5480,7 +5492,12 @@ function WorkflowBoardPanel({
               <div className="workflow-column-header">
                 <div className="workflow-column-title-row">
                   <span className="workflow-column-color" style={{ backgroundColor: column.color || "var(--accent)" }} />
-                  <h3>{column.name || t("workflowColumnName")}</h3>
+                  <div className="workflow-column-title-copy">
+                    <h3>{column.name || t("workflowColumnName")}</h3>
+                    <span className="workflow-column-subtitle">
+                      {t("workflowColumnCards").replace("{count}", String(Array.isArray(column.cards) ? column.cards.length : 0))}
+                    </span>
+                  </div>
                 </div>
                 <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
               </div>
@@ -5504,26 +5521,32 @@ function WorkflowBoardPanel({
                       </span>
                       <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
                     </div>
-                    <strong>{card.title}</strong>
-                    <div className="workflow-card-meta">
-                      <span>{card.client_name}</span>
-                      <span>{card.site_name || card.site_url}</span>
+                    <strong className="workflow-card-title">{card.title}</strong>
+                    <div className="workflow-card-stack">
+                      <div className="workflow-card-meta">
+                        <span className="workflow-card-label">{t("workflowClientLabel")}</span>
+                        <span>{card.client_name}</span>
+                      </div>
+                      <div className="workflow-card-meta">
+                        <span className="workflow-card-label">{t("workflowSiteLabel")}</span>
+                        <span>{card.site_name || card.site_url}</span>
+                      </div>
                     </div>
-                    <div className="workflow-card-meta">
+                    <div className="workflow-card-footer">
                       <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
+                      {card.wp_post_url ? (
+                        <a className="workflow-card-link" href={card.wp_post_url} target="_blank" rel="noreferrer">
+                          {t("viewPost")}
+                        </a>
+                      ) : null}
                     </div>
                     {card.last_error ? (
                       <p className="workflow-card-error">{card.last_error}</p>
                     ) : null}
-                    {card.wp_post_url ? (
-                      <a className="workflow-card-link" href={card.wp_post_url} target="_blank" rel="noreferrer">
-                        {t("viewPost")}
-                      </a>
-                    ) : null}
                   </article>
                 ))}
               </div>
-            </div>
+            </section>
           ))}
         </div>
       ) : null}

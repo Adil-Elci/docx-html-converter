@@ -5603,6 +5603,17 @@ function WorkflowBoardPanel({
     setOpenCardMenuId("");
   };
 
+  const resetCreateCardForm = () => {
+    setCreateCardOpen(false);
+    setCreateCardForm({
+      title: "",
+      job_type: "",
+      description: "",
+      client_id: "",
+      site_id: "",
+    });
+  };
+
   const submitManualCard = async () => {
     if (cardCreateBusy) return;
     const title = createCardForm.title.trim();
@@ -5619,14 +5630,7 @@ function WorkflowBoardPanel({
     });
     setCardCreateBusy(false);
     if (!created) return;
-    setCreateCardOpen(false);
-    setCreateCardForm({
-      title: "",
-      job_type: "",
-      description: "",
-      client_id: "",
-      site_id: "",
-    });
+    resetCreateCardForm();
   };
 
   const submitComment = async (cardId) => {
@@ -5927,92 +5931,15 @@ function WorkflowBoardPanel({
 
                 <div className="workflow-column-cards">
                   {isTodoColumn && !isCollapsed ? (
-                    <div className={`workflow-create-card ${createCardOpen ? "open" : ""}`.trim()}>
-                      {!createCardOpen ? (
-                        <button
-                          className="workflow-create-card-trigger"
-                          type="button"
-                          onClick={() => setCreateCardOpen(true)}
-                          disabled={cardCreateBusy || Boolean(movingCardId)}
-                        >
-                          {t("workflowCreateCard")}
-                        </button>
-                      ) : (
-                        <div className="workflow-create-card-form">
-                          <div className="workflow-create-card-form-row">
-                            <input
-                              type="text"
-                              value={createCardForm.title}
-                              onChange={(event) => setCreateCardForm((current) => ({ ...current, title: event.target.value }))}
-                              placeholder={t("workflowCreateCardTitlePlaceholder")}
-                              maxLength={160}
-                            />
-                            <select
-                              value={createCardForm.job_type}
-                              onChange={(event) => setCreateCardForm((current) => ({ ...current, job_type: event.target.value }))}
-                            >
-                              <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
-                              {jobTypeOptions.map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="workflow-create-card-form-row two-up">
-                            <select
-                              value={createCardForm.client_id}
-                              onChange={(event) => setCreateCardForm((current) => ({ ...current, client_id: event.target.value }))}
-                            >
-                              <option value="">{t("workflowNoClient")}</option>
-                              {availableClients.map((client) => (
-                                <option key={client.id} value={client.id}>{client.name}</option>
-                              ))}
-                            </select>
-                            <select
-                              value={createCardForm.site_id}
-                              onChange={(event) => setCreateCardForm((current) => ({ ...current, site_id: event.target.value }))}
-                            >
-                              <option value="">{t("workflowNoSite")}</option>
-                              {availableSites.map((site) => (
-                                <option key={site.id} value={site.id}>{site.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <textarea
-                            value={createCardForm.description}
-                            onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
-                            placeholder={t("workflowCreateCardDescriptionPlaceholder")}
-                            rows={3}
-                            maxLength={4000}
-                          />
-                          <div className="workflow-create-card-actions">
-                            <button
-                              className="btn ghost small"
-                              type="button"
-                              onClick={() => {
-                                setCreateCardOpen(false);
-                                setCreateCardForm({
-                                  title: "",
-                                  job_type: "",
-                                  description: "",
-                                  client_id: "",
-                                  site_id: "",
-                                });
-                              }}
-                              disabled={cardCreateBusy}
-                            >
-                              {t("cancel")}
-                            </button>
-                            <button
-                              className="btn small"
-                              type="button"
-                              onClick={submitManualCard}
-                              disabled={cardCreateBusy || !createCardForm.title.trim() || !createCardForm.job_type.trim()}
-                            >
-                              {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                    <div className="workflow-create-card">
+                      <button
+                        className="workflow-create-card-trigger"
+                        type="button"
+                        onClick={() => setCreateCardOpen(true)}
+                        disabled={cardCreateBusy || Boolean(movingCardId)}
+                      >
+                        {t("workflowCreateCard")}
+                      </button>
                     </div>
                   ) : null}
 
@@ -6291,6 +6218,90 @@ function WorkflowBoardPanel({
               </section>
             );
           })}
+        </div>
+      ) : null}
+
+      {createCardOpen ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workflow-create-card-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !cardCreateBusy) {
+              resetCreateCardForm();
+            }
+          }}
+        >
+          <div className="modal-card panel workflow-create-card-modal">
+            <h3 id="workflow-create-card-title">{t("workflowCreateCard")}</h3>
+            <div className="workflow-create-card-form">
+              <div className="workflow-create-card-form-row">
+                <input
+                  type="text"
+                  value={createCardForm.title}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, title: event.target.value }))}
+                  placeholder={t("workflowCreateCardTitlePlaceholder")}
+                  maxLength={160}
+                  autoFocus
+                />
+                <select
+                  value={createCardForm.job_type}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, job_type: event.target.value }))}
+                >
+                  <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
+                  {jobTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="workflow-create-card-form-row two-up">
+                <select
+                  value={createCardForm.client_id}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, client_id: event.target.value }))}
+                >
+                  <option value="">{t("workflowNoClient")}</option>
+                  {availableClients.map((client) => (
+                    <option key={client.id} value={client.id}>{client.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={createCardForm.site_id}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, site_id: event.target.value }))}
+                >
+                  <option value="">{t("workflowNoSite")}</option>
+                  {availableSites.map((site) => (
+                    <option key={site.id} value={site.id}>{site.name}</option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                value={createCardForm.description}
+                onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
+                placeholder={t("workflowCreateCardDescriptionPlaceholder")}
+                rows={4}
+                maxLength={4000}
+              />
+              <div className="modal-actions workflow-create-card-actions">
+                <button
+                  className="btn ghost small"
+                  type="button"
+                  onClick={resetCreateCardForm}
+                  disabled={cardCreateBusy}
+                >
+                  {t("cancel")}
+                </button>
+                <button
+                  className="btn small"
+                  type="button"
+                  onClick={submitManualCard}
+                  disabled={cardCreateBusy || !createCardForm.title.trim() || !createCardForm.job_type.trim()}
+                >
+                  {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

@@ -2436,11 +2436,13 @@ input:disabled {
   max-width: none;
   width: 100%;
   justify-self: stretch;
-  padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 82%, #a8b6cf);
+  padding: 22px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow-lg);
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, white) 0%, color-mix(in srgb, var(--panel) 98%, white) 100%);
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 94%, transparent) 0%, color-mix(in srgb, var(--panel) 98%, transparent) 100%);
 }
 
 .workflow-board-header {
@@ -2478,7 +2480,7 @@ input:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  color: var(--text);
+  color: var(--ink);
   font-size: 12px;
 }
 
@@ -2488,14 +2490,14 @@ input:disabled {
   min-height: 30px;
   padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 75%, #b2bfd4);
-  background: color-mix(in srgb, var(--panel) 88%, white);
-  color: var(--text-dim);
+  border: 1px solid var(--border-dim);
+  background: color-mix(in srgb, var(--panel-3) 88%, transparent);
+  color: var(--ink-secondary);
   font-weight: 700;
 }
 
 .workflow-updated-label {
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 12px;
 }
 
@@ -2504,21 +2506,27 @@ input:disabled {
   gap: 10px;
   grid-template-columns: repeat(4, minmax(0, 180px)) auto;
   align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) + 2px);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-3) 86%, transparent), color-mix(in srgb, var(--panel) 94%, transparent));
 }
 
 .workflow-filter-bar select,
 .workflow-filter-bar input {
   min-width: 0;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  border-color: var(--border-dim);
 }
 
 .workflow-column-editor {
   display: grid;
   gap: var(--space-3);
   padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 75%, #b2bfd4);
+  border: 1px solid var(--border-subtle);
   border-radius: calc(var(--radius) + 2px);
-  background: color-mix(in srgb, var(--panel) 94%, white);
-  box-shadow: 0 10px 26px color-mix(in srgb, #0f172a 7%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-3) 80%, transparent), color-mix(in srgb, var(--panel) 94%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .workflow-column-editor-header {
@@ -2548,9 +2556,9 @@ input:disabled {
 
 .workflow-column-editor-row {
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 76%, #bbc7da);
+  border: 1px solid var(--border-dim);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel-2) 45%, white);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
 }
 
 .workflow-column-editor-row-copy {
@@ -2568,8 +2576,8 @@ input:disabled {
   height: 28px;
   padding: 0 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, white);
-  color: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 88%, white);
   font-size: 12px;
   font-weight: 700;
 }
@@ -2583,7 +2591,7 @@ input:disabled {
 }
 
 .workflow-column-editor-locked {
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 12px;
   font-weight: 700;
 }
@@ -2593,7 +2601,7 @@ input:disabled {
   grid-template-columns: repeat(var(--workflow-column-count, 1), minmax(0, 1fr));
   gap: var(--space-3);
   overflow-x: auto;
-  padding-bottom: 6px;
+  padding: 2px 2px 8px;
   min-width: 100%;
   width: 100%;
   align-items: start;
@@ -2605,11 +2613,11 @@ input:disabled {
   align-content: start;
   min-height: 480px;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 80%, #bdc8da);
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
   border-radius: calc(var(--radius) + 4px);
-  background: linear-gradient(180deg, #f7f8fb 0%, color-mix(in srgb, var(--panel-2) 82%, white) 100%);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 70%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-3) 92%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 0 rgba(255, 255, 255, 0.02);
   isolation: isolate;
 }
 
@@ -2643,6 +2651,7 @@ input:disabled {
   font-size: 14px;
   line-height: 1.25;
   letter-spacing: 0.01em;
+  color: var(--ink);
 }
 
 .workflow-column-title-copy {
@@ -2672,7 +2681,7 @@ input:disabled {
 }
 
 .workflow-column-subtitle {
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -2705,8 +2714,9 @@ input:disabled {
   height: 28px;
   padding: 0 8px;
   border-radius: 10px;
-  background: color-mix(in srgb, #dbe4f0 78%, white);
-  color: color-mix(in srgb, var(--ink) 72%, #415166);
+  border: 1px solid var(--border-dim);
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  color: var(--ink-secondary);
   font-size: 12px;
   font-weight: 700;
 }
@@ -2738,19 +2748,19 @@ input:disabled {
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 78%, #bdc8da);
+  border: 1px solid var(--border-dim);
   border-radius: 8px;
-  background: color-mix(in srgb, white 92%, var(--panel));
-  color: var(--text-dim);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  color: var(--ink-secondary);
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .workflow-menu-btn:hover,
 .workflow-menu-btn:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 30%, #9db4d8);
-  background: color-mix(in srgb, var(--accent) 8%, white);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-elevated));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
   outline: none;
 }
 
@@ -2770,10 +2780,10 @@ input:disabled {
   display: grid;
   min-width: 180px;
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 76%, #bdc8da);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+  background: color-mix(in srgb, var(--panel-2) 96%, transparent);
+  box-shadow: var(--shadow-lg);
   backdrop-filter: blur(12px);
 }
 
@@ -2791,7 +2801,7 @@ input:disabled {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--text);
+  color: var(--ink);
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
@@ -2803,7 +2813,7 @@ input:disabled {
 .workflow-inline-menu button:focus-visible,
 .workflow-inline-menu a:hover,
 .workflow-inline-menu a:focus-visible {
-  background: color-mix(in srgb, var(--accent) 9%, white);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   outline: none;
 }
 
@@ -2837,10 +2847,10 @@ input:disabled {
   justify-content: center;
   min-height: 48px;
   padding: 0 14px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 28%, #9db4d8);
+  border: 1px dashed color-mix(in srgb, var(--accent) 34%, var(--border));
   border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 7%, white);
-  color: var(--accent-hover);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, transparent), color-mix(in srgb, var(--panel-3) 96%, transparent));
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
   font-weight: 700;
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
@@ -2848,8 +2858,8 @@ input:disabled {
 
 .workflow-create-card-trigger:hover,
 .workflow-create-card-trigger:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 40%, #7f9dd0);
-  background: color-mix(in srgb, var(--accent) 11%, white);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--panel-3) 96%, transparent));
   transform: translateY(-1px);
   outline: none;
 }
@@ -2858,14 +2868,15 @@ input:disabled {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 14%, #bdc8da);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-3) 82%, transparent), color-mix(in srgb, var(--panel) 96%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .workflow-create-card-modal {
   width: min(720px, calc(100vw - 32px));
+  max-width: 720px;
 }
 
 .workflow-create-card-form-row {
@@ -2900,17 +2911,17 @@ input:disabled {
   display: grid;
   gap: 12px;
   padding: 12px;
-  border: 1px solid color-mix(in srgb, #c7d1e0 86%, white);
+  border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
   cursor: grab;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 10px 20px rgba(15, 23, 42, 0.03);
+  box-shadow: 0 10px 20px rgba(4, 8, 16, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
 }
 
 .workflow-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 26%, #9db4d8);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  box-shadow: 0 14px 26px rgba(4, 8, 16, 0.24), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   transform: translateY(-2px);
 }
 
@@ -2948,27 +2959,27 @@ input:disabled {
 }
 
 .workflow-card-kind.submit {
-  background: color-mix(in srgb, #deebff 88%, white);
-  color: #1d5fbf;
+  background: color-mix(in srgb, #0c66e4 20%, transparent);
+  color: #8fc0ff;
 }
 
 .workflow-card-kind.create {
-  background: color-mix(in srgb, #e6fcf1 90%, white);
-  color: #1b7f52;
+  background: color-mix(in srgb, #1f845a 20%, transparent);
+  color: #83dbb4;
 }
 
 .workflow-card-kind.manual {
-  background: color-mix(in srgb, #ede7ff 88%, white);
-  color: #5a3ec8;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: #b6c4ff;
 }
 
 .workflow-card-status {
-  background: color-mix(in srgb, #eef2f8 92%, white);
-  color: #526071;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  color: var(--ink-secondary);
 }
 
 .workflow-card-meta {
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 12px;
 }
 
@@ -2978,7 +2989,7 @@ input:disabled {
 }
 
 .workflow-card-label {
-  color: color-mix(in srgb, var(--text-dim) 90%, #64748b);
+  color: color-mix(in srgb, var(--ink-secondary) 88%, transparent);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2987,11 +2998,12 @@ input:disabled {
 
 .workflow-card-title {
   line-height: 1.35;
+  color: var(--ink);
 }
 
 .workflow-card-description {
   margin: -4px 0 0;
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -3017,18 +3029,20 @@ input:disabled {
 }
 
 .workflow-card-job-type {
-  background: color-mix(in srgb, #eef2f8 88%, white);
-  color: #526071;
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  color: var(--ink-secondary);
 }
 
 .workflow-card-flag.bug {
-  background: color-mix(in srgb, #f87171 18%, white);
-  color: #b42318;
+  background: color-mix(in srgb, #f87171 22%, transparent);
+  color: #ff9ba6;
+  border: 1px solid color-mix(in srgb, #f87171 26%, transparent);
 }
 
 .workflow-card-flag.attention {
-  background: color-mix(in srgb, #facc15 24%, white);
-  color: #935f00;
+  background: color-mix(in srgb, #facc15 18%, transparent);
+  color: #ffd774;
+  border: 1px solid color-mix(in srgb, #facc15 24%, transparent);
 }
 
 .workflow-card-quick-actions {
@@ -3044,10 +3058,10 @@ input:disabled {
   justify-content: center;
   min-height: 30px;
   padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 78%, #bdc8da);
+  border: 1px solid var(--border-dim);
   border-radius: 999px;
-  background: color-mix(in srgb, #eef2f8 88%, white);
-  color: var(--text-dim);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  color: var(--ink-secondary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -3059,9 +3073,9 @@ input:disabled {
 .workflow-quick-action:focus-visible:not(:disabled),
 .workflow-quick-action.link:hover,
 .workflow-quick-action.link:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 30%, #9db4d8);
-  background: color-mix(in srgb, var(--accent) 10%, white);
-  color: var(--accent-hover);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
   outline: none;
 }
 
@@ -3075,16 +3089,16 @@ input:disabled {
 }
 
 .workflow-quick-action.active {
-  border-color: color-mix(in srgb, var(--accent) 34%, #9db4d8);
-  background: color-mix(in srgb, var(--accent) 12%, white);
-  color: var(--accent-hover);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
 }
 
 .workflow-card-comments {
   display: grid;
   gap: 10px;
   padding-top: 2px;
-  border-top: 1px solid color-mix(in srgb, var(--border-dim) 78%, #d0d8e5);
+  border-top: 1px solid var(--border-dim);
 }
 
 .workflow-card-comments-list,
@@ -3096,7 +3110,7 @@ input:disabled {
 
 .workflow-comments-empty {
   margin: 0;
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 12px;
 }
 
@@ -3104,9 +3118,9 @@ input:disabled {
   display: grid;
   gap: 8px;
   padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--border-dim) 78%, #d0d8e5);
+  border: 1px solid var(--border-dim);
   border-radius: 10px;
-  background: color-mix(in srgb, #f6f8fb 92%, white);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
 }
 
 .workflow-comment-header {
@@ -3114,18 +3128,18 @@ input:disabled {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 11px;
 }
 
 .workflow-comment-header strong {
-  color: var(--text);
+  color: var(--ink);
   font-size: 12px;
 }
 
 .workflow-comment-body {
   margin: 0;
-  color: var(--text);
+  color: var(--ink);
   font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -3136,7 +3150,7 @@ input:disabled {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--accent-hover);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -3148,7 +3162,7 @@ input:disabled {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  color: var(--text-dim);
+  color: var(--ink-secondary);
   font-size: 12px;
 }
 
@@ -3158,8 +3172,8 @@ input:disabled {
   color: var(--danger);
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--danger) 10%, white);
-  border: 1px solid color-mix(in srgb, var(--danger) 18%, #efc0c7);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, transparent);
 }
 
 .workflow-card-link {

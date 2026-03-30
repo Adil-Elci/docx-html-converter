@@ -5399,7 +5399,6 @@ function WorkflowBoardPanel({
     { value: "articles", label: t("workflowJobTypeArticles") },
     { value: "develop", label: t("workflowJobTypeDevelop") },
     { value: "fix", label: t("workflowJobTypeFix") },
-    { value: "build", label: t("workflowJobTypeBuild") },
   ];
   void clients;
   void sites;
@@ -5501,7 +5500,8 @@ function WorkflowBoardPanel({
 
   const cardMatchesFilters = (card) => {
     const createdBy = String(card?.created_by_name || "").trim().toLowerCase();
-    const cardJobType = String(card?.job_type || "").trim().toLowerCase();
+    const rawCardJobType = String(card?.job_type || "").trim().toLowerCase();
+    const cardJobType = rawCardJobType === "build" ? "develop" : rawCardJobType;
     const createdAt = card?.created_at ? new Date(card.created_at) : null;
     if (filterUser && createdBy !== filterUser.trim().toLowerCase()) return false;
     if (filterJobType && cardJobType !== filterJobType.trim().toLowerCase()) return false;
@@ -5540,9 +5540,8 @@ function WorkflowBoardPanel({
   const getJobTypeLabel = (jobType) => {
     const normalized = String(jobType || "").trim().toLowerCase();
     if (normalized === "articles") return t("workflowJobTypeArticles");
-    if (normalized === "develop") return t("workflowJobTypeDevelop");
+    if (normalized === "develop" || normalized === "build") return t("workflowJobTypeDevelop");
     if (normalized === "fix") return t("workflowJobTypeFix");
-    if (normalized === "build") return t("workflowJobTypeBuild");
     return normalized || t("notAvailable");
   };
 

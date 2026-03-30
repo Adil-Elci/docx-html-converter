@@ -5,6 +5,7 @@ __pycache__/
 .env
 converter/.env
 portal_backend/.env
+portal_backend/.env.live
 portal_frontend/.env
 .venv/
 node_modules/

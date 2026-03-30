@@ -15,6 +15,8 @@ from .portal_models import ClientUser, User
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SUPER_ADMIN_EMAIL = "aat@elci.cloud"
+SUPER_ADMIN_ROLE = "super_admin"
+ADMIN_ROLES = {"admin", SUPER_ADMIN_ROLE}
 
 
 def hash_password(raw_password: str) -> str:
@@ -114,8 +116,22 @@ def get_current_user(
     return user
 
 
+def is_admin_role(role: Optional[str]) -> bool:
+    return (role or "").strip().lower() in ADMIN_ROLES
+
+
+def is_admin(user: Optional[User]) -> bool:
+    if user is None:
+        return False
+    return is_admin_role(user.role)
+
+
+def is_super_admin_email(email: Optional[str]) -> bool:
+    return (email or "").strip().lower() == SUPER_ADMIN_EMAIL
+
+
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
     return current_user
 
@@ -123,7 +139,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 def is_super_admin(user: Optional[User]) -> bool:
     if user is None:
         return False
-    return (user.role or "").strip().lower() == "admin" and (user.email or "").strip().lower() == SUPER_ADMIN_EMAIL
+    return (user.role or "").strip().lower() == SUPER_ADMIN_ROLE and is_super_admin_email(user.email)
 
 
 def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -161,7 +177,7 @@ def get_optional_current_user(
 
 
 def user_client_ids(db: Session, user: User) -> Set[UUID]:
-    if user.role == "admin":
+    if is_admin(user):
         rows = db.query(ClientUser.client_id).all()
     else:
         rows = db.query(ClientUser.client_id).filter(ClientUser.user_id == user.id).all()
@@ -169,7 +185,7 @@ def user_client_ids(db: Session, user: User) -> Set[UUID]:
 
 
 def ensure_client_access(db: Session, user: User, client_id: UUID) -> None:
-    if user.role == "admin":
+    if is_admin(user):
         return
     allowed_client_ids = user_client_ids(db, user)
     if client_id not in allowed_client_ids:

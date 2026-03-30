@@ -10,6 +10,7 @@ from ..auth import (
     ensure_client_access,
     ensure_site_access,
     get_current_user,
+    is_admin,
     require_admin,
     user_client_ids,
 )
@@ -80,18 +81,18 @@ def list_submissions(
     current_user: User = Depends(get_current_user),
 ) -> List[SubmissionOut]:
     query = db.query(Submission)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         allowed_client_ids = user_client_ids(db, current_user)
         if not allowed_client_ids:
             return []
         query = query.filter(Submission.client_id.in_(allowed_client_ids))
 
     if client_id is not None:
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_client_access(db, current_user, client_id)
         query = query.filter(Submission.client_id == client_id)
     if site_id is not None:
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_site_access(db, current_user, site_id)
         query = query.filter(Submission.site_id == site_id)
     if status_filter:
@@ -107,7 +108,7 @@ def create_submission(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> SubmissionOut:
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, payload.client_id)
         ensure_site_access(db, current_user, payload.site_id)
     _require_active_client(db, payload.client_id)
@@ -145,7 +146,7 @@ def get_submission(
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, submission.client_id)
         ensure_site_access(db, current_user, submission.site_id)
     return _submission_to_out(submission)
@@ -161,7 +162,7 @@ def update_submission(
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
     if not submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, submission.client_id)
         ensure_site_access(db, current_user, submission.site_id)
         if payload.client_id is not None and payload.client_id != submission.client_id:

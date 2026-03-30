@@ -96,6 +96,12 @@ const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
 const SUPER_ADMIN_EMAIL = "aat@elci.cloud";
+const isAdminRole = (role) => {
+  const normalized = (role || "").trim().toLowerCase();
+  return normalized === "admin" || normalized === "super_admin";
+};
+const isClientRole = (role) => (role || "").trim().toLowerCase() === "client";
+const getRoleStorageBucket = (role) => (isAdminRole(role) ? "admin" : "client");
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
@@ -124,11 +130,11 @@ const clientPortalHost = normalizeHost(import.meta.env.VITE_CLIENT_PORTAL_HOST) 
 const adminPortalHost = normalizeHost(import.meta.env.VITE_ADMIN_PORTAL_HOST) || defaultAdminPortalHost;
 const dbUpdaterHost = normalizeHost(import.meta.env.VITE_DB_UPDATER_HOST) || defaultDbUpdaterHost;
 
-const getDefaultSectionForRole = (role) => (role === "admin" ? "admin" : "dashboard");
+const getDefaultSectionForRole = (role) => (isAdminRole(role) ? "admin" : "dashboard");
 
-const getAllowedSectionsForRole = (role) => (role === "admin" ? ADMIN_SECTIONS : CLIENT_SECTIONS);
+const getAllowedSectionsForRole = (role) => (isAdminRole(role) ? ADMIN_SECTIONS : CLIENT_SECTIONS);
 
-const getStoredSectionForRole = (role) => (localStorage.getItem(`active_section_${role}`) || "").trim();
+const getStoredSectionForRole = (role) => (localStorage.getItem(`active_section_${getRoleStorageBucket(role)}`) || "").trim();
 
 const resolveSectionForRole = (role, section) => {
   const allowed = getAllowedSectionsForRole(role);
@@ -136,7 +142,7 @@ const resolveSectionForRole = (role, section) => {
 };
 
 const getLandingSectionForRole = (role) =>
-  role === "admin" ? getDefaultSectionForRole(role) : resolveSectionForRole(role, getStoredSectionForRole(role));
+  isAdminRole(role) ? getDefaultSectionForRole(role) : resolveSectionForRole(role, getStoredSectionForRole(role));
 
 const getUserStorageSuffix = (user) => (
   (user?.id || user?.email || user?.role || "default").toString().trim().toLowerCase()
@@ -318,7 +324,7 @@ export default function App() {
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
   const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
-  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+  const isSuperAdmin = isAdminRole(currentUser?.role) && ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -585,7 +591,7 @@ export default function App() {
   }, [currentUser?.role]);
 
   useEffect(() => {
-    if (currentUser?.role !== "client") return;
+    if (!isClientRole(currentUser?.role)) return;
     const targetSites = getClientTargetSites();
     if (!targetSites.length) return;
     const validIds = new Set(targetSites.map((row) => String(row.id || "")).filter(Boolean));
@@ -608,7 +614,7 @@ export default function App() {
   }, [clients, currentUser?.role]);
 
   useEffect(() => {
-    if (currentUser?.role !== "client") return;
+    if (!isClientRole(currentUser?.role)) return;
     const fallbackClientName = ((clients[0]?.name) || "").trim();
     if (!fallbackClientName) return;
     updateAllSubmissionBlocks((prev) => prev.map((block) => (
@@ -717,17 +723,17 @@ export default function App() {
       document.title = "Elci Solutions Portal";
       return;
     }
-    document.title = currentUser.role === "admin" ? "Admin Portal | Elci Solutions" : "Clients Portal | Elci Solutions";
+    document.title = isAdminRole(currentUser.role) ? "Admin Portal | Elci Solutions" : "Clients Portal | Elci Solutions";
   }, [currentUser, isDbUpdaterDomain]);
 
   const loadAll = async (forUser = currentUser) => {
     try {
       setError("");
-      const isAdmin = forUser?.role === "admin";
+      const isAdmin = isAdminRole(forUser?.role);
       if (isAdmin) {
         setSiteAccessCheckResult(null);
       }
-      const sitesPath = forUser?.role === "client" ? "/sites?status=active&ready_only=true" : "/sites";
+      const sitesPath = isClientRole(forUser?.role) ? "/sites?status=active&ready_only=true" : "/sites";
       if (isAdmin) {
         const [clientsData, sitesData, readySitesData] = await Promise.all([
           api.get("/clients"),
@@ -785,7 +791,7 @@ export default function App() {
   };
 
   const loadAdminUsers = async (forUser = currentUser) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setAdminLoading(true);
       const users = await api.get("/admin/users");
@@ -800,7 +806,7 @@ export default function App() {
   };
 
   const loadWorkflowBoard = async (forUser = currentUser) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setWorkflowLoading(true);
       const payload = await api.get("/workflow/board");
@@ -886,7 +892,7 @@ export default function App() {
   };
 
   const loadPendingJobs = async (forUser = currentUser) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setPendingLoading(true);
       const items = await api.get("/jobs/pending");
@@ -902,7 +908,7 @@ export default function App() {
   };
 
   const loadPublishedArticles = async (forUser = currentUser, overrides = {}) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setPublishedLoading(true);
       const params = new URLSearchParams();
@@ -932,7 +938,7 @@ export default function App() {
   };
 
   const loadRejectedArticles = async (forUser = currentUser, overrides = {}) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setRejectedLoading(true);
       const params = new URLSearchParams();
@@ -974,7 +980,7 @@ export default function App() {
   };
 
   const loadKeywordTrendDashboard = async (forUser = currentUser) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setKeywordTrendLoading(true);
       const data = await api.get("/admin/keyword-trends/dashboard");
@@ -987,7 +993,7 @@ export default function App() {
   };
 
   const loadSiteFitDashboard = async (forUser = currentUser) => {
-    if (forUser?.role !== "admin") return;
+    if (!isAdminRole(forUser?.role)) return;
     try {
       setSiteFitLoading(true);
       const data = await api.get("/admin/site-fit/dashboard");
@@ -1404,7 +1410,7 @@ export default function App() {
         setActiveSection(getLandingSectionForRole(user.role));
         setLoading(true);
         await loadAll(user);
-        if (user.role === "admin") {
+        if (isAdminRole(user.role)) {
           await loadAdminUsers(user);
           await loadKeywordTrendDashboard(user);
           await loadSiteFitDashboard(user);
@@ -1436,7 +1442,7 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return;
-    localStorage.setItem(`active_section_${currentUser.role}`, activeSection);
+    localStorage.setItem(`active_section_${getRoleStorageBucket(currentUser.role)}`, activeSection);
   }, [currentUser, activeSection]);
 
   useEffect(() => {
@@ -1563,9 +1569,9 @@ export default function App() {
     if (dbUpdaterHost && currentHostName === dbUpdaterHost) return;
 
     let targetHost = "";
-    if (currentUser.role === "admin" && currentHostName === clientPortalHost) {
+    if (isAdminRole(currentUser.role) && currentHostName === clientPortalHost) {
       targetHost = adminPortalHost;
-    } else if (currentUser.role !== "admin" && currentHostName === adminPortalHost) {
+    } else if (!isAdminRole(currentUser.role) && currentHostName === adminPortalHost) {
       targetHost = clientPortalHost;
     }
     if (!targetHost || targetHost === currentHostName) return;
@@ -1642,7 +1648,7 @@ export default function App() {
   }, [isDbUpdaterDomain]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "admin") return;
     if (adminUsers.length === 0) loadAdminUsers(currentUser);
     if (!keywordTrendDashboard) loadKeywordTrendDashboard(currentUser);
@@ -1650,13 +1656,13 @@ export default function App() {
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "workflow") return;
     loadWorkflowBoard();
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
@@ -1672,25 +1678,25 @@ export default function App() {
   }, [pendingSelectedCount]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "published-articles") return;
     loadPublishedArticles();
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "rejected-articles") return;
     loadRejectedArticles();
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "queue-dashboard") return;
     loadQueueStats();
   }, [currentUser, activeSection]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "admin") return;
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "queue-dashboard") return;
     if (!queueAutoRefreshRef.current) return;
     const intervalId = window.setInterval(() => {
@@ -1706,7 +1712,7 @@ export default function App() {
       portalRefreshInFlightRef.current = true;
       try {
         await loadAll(currentUser);
-        if (currentUser.role === "admin") {
+        if (isAdminRole(currentUser.role)) {
           if (activeSection === "workflow") {
             await loadWorkflowBoard(currentUser);
           }
@@ -1741,7 +1747,7 @@ export default function App() {
       return;
     }
 
-    const timeoutMs = currentUser.role === "admin" ? ADMIN_IDLE_LOGOUT_MS : CLIENT_IDLE_LOGOUT_MS;
+    const timeoutMs = isAdminRole(currentUser.role) ? ADMIN_IDLE_LOGOUT_MS : CLIENT_IDLE_LOGOUT_MS;
 
     const clearInactivityTimer = () => {
       if (!inactivityTimerRef.current) return;
@@ -1835,7 +1841,7 @@ export default function App() {
       setActiveSection(getLandingSectionForRole(user.role));
       setLoading(true);
       await loadAll(user);
-      if (user.role === "admin") {
+      if (isAdminRole(user.role)) {
         await loadAdminUsers(user);
         await loadKeywordTrendDashboard(user);
         await loadSiteFitDashboard(user);
@@ -2413,7 +2419,7 @@ export default function App() {
       password,
       role: adminUserForm.role,
       is_active: adminUserForm.is_active,
-      client_ids: adminUserForm.role === "client" ? adminUserForm.client_ids : [],
+      client_ids: isClientRole(adminUserForm.role) ? adminUserForm.client_ids : [],
     };
     try {
       setAdminSubmitting(true);
@@ -2434,7 +2440,7 @@ export default function App() {
     const payload = {
       role: draft.role,
       is_active: Boolean(draft.is_active),
-      client_ids: draft.role === "client" ? draft.client_ids || [] : [],
+      client_ids: isClientRole(draft.role) ? draft.client_ids || [] : [],
     };
     if ((draft.password || "").trim()) {
       payload.password = draft.password.trim();
@@ -2486,7 +2492,7 @@ export default function App() {
   const isWorkflowSection = activeSection === "workflow";
   const isSiteAccessSection = activeSection === "site-access";
   const isClientsSection = activeSection === "clients";
-  const isAdminUser = currentUser?.role === "admin";
+  const isAdminUser = isAdminRole(currentUser?.role);
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
   const isPublishedArticlesSection = isAdminUser && activeSection === "published-articles";
   const isRejectedArticlesSection = isAdminUser && activeSection === "rejected-articles";
@@ -2514,11 +2520,11 @@ export default function App() {
     })
     .filter(Boolean)
     .join(" • ");
-  const adminCount = adminUsers.filter((item) => item.role === "admin").length;
-  const clientUserCount = adminUsers.filter((item) => item.role === "client").length;
+  const adminCount = adminUsers.filter((item) => isAdminRole(item.role)).length;
+  const clientUserCount = adminUsers.filter((item) => isClientRole(item.role)).length;
   const inactiveUserCount = adminUsers.filter((item) => !item.is_active).length;
-  const mappedClientUserCount = adminUsers.filter((item) => item.role === "client" && (item.client_ids || []).length > 0).length;
-  const unmappedClientUserCount = adminUsers.filter((item) => item.role === "client" && (item.client_ids || []).length === 0).length;
+  const mappedClientUserCount = adminUsers.filter((item) => isClientRole(item.role) && (item.client_ids || []).length > 0).length;
+  const unmappedClientUserCount = adminUsers.filter((item) => isClientRole(item.role) && (item.client_ids || []).length === 0).length;
   const activeCoveragePercent = clients.length
     ? Math.round((mappedClientUserCount / Math.max(clientUserCount, 1)) * 100)
     : 0;
@@ -2963,7 +2969,7 @@ export default function App() {
           <div className="inline header-actions">
             <div className="user-chip">
               <span>{`Hey ${
-                currentUser.role === "admin"
+                isAdminRole(currentUser.role)
                   ? (currentUser.full_name || currentUser.email)
                   : (resolvedClientName || t("roleClient"))
               }!`}</span>
@@ -3020,7 +3026,7 @@ export default function App() {
                 <div className="mobile-menu-panel">
                   <div className="user-chip mobile-menu-user">
                     <span>{`Hey ${
-                      currentUser.role === "admin"
+                      isAdminRole(currentUser.role)
                         ? (currentUser.full_name || currentUser.email)
                         : (resolvedClientName || t("roleClient"))
                     }!`}</span>
@@ -5143,7 +5149,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
     ),
   };
 
-  const sections = userRole === "admin"
+  const sections = isAdminRole(userRole)
     ? [
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },

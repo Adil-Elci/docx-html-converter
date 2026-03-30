@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import hash_password, require_admin
+from ..auth import SUPER_ADMIN_ROLE, hash_password, is_admin_role, is_super_admin_email, require_admin
 from ..db import get_db
 from ..portal_models import Client, ClientUser, User
 from ..portal_schemas import AdminUserCreate, AdminUserOut, AdminUserUpdate
@@ -16,7 +16,11 @@ router = APIRouter(prefix="/admin/users", tags=["admin_users"], dependencies=[De
 
 
 def _active_admin_count(db: Session) -> int:
-    return db.query(User).filter(User.role == "admin", User.is_active.is_(True)).count()
+    return (
+        db.query(User)
+        .filter(User.role.in_(tuple(sorted({"admin", SUPER_ADMIN_ROLE}))), User.is_active.is_(True))
+        .count()
+    )
 
 
 def _validated_client_ids(db: Session, client_ids: List[UUID]) -> List[UUID]:
@@ -77,18 +81,24 @@ def list_admin_users(db: Session = Depends(get_db)) -> List[AdminUserOut]:
 @router.post("", response_model=AdminUserOut, status_code=status.HTTP_201_CREATED)
 def create_admin_user(payload: AdminUserCreate, db: Session = Depends(get_db)) -> AdminUserOut:
     client_ids = _validated_client_ids(db, payload.client_ids)
+    normalized_email = str(payload.email).strip().lower()
+    resolved_role = payload.role
+    if is_super_admin_email(normalized_email):
+        resolved_role = SUPER_ADMIN_ROLE
+    elif payload.role == SUPER_ADMIN_ROLE:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the designated super admin email can use the super_admin role.")
 
     user = User(
-        email=str(payload.email).strip().lower(),
+        email=normalized_email,
         full_name=payload.full_name,
         password_hash=hash_password(payload.password),
-        role=payload.role,
+        role=resolved_role,
         is_active=payload.is_active,
     )
     db.add(user)
     db.flush()
 
-    if payload.role == "client":
+    if resolved_role == "client":
         for client_id in client_ids:
             db.add(
                 ClientUser(
@@ -119,8 +129,12 @@ def update_admin_user(
 
     new_role = payload.role if payload.role is not None else user.role
     new_is_active = payload.is_active if payload.is_active is not None else user.is_active
+    if is_super_admin_email(user.email):
+        new_role = SUPER_ADMIN_ROLE
+    elif payload.role == SUPER_ADMIN_ROLE:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the designated super admin email can use the super_admin role.")
 
-    if user.role == "admin" and user.is_active and (new_role != "admin" or not new_is_active):
+    if is_admin_role(user.role) and user.is_active and (not is_admin_role(new_role) or not new_is_active):
         if _active_admin_count(db) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -139,7 +153,7 @@ def update_admin_user(
     if payload.client_ids is not None:
         client_ids = _validated_client_ids(db, payload.client_ids)
         _replace_client_links(db, user.id, client_ids if user.role == "client" else [])
-    elif payload.role == "admin":
+    elif is_admin_role(user.role):
         # Keep admin accounts unmapped by default for least confusion.
         _replace_client_links(db, user.id, [])
 

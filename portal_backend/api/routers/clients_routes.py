@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user, require_admin, user_client_ids
+from ..auth import get_current_user, is_admin, require_admin, user_client_ids
 from ..db import get_db
 from ..portal_models import Client, ClientTargetSite, User
 from ..portal_schemas import ClientCreate, ClientOut, ClientTargetSiteIn, ClientTargetSiteOut, ClientUpdate
@@ -209,7 +209,7 @@ def list_clients(
     current_user: User = Depends(get_current_user),
 ) -> List[ClientOut]:
     query = db.query(Client)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         allowed_ids = user_client_ids(db, current_user)
         if not allowed_ids:
             return []

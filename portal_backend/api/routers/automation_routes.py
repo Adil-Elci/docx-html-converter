@@ -23,6 +23,7 @@ from ..auth import (
     ensure_site_access,
     get_current_user,
     get_optional_current_user,
+    is_admin,
 )
 from ..automation_service import (
     AutomationError,
@@ -1091,7 +1092,7 @@ async def process_submit_article_webhook(
             client_target_site=client_target_site,
             creator_endpoint=get_runtime_config()["creator_endpoint"],
         )
-        if current_user is not None and current_user.role != "admin":
+        if current_user is not None and not is_admin(current_user):
             ensure_client_access(db, current_user, client.id)
             ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
@@ -1128,7 +1129,7 @@ async def process_submit_article_webhook(
         site = _resolve_publishing_site(db, payload.publishing_site or "")
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
-        if current_user is not None and current_user.role != "admin":
+        if current_user is not None and not is_admin(current_user):
             ensure_client_access(db, current_user, client.id)
             ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
@@ -1208,7 +1209,7 @@ async def process_submit_article_webhook(
     if payload.execution_mode in {"async", "shadow"}:
         client = _resolve_client(db, payload)
         client_target_site = _resolve_client_target_site(db, client=client, payload=payload)
-        if current_user is not None and current_user.role != "admin":
+        if current_user is not None and not is_admin(current_user):
             ensure_client_access(db, current_user, client.id)
             ensure_site_access(db, current_user, site.id)
         submission, job, deduplicated = _enqueue_job(
@@ -1249,7 +1250,7 @@ async def process_submit_article_webhook(
         )
 
     try:
-        if current_user is not None and current_user.role != "admin" and payload.execution_mode == "sync":
+        if current_user is not None and not is_admin(current_user) and payload.execution_mode == "sync":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Clients cannot run sync execution mode.")
         pipeline_result = run_submit_article_pipeline(
             source_url=source_url,
@@ -1372,7 +1373,7 @@ def get_automation_status(
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_client_access(db, current_user, job.client_id)
             ensure_site_access(db, current_user, job.site_id)
         submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
@@ -1384,7 +1385,7 @@ def get_automation_status(
         submission = db.query(Submission).filter(Submission.id == submission_id).first()
         if not submission:
             return AutomationStatusOut(found=False, idempotency_key=idempotency_key)
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_client_access(db, current_user, submission.client_id)
             ensure_site_access(db, current_user, submission.site_id)
         return _status_from_submission(db, submission, idempotency_key=idempotency_key)
@@ -1403,7 +1404,7 @@ def get_automation_status(
     for submission in candidates:
         note_map = _extract_note_map(submission.notes)
         if note_map.get("idempotency_key") == cleaned_key:
-            if current_user.role != "admin":
+            if not is_admin(current_user):
                 ensure_client_access(db, current_user, submission.client_id)
                 ensure_site_access(db, current_user, submission.site_id)
             return _status_from_submission(db, submission, idempotency_key=cleaned_key)

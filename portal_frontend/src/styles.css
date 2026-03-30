@@ -2433,6 +2433,9 @@ input:disabled {
 .workflow-board-panel {
   display: grid;
   gap: var(--space-4);
+  max-width: none;
+  width: 100%;
+  justify-self: stretch;
 }
 
 .workflow-board-header {

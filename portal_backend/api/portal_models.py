@@ -59,7 +59,7 @@ class ClientTargetSite(Base):
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint("role IN ('admin','client')", name="users_role_check"),
+        CheckConstraint("role IN ('super_admin','admin','client')", name="users_role_check"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -26,7 +26,7 @@ EVENT_TYPES = {
 }
 ASSET_TYPES = {"featured_image"}
 ASSET_PROVIDERS = {"leonardo", "openai", "other"}
-USER_ROLES = {"admin", "client"}
+USER_ROLES = {"super_admin", "admin", "client"}
 
 
 class UserOut(BaseModel):
@@ -126,7 +126,7 @@ class AdminUserCreate(BaseModel):
     def validate_role(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in USER_ROLES:
-            raise ValueError("role must be admin or client.")
+            raise ValueError("role must be super_admin, admin, or client.")
         return cleaned
 
     @validator("full_name")
@@ -159,7 +159,7 @@ class AdminUserUpdate(BaseModel):
             return value
         cleaned = value.strip().lower()
         if cleaned not in USER_ROLES:
-            raise ValueError("role must be admin or client.")
+            raise ValueError("role must be super_admin, admin, or client.")
         return cleaned
 
     @validator("full_name")

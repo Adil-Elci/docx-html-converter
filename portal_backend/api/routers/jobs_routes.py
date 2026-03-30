@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from ..auth import ensure_client_access, ensure_site_access, get_current_user, require_admin, user_client_ids
+from ..auth import ensure_client_access, ensure_site_access, get_current_user, is_admin, require_admin, user_client_ids
 from ..automation_service import (
     AutomationError,
     download_binary_file,
@@ -435,7 +435,7 @@ def list_jobs(
     current_user: User = Depends(get_current_user),
 ) -> List[JobOut]:
     query = db.query(Job)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         allowed_client_ids = user_client_ids(db, current_user)
         if not allowed_client_ids:
             return []
@@ -443,11 +443,11 @@ def list_jobs(
     if submission_id is not None:
         query = query.filter(Job.submission_id == submission_id)
     if client_id is not None:
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_client_access(db, current_user, client_id)
         query = query.filter(Job.client_id == client_id)
     if site_id is not None:
-        if current_user.role != "admin":
+        if not is_admin(current_user):
             ensure_site_access(db, current_user, site_id)
         query = query.filter(Job.site_id == site_id)
     if job_status:
@@ -754,7 +754,7 @@ def get_job(
     current_user: User = Depends(get_current_user),
 ) -> JobOut:
     job = _get_job_or_404(db, job_id)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
     return _job_to_out(job)
@@ -767,7 +767,7 @@ def get_job_creator_debug(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     job = _get_job_or_404(db, job_id)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
 
@@ -902,7 +902,7 @@ def cancel_job(
     current_user: User = Depends(get_current_user),
 ) -> JobOut:
     job = _get_job_or_404(db, job_id)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
 
@@ -917,7 +917,7 @@ def cancel_job(
     if job.wp_post_id is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Job already created a WordPress draft.")
 
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         max_cancels = _read_int_env("AUTOMATION_CLIENT_CANCELS_PER_DAY", 2)
         now = datetime.now(timezone.utc)
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1574,7 +1574,7 @@ def list_job_events(
     current_user: User = Depends(get_current_user),
 ) -> List[JobEventOut]:
     job = _get_job_or_404(db, job_id)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
     events = db.query(JobEvent).filter(JobEvent.job_id == job_id).order_by(JobEvent.created_at.asc()).all()
@@ -1608,7 +1608,7 @@ def list_job_assets(
     current_user: User = Depends(get_current_user),
 ) -> List[AssetOut]:
     job = _get_job_or_404(db, job_id)
-    if current_user.role != "admin":
+    if not is_admin(current_user):
         ensure_client_access(db, current_user, job.client_id)
         ensure_site_access(db, current_user, job.site_id)
     assets = db.query(Asset).filter(Asset.job_id == job_id).order_by(Asset.created_at.asc()).all()

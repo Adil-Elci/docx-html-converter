@@ -22,6 +22,7 @@ from ..auth import (
     create_access_token,
     get_current_user,
     hash_password,
+    is_admin_role,
     verify_password,
 )
 from ..db import get_db
@@ -115,7 +116,7 @@ def _password_reset_url_base_for_role(user_role: str) -> str:
     client_base = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE_CLIENT") or "").strip()
     legacy_base = (os.getenv("AUTH_PASSWORD_RESET_URL_BASE") or "").strip()
 
-    if role == "admin":
+    if is_admin_role(role):
         if admin_base:
             return admin_base
         if legacy_base:

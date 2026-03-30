@@ -5401,12 +5401,8 @@ function WorkflowBoardPanel({
     { value: "fix", label: t("workflowJobTypeFix") },
     { value: "build", label: t("workflowJobTypeBuild") },
   ];
-  const availableClients = [...(Array.isArray(clients) ? clients : [])].sort((a, b) => (
-    String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { sensitivity: "base" })
-  ));
-  const availableSites = [...(Array.isArray(sites) ? sites : [])].sort((a, b) => (
-    String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { sensitivity: "base" })
-  ));
+  void clients;
+  void sites;
   const currentUserId = String(currentUser?.id || "");
   const [editorOpen, setEditorOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
@@ -5416,8 +5412,6 @@ function WorkflowBoardPanel({
     title: "",
     job_type: "",
     description: "",
-    client_id: "",
-    site_id: "",
   });
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
   const [openCommentCardIds, setOpenCommentCardIds] = useState([]);
@@ -5616,8 +5610,6 @@ function WorkflowBoardPanel({
       title: "",
       job_type: "",
       description: "",
-      client_id: "",
-      site_id: "",
     });
   };
 
@@ -5631,8 +5623,6 @@ function WorkflowBoardPanel({
       title,
       job_type: jobType,
       description: createCardForm.description.trim() || null,
-      client_id: createCardForm.client_id || null,
-      site_id: createCardForm.site_id || null,
       request_kind: "manual",
     });
     setCardCreateBusy(false);
@@ -6273,7 +6263,7 @@ function WorkflowBoardPanel({
           <div className="modal-card panel workflow-create-card-modal">
             <h3 id="workflow-create-card-title">{t("workflowCreateCard")}</h3>
             <div className="workflow-create-card-form">
-              <div className="workflow-create-card-form-row">
+              <div className="workflow-create-card-form-stack">
                 <input
                   type="text"
                   value={createCardForm.title}
@@ -6292,26 +6282,6 @@ function WorkflowBoardPanel({
                   ))}
                 </select>
               </div>
-              <div className="workflow-create-card-form-row two-up">
-                <select
-                  value={createCardForm.client_id}
-                  onChange={(event) => setCreateCardForm((current) => ({ ...current, client_id: event.target.value }))}
-                >
-                  <option value="">{t("workflowNoClient")}</option>
-                  {availableClients.map((client) => (
-                    <option key={client.id} value={client.id}>{client.name}</option>
-                  ))}
-                </select>
-                <select
-                  value={createCardForm.site_id}
-                  onChange={(event) => setCreateCardForm((current) => ({ ...current, site_id: event.target.value }))}
-                >
-                  <option value="">{t("workflowNoSite")}</option>
-                  {availableSites.map((site) => (
-                    <option key={site.id} value={site.id}>{site.name}</option>
-                  ))}
-                </select>
-              </div>
               <textarea
                 value={createCardForm.description}
                 onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
@@ -6319,6 +6289,20 @@ function WorkflowBoardPanel({
                 rows={4}
                 maxLength={4000}
               />
+              <div className="workflow-create-card-helper-row">
+                <button
+                  className="btn ghost small"
+                  type="button"
+                  onClick={() => improveDraft(
+                    "create:description",
+                    createCardForm.description || "",
+                    (nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue })),
+                  )}
+                  disabled={commentRewriteKey === "create:description" || !String(createCardForm.description || "").trim() || cardCreateBusy}
+                >
+                  {commentRewriteKey === "create:description" ? t("loading") : t("workflowImproveComment")}
+                </button>
+              </div>
               <div className="modal-actions workflow-create-card-actions">
                 <button
                   className="btn ghost small"

@@ -2929,6 +2929,15 @@ input:disabled {
   max-width: 720px;
 }
 
+.workflow-create-card-modal h3 {
+  color: var(--ink);
+}
+
+.workflow-create-card-form-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .workflow-create-card-form-row {
   display: grid;
   gap: 10px;
@@ -2946,6 +2955,24 @@ input:disabled {
 .workflow-comment-composer textarea {
   width: 100%;
   min-width: 0;
+}
+
+.workflow-create-card-form input,
+.workflow-create-card-form select,
+.workflow-create-card-form textarea {
+  background: color-mix(in srgb, var(--bg-subtle) 92%, var(--panel-2));
+  color: var(--ink);
+  border-color: var(--border-dim);
+}
+
+.workflow-create-card-form input::placeholder,
+.workflow-create-card-form textarea::placeholder {
+  color: var(--muted);
+}
+
+.workflow-create-card-helper-row {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .workflow-create-card-actions,
@@ -3232,6 +3259,27 @@ input:disabled {
   font-weight: 700;
 }
 
+:root[data-theme="light"] .workflow-create-card-modal {
+  background: linear-gradient(180deg, color-mix(in srgb, #ffffff 96%, var(--panel-2)), color-mix(in srgb, var(--panel-3) 92%, #ffffff));
+  border-color: color-mix(in srgb, var(--border) 92%, #d9e1ef);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+}
+
+:root[data-theme="light"] .workflow-create-card-form {
+  background: linear-gradient(180deg, #f7f9fd 0%, #eef3fb 100%);
+  border-color: color-mix(in srgb, var(--border) 88%, #d8e0ef);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+:root[data-theme="light"] .workflow-create-card-form input,
+:root[data-theme="light"] .workflow-create-card-form select,
+:root[data-theme="light"] .workflow-create-card-form textarea {
+  background: #ffffff;
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--border) 88%, #cfd8ea);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
 @media (max-width: 860px) {
   .workflow-filter-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3242,6 +3290,7 @@ input:disabled {
     left: 0;
   }
 
+  .workflow-create-card-form-stack,
   .workflow-create-card-form-row,
   .workflow-create-card-form-row.two-up {
     grid-template-columns: minmax(0, 1fr);

@@ -2501,6 +2501,65 @@ input:disabled {
   font-size: 12px;
 }
 
+.workflow-filter-shell {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.workflow-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border-dim);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.workflow-filter-trigger:hover,
+.workflow-filter-trigger:focus-visible,
+.workflow-filter-trigger.open {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-elevated));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.workflow-filter-trigger.active {
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
+}
+
+.workflow-filter-trigger::after {
+  content: "▾";
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+.workflow-filter-trigger.open::after {
+  content: "▴";
+}
+
+.workflow-filter-trigger-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .workflow-filter-bar {
   display: grid;
   gap: 10px;

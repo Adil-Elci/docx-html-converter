@@ -14,6 +14,7 @@ from .db import get_db
 from .portal_models import ClientUser, User
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SUPER_ADMIN_EMAIL = "aat@elci.cloud"
 
 
 def hash_password(raw_password: str) -> str:
@@ -116,6 +117,19 @@ def get_current_user(
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return current_user
+
+
+def is_super_admin(user: Optional[User]) -> bool:
+    if user is None:
+        return False
+    return (user.role or "").strip().lower() == "admin" and (user.email or "").strip().lower() == SUPER_ADMIN_EMAIL
+
+
+def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
+    current_user = require_admin(current_user)
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
     return current_user
 
 

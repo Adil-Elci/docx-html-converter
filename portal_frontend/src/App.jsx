@@ -95,6 +95,7 @@ const ADMIN_SECTIONS = ["admin", "websites", "workflow", "site-access", "clients
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
+const SUPER_ADMIN_EMAIL = "aat@elci.cloud";
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
 const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
@@ -256,6 +257,9 @@ export default function App() {
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const [workflowMovingCardId, setWorkflowMovingCardId] = useState("");
   const [workflowDragCardId, setWorkflowDragCardId] = useState("");
+  const [workflowColumnCreating, setWorkflowColumnCreating] = useState(false);
+  const [workflowColumnSavingId, setWorkflowColumnSavingId] = useState("");
+  const [workflowColumnDeletingId, setWorkflowColumnDeletingId] = useState("");
   const [siteFitDashboard, setSiteFitDashboard] = useState(null);
   const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
@@ -314,6 +318,7 @@ export default function App() {
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
   const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
+  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -823,6 +828,60 @@ export default function App() {
     } finally {
       setWorkflowMovingCardId("");
       setWorkflowDragCardId("");
+    }
+  };
+
+  const createWorkflowColumn = async (name) => {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) return false;
+    try {
+      setWorkflowColumnCreating(true);
+      setError("");
+      setSuccess("");
+      const payload = await api.post("/workflow/columns", { name: normalizedName });
+      setWorkflowBoard(payload || null);
+      setSuccess(t("workflowColumnsUpdated"));
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    } finally {
+      setWorkflowColumnCreating(false);
+    }
+  };
+
+  const renameWorkflowColumn = async (columnId, name) => {
+    const normalizedColumnId = String(columnId || "").trim();
+    const normalizedName = String(name || "").trim();
+    if (!normalizedColumnId || !normalizedName) return;
+    try {
+      setWorkflowColumnSavingId(normalizedColumnId);
+      setError("");
+      setSuccess("");
+      const payload = await api.patch(`/workflow/columns/${normalizedColumnId}`, { name: normalizedName });
+      setWorkflowBoard(payload || null);
+      setSuccess(t("workflowColumnsUpdated"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setWorkflowColumnSavingId("");
+    }
+  };
+
+  const deleteWorkflowColumn = async (columnId) => {
+    const normalizedColumnId = String(columnId || "").trim();
+    if (!normalizedColumnId) return;
+    try {
+      setWorkflowColumnDeletingId(normalizedColumnId);
+      setError("");
+      setSuccess("");
+      const payload = await api.delete(`/workflow/columns/${normalizedColumnId}`);
+      setWorkflowBoard(payload || null);
+      setSuccess(t("workflowColumnsUpdated"));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setWorkflowColumnDeletingId("");
     }
   };
 
@@ -3298,10 +3357,17 @@ export default function App() {
               loading={workflowLoading}
               movingCardId={workflowMovingCardId}
               draggingCardId={workflowDragCardId}
+              columnCreating={workflowColumnCreating}
+              columnSavingId={workflowColumnSavingId}
+              columnDeletingId={workflowColumnDeletingId}
+              canManageColumns={isSuperAdmin}
               onRefresh={() => loadWorkflowBoard(currentUser)}
               onDragStart={(cardId) => setWorkflowDragCardId(String(cardId || ""))}
               onDragEnd={() => setWorkflowDragCardId("")}
               onMoveCard={moveWorkflowCard}
+              onCreateColumn={createWorkflowColumn}
+              onRenameColumn={renameWorkflowColumn}
+              onDeleteColumn={deleteWorkflowColumn}
               formatPublishedAt={formatPublishedAt}
               formatPublishedStatus={formatPublishedStatus}
             />
@@ -5218,10 +5284,17 @@ function WorkflowBoardPanel({
   loading,
   movingCardId,
   draggingCardId,
+  columnCreating,
+  columnSavingId,
+  columnDeletingId,
+  canManageColumns,
   onRefresh,
   onDragStart,
   onDragEnd,
   onMoveCard,
+  onCreateColumn,
+  onRenameColumn,
+  onDeleteColumn,
   formatPublishedAt,
   formatPublishedStatus,
 }) {
@@ -5229,14 +5302,23 @@ function WorkflowBoardPanel({
   const openCardCount = Number(board?.open_card_count || 0);
   const completedCardCount = Number(board?.completed_card_count || 0);
   const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
-  const getColumnLabel = (column) => {
-    const key = String(column?.key || "").trim();
-    if (key === "backlog") return t("workflowColumnBacklog");
-    if (key === "in_progress") return t("workflowColumnInProgress");
-    if (key === "pending_review") return t("workflowColumnPendingReview");
-    if (key === "blocked") return t("workflowColumnBlocked");
-    if (key === "done") return t("workflowColumnDone");
-    return column?.name || "Column";
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [newColumnName, setNewColumnName] = useState("");
+  const [columnDrafts, setColumnDrafts] = useState({});
+
+  useEffect(() => {
+    const nextDrafts = {};
+    for (const column of columns) {
+      nextDrafts[column.id] = column.name || "";
+    }
+    setColumnDrafts(nextDrafts);
+  }, [columns]);
+
+  const submitNewColumn = async () => {
+    const normalizedName = newColumnName.trim();
+    if (!normalizedName || columnCreating) return;
+    const created = await onCreateColumn(normalizedName);
+    if (created) setNewColumnName("");
   };
 
   return (
@@ -5257,6 +5339,109 @@ function WorkflowBoardPanel({
         <span>{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
       </div>
 
+      {canManageColumns ? (
+        <div className="workflow-column-editor">
+          <div className="workflow-column-editor-header">
+            <div>
+              <h3>{t("workflowEditColumns")}</h3>
+              <p className="muted-text">{t("workflowEditColumnsDescription")}</p>
+            </div>
+            <button
+              className="btn secondary small"
+              type="button"
+              onClick={() => setEditorOpen((current) => !current)}
+              disabled={loading || Boolean(movingCardId)}
+            >
+              {editorOpen ? t("workflowHideColumnEditor") : t("workflowEditColumns")}
+            </button>
+          </div>
+
+          {editorOpen ? (
+            <div className="workflow-column-editor-body">
+              <div className="workflow-column-editor-add">
+                <input
+                  type="text"
+                  value={newColumnName}
+                  onChange={(event) => setNewColumnName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      submitNewColumn();
+                    }
+                  }}
+                  placeholder={t("workflowColumnAddPlaceholder")}
+                  maxLength={80}
+                />
+                <button
+                  className="btn secondary small"
+                  type="button"
+                  onClick={submitNewColumn}
+                  disabled={columnCreating || !newColumnName.trim()}
+                >
+                  {columnCreating ? t("loading") : t("workflowAddColumn")}
+                </button>
+              </div>
+
+              <div className="workflow-column-editor-list">
+                {columns.map((column) => {
+                  const columnId = String(column.id || "");
+                  const draftName = String(columnDrafts[column.id] ?? column.name ?? "");
+                  const normalizedDraftName = draftName.trim();
+                  const normalizedCurrentName = String(column.name || "").trim();
+                  const saveDisabled = !normalizedDraftName || normalizedDraftName === normalizedCurrentName;
+                  const rowBusy = columnSavingId === columnId || columnDeletingId === columnId;
+                  return (
+                    <div key={column.id} className="workflow-column-editor-row">
+                      <input
+                        type="text"
+                        value={draftName}
+                        onChange={(event) => setColumnDrafts((current) => ({ ...current, [column.id]: event.target.value }))}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !saveDisabled && !rowBusy) {
+                            event.preventDefault();
+                            onRenameColumn(column.id, normalizedDraftName);
+                          }
+                        }}
+                        maxLength={80}
+                        disabled={rowBusy}
+                        aria-label={t("workflowColumnName")}
+                      />
+                      <div className="workflow-column-editor-actions">
+                        <button
+                          className="btn secondary small"
+                          type="button"
+                          onClick={() => onRenameColumn(column.id, normalizedDraftName)}
+                          disabled={rowBusy || saveDisabled}
+                        >
+                          {columnSavingId === columnId ? t("loading") : t("workflowColumnSave")}
+                        </button>
+                        {column.is_system ? (
+                          <span className="workflow-column-editor-locked">{t("workflowSystemColumnLocked")}</span>
+                        ) : (
+                          <button
+                            className="btn ghost small danger"
+                            type="button"
+                            onClick={() => {
+                              const confirmed = window.confirm(
+                                t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
+                              );
+                              if (confirmed) onDeleteColumn(column.id);
+                            }}
+                            disabled={rowBusy}
+                          >
+                            {columnDeletingId === columnId ? t("loading") : t("workflowColumnDelete")}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {loading && columns.length === 0 ? (
         <div className="loading-inline" role="status" aria-live="polite">
           <span className="sr-only">{t("loading")}</span>
@@ -5268,7 +5453,10 @@ function WorkflowBoardPanel({
       ) : null}
 
       {columns.length > 0 ? (
-        <div className="workflow-board-columns">
+        <div
+          className="workflow-board-columns"
+          style={{ "--workflow-column-count": String(Math.max(columns.length, 1)) }}
+        >
           {columns.map((column) => (
             <div
               key={column.id}
@@ -5286,7 +5474,7 @@ function WorkflowBoardPanel({
               <div className="workflow-column-header">
                 <div className="workflow-column-title-row">
                   <span className="workflow-column-color" style={{ backgroundColor: column.color || "var(--accent)" }} />
-                  <h3>{getColumnLabel(column)}</h3>
+                  <h3>{column.name || t("workflowColumnName")}</h3>
                 </div>
                 <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
               </div>

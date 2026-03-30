@@ -33,6 +33,7 @@ class WorkflowColumnOut(BaseModel):
     key: str
     name: str
     color: Optional[str] = None
+    is_system: bool = False
     position: int
     cards: List[WorkflowCardOut] = Field(default_factory=list)
 
@@ -52,3 +53,29 @@ class WorkflowCardMoveIn(BaseModel):
         if not value:
             raise ValueError("column_id is required.")
         return value
+
+
+class WorkflowColumnCreateIn(BaseModel):
+    name: str
+
+    @validator("name")
+    def validate_name(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("name is required.")
+        if len(normalized) > 80:
+            raise ValueError("name must be 80 characters or fewer.")
+        return normalized
+
+
+class WorkflowColumnUpdateIn(BaseModel):
+    name: str
+
+    @validator("name")
+    def validate_name(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("name is required.")
+        if len(normalized) > 80:
+            raise ValueError("name must be 80 characters or fewer.")
+        return normalized

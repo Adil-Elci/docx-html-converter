@@ -14,6 +14,20 @@ def test_workflow_column_key_for_status_maps_job_states() -> None:
     assert workflow_routes._workflow_column_key_for_status("succeeded") == "done"
 
 
+def test_is_system_workflow_column_key_detects_core_columns() -> None:
+    assert workflow_routes._is_system_workflow_column_key("backlog") is True
+    assert workflow_routes._is_system_workflow_column_key("done") is True
+    assert workflow_routes._is_system_workflow_column_key("custom_review") is False
+
+
+def test_build_custom_workflow_column_key_deduplicates_names() -> None:
+    key = workflow_routes._build_custom_workflow_column_key(
+        "In Progress",
+        ["backlog", "custom_in_progress"],
+    )
+    assert key == "custom_in_progress_2"
+
+
 def test_apply_card_job_sync_preserves_manual_open_column() -> None:
     backlog_id = uuid4()
     manual_column_id = uuid4()

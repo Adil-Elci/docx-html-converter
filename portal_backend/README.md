@@ -45,7 +45,7 @@ Required auth env:
 - `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default: `8`)
 - `AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES` (default: `60`)
 - `AUTH_PASSWORD_RESET_URL_BASE` (required for reset links, e.g. frontend domain)
-- SMTP settings for reset emails:
+- SMTP settings for reset emails and publish notifications:
   - `SMTP_HOST`
   - `SMTP_PORT` (default `587`)
   - `SMTP_USE_TLS` (default `true`)

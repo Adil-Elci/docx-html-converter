@@ -4,11 +4,8 @@ import hashlib
 import logging
 import os
 import secrets
-import smtplib
-import ssl
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 from threading import Lock
 from time import monotonic
 
@@ -26,6 +23,7 @@ from ..auth import (
     verify_password,
 )
 from ..db import get_db
+from ..mailer import send_plain_text_email
 from ..portal_models import PasswordResetToken, User
 from ..portal_schemas import (
     AuthLoginIn,
@@ -134,54 +132,17 @@ def _hash_reset_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def _smtp_port() -> int:
-    return _read_int_env("SMTP_PORT", 587, 1)
-
-
-def _smtp_use_tls() -> bool:
-    return (os.getenv("SMTP_USE_TLS") or "true").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _smtp_use_ssl() -> bool:
-    return (os.getenv("SMTP_USE_SSL") or "false").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _send_password_reset_email(*, to_email: str, reset_link: str) -> None:
-    smtp_host = (os.getenv("SMTP_HOST") or "").strip()
-    smtp_username = (os.getenv("SMTP_USERNAME") or "").strip()
-    smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip()
-    from_email = (os.getenv("SMTP_FROM_EMAIL") or smtp_username).strip()
-    from_name = (os.getenv("SMTP_FROM_NAME") or "Elci Solutions").strip()
-
-    if not smtp_host or not from_email:
-        raise RuntimeError("SMTP_HOST and SMTP_FROM_EMAIL (or SMTP_USERNAME) are required for password reset emails.")
-
-    message = EmailMessage()
-    message["Subject"] = "Reset your Elci Solutions Portal password"
-    message["From"] = f"{from_name} <{from_email}>"
-    message["To"] = to_email
-    message.set_content(
-        "We received a password reset request for your Elci Solutions Portal account.\n\n"
-        f"Reset your password: {reset_link}\n\n"
-        f"This link expires in {_password_reset_ttl_minutes()} minutes.\n"
-        "If you did not request this, you can ignore this email."
+    send_plain_text_email(
+        to_emails=[to_email],
+        subject="Reset your Elci Solutions Portal password",
+        body=(
+            "We received a password reset request for your Elci Solutions Portal account.\n\n"
+            f"Reset your password: {reset_link}\n\n"
+            f"This link expires in {_password_reset_ttl_minutes()} minutes.\n"
+            "If you did not request this, you can ignore this email."
+        ),
     )
-
-    port = _smtp_port()
-    context = ssl.create_default_context()
-    if _smtp_use_ssl():
-        with smtplib.SMTP_SSL(smtp_host, port, timeout=20, context=context) as smtp:
-            if smtp_username:
-                smtp.login(smtp_username, smtp_password)
-            smtp.send_message(message)
-        return
-
-    with smtplib.SMTP(smtp_host, port, timeout=20) as smtp:
-        if _smtp_use_tls():
-            smtp.starttls(context=context)
-        if smtp_username:
-            smtp.login(smtp_username, smtp_password)
-        smtp.send_message(message)
 
 
 def _user_to_out(user: User) -> UserOut:

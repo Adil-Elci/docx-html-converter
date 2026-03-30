@@ -196,6 +196,7 @@ def _client_to_out(client: Client, target_sites: Optional[List[ClientTargetSite]
         ],
         email=client.email,
         phone_number=client.phone_number,
+        publish_notifications_enabled=bool(client.publish_notifications_enabled),
         status=client.status,
         created_at=client.created_at,
         updated_at=client.updated_at,
@@ -231,6 +232,7 @@ def create_client(
         name=payload.name,
         email=payload.email,
         phone_number=payload.phone_number,
+        publish_notifications_enabled=bool(payload.publish_notifications_enabled),
         status=payload.status,
     )
     normalized_target_sites = _normalize_target_site_payloads(
@@ -275,6 +277,8 @@ def update_client(
         client.email = payload.email
     if "phone_number" in payload.__fields_set__:
         client.phone_number = payload.phone_number
+    if "publish_notifications_enabled" in payload.__fields_set__:
+        client.publish_notifications_enabled = bool(payload.publish_notifications_enabled)
     if payload.status is not None:
         client.status = payload.status
 

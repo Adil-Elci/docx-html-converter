@@ -212,6 +212,7 @@ class ClientCreate(BaseModel):
     target_sites: List[ClientTargetSiteIn] = Field(default_factory=list)
     email: Optional[str] = None
     phone_number: Optional[str] = None
+    publish_notifications_enabled: bool = True
     status: str = "active"
 
     @validator("name")
@@ -245,6 +246,7 @@ class ClientUpdate(BaseModel):
     target_sites: Optional[List[ClientTargetSiteIn]] = None
     email: Optional[str] = None
     phone_number: Optional[str] = None
+    publish_notifications_enabled: Optional[bool] = None
     status: Optional[str] = None
 
     @validator("name")
@@ -283,6 +285,7 @@ class ClientOut(BaseModel):
     target_sites: List[ClientTargetSiteOut] = Field(default_factory=list)
     email: Optional[str]
     phone_number: Optional[str]
+    publish_notifications_enabled: bool
     status: str
     created_at: datetime
     updated_at: datetime

@@ -91,7 +91,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "websites", "workflow", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
@@ -252,6 +252,10 @@ export default function App() {
   const [keywordTrendLoading, setKeywordTrendLoading] = useState(false);
   const [siteAccessCheckLoading, setSiteAccessCheckLoading] = useState(false);
   const [siteAccessCheckResult, setSiteAccessCheckResult] = useState(null);
+  const [workflowBoard, setWorkflowBoard] = useState(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowMovingCardId, setWorkflowMovingCardId] = useState("");
+  const [workflowDragCardId, setWorkflowDragCardId] = useState("");
   const [siteFitDashboard, setSiteFitDashboard] = useState(null);
   const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
@@ -787,6 +791,38 @@ export default function App() {
       setError(err.message);
     } finally {
       setAdminLoading(false);
+    }
+  };
+
+  const loadWorkflowBoard = async (forUser = currentUser) => {
+    if (forUser?.role !== "admin") return;
+    try {
+      setWorkflowLoading(true);
+      const payload = await api.get("/workflow/board");
+      setWorkflowBoard(payload || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setWorkflowLoading(false);
+    }
+  };
+
+  const moveWorkflowCard = async (cardId, columnId) => {
+    const normalizedCardId = String(cardId || "").trim();
+    const normalizedColumnId = String(columnId || "").trim();
+    if (!normalizedCardId || !normalizedColumnId) return;
+    try {
+      setWorkflowMovingCardId(normalizedCardId);
+      setError("");
+      const payload = await api.patch(`/workflow/cards/${normalizedCardId}`, {
+        column_id: normalizedColumnId,
+      });
+      setWorkflowBoard(payload || null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setWorkflowMovingCardId("");
+      setWorkflowDragCardId("");
     }
   };
 
@@ -1556,6 +1592,12 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== "admin") return;
+    if (activeSection !== "workflow") return;
+    loadWorkflowBoard();
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
@@ -1606,6 +1648,9 @@ export default function App() {
       try {
         await loadAll(currentUser);
         if (currentUser.role === "admin") {
+          if (activeSection === "workflow") {
+            await loadWorkflowBoard(currentUser);
+          }
           if (activeSection === "pending-jobs") {
             await loadPendingJobs(currentUser);
           }
@@ -2379,6 +2424,7 @@ export default function App() {
 
   const isAdminSection = activeSection === "admin";
   const isWebsitesSection = activeSection === "websites";
+  const isWorkflowSection = activeSection === "workflow";
   const isSiteAccessSection = activeSection === "site-access";
   const isClientsSection = activeSection === "clients";
   const isAdminUser = currentUser?.role === "admin";
@@ -2939,7 +2985,7 @@ export default function App() {
       </div>
       <div className="app-main">
 
-        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+        <div className={`container ${(isWorkflowSection || isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
               <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
@@ -3245,6 +3291,20 @@ export default function App() {
                 ))}
               </div>
             </div>
+          ) : isWorkflowSection ? (
+            <WorkflowBoardPanel
+              t={t}
+              board={workflowBoard}
+              loading={workflowLoading}
+              movingCardId={workflowMovingCardId}
+              draggingCardId={workflowDragCardId}
+              onRefresh={() => loadWorkflowBoard(currentUser)}
+              onDragStart={(cardId) => setWorkflowDragCardId(String(cardId || ""))}
+              onDragEnd={() => setWorkflowDragCardId("")}
+              onMoveCard={moveWorkflowCard}
+              formatPublishedAt={formatPublishedAt}
+              formatPublishedStatus={formatPublishedStatus}
+            />
           ) : isSiteAccessSection ? (
             <div className="panel form-panel site-access-section">
               <div className="site-access-header">
@@ -4936,6 +4996,14 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         <path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none" stroke="currentColor" strokeWidth="1.6" />
       </svg>
     ),
+    workflow: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <rect x="3" y="5" width="5" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="10" y="5" width="5" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="17" y="5" width="4" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M5.5 14.5h13M8 17.5h10M12 20h6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    ),
     "site-access": (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <path d="M12 3l7 3v5c0 4.5-2.9 8.5-7 10-4.1-1.5-7-5.5-7-10V6l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -5013,6 +5081,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
     ? [
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
+        { id: "workflow", label: t("navWorkflow") },
         { id: "site-access", label: t("navSiteAccess") },
         { id: "clients", label: t("navClients") },
         { id: "submit-article", label: t("navSubmitArticle") },
@@ -5140,6 +5209,131 @@ function MoonIcon() {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+function WorkflowBoardPanel({
+  t,
+  board,
+  loading,
+  movingCardId,
+  draggingCardId,
+  onRefresh,
+  onDragStart,
+  onDragEnd,
+  onMoveCard,
+  formatPublishedAt,
+  formatPublishedStatus,
+}) {
+  const columns = Array.isArray(board?.columns) ? board.columns : [];
+  const openCardCount = Number(board?.open_card_count || 0);
+  const completedCardCount = Number(board?.completed_card_count || 0);
+  const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
+  const getColumnLabel = (column) => {
+    const key = String(column?.key || "").trim();
+    if (key === "backlog") return t("workflowColumnBacklog");
+    if (key === "in_progress") return t("workflowColumnInProgress");
+    if (key === "pending_review") return t("workflowColumnPendingReview");
+    if (key === "blocked") return t("workflowColumnBlocked");
+    if (key === "done") return t("workflowColumnDone");
+    return column?.name || "Column";
+  };
+
+  return (
+    <div className="panel form-panel workflow-board-panel">
+      <div className="workflow-board-header">
+        <div>
+          <h2>{t("workflowTitle")}</h2>
+          <p className="muted-text">{t("workflowDescription")}</p>
+        </div>
+        <button className="btn secondary small" type="button" onClick={onRefresh} disabled={loading || Boolean(movingCardId)}>
+          {loading ? t("loading") : t("refresh")}
+        </button>
+      </div>
+
+      <div className="workflow-board-meta">
+        <span>{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
+        <span>{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
+        <span>{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
+      </div>
+
+      {loading && columns.length === 0 ? (
+        <div className="loading-inline" role="status" aria-live="polite">
+          <span className="sr-only">{t("loading")}</span>
+        </div>
+      ) : null}
+
+      {!loading && columns.length === 0 ? (
+        <p className="muted-text">{t("workflowEmpty")}</p>
+      ) : null}
+
+      {columns.length > 0 ? (
+        <div className="workflow-board-columns">
+          {columns.map((column) => (
+            <div
+              key={column.id}
+              className="workflow-column"
+              onDragOver={(event) => {
+                event.preventDefault();
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const cardId = draggingCardId || event.dataTransfer.getData("text/workflow-card-id");
+                if (!cardId) return;
+                onMoveCard(cardId, column.id);
+              }}
+            >
+              <div className="workflow-column-header">
+                <div className="workflow-column-title-row">
+                  <span className="workflow-column-color" style={{ backgroundColor: column.color || "var(--accent)" }} />
+                  <h3>{getColumnLabel(column)}</h3>
+                </div>
+                <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
+              </div>
+
+              <div className="workflow-column-cards">
+                {(column.cards || []).map((card) => (
+                  <article
+                    key={card.id}
+                    className={`workflow-card ${(movingCardId && movingCardId === String(card.id)) ? "moving" : ""} ${(draggingCardId && draggingCardId === String(card.id)) ? "dragging" : ""}`.trim()}
+                    draggable={!movingCardId}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/workflow-card-id", String(card.id));
+                      onDragStart(card.id);
+                    }}
+                    onDragEnd={onDragEnd}
+                  >
+                    <div className="workflow-card-top">
+                      <span className={`workflow-card-kind ${card.request_kind === "create_article" ? "create" : "submit"}`}>
+                        {card.request_kind === "create_article" ? t("workflowKindCreate") : t("workflowKindSubmit")}
+                      </span>
+                      <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
+                    </div>
+                    <strong>{card.title}</strong>
+                    <div className="workflow-card-meta">
+                      <span>{card.client_name}</span>
+                      <span>{card.site_name || card.site_url}</span>
+                    </div>
+                    <div className="workflow-card-meta">
+                      <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
+                    </div>
+                    {card.last_error ? (
+                      <p className="workflow-card-error">{card.last_error}</p>
+                    ) : null}
+                    {card.wp_post_url ? (
+                      <a className="workflow-card-link" href={card.wp_post_url} target="_blank" rel="noreferrer">
+                        {t("viewPost")}
+                      </a>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

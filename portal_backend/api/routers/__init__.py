@@ -9,6 +9,7 @@ from .site_fit_routes import router as site_fit_router
 from .site_credentials_routes import router as site_credentials_router
 from .sites_routes import router as sites_router
 from .submissions_routes import router as submissions_router
+from .workflow_routes import router as workflow_router
 
 __all__ = [
     "auth_router",
@@ -22,4 +23,5 @@ __all__ = [
     "site_credentials_router",
     "submissions_router",
     "jobs_router",
+    "workflow_router",
 ]

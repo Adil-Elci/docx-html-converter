@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine.url import make_url
 
 from api.portal_models import Base
+from api import workflow_models  # noqa: F401
 
 config = context.config
 

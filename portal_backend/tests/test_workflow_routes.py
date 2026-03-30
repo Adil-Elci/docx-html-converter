@@ -126,3 +126,15 @@ def test_extract_anthropic_text_returns_combined_text_blocks() -> None:
         ]
     }
     assert workflow_routes._extract_anthropic_text(payload) == "First line\nSecond line"
+
+
+def test_parse_submission_notes_map_extracts_submission_actor_fields() -> None:
+    submission = SimpleNamespace(notes="submission_actor_email=ops@example.com;submission_actor_user_id=123;foo=bar")
+    parsed = workflow_routes._parse_submission_notes_map(submission)
+    assert parsed["submission_actor_email"] == "ops@example.com"
+    assert parsed["submission_actor_user_id"] == "123"
+
+
+def test_infer_job_type_defaults_job_cards_to_articles() -> None:
+    card = SimpleNamespace(job_type=None, request_kind_snapshot="submit_article", card_kind="job")
+    assert workflow_routes._infer_job_type(card, None) == "articles"

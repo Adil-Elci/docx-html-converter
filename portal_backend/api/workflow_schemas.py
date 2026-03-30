@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, validator
 
 WORKFLOW_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
 WORKFLOW_COMMENT_LANGUAGES = {"en", "de"}
+WORKFLOW_JOB_TYPES = {"articles", "develop", "fix", "build"}
+WORKFLOW_FLAG_TYPES = {"bug", "needs_levent_attention"}
 
 
 class WorkflowCommentOut(BaseModel):
@@ -35,6 +37,8 @@ class WorkflowCardOut(BaseModel):
     description: Optional[str] = None
     card_kind: str = "job"
     created_by_name: Optional[str] = None
+    job_type: Optional[str] = None
+    flag_type: Optional[str] = None
     request_kind: Optional[str] = None
     job_status: str
     wp_post_url: Optional[str] = None
@@ -100,6 +104,7 @@ class WorkflowColumnUpdateIn(BaseModel):
 
 class WorkflowCardCreateIn(BaseModel):
     title: str
+    job_type: str
     description: Optional[str] = None
     client_id: Optional[UUID] = None
     site_id: Optional[UUID] = None
@@ -112,6 +117,13 @@ class WorkflowCardCreateIn(BaseModel):
             raise ValueError("title is required.")
         if len(normalized) > 160:
             raise ValueError("title must be 160 characters or fewer.")
+        return normalized
+
+    @validator("job_type")
+    def validate_job_type(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in WORKFLOW_JOB_TYPES:
+            raise ValueError("job_type must be one of articles, develop, fix, build.")
         return normalized
 
     @validator("description")
@@ -182,3 +194,18 @@ class WorkflowCommentRewriteIn(BaseModel):
 
 class WorkflowCommentRewriteOut(BaseModel):
     body: str
+
+
+class WorkflowCardUpdateIn(BaseModel):
+    flag_type: Optional[str] = None
+
+    @validator("flag_type")
+    def validate_flag_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized not in WORKFLOW_FLAG_TYPES:
+            raise ValueError("flag_type must be bug or needs_levent_attention.")
+        return normalized

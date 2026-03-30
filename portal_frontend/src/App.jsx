@@ -947,6 +947,20 @@ export default function App() {
     }
   };
 
+  const updateWorkflowCardDetails = async (cardId, details) => {
+    const normalizedCardId = String(cardId || "").trim();
+    if (!normalizedCardId) return false;
+    try {
+      setError("");
+      const nextBoard = await api.patch(`/workflow/cards/${normalizedCardId}/details`, details || {});
+      setWorkflowBoard(nextBoard || null);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  };
+
   const loadPendingJobs = async (forUser = currentUser) => {
     if (!isAdminRole(forUser?.role)) return;
     try {
@@ -3439,6 +3453,7 @@ export default function App() {
               onAddComment={addWorkflowComment}
               onUpdateComment={updateWorkflowComment}
               onRewriteComment={rewriteWorkflowComment}
+              onUpdateCardDetails={updateWorkflowCardDetails}
               formatPublishedAt={formatPublishedAt}
               formatPublishedStatus={formatPublishedStatus}
             />
@@ -5374,14 +5389,18 @@ function WorkflowBoardPanel({
   onAddComment,
   onUpdateComment,
   onRewriteComment,
+  onUpdateCardDetails,
   formatPublishedAt,
   formatPublishedStatus,
 }) {
   const columns = Array.isArray(board?.columns) ? board.columns : [];
-  const openCardCount = Number(board?.open_card_count || 0);
-  const completedCardCount = Number(board?.completed_card_count || 0);
   const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
-  const totalCardCount = openCardCount + completedCardCount;
+  const jobTypeOptions = [
+    { value: "articles", label: t("workflowJobTypeArticles") },
+    { value: "develop", label: t("workflowJobTypeDevelop") },
+    { value: "fix", label: t("workflowJobTypeFix") },
+    { value: "build", label: t("workflowJobTypeBuild") },
+  ];
   const availableClients = [...(Array.isArray(clients) ? clients : [])].sort((a, b) => (
     String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { sensitivity: "base" })
   ));
@@ -5395,10 +5414,10 @@ function WorkflowBoardPanel({
   const [createCardOpen, setCreateCardOpen] = useState(false);
   const [createCardForm, setCreateCardForm] = useState({
     title: "",
+    job_type: "",
     description: "",
     client_id: "",
     site_id: "",
-    request_kind: "manual",
   });
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
   const [openCommentCardIds, setOpenCommentCardIds] = useState([]);
@@ -5406,6 +5425,11 @@ function WorkflowBoardPanel({
   const [editingComments, setEditingComments] = useState({});
   const [commentSavingKey, setCommentSavingKey] = useState("");
   const [commentRewriteKey, setCommentRewriteKey] = useState("");
+  const [cardDetailSavingKey, setCardDetailSavingKey] = useState("");
+  const [filterUser, setFilterUser] = useState("");
+  const [filterJobType, setFilterJobType] = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
   const [collapsedColumnIds, setCollapsedColumnIds] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -5467,6 +5491,67 @@ function WorkflowBoardPanel({
     });
   }, [columns]);
 
+  const userOptions = useMemo(() => {
+    const seen = new Map();
+    for (const column of columns) {
+      for (const card of column.cards || []) {
+        const label = String(card?.created_by_name || "").trim();
+        if (!label) continue;
+        const key = label.toLowerCase();
+        if (!seen.has(key)) seen.set(key, label);
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [columns]);
+
+  const cardMatchesFilters = (card) => {
+    const createdBy = String(card?.created_by_name || "").trim().toLowerCase();
+    const cardJobType = String(card?.job_type || "").trim().toLowerCase();
+    const createdAt = card?.created_at ? new Date(card.created_at) : null;
+    if (filterUser && createdBy !== filterUser.trim().toLowerCase()) return false;
+    if (filterJobType && cardJobType !== filterJobType.trim().toLowerCase()) return false;
+    if (filterDateFrom) {
+      const fromDate = new Date(`${filterDateFrom}T00:00:00`);
+      if (!createdAt || Number.isNaN(createdAt.getTime()) || createdAt < fromDate) return false;
+    }
+    if (filterDateTo) {
+      const toDate = new Date(`${filterDateTo}T23:59:59`);
+      if (!createdAt || Number.isNaN(createdAt.getTime()) || createdAt > toDate) return false;
+    }
+    return true;
+  };
+
+  const filteredColumns = useMemo(() => (
+    columns.map((column) => ({
+      ...column,
+      cards: (column.cards || []).filter(cardMatchesFilters),
+    }))
+  ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
+
+  const openCardCount = filteredColumns.reduce((sum, column) => (
+    sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() !== "done").length
+  ), 0);
+  const completedCardCount = filteredColumns.reduce((sum, column) => (
+    sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() === "done").length
+  ), 0);
+  const totalCardCount = openCardCount + completedCardCount;
+
+  const getJobTypeLabel = (jobType) => {
+    const normalized = String(jobType || "").trim().toLowerCase();
+    if (normalized === "articles") return t("workflowJobTypeArticles");
+    if (normalized === "develop") return t("workflowJobTypeDevelop");
+    if (normalized === "fix") return t("workflowJobTypeFix");
+    if (normalized === "build") return t("workflowJobTypeBuild");
+    return normalized || t("notAvailable");
+  };
+
+  const getFlagLabel = (flagType) => {
+    const normalized = String(flagType || "").trim().toLowerCase();
+    if (normalized === "bug") return t("workflowFlagBug");
+    if (normalized === "needs_levent_attention") return t("workflowFlagNeedsLevent");
+    return "";
+  };
+
   const toggleColumnCollapsed = (columnId) => {
     const normalizedColumnId = String(columnId || "");
     if (!normalizedColumnId) return;
@@ -5521,24 +5606,26 @@ function WorkflowBoardPanel({
   const submitManualCard = async () => {
     if (cardCreateBusy) return;
     const title = createCardForm.title.trim();
-    if (!title) return;
+    const jobType = createCardForm.job_type.trim();
+    if (!title || !jobType) return;
     setCardCreateBusy(true);
     const created = await onCreateCard({
       title,
+      job_type: jobType,
       description: createCardForm.description.trim() || null,
       client_id: createCardForm.client_id || null,
       site_id: createCardForm.site_id || null,
-      request_kind: createCardForm.request_kind || "manual",
+      request_kind: "manual",
     });
     setCardCreateBusy(false);
     if (!created) return;
     setCreateCardOpen(false);
     setCreateCardForm({
       title: "",
+      job_type: "",
       description: "",
       client_id: "",
       site_id: "",
-      request_kind: "manual",
     });
   };
 
@@ -5579,6 +5666,15 @@ function WorkflowBoardPanel({
     applyValue(rewritten);
   };
 
+  const updateCardFlag = async (cardId, flagType) => {
+    const normalizedCardId = String(cardId || "");
+    if (!normalizedCardId) return;
+    setCardDetailSavingKey(`flag:${normalizedCardId}`);
+    await onUpdateCardDetails(normalizedCardId, { flag_type: flagType || null });
+    setCardDetailSavingKey("");
+    setOpenCardMenuId("");
+  };
+
   const gridTemplateColumns = columns
     .map((column) => (
       collapsedColumnIds.includes(String(column.id || "")) ? "76px" : "minmax(320px, 1fr)"
@@ -5613,10 +5709,40 @@ function WorkflowBoardPanel({
         <div className="workflow-board-meta">
           <span className="workflow-meta-pill">{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
           <span className="workflow-meta-pill">{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
-          <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(columns.length))}</span>
+          <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(filteredColumns.length))}</span>
           <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
         </div>
         <span className="workflow-updated-label">{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
+      </div>
+
+      <div className="workflow-filter-bar">
+        <select value={filterUser} onChange={(event) => setFilterUser(event.target.value)}>
+          <option value="">{t("workflowFilterAllUsers")}</option>
+          {userOptions.map((userLabel) => (
+            <option key={userLabel} value={userLabel}>{userLabel}</option>
+          ))}
+        </select>
+        <select value={filterJobType} onChange={(event) => setFilterJobType(event.target.value)}>
+          <option value="">{t("workflowFilterAllJobTypes")}</option>
+          {jobTypeOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        <input type="date" value={filterDateFrom} onChange={(event) => setFilterDateFrom(event.target.value)} aria-label={t("workflowFilterDateFrom")} />
+        <input type="date" value={filterDateTo} onChange={(event) => setFilterDateTo(event.target.value)} aria-label={t("workflowFilterDateTo")} />
+        <button
+          className="btn ghost small"
+          type="button"
+          onClick={() => {
+            setFilterUser("");
+            setFilterJobType("");
+            setFilterDateFrom("");
+            setFilterDateTo("");
+          }}
+          disabled={!filterUser && !filterJobType && !filterDateFrom && !filterDateTo}
+        >
+          {t("workflowClearFilters")}
+        </button>
       </div>
 
       {canManageColumns && editorOpen ? (
@@ -5732,7 +5858,7 @@ function WorkflowBoardPanel({
           className="workflow-board-columns"
           style={{ gridTemplateColumns: gridTemplateColumns || "minmax(320px, 1fr)" }}
         >
-          {columns.map((column, columnIndex) => {
+          {filteredColumns.map((column, columnIndex) => {
             const columnId = String(column.id || "");
             const isCollapsed = collapsedColumnIds.includes(columnId);
             const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";
@@ -5817,12 +5943,13 @@ function WorkflowBoardPanel({
                               maxLength={160}
                             />
                             <select
-                              value={createCardForm.request_kind}
-                              onChange={(event) => setCreateCardForm((current) => ({ ...current, request_kind: event.target.value }))}
+                              value={createCardForm.job_type}
+                              onChange={(event) => setCreateCardForm((current) => ({ ...current, job_type: event.target.value }))}
                             >
-                              <option value="manual">{t("workflowKindManual")}</option>
-                              <option value="submit_article">{t("workflowKindSubmit")}</option>
-                              <option value="create_article">{t("workflowKindCreate")}</option>
+                              <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
+                              {jobTypeOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
                             </select>
                           </div>
                           <div className="workflow-create-card-form-row two-up">
@@ -5860,10 +5987,10 @@ function WorkflowBoardPanel({
                                 setCreateCardOpen(false);
                                 setCreateCardForm({
                                   title: "",
+                                  job_type: "",
                                   description: "",
                                   client_id: "",
                                   site_id: "",
-                                  request_kind: "manual",
                                 });
                               }}
                               disabled={cardCreateBusy}
@@ -5874,7 +6001,7 @@ function WorkflowBoardPanel({
                               className="btn small"
                               type="button"
                               onClick={submitManualCard}
-                              disabled={cardCreateBusy || !createCardForm.title.trim()}
+                              disabled={cardCreateBusy || !createCardForm.title.trim() || !createCardForm.job_type.trim()}
                             >
                               {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}
                             </button>
@@ -5886,8 +6013,8 @@ function WorkflowBoardPanel({
 
                   {(column.cards || []).map((card) => {
                     const cardId = String(card.id || "");
-                    const previousColumn = columnIndex > 0 ? columns[columnIndex - 1] : null;
-                    const nextColumn = columnIndex < columns.length - 1 ? columns[columnIndex + 1] : null;
+                    const previousColumn = columnIndex > 0 ? filteredColumns[columnIndex - 1] : null;
+                    const nextColumn = columnIndex < filteredColumns.length - 1 ? filteredColumns[columnIndex + 1] : null;
                     const commentsOpen = openCommentCardIds.includes(cardId);
                     const comments = Array.isArray(card.comments) ? card.comments : [];
                     return (
@@ -5940,6 +6067,29 @@ function WorkflowBoardPanel({
                                   <button type="button" onClick={() => toggleComments(card.id)}>
                                     {t("workflowCommentsToggle").replace("{count}", String(comments.length))}
                                   </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCardFlag(card.id, "bug")}
+                                    disabled={cardDetailSavingKey === `flag:${cardId}` || card.flag_type === "bug"}
+                                  >
+                                    {t("workflowFlagAsBug")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCardFlag(card.id, "needs_levent_attention")}
+                                    disabled={cardDetailSavingKey === `flag:${cardId}` || card.flag_type === "needs_levent_attention"}
+                                  >
+                                    {t("workflowFlagAsNeedsLevent")}
+                                  </button>
+                                  {card.flag_type ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateCardFlag(card.id, "")}
+                                      disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                    >
+                                      {t("workflowClearFlag")}
+                                    </button>
+                                  ) : null}
                                   {card.wp_post_url ? (
                                     <a href={card.wp_post_url} target="_blank" rel="noreferrer">
                                       {t("viewPost")}
@@ -5954,6 +6104,14 @@ function WorkflowBoardPanel({
                         {card.description ? (
                           <p className="workflow-card-description">{card.description}</p>
                         ) : null}
+                        <div className="workflow-card-badges">
+                          <span className="workflow-card-job-type">{getJobTypeLabel(card.job_type)}</span>
+                          {card.flag_type ? (
+                            <span className={`workflow-card-flag ${card.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
+                              {getFlagLabel(card.flag_type)}
+                            </span>
+                          ) : null}
+                        </div>
                         <div className="workflow-card-stack">
                           <div className="workflow-card-meta">
                             <span className="workflow-card-label">{t("workflowClientLabel")}</span>

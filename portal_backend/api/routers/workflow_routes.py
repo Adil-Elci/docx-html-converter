@@ -21,6 +21,7 @@ from ..workflow_schemas import (
     WorkflowCardCreateIn,
     WorkflowCardMoveIn,
     WorkflowCardOut,
+    WorkflowCardUpdateIn,
     WorkflowColumnCreateIn,
     WorkflowColumnOut,
     WorkflowColumnUpdateIn,
@@ -105,6 +106,50 @@ def _build_actor_name(user: Optional[User]) -> str:
     if email:
         return email
     return "Unknown"
+
+
+def _parse_submission_notes_map(submission: Optional[Submission]) -> dict[str, str]:
+    notes = str(submission.notes or "") if submission is not None else ""
+    parsed: dict[str, str] = {}
+    for item in notes.split(";"):
+        left, sep, right = item.partition("=")
+        if not sep:
+            continue
+        key = left.strip().lower()
+        if not key:
+            continue
+        parsed[key] = right.strip()
+    return parsed
+
+
+def _infer_job_type(card: WorkflowCard, submission: Optional[Submission]) -> Optional[str]:
+    existing = str(card.job_type or "").strip().lower()
+    if existing:
+        return existing
+    request_kind = str(card.request_kind_snapshot or (submission.request_kind if submission is not None else "")).strip().lower()
+    if request_kind in {"submit_article", "create_article"} or card.card_kind == "job":
+        return "articles"
+    return None
+
+
+def _extract_submission_actor(
+    db: Session,
+    submission: Optional[Submission],
+) -> tuple[Optional[UUID], Optional[str]]:
+    note_map = _parse_submission_notes_map(submission)
+    actor_user_id = None
+    raw_user_id = str(note_map.get("submission_actor_user_id") or "").strip()
+    if raw_user_id:
+        try:
+            actor_user_id = UUID(raw_user_id)
+        except ValueError:
+            actor_user_id = None
+    actor_name = str(note_map.get("submission_actor_email") or "").strip() or None
+    if actor_user_id is not None:
+        user = db.query(User).filter(User.id == actor_user_id).first()
+        if user is not None:
+            return user.id, _build_actor_name(user)
+    return actor_user_id, actor_name
 
 
 def _ensure_default_workflow_columns(db: Session) -> List[WorkflowColumn]:
@@ -306,6 +351,7 @@ def _sync_workflow_cards(
         title_snapshot = _build_workflow_card_title(submission, content_titles.get(job.id, ""))
         card = cards_by_job_id.get(job.id)
         if card is None:
+            actor_user_id_for_submission, actor_name_for_submission = _extract_submission_actor(db, submission)
             card = WorkflowCard(
                 job_id=job.id,
                 submission_id=submission.id,
@@ -316,8 +362,11 @@ def _sync_workflow_cards(
                 column_source="auto",
                 position=_next_position(positions_by_column, desired_column.id),
                 title_snapshot=title_snapshot,
+                job_type="articles",
                 request_kind_snapshot=submission.request_kind,
                 job_status_snapshot=job.job_status,
+                created_by_user_id=actor_user_id_for_submission,
+                created_by_name_snapshot=actor_name_for_submission,
             )
             db.add(card)
             db.flush()
@@ -342,9 +391,25 @@ def _sync_workflow_cards(
             request_kind=submission.request_kind,
             next_position=lambda column_id: _next_position(positions_by_column, column_id),
         )
+        actor_user_id_for_submission, actor_name_for_submission = _extract_submission_actor(db, submission)
+        next_job_type = _infer_job_type(card, submission)
+        next_created_by_user_id = actor_user_id_for_submission
+        next_created_by_name = actor_name_for_submission
+        if (
+            card.submission_id != submission.id
+            or card.client_id != client.id
+            or card.site_id != site.id
+            or (card.job_type or None) != next_job_type
+            or card.created_by_user_id != next_created_by_user_id
+            or (card.created_by_name_snapshot or None) != next_created_by_name
+        ):
+            changed = True
         card.submission_id = submission.id
         card.client_id = client.id
         card.site_id = site.id
+        card.job_type = next_job_type
+        card.created_by_user_id = next_created_by_user_id
+        card.created_by_name_snapshot = next_created_by_name
         if sync_event["dirty"]:
             changed = True
         if sync_event["moved"]:
@@ -443,6 +508,8 @@ def _build_workflow_board_payload(
             description=(card.description or "").strip() or None,
             card_kind=(card.card_kind or "job").strip() or "job",
             created_by_name=(card.created_by_name_snapshot or "").strip() or None,
+            job_type=_infer_job_type(card, submission),
+            flag_type=(card.flag_type or "").strip() or None,
             request_kind=(card.request_kind_snapshot or (submission.request_kind if submission is not None else "")).strip() or None,
             job_status=((job.job_status if job is not None else card.job_status_snapshot) or "manual").strip() or "manual",
             wp_post_url=((job.wp_post_url or "").strip() if job is not None else None) or None,
@@ -631,6 +698,7 @@ def create_workflow_card(
         position=_next_position(positions_by_column, todo_column.id),
         title_snapshot=payload.title,
         description=payload.description,
+        job_type=payload.job_type,
         request_kind_snapshot=payload.request_kind,
         job_status_snapshot="manual",
         created_by_user_id=current_user.id,
@@ -648,6 +716,35 @@ def create_workflow_card(
         payload={"request_kind": payload.request_kind},
     )
     db.commit()
+    return _load_workflow_board(db, actor_user_id=current_user.id)
+
+
+@router.patch("/cards/{card_id}/details", response_model=WorkflowBoardOut)
+def update_workflow_card_details(
+    card_id: UUID,
+    payload: WorkflowCardUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> WorkflowBoardOut:
+    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+
+    next_flag_type = payload.flag_type
+    if (card.flag_type or None) != next_flag_type:
+        card.flag_type = next_flag_type
+        card.updated_at = datetime.now(timezone.utc)
+        _record_card_event(
+            db,
+            card=card,
+            actor_user_id=current_user.id,
+            event_type="moved",
+            from_column_id=card.column_id,
+            to_column_id=card.column_id,
+            payload={"flag_type": next_flag_type, "reason": "card_details_updated"},
+        )
+        db.commit()
+
     return _load_workflow_board(db, actor_user_id=current_user.id)
 
 

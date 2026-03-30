@@ -2499,6 +2499,18 @@ input:disabled {
   font-size: 12px;
 }
 
+.workflow-filter-bar {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 180px)) auto;
+  align-items: center;
+}
+
+.workflow-filter-bar select,
+.workflow-filter-bar input {
+  min-width: 0;
+}
+
 .workflow-column-editor {
   display: grid;
   gap: var(--space-3);
@@ -2795,6 +2807,11 @@ input:disabled {
   outline: none;
 }
 
+.workflow-inline-menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .workflow-inline-menu .danger {
   color: var(--danger);
 }
@@ -2976,6 +2993,40 @@ input:disabled {
   white-space: pre-wrap;
 }
 
+.workflow-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-card-job-type,
+.workflow-card-flag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.workflow-card-job-type {
+  background: color-mix(in srgb, #eef2f8 88%, white);
+  color: #526071;
+}
+
+.workflow-card-flag.bug {
+  background: color-mix(in srgb, #f87171 18%, white);
+  color: #b42318;
+}
+
+.workflow-card-flag.attention {
+  background: color-mix(in srgb, #facc15 24%, white);
+  color: #935f00;
+}
+
 .workflow-card-quick-actions {
   display: flex;
   align-items: center;
@@ -3114,6 +3165,10 @@ input:disabled {
 }
 
 @media (max-width: 860px) {
+  .workflow-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .workflow-inline-menu {
     right: auto;
     left: 0;

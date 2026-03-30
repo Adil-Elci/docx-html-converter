@@ -5407,13 +5407,13 @@ function WorkflowBoardPanel({
   const [newColumnName, setNewColumnName] = useState("");
   const [columnDrafts, setColumnDrafts] = useState({});
   const [createCardOpen, setCreateCardOpen] = useState(false);
+  const [activeCardId, setActiveCardId] = useState("");
   const [createCardForm, setCreateCardForm] = useState({
     title: "",
     job_type: "",
     description: "",
   });
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
-  const [openCommentCardIds, setOpenCommentCardIds] = useState([]);
   const [commentDrafts, setCommentDrafts] = useState({});
   const [editingComments, setEditingComments] = useState({});
   const [commentSavingKey, setCommentSavingKey] = useState("");
@@ -5434,7 +5434,6 @@ function WorkflowBoardPanel({
     }
   });
   const [openColumnMenuId, setOpenColumnMenuId] = useState("");
-  const [openCardMenuId, setOpenCardMenuId] = useState("");
 
   useEffect(() => {
     const nextDrafts = {};
@@ -5463,7 +5462,9 @@ function WorkflowBoardPanel({
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
-    setOpenCommentCardIds((current) => current.filter((cardId) => allowedCardIds.has(cardId)));
+    if (activeCardId && !allowedCardIds.has(activeCardId)) {
+      setActiveCardId("");
+    }
     setCommentDrafts((current) => {
       const next = {};
       for (const [cardId, value] of Object.entries(current)) {
@@ -5483,7 +5484,7 @@ function WorkflowBoardPanel({
       }
       return next;
     });
-  }, [columns]);
+  }, [columns, activeCardId]);
 
   const userOptions = useMemo(() => {
     const seen = new Map();
@@ -5522,6 +5523,11 @@ function WorkflowBoardPanel({
       cards: (column.cards || []).filter(cardMatchesFilters),
     }))
   ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
+  const allCards = useMemo(() => columns.flatMap((column) => (column.cards || [])), [columns]);
+  const activeCard = useMemo(
+    () => allCards.find((card) => String(card?.id || "") === activeCardId) || null,
+    [allCards, activeCardId],
+  );
 
   const hasActiveFilters = Boolean(filterUser || filterJobType || filterDateFrom || filterDateTo);
   const activeFilterCount = [filterUser, filterJobType, filterDateFrom, filterDateTo].filter(Boolean).length;
@@ -5544,6 +5550,7 @@ function WorkflowBoardPanel({
     if (normalized === "fix") return t("workflowJobTypeFix");
     return normalized || t("notAvailable");
   };
+  const getJobTypeDisplay = (jobType) => `${t("workflowCreateCardJobTypeLabel")}: ${getJobTypeLabel(jobType)}`;
 
   const getFlagLabel = (flagType) => {
     const normalized = String(flagType || "").trim().toLowerCase();
@@ -5592,17 +5599,6 @@ function WorkflowBoardPanel({
     return t("workflowKindManual");
   };
 
-  const toggleComments = (cardId) => {
-    const normalizedCardId = String(cardId || "");
-    if (!normalizedCardId) return;
-    setOpenCommentCardIds((current) => (
-      current.includes(normalizedCardId)
-        ? current.filter((item) => item !== normalizedCardId)
-        : [...current, normalizedCardId]
-    ));
-    setOpenCardMenuId("");
-  };
-
   const resetCreateCardForm = () => {
     setCreateCardOpen(false);
     setCreateCardForm({
@@ -5638,7 +5634,6 @@ function WorkflowBoardPanel({
     setCommentSavingKey("");
     if (!saved) return;
     setCommentDrafts((current) => ({ ...current, [normalizedCardId]: "" }));
-    setOpenCommentCardIds((current) => current.includes(normalizedCardId) ? current : [...current, normalizedCardId]);
   };
 
   const saveEditedComment = async (commentId) => {
@@ -5672,7 +5667,11 @@ function WorkflowBoardPanel({
     setCardDetailSavingKey(`flag:${normalizedCardId}`);
     await onUpdateCardDetails(normalizedCardId, { flag_type: flagType || null });
     setCardDetailSavingKey("");
-    setOpenCardMenuId("");
+  };
+  const openCardDetails = (cardId) => {
+    const normalizedCardId = String(cardId || "");
+    if (!normalizedCardId || movingCardId) return;
+    setActiveCardId(normalizedCardId);
   };
 
   const stretchColumnsToViewport = columns.length <= 3 && collapsedColumnIds.length === 0;
@@ -5971,15 +5970,21 @@ function WorkflowBoardPanel({
 
                   {(column.cards || []).map((card) => {
                     const cardId = String(card.id || "");
-                    const previousColumn = columnIndex > 0 ? filteredColumns[columnIndex - 1] : null;
-                    const nextColumn = columnIndex < filteredColumns.length - 1 ? filteredColumns[columnIndex + 1] : null;
-                    const commentsOpen = openCommentCardIds.includes(cardId);
                     const comments = Array.isArray(card.comments) ? card.comments : [];
                     return (
                       <article
                         key={card.id}
-                        className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""}`.trim()}
+                        className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""} ${card.flag_type === "bug" ? "flag-bug" : card.flag_type === "needs_levent_attention" ? "flag-attention" : ""}`.trim()}
                         draggable={!movingCardId}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openCardDetails(card.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openCardDetails(card.id);
+                          }
+                        }}
                         onDragStart={(event) => {
                           event.dataTransfer.effectAllowed = "move";
                           event.dataTransfer.setData("text/workflow-card-id", String(card.id));
@@ -5993,250 +5998,21 @@ function WorkflowBoardPanel({
                           </span>
                           <div className="workflow-card-top-actions">
                             <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
-                            <div className="workflow-card-menu-wrap">
-                              <button
-                                className="workflow-menu-btn"
-                                type="button"
-                                onClick={() => setOpenCardMenuId((current) => current === cardId ? "" : cardId)}
-                                aria-label={t("workflowCardActions")}
-                              >
-                                <span />
-                                <span />
-                                <span />
-                              </button>
-                              {openCardMenuId === cardId ? (
-                                <div className="workflow-inline-menu card-menu">
-                                  {previousColumn ? (
-                                    <button type="button" onClick={() => {
-                                      onMoveCard(card.id, previousColumn.id);
-                                      setOpenCardMenuId("");
-                                    }}>
-                                      {t("workflowCardMoveLeft")}
-                                    </button>
-                                  ) : null}
-                                  {nextColumn ? (
-                                    <button type="button" onClick={() => {
-                                      onMoveCard(card.id, nextColumn.id);
-                                      setOpenCardMenuId("");
-                                    }}>
-                                      {t("workflowCardMoveRight")}
-                                    </button>
-                                  ) : null}
-                                  <button type="button" onClick={() => toggleComments(card.id)}>
-                                    {t("workflowCommentsToggle").replace("{count}", String(comments.length))}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => updateCardFlag(card.id, "bug")}
-                                    disabled={cardDetailSavingKey === `flag:${cardId}` || card.flag_type === "bug"}
-                                  >
-                                    {t("workflowFlagAsBug")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => updateCardFlag(card.id, "needs_levent_attention")}
-                                    disabled={cardDetailSavingKey === `flag:${cardId}` || card.flag_type === "needs_levent_attention"}
-                                  >
-                                    {t("workflowFlagAsNeedsLevent")}
-                                  </button>
-                                  {card.flag_type ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => updateCardFlag(card.id, "")}
-                                      disabled={cardDetailSavingKey === `flag:${cardId}`}
-                                    >
-                                      {t("workflowClearFlag")}
-                                    </button>
-                                  ) : null}
-                                  {card.wp_post_url ? (
-                                    <a href={card.wp_post_url} target="_blank" rel="noreferrer">
-                                      {t("viewPost")}
-                                    </a>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
                           </div>
                         </div>
                         <strong className="workflow-card-title">{card.title}</strong>
-                        {card.description ? (
-                          <p className="workflow-card-description">{card.description}</p>
-                        ) : null}
                         <div className="workflow-card-badges">
-                          <span className="workflow-card-job-type">{getJobTypeLabel(card.job_type)}</span>
+                          <span className="workflow-card-job-type">{getJobTypeDisplay(card.job_type)}</span>
                           {card.flag_type ? (
                             <span className={`workflow-card-flag ${card.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
                               {getFlagLabel(card.flag_type)}
                             </span>
                           ) : null}
                         </div>
-                        <div className="workflow-card-stack">
-                          <div className="workflow-card-meta">
-                            <span className="workflow-card-label">{t("workflowClientLabel")}</span>
-                            <span>{card.client_name || "—"}</span>
-                          </div>
-                          <div className="workflow-card-meta">
-                            <span className="workflow-card-label">{t("workflowSiteLabel")}</span>
-                            <span>{card.site_name || card.site_url || "—"}</span>
-                          </div>
-                          {card.created_by_name ? (
-                            <div className="workflow-card-meta">
-                              <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
-                              <span>{card.created_by_name}</span>
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="workflow-card-quick-actions">
-                          <button
-                            className="workflow-quick-action"
-                            type="button"
-                            onClick={() => previousColumn && onMoveCard(card.id, previousColumn.id)}
-                            disabled={!previousColumn || Boolean(movingCardId)}
-                          >
-                            {t("workflowCardMoveLeft")}
-                          </button>
-                          <button
-                            className="workflow-quick-action"
-                            type="button"
-                            onClick={() => nextColumn && onMoveCard(card.id, nextColumn.id)}
-                            disabled={!nextColumn || Boolean(movingCardId)}
-                          >
-                            {t("workflowCardMoveRight")}
-                          </button>
-                          <button
-                            className={`workflow-quick-action ${commentsOpen ? "active" : ""}`.trim()}
-                            type="button"
-                            onClick={() => toggleComments(card.id)}
-                          >
-                            {t("workflowCommentsToggle").replace("{count}", String(comments.length))}
-                          </button>
-                          {card.wp_post_url ? (
-                            <a className="workflow-quick-action link" href={card.wp_post_url} target="_blank" rel="noreferrer">
-                              {t("viewPost")}
-                            </a>
-                          ) : null}
-                        </div>
-                        {commentsOpen ? (
-                          <div className="workflow-card-comments">
-                            <div className="workflow-card-comments-list">
-                              {comments.length === 0 ? (
-                                <p className="workflow-comments-empty">{t("workflowCommentsEmpty")}</p>
-                              ) : comments.map((comment) => {
-                                const commentId = String(comment.id || "");
-                                const editValue = editingComments[commentId];
-                                const isEditing = typeof editValue === "string";
-                                const isOwnComment = comment.can_edit || (comment.author_user_id && String(comment.author_user_id) === currentUserId);
-                                const createdLabel = t("workflowCommentCreatedAt").replace("{value}", formatPublishedAt(comment.created_at));
-                                const editedLabel = comment.updated_at !== comment.created_at
-                                  ? t("workflowCommentEditedAt").replace("{value}", formatPublishedAt(comment.updated_at))
-                                  : "";
-                                return (
-                                  <div key={comment.id} className="workflow-comment">
-                                    <div className="workflow-comment-header">
-                                      <strong>{comment.author_name}</strong>
-                                      <span>{createdLabel}</span>
-                                      {editedLabel ? <span>{editedLabel}</span> : null}
-                                    </div>
-                                    {isEditing ? (
-                                      <div className="workflow-comment-editor">
-                                        <textarea
-                                          value={editValue}
-                                          onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
-                                          rows={3}
-                                          maxLength={4000}
-                                        />
-                                        <div className="workflow-comment-actions">
-                                          <button
-                                            className="btn ghost small"
-                                            type="button"
-                                            onClick={() => improveDraft(
-                                              `edit:${commentId}`,
-                                              editValue,
-                                              (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
-                                            )}
-                                            disabled={commentRewriteKey === `edit:${commentId}` || !String(editValue || "").trim()}
-                                          >
-                                            {commentRewriteKey === `edit:${commentId}` ? t("loading") : t("workflowImproveComment")}
-                                          </button>
-                                          <button
-                                            className="btn ghost small"
-                                            type="button"
-                                            onClick={() => setEditingComments((current) => {
-                                              const next = { ...current };
-                                              delete next[commentId];
-                                              return next;
-                                            })}
-                                            disabled={commentSavingKey === `edit:${commentId}`}
-                                          >
-                                            {t("cancel")}
-                                          </button>
-                                          <button
-                                            className="btn secondary small"
-                                            type="button"
-                                            onClick={() => saveEditedComment(commentId)}
-                                            disabled={commentSavingKey === `edit:${commentId}` || !String(editValue || "").trim()}
-                                          >
-                                            {commentSavingKey === `edit:${commentId}` ? t("loading") : t("workflowSaveComment")}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <p className="workflow-comment-body">{comment.body}</p>
-                                        {isOwnComment ? (
-                                          <button
-                                            className="workflow-comment-inline-action"
-                                            type="button"
-                                            onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
-                                          >
-                                            {t("workflowEditComment")}
-                                          </button>
-                                        ) : null}
-                                      </>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            <div className="workflow-comment-composer">
-                              <textarea
-                                value={commentDrafts[cardId] || ""}
-                                onChange={(event) => setCommentDrafts((current) => ({ ...current, [cardId]: event.target.value }))}
-                                placeholder={t("workflowCommentPlaceholder")}
-                                rows={3}
-                                maxLength={4000}
-                              />
-                              <div className="workflow-comment-actions">
-                                <button
-                                  className="btn ghost small"
-                                  type="button"
-                                  onClick={() => improveDraft(
-                                    `new:${cardId}`,
-                                    commentDrafts[cardId] || "",
-                                    (nextValue) => setCommentDrafts((current) => ({ ...current, [cardId]: nextValue })),
-                                  )}
-                                  disabled={commentRewriteKey === `new:${cardId}` || !String(commentDrafts[cardId] || "").trim()}
-                                >
-                                  {commentRewriteKey === `new:${cardId}` ? t("loading") : t("workflowImproveComment")}
-                                </button>
-                                <button
-                                  className="btn small"
-                                  type="button"
-                                  onClick={() => submitComment(cardId)}
-                                  disabled={commentSavingKey === `new:${cardId}` || !String(commentDrafts[cardId] || "").trim()}
-                                >
-                                  {commentSavingKey === `new:${cardId}` ? t("loading") : t("workflowAddComment")}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
                         <div className="workflow-card-footer">
+                          <span>{card.created_by_name || t("notAvailable")}</span>
                           <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
                         </div>
-                        {card.last_error ? (
-                          <p className="workflow-card-error">{card.last_error}</p>
-                        ) : null}
                       </article>
                     );
                   })}
@@ -6263,7 +6039,11 @@ function WorkflowBoardPanel({
             <h3 id="workflow-create-card-title">{t("workflowCreateCard")}</h3>
             <div className="workflow-create-card-form">
               <div className="workflow-create-card-form-stack">
+                <label className="workflow-field-label" htmlFor="workflow-create-title">
+                  {t("workflowCreateCardTitleLabel")}
+                </label>
                 <input
+                  id="workflow-create-title"
                   type="text"
                   value={createCardForm.title}
                   onChange={(event) => setCreateCardForm((current) => ({ ...current, title: event.target.value }))}
@@ -6271,7 +6051,11 @@ function WorkflowBoardPanel({
                   maxLength={160}
                   autoFocus
                 />
+                <label className="workflow-field-label" htmlFor="workflow-create-job-type">
+                  {t("workflowCreateCardJobTypeLabel")}
+                </label>
                 <select
+                  id="workflow-create-job-type"
                   value={createCardForm.job_type}
                   onChange={(event) => setCreateCardForm((current) => ({ ...current, job_type: event.target.value }))}
                 >
@@ -6281,7 +6065,11 @@ function WorkflowBoardPanel({
                   ))}
                 </select>
               </div>
+              <label className="workflow-field-label" htmlFor="workflow-create-description">
+                {t("workflowCreateCardDescriptionLabel")}
+              </label>
               <textarea
+                id="workflow-create-description"
                 value={createCardForm.description}
                 onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
                 placeholder={t("workflowCreateCardDescriptionPlaceholder")}
@@ -6319,6 +6107,211 @@ function WorkflowBoardPanel({
                 >
                   {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeCard ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workflow-card-details-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !commentSavingKey && !cardDetailSavingKey) {
+              setActiveCardId("");
+            }
+          }}
+        >
+          <div className={`modal-card panel workflow-card-details-modal ${activeCard.flag_type === "bug" ? "flag-bug" : activeCard.flag_type === "needs_levent_attention" ? "flag-attention" : ""}`.trim()}>
+            <div className="workflow-card-details-header">
+              <div className="workflow-card-details-heading">
+                <h3 id="workflow-card-details-title">{activeCard.title}</h3>
+                <div className="workflow-card-badges">
+                  <span className="workflow-card-job-type">{getJobTypeDisplay(activeCard.job_type)}</span>
+                  <span className="workflow-card-status">{formatPublishedStatus(activeCard.job_status)}</span>
+                  {activeCard.flag_type ? (
+                    <span className={`workflow-card-flag ${activeCard.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
+                      {getFlagLabel(activeCard.flag_type)}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button className="btn ghost small" type="button" onClick={() => setActiveCardId("")}>
+                {t("close")}
+              </button>
+            </div>
+
+            <div className="workflow-card-details-meta">
+              {activeCard.created_by_name ? (
+                <div className="workflow-card-meta">
+                  <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
+                  <span>{activeCard.created_by_name}</span>
+                </div>
+              ) : null}
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowCreatedAtLabel")}</span>
+                <span>{formatPublishedAt(activeCard.created_at)}</span>
+              </div>
+            </div>
+
+            <div className="workflow-card-details-section">
+              <div className="workflow-card-details-section-header">
+                <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
+                <div className="workflow-card-detail-actions">
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => updateCardFlag(activeCard.id, "bug")}
+                    disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}` || activeCard.flag_type === "bug"}
+                  >
+                    {t("workflowFlagAsBug")}
+                  </button>
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => updateCardFlag(activeCard.id, "needs_levent_attention")}
+                    disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}` || activeCard.flag_type === "needs_levent_attention"}
+                  >
+                    {t("workflowFlagAsNeedsLevent")}
+                  </button>
+                  {activeCard.flag_type ? (
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      onClick={() => updateCardFlag(activeCard.id, "")}
+                      disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}`}
+                    >
+                      {t("workflowClearFlag")}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
+              {activeCard.last_error ? (
+                <p className="workflow-card-error">{activeCard.last_error}</p>
+              ) : null}
+              {activeCard.wp_post_url ? (
+                <a className="workflow-card-link" href={activeCard.wp_post_url} target="_blank" rel="noreferrer">
+                  {t("viewPost")}
+                </a>
+              ) : null}
+            </div>
+
+            <div className="workflow-card-comments details">
+              <span className="workflow-card-label">{t("workflowCommentsSectionTitle")}</span>
+              <div className="workflow-card-comments-list">
+                {(activeCard.comments || []).length === 0 ? (
+                  <p className="workflow-comments-empty">{t("workflowCommentsEmpty")}</p>
+                ) : (activeCard.comments || []).map((comment) => {
+                  const commentId = String(comment.id || "");
+                  const editValue = editingComments[commentId];
+                  const isEditing = typeof editValue === "string";
+                  const isOwnComment = comment.can_edit || (comment.author_user_id && String(comment.author_user_id) === currentUserId);
+                  const createdLabel = t("workflowCommentCreatedAt").replace("{value}", formatPublishedAt(comment.created_at));
+                  const editedLabel = comment.updated_at !== comment.created_at
+                    ? t("workflowCommentEditedAt").replace("{value}", formatPublishedAt(comment.updated_at))
+                    : "";
+                  return (
+                    <div key={comment.id} className="workflow-comment">
+                      <div className="workflow-comment-header">
+                        <strong>{comment.author_name}</strong>
+                        <span>{createdLabel}</span>
+                        {editedLabel ? <span>{editedLabel}</span> : null}
+                      </div>
+                      {isEditing ? (
+                        <div className="workflow-comment-editor">
+                          <textarea
+                            value={editValue}
+                            onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
+                            rows={3}
+                            maxLength={4000}
+                          />
+                          <div className="workflow-comment-actions">
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => improveDraft(
+                                `edit:${commentId}`,
+                                editValue,
+                                (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
+                              )}
+                              disabled={commentRewriteKey === `edit:${commentId}` || !String(editValue || "").trim()}
+                            >
+                              {commentRewriteKey === `edit:${commentId}` ? t("loading") : t("workflowImproveComment")}
+                            </button>
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => setEditingComments((current) => {
+                                const next = { ...current };
+                                delete next[commentId];
+                                return next;
+                              })}
+                              disabled={commentSavingKey === `edit:${commentId}`}
+                            >
+                              {t("cancel")}
+                            </button>
+                            <button
+                              className="btn secondary small"
+                              type="button"
+                              onClick={() => saveEditedComment(commentId)}
+                              disabled={commentSavingKey === `edit:${commentId}` || !String(editValue || "").trim()}
+                            >
+                              {commentSavingKey === `edit:${commentId}` ? t("loading") : t("workflowSaveComment")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="workflow-comment-body">{comment.body}</p>
+                          {isOwnComment ? (
+                            <button
+                              className="workflow-comment-inline-action"
+                              type="button"
+                              onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
+                            >
+                              {t("workflowEditComment")}
+                            </button>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="workflow-comment-composer">
+                <textarea
+                  value={commentDrafts[String(activeCard.id || "")] || ""}
+                  onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
+                  placeholder={t("workflowCommentPlaceholder")}
+                  rows={3}
+                  maxLength={4000}
+                />
+                <div className="workflow-comment-actions">
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => improveDraft(
+                      `new:${String(activeCard.id || "")}`,
+                      commentDrafts[String(activeCard.id || "")] || "",
+                      (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
+                    )}
+                    disabled={commentRewriteKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
+                  >
+                    {commentRewriteKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowImproveComment")}
+                  </button>
+                  <button
+                    className="btn small"
+                    type="button"
+                    onClick={() => submitComment(String(activeCard.id || ""))}
+                    disabled={commentSavingKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
+                  >
+                    {commentSavingKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowAddComment")}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

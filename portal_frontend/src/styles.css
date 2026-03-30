@@ -2938,6 +2938,13 @@ input:disabled {
   gap: 10px;
 }
 
+.workflow-field-label {
+  color: var(--ink-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 .workflow-create-card-form-row {
   display: grid;
   gap: 10px;
@@ -2986,12 +2993,12 @@ input:disabled {
 
 .workflow-card {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   padding: 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
-  cursor: grab;
+  cursor: pointer;
   box-shadow: 0 10px 20px rgba(4, 8, 16, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
 }
@@ -3005,6 +3012,22 @@ input:disabled {
 .workflow-card.dragging,
 .workflow-card.moving {
   opacity: 0.55;
+}
+
+.workflow-card.flag-bug {
+  border-color: color-mix(in srgb, #f87171 54%, var(--border));
+  box-shadow:
+    0 14px 26px rgba(4, 8, 16, 0.24),
+    0 0 0 1px color-mix(in srgb, #f87171 28%, transparent),
+    0 0 22px color-mix(in srgb, #f87171 22%, transparent);
+}
+
+.workflow-card.flag-attention {
+  border-color: color-mix(in srgb, #facc15 54%, var(--border));
+  box-shadow:
+    0 14px 26px rgba(4, 8, 16, 0.24),
+    0 0 0 1px color-mix(in srgb, #facc15 26%, transparent),
+    0 0 22px color-mix(in srgb, #facc15 18%, transparent);
 }
 
 .workflow-card-top-actions {
@@ -3122,60 +3145,15 @@ input:disabled {
   border: 1px solid color-mix(in srgb, #facc15 24%, transparent);
 }
 
-.workflow-card-quick-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.workflow-quick-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border-dim);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
-  color: var(--ink-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-}
-
-.workflow-quick-action:hover:not(:disabled),
-.workflow-quick-action:focus-visible:not(:disabled),
-.workflow-quick-action.link:hover,
-.workflow-quick-action.link:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: color-mix(in srgb, var(--accent-hover) 92%, white);
-  outline: none;
-}
-
-.workflow-quick-action:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.workflow-quick-action.link {
-  text-decoration: none;
-}
-
-.workflow-quick-action.active {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: color-mix(in srgb, var(--accent-hover) 92%, white);
-}
-
 .workflow-card-comments {
   display: grid;
   gap: 10px;
   padding-top: 2px;
   border-top: 1px solid var(--border-dim);
+}
+
+.workflow-card-comments.details {
+  padding-top: 14px;
 }
 
 .workflow-card-comments-list,
@@ -3236,11 +3214,17 @@ input:disabled {
 .workflow-card-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   flex-wrap: wrap;
   color: var(--ink-secondary);
   font-size: 12px;
+}
+
+.workflow-card-footer span + span::before {
+  content: "•";
+  margin-right: 10px;
+  color: var(--border-strong);
 }
 
 .workflow-card-error {
@@ -3257,6 +3241,67 @@ input:disabled {
   justify-self: start;
   font-size: 12px;
   font-weight: 700;
+}
+
+.workflow-card-details-modal {
+  width: min(820px, calc(100vw - 32px));
+  max-width: 820px;
+  gap: 18px;
+}
+
+.workflow-card-details-modal.flag-bug {
+  border-color: color-mix(in srgb, #f87171 56%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 28px color-mix(in srgb, #f87171 18%, transparent);
+}
+
+.workflow-card-details-modal.flag-attention {
+  border-color: color-mix(in srgb, #facc15 56%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 28px color-mix(in srgb, #facc15 16%, transparent);
+}
+
+.workflow-card-details-header,
+.workflow-card-details-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workflow-card-details-heading {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-card-details-heading h3 {
+  margin: 0;
+  color: var(--ink);
+}
+
+.workflow-card-details-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.workflow-card-details-meta .workflow-card-meta {
+  min-width: 180px;
+}
+
+.workflow-card-details-section {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.workflow-card-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-card-description.details {
+  margin: 0;
 }
 
 :root[data-theme="light"] .workflow-create-card-modal {
@@ -3280,6 +3325,22 @@ input:disabled {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
+:root[data-theme="light"] .workflow-card.flag-bug,
+:root[data-theme="light"] .workflow-card-details-modal.flag-bug {
+  box-shadow:
+    0 14px 26px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(248, 113, 113, 0.34),
+    0 0 24px rgba(248, 113, 113, 0.2);
+}
+
+:root[data-theme="light"] .workflow-card.flag-attention,
+:root[data-theme="light"] .workflow-card-details-modal.flag-attention {
+  box-shadow:
+    0 14px 26px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(250, 204, 21, 0.32),
+    0 0 24px rgba(250, 204, 21, 0.18);
+}
+
 @media (max-width: 860px) {
   .workflow-filter-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3294,15 +3355,6 @@ input:disabled {
   .workflow-create-card-form-row,
   .workflow-create-card-form-row.two-up {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .workflow-card-quick-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .workflow-quick-action.link {
-    grid-column: 1 / -1;
   }
 }
 

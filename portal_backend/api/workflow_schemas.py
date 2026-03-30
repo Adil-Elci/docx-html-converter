@@ -6,19 +6,35 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
 
+WORKFLOW_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
+WORKFLOW_COMMENT_LANGUAGES = {"en", "de"}
+
+
+class WorkflowCommentOut(BaseModel):
+    id: UUID
+    author_user_id: Optional[UUID] = None
+    author_name: str
+    body: str
+    created_at: datetime
+    updated_at: datetime
+    can_edit: bool = False
+
 
 class WorkflowCardOut(BaseModel):
     id: UUID
-    job_id: UUID
-    submission_id: UUID
-    client_id: UUID
-    client_name: str
-    site_id: UUID
-    site_name: str
-    site_url: str
+    job_id: Optional[UUID] = None
+    submission_id: Optional[UUID] = None
+    client_id: Optional[UUID] = None
+    client_name: str = ""
+    site_id: Optional[UUID] = None
+    site_name: str = ""
+    site_url: str = ""
     column_id: UUID
     column_key: str
     title: str
+    description: Optional[str] = None
+    card_kind: str = "job"
+    created_by_name: Optional[str] = None
     request_kind: Optional[str] = None
     job_status: str
     wp_post_url: Optional[str] = None
@@ -26,6 +42,7 @@ class WorkflowCardOut(BaseModel):
     position: int
     created_at: datetime
     updated_at: datetime
+    comments: List[WorkflowCommentOut] = Field(default_factory=list)
 
 
 class WorkflowColumnOut(BaseModel):
@@ -79,3 +96,89 @@ class WorkflowColumnUpdateIn(BaseModel):
         if len(normalized) > 80:
             raise ValueError("name must be 80 characters or fewer.")
         return normalized
+
+
+class WorkflowCardCreateIn(BaseModel):
+    title: str
+    description: Optional[str] = None
+    client_id: Optional[UUID] = None
+    site_id: Optional[UUID] = None
+    request_kind: str = "manual"
+
+    @validator("title")
+    def validate_title(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("title is required.")
+        if len(normalized) > 160:
+            raise ValueError("title must be 160 characters or fewer.")
+        return normalized
+
+    @validator("description")
+    def validate_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 4000:
+            raise ValueError("description must be 4000 characters or fewer.")
+        return normalized
+
+    @validator("request_kind")
+    def validate_request_kind(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in WORKFLOW_REQUEST_KINDS:
+            raise ValueError("request_kind must be one of manual, submit_article, create_article.")
+        return normalized
+
+
+class WorkflowCommentCreateIn(BaseModel):
+    body: str
+
+    @validator("body")
+    def validate_body(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("body is required.")
+        if len(normalized) > 4000:
+            raise ValueError("body must be 4000 characters or fewer.")
+        return normalized
+
+
+class WorkflowCommentUpdateIn(BaseModel):
+    body: str
+
+    @validator("body")
+    def validate_body(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("body is required.")
+        if len(normalized) > 4000:
+            raise ValueError("body must be 4000 characters or fewer.")
+        return normalized
+
+
+class WorkflowCommentRewriteIn(BaseModel):
+    body: str
+    language: str = "en"
+
+    @validator("body")
+    def validate_body(cls, value: str) -> str:
+        normalized = (value or "").strip()
+        if not normalized:
+            raise ValueError("body is required.")
+        if len(normalized) > 4000:
+            raise ValueError("body must be 4000 characters or fewer.")
+        return normalized
+
+    @validator("language")
+    def validate_language(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in WORKFLOW_COMMENT_LANGUAGES:
+            raise ValueError("language must be en or de.")
+        return normalized
+
+
+class WorkflowCommentRewriteOut(BaseModel):
+    body: str

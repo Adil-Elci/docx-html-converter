@@ -5430,7 +5430,7 @@ function WorkflowBoardPanel({
   const [filterJobType, setFilterJobType] = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterPanel, setFilterPanel] = useState("");
   const [collapsedColumnIds, setCollapsedColumnIds] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -5531,6 +5531,9 @@ function WorkflowBoardPanel({
 
   const hasActiveFilters = Boolean(filterUser || filterJobType || filterDateFrom || filterDateTo);
   const activeFilterCount = [filterUser, filterJobType, filterDateFrom, filterDateTo].filter(Boolean).length;
+  const showUserFilter = filterPanel === "user" || filterPanel === "all";
+  const showJobTypeFilter = filterPanel === "job_type" || filterPanel === "all";
+  const showDateFilters = filterPanel === "date_range" || filterPanel === "all";
 
   const openCardCount = filteredColumns.reduce((sum, column) => (
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() !== "done").length
@@ -5729,33 +5732,47 @@ function WorkflowBoardPanel({
       </div>
 
       <div className="workflow-filter-shell">
-        <button
-          className={`workflow-filter-trigger ${filtersOpen ? "open" : ""} ${hasActiveFilters ? "active" : ""}`.trim()}
-          type="button"
-          onClick={() => setFiltersOpen((current) => !current)}
-          aria-expanded={filtersOpen}
-        >
-          <span>{t("workflowFilterBy")}</span>
+        <div className="workflow-filter-select-wrap">
+          <select
+            className={`workflow-filter-select ${hasActiveFilters ? "active" : ""}`.trim()}
+            value={filterPanel}
+            onChange={(event) => setFilterPanel(event.target.value)}
+            aria-label={t("workflowFilterBy")}
+          >
+            <option value="">{t("workflowFilterBy")}</option>
+            <option value="all">{t("workflowFilterPanelAll")}</option>
+            <option value="user">{t("workflowFilterPanelUser")}</option>
+            <option value="job_type">{t("workflowFilterPanelJobType")}</option>
+            <option value="date_range">{t("workflowFilterPanelDateRange")}</option>
+          </select>
           {hasActiveFilters ? (
             <span className="workflow-filter-trigger-count">{activeFilterCount}</span>
           ) : null}
-        </button>
-        {filtersOpen ? (
+        </div>
+        {filterPanel ? (
           <div className="workflow-filter-bar">
-            <select value={filterUser} onChange={(event) => setFilterUser(event.target.value)}>
-              <option value="">{t("workflowFilterAllUsers")}</option>
-              {userOptions.map((userLabel) => (
-                <option key={userLabel} value={userLabel}>{userLabel}</option>
-              ))}
-            </select>
-            <select value={filterJobType} onChange={(event) => setFilterJobType(event.target.value)}>
-              <option value="">{t("workflowFilterAllJobTypes")}</option>
-              {jobTypeOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <input type="date" value={filterDateFrom} onChange={(event) => setFilterDateFrom(event.target.value)} aria-label={t("workflowFilterDateFrom")} />
-            <input type="date" value={filterDateTo} onChange={(event) => setFilterDateTo(event.target.value)} aria-label={t("workflowFilterDateTo")} />
+            {showUserFilter ? (
+              <select value={filterUser} onChange={(event) => setFilterUser(event.target.value)}>
+                <option value="">{t("workflowFilterAllUsers")}</option>
+                {userOptions.map((userLabel) => (
+                  <option key={userLabel} value={userLabel}>{userLabel}</option>
+                ))}
+              </select>
+            ) : null}
+            {showJobTypeFilter ? (
+              <select value={filterJobType} onChange={(event) => setFilterJobType(event.target.value)}>
+                <option value="">{t("workflowFilterAllJobTypes")}</option>
+                {jobTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            ) : null}
+            {showDateFilters ? (
+              <input type="date" value={filterDateFrom} onChange={(event) => setFilterDateFrom(event.target.value)} aria-label={t("workflowFilterDateFrom")} />
+            ) : null}
+            {showDateFilters ? (
+              <input type="date" value={filterDateTo} onChange={(event) => setFilterDateTo(event.target.value)} aria-label={t("workflowFilterDateTo")} />
+            ) : null}
             {hasActiveFilters ? (
               <button
                 className="btn ghost small"

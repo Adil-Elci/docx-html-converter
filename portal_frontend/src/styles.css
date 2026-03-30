@@ -2399,6 +2399,37 @@ input:disabled {
   gap: 8px;
 }
 
+.site-access-section {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.site-access-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.site-access-header h2,
+.site-access-failure-panel h3 {
+  margin: 0 0 6px;
+}
+
+.site-access-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.site-access-results {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.site-access-failure-panel {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .admin-site-access-badge {
   display: inline-flex;
   align-items: center;
@@ -3639,6 +3670,14 @@ input:disabled {
 
   .published-controls,
   .pending-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .site-access-header {
+    flex-direction: column;
+  }
+
+  .site-access-stats {
     grid-template-columns: 1fr;
   }
 }

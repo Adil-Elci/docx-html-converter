@@ -91,7 +91,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "websites", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
@@ -2379,6 +2379,7 @@ export default function App() {
 
   const isAdminSection = activeSection === "admin";
   const isWebsitesSection = activeSection === "websites";
+  const isSiteAccessSection = activeSection === "site-access";
   const isClientsSection = activeSection === "clients";
   const isAdminUser = currentUser?.role === "admin";
   const isAdminPendingSection = isAdminUser && activeSection === "pending-jobs";
@@ -2938,7 +2939,7 @@ export default function App() {
       </div>
       <div className="app-main">
 
-        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection || isQueueDashboardSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+        <div className={`container ${(isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
               <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
@@ -2951,51 +2952,9 @@ export default function App() {
                 <span className="stat-label">{t("statTotalSites")}</span>
                 <strong>{sites.length}</strong>
               </div>
-              <div className="stat-card stat-card-actionable" style={{"--i": 1}}>
-                <div className="stat-card-header">
-                  <span className="stat-label">{t("statActiveSites")}</span>
-                  {siteAccessCheckResult ? (
-                    <span className={`admin-site-access-badge ${siteAccessCheckResult.failed_count > 0 ? "fail" : "success"}`}>
-                      {siteAccessCheckResult.failed_count > 0 ? t("adminSiteAccessCheckFailBadge") : t("adminSiteAccessCheckSuccessBadge")}
-                    </span>
-                  ) : null}
-                </div>
-                <strong>{activeSitesStatCount}</strong>
-                <div className="admin-site-access-panel">
-                  <button
-                    className="btn secondary small"
-                    type="button"
-                    onClick={handleSiteAccessCheck}
-                    disabled={siteAccessCheckLoading || readySites.length === 0}
-                  >
-                    {siteAccessCheckLoading ? t("adminSiteAccessCheckRunning") : t("adminSiteAccessCheckButton")}
-                  </button>
-                  {siteAccessCheckResult ? (
-                    <p className={`admin-site-access-message ${siteAccessCheckResult.failed_count > 0 ? "fail" : "success"}`}>
-                      {siteAccessCheckResult.failed_count > 0
-                        ? t("adminSiteAccessCheckFailMessage")
-                          .replace("{available}", String(siteAccessCheckResult.accessible_count || 0))
-                          .replace("{total}", String(siteAccessCheckResult.tested_count || 0))
-                        : t("adminSiteAccessCheckSuccessMessage")
-                          .replace("{count}", String(siteAccessCheckResult.accessible_count || 0))}
-                    </p>
-                  ) : (
-                    <p className="muted-text admin-site-access-message">
-                      {readySites.length > 0 ? t("adminSiteAccessCheckHint") : t("adminSiteAccessCheckEmpty")}
-                    </p>
-                  )}
-                  {siteAccessCheckResult?.failures?.length ? (
-                    <ul className="admin-site-access-failures">
-                      {siteAccessCheckResult.failures.map((item) => (
-                        <li key={`${item.site_id}-${item.site_url}`}>
-                          <strong>{item.site_name}</strong>
-                          <span className="admin-site-access-site">{item.site_url}</span>
-                          <span className="admin-site-access-error">{item.error}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
+              <div className="stat-card" style={{"--i": 1}}>
+                <span className="stat-label">{t("statActiveSites")}</span>
+                <strong>{readySites.length}</strong>
               </div>
               <div className="stat-card" style={{"--i": 2}}>
                 <span className="stat-label">{t("kpiTotalUsers")}</span>
@@ -3285,6 +3244,69 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            </div>
+          ) : isSiteAccessSection ? (
+            <div className="panel form-panel site-access-section">
+              <div className="site-access-header">
+                <div>
+                  <h2>{t("siteAccessTitle")}</h2>
+                  <p className="muted-text">{t("siteAccessDescription")}</p>
+                </div>
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={handleSiteAccessCheck}
+                  disabled={siteAccessCheckLoading || readySites.length === 0}
+                >
+                  {siteAccessCheckLoading ? t("adminSiteAccessCheckRunning") : t("adminSiteAccessCheckButton")}
+                </button>
+              </div>
+
+              <div className="stats-grid site-access-stats">
+                <div className="stat-card" style={{"--i": 0}}>
+                  <span className="stat-label">{t("siteAccessReadySitesLabel")}</span>
+                  <strong>{readySites.length}</strong>
+                </div>
+                <div className="stat-card" style={{"--i": 1}}>
+                  <span className="stat-label">{t("siteAccessAvailableSitesLabel")}</span>
+                  <strong>{siteAccessCheckResult ? activeSitesStatCount : "-"}</strong>
+                </div>
+                <div className="stat-card" style={{"--i": 2}}>
+                  <span className="stat-label">{t("siteAccessFailedSitesLabel")}</span>
+                  <strong>{siteAccessCheckResult ? siteAccessCheckResult.failed_count || 0 : "-"}</strong>
+                </div>
+              </div>
+
+              {!siteAccessCheckResult ? (
+                <p className="muted-text">
+                  {readySites.length > 0 ? t("adminSiteAccessCheckHint") : t("adminSiteAccessCheckEmpty")}
+                </p>
+              ) : (
+                <div className="site-access-results">
+                  <p className={`admin-site-access-message ${siteAccessCheckResult.failed_count > 0 ? "fail" : "success"}`}>
+                    {siteAccessCheckResult.failed_count > 0
+                      ? t("adminSiteAccessCheckFailMessage")
+                        .replace("{available}", String(siteAccessCheckResult.accessible_count || 0))
+                        .replace("{total}", String(siteAccessCheckResult.tested_count || 0))
+                      : t("adminSiteAccessCheckSuccessMessage")
+                        .replace("{count}", String(siteAccessCheckResult.accessible_count || 0))}
+                  </p>
+                  {siteAccessCheckResult.failed_count > 0 ? (
+                    <div className="site-access-failure-panel">
+                      <h3>{t("siteAccessFailedListTitle")}</h3>
+                      <ul className="admin-site-access-failures">
+                        {siteAccessCheckResult.failures.map((item) => (
+                          <li key={`${item.site_id}-${item.site_url}`}>
+                            <strong>{item.site_name}</strong>
+                            <span className="admin-site-access-site">{item.site_url}</span>
+                            <span className="admin-site-access-error">{item.error}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : isClientsSection ? (
             <div className="panel form-panel">
@@ -4914,6 +4936,12 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         <path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none" stroke="currentColor" strokeWidth="1.6" />
       </svg>
     ),
+    "site-access": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path d="M12 3l7 3v5c0 4.5-2.9 8.5-7 10-4.1-1.5-7-5.5-7-10V6l7-3z" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
     clients: (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <path
@@ -4985,6 +5013,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
     ? [
         { id: "admin", label: t("navAdmin") },
         { id: "websites", label: t("navWebsites") },
+        { id: "site-access", label: t("navSiteAccess") },
         { id: "clients", label: t("navClients") },
         { id: "submit-article", label: t("navSubmitArticle") },
         { id: "create-article", label: t("navCreateArticle") },

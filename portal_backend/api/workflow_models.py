@@ -28,7 +28,8 @@ class WorkflowCard(Base):
     __table_args__ = (
         CheckConstraint("column_source IN ('auto','manual')", name="workflow_cards_column_source_check"),
         CheckConstraint("card_kind IN ('job','manual')", name="workflow_cards_kind_check"),
-        CheckConstraint("job_type IN ('articles','develop','fix','build')", name="workflow_cards_job_type_check"),
+        CheckConstraint("job_type IN ('articles','develop','fix','research')", name="workflow_cards_job_type_check"),
+        CheckConstraint("priority IN ('urgent','high','medium','low')", name="workflow_cards_priority_check"),
         CheckConstraint("flag_type IN ('bug','needs_levent_attention') OR flag_type IS NULL", name="workflow_cards_flag_type_check"),
         UniqueConstraint("job_id", name="workflow_cards_job_unique"),
     )
@@ -45,10 +46,12 @@ class WorkflowCard(Base):
     title_snapshot = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
     job_type = Column(Text, nullable=True)
+    priority = Column(Text, nullable=False, default="medium")
     flag_type = Column(Text, nullable=True)
     request_kind_snapshot = Column(Text, nullable=True)
     job_status_snapshot = Column(Text, nullable=True)
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    assignee_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_by_name_snapshot = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

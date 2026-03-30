@@ -9,11 +9,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 import requests
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..auth import require_admin, require_super_admin
 from ..db import get_db
-from ..portal_models import Client, Site, User
+from ..portal_models import User
 from ..workflow_models import WorkflowCard, WorkflowCardComment, WorkflowCardEvent, WorkflowColumn
 from ..workflow_schemas import (
     WorkflowBoardOut,
@@ -78,6 +79,18 @@ def _build_actor_name(user: Optional[User]) -> str:
     if email:
         return email
     return "Unknown"
+
+
+def _get_assignable_workflow_user(db: Session, user_id: UUID) -> Optional[User]:
+    return (
+        db.query(User)
+        .filter(
+            User.id == user_id,
+            User.is_active.is_(True),
+            or_(User.role == "admin", User.role == "super_admin"),
+        )
+        .first()
+    )
 
 
 def _ensure_default_workflow_columns(db: Session) -> List[WorkflowColumn]:
@@ -145,11 +158,10 @@ def _record_card_event(
 
 def _select_workflow_card_rows(
     db: Session,
-) -> list[tuple[WorkflowCard, Optional[Client], Optional[Site]]]:
+) -> list[tuple[WorkflowCard, Optional[User]]]:
     return (
-        db.query(WorkflowCard, Client, Site)
-        .outerjoin(Client, Client.id == WorkflowCard.client_id)
-        .outerjoin(Site, Site.id == WorkflowCard.site_id)
+        db.query(WorkflowCard, User)
+        .outerjoin(User, User.id == WorkflowCard.assignee_user_id)
         .filter(WorkflowCard.card_kind == "manual")
         .order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc())
         .all()
@@ -188,7 +200,7 @@ def _load_workflow_card_comments(
 
 def _build_workflow_board_payload(
     columns: Sequence[WorkflowColumn],
-    rows: Iterable[tuple[WorkflowCard, Optional[Client], Optional[Site]]],
+    rows: Iterable[tuple[WorkflowCard, Optional[User]]],
     *,
     comments_by_card: dict[UUID, list[WorkflowCommentOut]],
 ) -> WorkflowBoardOut:
@@ -198,7 +210,7 @@ def _build_workflow_board_payload(
     updated_at = max((item.updated_at for item in columns), default=datetime.now(timezone.utc))
     columns_by_id = {item.id: item for item in columns}
 
-    for card, client, site in rows:
+    for card, assignee in rows:
         column = columns_by_id.get(card.column_id)
         column_key = column.column_key if column is not None else ""
         title = _build_workflow_card_title(str(card.title_snapshot or ""))
@@ -207,18 +219,16 @@ def _build_workflow_board_payload(
             id=card.id,
             job_id=None,
             submission_id=card.submission_id,
-            client_id=client.id if client is not None else card.client_id,
-            client_name=(client.name or "").strip() if client is not None else "",
-            site_id=site.id if site is not None else card.site_id,
-            site_name=(site.name or "").strip() if site is not None else "",
-            site_url=(site.site_url or "").strip() if site is not None else "",
             column_id=card.column_id,
             column_key=column_key,
             title=title,
             description=(card.description or "").strip() or None,
             card_kind=(card.card_kind or "manual").strip() or "manual",
             created_by_name=(card.created_by_name_snapshot or "").strip() or None,
+            assignee_user_id=card.assignee_user_id,
+            assignee_name=_build_actor_name(assignee) if assignee is not None else None,
             job_type=(card.job_type or "").strip() or None,
+            priority=(card.priority or "medium").strip() or "medium",
             flag_type=(card.flag_type or "").strip() or None,
             request_kind=(card.request_kind_snapshot or "manual").strip() or "manual",
             job_status=(card.job_status_snapshot or "manual").strip() or "manual",
@@ -380,16 +390,9 @@ def create_workflow_card(
     if todo_column is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="TO DO column is missing.")
 
-    client = None
-    site = None
-    if payload.client_id is not None:
-        client = db.query(Client).filter(Client.id == payload.client_id).first()
-        if client is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found.")
-    if payload.site_id is not None:
-        site = db.query(Site).filter(Site.id == payload.site_id).first()
-        if site is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found.")
+    assignee = _get_assignable_workflow_user(db, payload.assignee_user_id)
+    if assignee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found.")
 
     positions_by_column: Dict[UUID, int] = defaultdict(int)
     for item in db.query(WorkflowCard).order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc()).all():
@@ -398,8 +401,6 @@ def create_workflow_card(
     card = WorkflowCard(
         job_id=None,
         submission_id=None,
-        client_id=client.id if client is not None else None,
-        site_id=site.id if site is not None else None,
         column_id=todo_column.id,
         card_kind="manual",
         column_source="manual",
@@ -407,7 +408,9 @@ def create_workflow_card(
         title_snapshot=payload.title,
         description=payload.description,
         job_type=payload.job_type,
-        request_kind_snapshot=payload.request_kind,
+        priority=payload.priority,
+        assignee_user_id=assignee.id,
+        request_kind_snapshot="manual",
         job_status_snapshot="manual",
         created_by_user_id=current_user.id,
         created_by_name_snapshot=_build_actor_name(current_user),
@@ -421,7 +424,11 @@ def create_workflow_card(
         event_type="manual_created",
         from_column_id=None,
         to_column_id=todo_column.id,
-        payload={"request_kind": payload.request_kind},
+        payload={
+            "request_kind": "manual",
+            "priority": payload.priority,
+            "assignee_user_id": str(assignee.id),
+        },
     )
     db.commit()
     return _load_workflow_board(db, actor_user_id=current_user.id)
@@ -438,19 +445,28 @@ def update_workflow_card_details(
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
 
-    next_flag_type = payload.flag_type
+    changed = False
+    if payload.title is not None and card.title_snapshot != payload.title:
+        card.title_snapshot = payload.title
+        changed = True
+
+    if "description" in payload.__fields_set__:
+        next_description = payload.description
+        current_description = (card.description or "").strip() or None
+        if current_description != next_description:
+            card.description = next_description
+            changed = True
+
+    if "flag_type" in payload.__fields_set__:
+        next_flag_type = payload.flag_type
+    else:
+        next_flag_type = card.flag_type
     if (card.flag_type or None) != next_flag_type:
         card.flag_type = next_flag_type
+        changed = True
+
+    if changed:
         card.updated_at = datetime.now(timezone.utc)
-        _record_card_event(
-            db,
-            card=card,
-            actor_user_id=current_user.id,
-            event_type="moved",
-            from_column_id=card.column_id,
-            to_column_id=card.column_id,
-            payload={"flag_type": next_flag_type, "reason": "card_details_updated"},
-        )
         db.commit()
 
     return _load_workflow_board(db, actor_user_id=current_user.id)
@@ -493,6 +509,20 @@ def move_workflow_card(
         )
         db.commit()
 
+    return _load_workflow_board(db, actor_user_id=current_user.id)
+
+
+@router.delete("/cards/{card_id}", response_model=WorkflowBoardOut)
+def delete_workflow_card(
+    card_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_super_admin),
+) -> WorkflowBoardOut:
+    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+    db.delete(card)
+    db.commit()
     return _load_workflow_board(db, actor_user_id=current_user.id)
 
 

@@ -897,7 +897,20 @@ export default function App() {
       setSuccess("");
       const nextBoard = await api.post("/workflow/cards", payload);
       setWorkflowBoard(nextBoard || null);
-      setSuccess(t("workflowCardCreated"));
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  };
+
+  const deleteWorkflowCard = async (cardId) => {
+    const normalizedCardId = String(cardId || "").trim();
+    if (!normalizedCardId) return false;
+    try {
+      setError("");
+      const nextBoard = await api.delete(`/workflow/cards/${normalizedCardId}`);
+      setWorkflowBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -3434,28 +3447,20 @@ export default function App() {
               loading={workflowLoading}
               movingCardId={workflowMovingCardId}
               draggingCardId={workflowDragCardId}
-              columnCreating={workflowColumnCreating}
-              columnSavingId={workflowColumnSavingId}
-              columnDeletingId={workflowColumnDeletingId}
-              canManageColumns={isSuperAdmin}
               currentUser={currentUser}
-              clients={clients}
-              sites={sites}
+              adminUsers={adminUsers}
               language={language}
               onRefresh={() => loadWorkflowBoard(currentUser)}
               onDragStart={(cardId) => setWorkflowDragCardId(String(cardId || ""))}
               onDragEnd={() => setWorkflowDragCardId("")}
               onMoveCard={moveWorkflowCard}
               onCreateCard={createWorkflowCard}
-              onCreateColumn={createWorkflowColumn}
-              onRenameColumn={renameWorkflowColumn}
-              onDeleteColumn={deleteWorkflowColumn}
+              onDeleteCard={deleteWorkflowCard}
               onAddComment={addWorkflowComment}
               onUpdateComment={updateWorkflowComment}
               onRewriteComment={rewriteWorkflowComment}
               onUpdateCardDetails={updateWorkflowCardDetails}
               formatPublishedAt={formatPublishedAt}
-              formatPublishedStatus={formatPublishedStatus}
             />
           ) : isSiteAccessSection ? (
             <div className="panel form-panel site-access-section">
@@ -5370,47 +5375,44 @@ function WorkflowBoardPanel({
   loading,
   movingCardId,
   draggingCardId,
-  columnCreating,
-  columnSavingId,
-  columnDeletingId,
-  canManageColumns,
   currentUser,
-  clients,
-  sites,
+  adminUsers,
   language,
   onRefresh,
   onDragStart,
   onDragEnd,
   onMoveCard,
   onCreateCard,
-  onCreateColumn,
-  onRenameColumn,
-  onDeleteColumn,
+  onDeleteCard,
   onAddComment,
   onUpdateComment,
   onRewriteComment,
   onUpdateCardDetails,
   formatPublishedAt,
-  formatPublishedStatus,
 }) {
   const columns = Array.isArray(board?.columns) ? board.columns : [];
   const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
   const jobTypeOptions = [
     { value: "articles", label: t("workflowJobTypeArticles") },
+    { value: "research", label: t("workflowJobTypeResearch") },
     { value: "develop", label: t("workflowJobTypeDevelop") },
     { value: "fix", label: t("workflowJobTypeFix") },
   ];
-  void clients;
-  void sites;
+  const priorityOptions = [
+    { value: "urgent", label: t("workflowPriorityUrgent") },
+    { value: "high", label: t("workflowPriorityHigh") },
+    { value: "medium", label: t("workflowPriorityMedium") },
+    { value: "low", label: t("workflowPriorityLow") },
+  ];
   const currentUserId = String(currentUser?.id || "");
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [newColumnName, setNewColumnName] = useState("");
-  const [columnDrafts, setColumnDrafts] = useState({});
   const [createCardOpen, setCreateCardOpen] = useState(false);
   const [activeCardId, setActiveCardId] = useState("");
+  const [openCardMenuId, setOpenCardMenuId] = useState("");
   const [createCardForm, setCreateCardForm] = useState({
     title: "",
     job_type: "",
+    assignee_user_id: currentUserId,
+    priority: "medium",
     description: "",
   });
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
@@ -5419,46 +5421,13 @@ function WorkflowBoardPanel({
   const [commentSavingKey, setCommentSavingKey] = useState("");
   const [commentRewriteKey, setCommentRewriteKey] = useState("");
   const [cardDetailSavingKey, setCardDetailSavingKey] = useState("");
+  const [cardEditOpen, setCardEditOpen] = useState(false);
+  const [cardDetailDraft, setCardDetailDraft] = useState({ title: "", description: "" });
   const [filterUser, setFilterUser] = useState("");
   const [filterJobType, setFilterJobType] = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterPanel, setFilterPanel] = useState("");
-  const [collapsedColumnIds, setCollapsedColumnIds] = useState(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const parsed = JSON.parse(window.localStorage.getItem("workflow_collapsed_columns_v1") || "[]");
-      return Array.isArray(parsed) ? parsed.map((item) => String(item || "")).filter(Boolean) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [openColumnMenuId, setOpenColumnMenuId] = useState("");
-
-  useEffect(() => {
-    const nextDrafts = {};
-    for (const column of columns) {
-      nextDrafts[column.id] = column.name || "";
-    }
-    setColumnDrafts(nextDrafts);
-  }, [columns]);
-
-  const submitNewColumn = async () => {
-    const normalizedName = newColumnName.trim();
-    if (!normalizedName || columnCreating) return;
-    const created = await onCreateColumn(normalizedName);
-    if (created) setNewColumnName("");
-  };
-
-  useEffect(() => {
-    const allowedIds = new Set(columns.map((column) => String(column.id || "")));
-    setCollapsedColumnIds((current) => current.filter((columnId) => allowedIds.has(columnId)));
-  }, [columns]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem("workflow_collapsed_columns_v1", JSON.stringify(collapsedColumnIds));
-  }, [collapsedColumnIds]);
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
@@ -5486,25 +5455,59 @@ function WorkflowBoardPanel({
     });
   }, [columns, activeCardId]);
 
+  useEffect(() => {
+    setCreateCardForm((current) => ({
+      ...current,
+      assignee_user_id: current.assignee_user_id || currentUserId,
+      priority: current.priority || "medium",
+    }));
+  }, [currentUserId]);
+
+  const isSuperAdmin = isAdminRole(currentUser?.role) && ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+
+  const assignableUsers = useMemo(() => {
+    const seen = new Map();
+    for (const user of adminUsers || []) {
+      const isAssignable = isAdminRole(user?.role) && Boolean(user?.is_active);
+      const id = String(user?.id || "");
+      if (!isAssignable || !id) continue;
+      const label = String(user?.full_name || user?.email || "").trim();
+      seen.set(id, {
+        id,
+        label: label || t("notAvailable"),
+      });
+    }
+    if (currentUserId && !seen.has(currentUserId)) {
+      seen.set(currentUserId, {
+        id: currentUserId,
+        label: String(currentUser?.full_name || currentUser?.email || "").trim() || t("notAvailable"),
+      });
+    }
+    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+  }, [adminUsers, currentUser, currentUserId, t]);
+
   const userOptions = useMemo(() => {
     const seen = new Map();
+    for (const user of assignableUsers) {
+      seen.set(user.label.toLowerCase(), user.label);
+    }
     for (const column of columns) {
       for (const card of column.cards || []) {
-        const label = String(card?.created_by_name || "").trim();
+        const label = String(card?.assignee_name || "").trim();
         if (!label) continue;
         const key = label.toLowerCase();
         if (!seen.has(key)) seen.set(key, label);
       }
     }
     return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  }, [columns]);
+  }, [assignableUsers, columns]);
 
   const cardMatchesFilters = (card) => {
-    const createdBy = String(card?.created_by_name || "").trim().toLowerCase();
+    const assignee = String(card?.assignee_name || "").trim().toLowerCase();
     const rawCardJobType = String(card?.job_type || "").trim().toLowerCase();
     const cardJobType = rawCardJobType === "build" ? "develop" : rawCardJobType;
     const createdAt = card?.created_at ? new Date(card.created_at) : null;
-    if (filterUser && createdBy !== filterUser.trim().toLowerCase()) return false;
+    if (filterUser && assignee !== filterUser.trim().toLowerCase()) return false;
     if (filterJobType && cardJobType !== filterJobType.trim().toLowerCase()) return false;
     if (filterDateFrom) {
       const fromDate = new Date(`${filterDateFrom}T00:00:00`);
@@ -5546,11 +5549,11 @@ function WorkflowBoardPanel({
   const getJobTypeLabel = (jobType) => {
     const normalized = String(jobType || "").trim().toLowerCase();
     if (normalized === "articles") return t("workflowJobTypeArticles");
+    if (normalized === "research") return t("workflowJobTypeResearch");
     if (normalized === "develop" || normalized === "build") return t("workflowJobTypeDevelop");
     if (normalized === "fix") return t("workflowJobTypeFix");
     return normalized || t("notAvailable");
   };
-  const getJobTypeDisplay = (jobType) => `${t("workflowCreateCardJobTypeLabel")}: ${getJobTypeLabel(jobType)}`;
 
   const getFlagLabel = (flagType) => {
     const normalized = String(flagType || "").trim().toLowerCase();
@@ -5559,44 +5562,13 @@ function WorkflowBoardPanel({
     return "";
   };
 
-  const toggleColumnCollapsed = (columnId) => {
-    const normalizedColumnId = String(columnId || "");
-    if (!normalizedColumnId) return;
-    setCollapsedColumnIds((current) => (
-      current.includes(normalizedColumnId)
-        ? current.filter((item) => item !== normalizedColumnId)
-        : [...current, normalizedColumnId]
-    ));
-    setOpenColumnMenuId("");
-  };
-
-  const renameColumnFromMenu = async (column) => {
-    const currentName = String(column?.name || "").trim();
-    const nextName = window.prompt(t("workflowRenameColumnPrompt"), currentName);
-    if (nextName === null) return;
-    const normalizedName = nextName.trim();
-    if (!normalizedName || normalizedName === currentName) {
-      setOpenColumnMenuId("");
-      return;
-    }
-    await onRenameColumn(column.id, normalizedName);
-    setOpenColumnMenuId("");
-  };
-
-  const deleteColumnFromMenu = async (column) => {
-    const confirmed = window.confirm(
-      t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
-    );
-    if (!confirmed) return;
-    await onDeleteColumn(column.id);
-    setOpenColumnMenuId("");
-  };
-
-  const getCardKindLabel = (card) => {
-    const requestKind = String(card?.request_kind || "").trim().toLowerCase();
-    if (requestKind === "create_article") return t("workflowKindCreate");
-    if (requestKind === "submit_article") return t("workflowKindSubmit");
-    return t("workflowKindManual");
+  const getPriorityLabel = (priority) => {
+    const normalized = String(priority || "").trim().toLowerCase();
+    if (normalized === "urgent") return t("workflowPriorityUrgent");
+    if (normalized === "high") return t("workflowPriorityHigh");
+    if (normalized === "medium") return t("workflowPriorityMedium");
+    if (normalized === "low") return t("workflowPriorityLow");
+    return t("workflowPriorityMedium");
   };
 
   const resetCreateCardForm = () => {
@@ -5604,6 +5576,8 @@ function WorkflowBoardPanel({
     setCreateCardForm({
       title: "",
       job_type: "",
+      assignee_user_id: currentUserId,
+      priority: "medium",
       description: "",
     });
   };
@@ -5612,13 +5586,16 @@ function WorkflowBoardPanel({
     if (cardCreateBusy) return;
     const title = createCardForm.title.trim();
     const jobType = createCardForm.job_type.trim();
-    if (!title || !jobType) return;
+    const assigneeUserId = createCardForm.assignee_user_id.trim();
+    const priority = createCardForm.priority.trim() || "medium";
+    if (!title || !jobType || !assigneeUserId || !priority) return;
     setCardCreateBusy(true);
     const created = await onCreateCard({
       title,
       job_type: jobType,
+      assignee_user_id: assigneeUserId,
+      priority,
       description: createCardForm.description.trim() || null,
-      request_kind: "manual",
     });
     setCardCreateBusy(false);
     if (!created) return;
@@ -5661,29 +5638,69 @@ function WorkflowBoardPanel({
     applyValue(rewritten);
   };
 
-  const updateCardFlag = async (cardId, flagType) => {
-    const normalizedCardId = String(cardId || "");
+  const updateCardFlag = async (card, flagType) => {
+    const normalizedCardId = String(card?.id || "");
     if (!normalizedCardId) return;
+    const nextFlagType = card?.flag_type === flagType ? null : flagType;
     setCardDetailSavingKey(`flag:${normalizedCardId}`);
-    await onUpdateCardDetails(normalizedCardId, { flag_type: flagType || null });
+    await onUpdateCardDetails(normalizedCardId, { flag_type: nextFlagType });
     setCardDetailSavingKey("");
+    setOpenCardMenuId("");
   };
+
+  const removeCard = async (card) => {
+    const normalizedCardId = String(card?.id || "");
+    if (!normalizedCardId) return;
+    const confirmed = window.confirm(
+      t("workflowDeleteCardConfirm").replace("{title}", String(card?.title || t("workflowCardFallbackTitle"))),
+    );
+    if (!confirmed) return;
+    setCardDetailSavingKey(`delete:${normalizedCardId}`);
+    const deleted = await onDeleteCard(normalizedCardId);
+    setCardDetailSavingKey("");
+    if (deleted) {
+      setOpenCardMenuId("");
+      if (activeCardId === normalizedCardId) setActiveCardId("");
+    }
+  };
+
   const openCardDetails = (cardId) => {
     const normalizedCardId = String(cardId || "");
     if (!normalizedCardId || movingCardId) return;
+    setOpenCardMenuId("");
     setActiveCardId(normalizedCardId);
   };
 
-  const stretchColumnsToViewport = columns.length <= 3 && collapsedColumnIds.length === 0;
-  const gridTemplateColumns = columns
-    .map((column) => (
-      collapsedColumnIds.includes(String(column.id || ""))
-        ? "76px"
-        : stretchColumnsToViewport
-          ? "minmax(0, 1fr)"
-          : "minmax(280px, 1fr)"
-    ))
-    .join(" ");
+  useEffect(() => {
+    if (!activeCard) {
+      setCardEditOpen(false);
+      setCardDetailDraft({ title: "", description: "" });
+      return;
+    }
+    setCardEditOpen(false);
+    setCardDetailDraft({
+      title: String(activeCard.title || ""),
+      description: String(activeCard.description || ""),
+    });
+  }, [activeCard]);
+
+  const saveCardDetails = async () => {
+    if (!activeCard) return;
+    const normalizedCardId = String(activeCard.id || "");
+    const title = String(cardDetailDraft.title || "").trim();
+    if (!normalizedCardId || !title) return;
+    setCardDetailSavingKey(`details:${normalizedCardId}`);
+    const saved = await onUpdateCardDetails(normalizedCardId, {
+      title,
+      description: String(cardDetailDraft.description || "").trim() || null,
+    });
+    setCardDetailSavingKey("");
+    if (saved) setCardEditOpen(false);
+  };
+
+  const gridTemplateColumns = columns.length <= 3
+    ? `repeat(${Math.max(columns.length, 1)}, minmax(0, 1fr))`
+    : `repeat(${columns.length}, minmax(280px, 1fr))`;
 
   return (
     <div className="panel form-panel workflow-board-panel">
@@ -5693,16 +5710,6 @@ function WorkflowBoardPanel({
           <p className="muted-text">{t("workflowDescription")}</p>
         </div>
         <div className="workflow-board-actions">
-          {canManageColumns ? (
-            <button
-              className={`btn secondary small ${editorOpen ? "active" : ""}`.trim()}
-              type="button"
-              onClick={() => setEditorOpen((current) => !current)}
-              disabled={loading || Boolean(movingCardId)}
-            >
-              {editorOpen ? t("workflowHideColumnEditor") : t("workflowEditColumns")}
-            </button>
-          ) : null}
           <button className="btn secondary small" type="button" onClick={onRefresh} disabled={loading || Boolean(movingCardId)}>
             {loading ? t("loading") : t("refresh")}
           </button>
@@ -5779,104 +5786,6 @@ function WorkflowBoardPanel({
         ) : null}
       </div>
 
-      {canManageColumns && editorOpen ? (
-        <div className="workflow-column-editor">
-          <div className="workflow-column-editor-header">
-            <div>
-              <h3>{t("workflowEditColumns")}</h3>
-              <p className="muted-text">{t("workflowEditColumnsDescription")}</p>
-            </div>
-          </div>
-
-          <div className="workflow-column-editor-body">
-            <div className="workflow-column-editor-add">
-              <input
-                type="text"
-                value={newColumnName}
-                onChange={(event) => setNewColumnName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    submitNewColumn();
-                  }
-                }}
-                placeholder={t("workflowColumnAddPlaceholder")}
-                maxLength={80}
-              />
-              <button
-                className="btn small"
-                type="button"
-                onClick={submitNewColumn}
-                disabled={columnCreating || !newColumnName.trim()}
-              >
-                {columnCreating ? t("loading") : t("workflowAddColumn")}
-              </button>
-            </div>
-
-            <div className="workflow-column-editor-list">
-              {columns.map((column) => {
-                const columnId = String(column.id || "");
-                const draftName = String(columnDrafts[column.id] ?? column.name ?? "");
-                const normalizedDraftName = draftName.trim();
-                const normalizedCurrentName = String(column.name || "").trim();
-                const saveDisabled = !normalizedDraftName || normalizedDraftName === normalizedCurrentName;
-                const rowBusy = columnSavingId === columnId || columnDeletingId === columnId;
-                return (
-                  <div key={column.id} className="workflow-column-editor-row">
-                    <div className="workflow-column-editor-row-copy">
-                      <span className="workflow-column-editor-chip">
-                        {Array.isArray(column.cards) ? column.cards.length : 0}
-                      </span>
-                      <input
-                        type="text"
-                        value={draftName}
-                        onChange={(event) => setColumnDrafts((current) => ({ ...current, [column.id]: event.target.value }))}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !saveDisabled && !rowBusy) {
-                            event.preventDefault();
-                            onRenameColumn(column.id, normalizedDraftName);
-                          }
-                        }}
-                        maxLength={80}
-                        disabled={rowBusy}
-                        aria-label={t("workflowColumnName")}
-                      />
-                    </div>
-                    <div className="workflow-column-editor-actions">
-                      <button
-                        className="btn secondary small"
-                        type="button"
-                        onClick={() => onRenameColumn(column.id, normalizedDraftName)}
-                        disabled={rowBusy || saveDisabled}
-                      >
-                        {columnSavingId === columnId ? t("loading") : t("workflowColumnSave")}
-                      </button>
-                      {column.is_system ? (
-                        <span className="workflow-column-editor-locked">{t("workflowSystemColumnLocked")}</span>
-                      ) : (
-                        <button
-                          className="btn ghost small danger"
-                          type="button"
-                          onClick={() => {
-                            const confirmed = window.confirm(
-                              t("workflowDeleteColumnConfirm").replace("{name}", column.name || t("workflowColumnName")),
-                            );
-                            if (confirmed) onDeleteColumn(column.id);
-                          }}
-                          disabled={rowBusy}
-                        >
-                          {columnDeletingId === columnId ? t("loading") : t("workflowColumnDelete")}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {loading && columns.length === 0 ? (
         <div className="loading-inline" role="status" aria-live="polite">
           <span className="sr-only">{t("loading")}</span>
@@ -5893,13 +5802,11 @@ function WorkflowBoardPanel({
           style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
         >
           {filteredColumns.map((column, columnIndex) => {
-            const columnId = String(column.id || "");
-            const isCollapsed = collapsedColumnIds.includes(columnId);
             const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";
             return (
               <section
                 key={column.id}
-                className={`workflow-column ${isCollapsed ? "collapsed" : ""}`.trim()}
+                className="workflow-column"
                 onDragOver={(event) => {
                   event.preventDefault();
                 }}
@@ -5922,40 +5829,11 @@ function WorkflowBoardPanel({
                   </div>
                   <div className="workflow-column-header-actions">
                     <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
-                    <div className="workflow-column-menu-wrap">
-                      <button
-                        className="workflow-menu-btn"
-                        type="button"
-                        onClick={() => setOpenColumnMenuId((current) => current === columnId ? "" : columnId)}
-                        aria-label={t("workflowColumnMenu")}
-                      >
-                        <span />
-                        <span />
-                        <span />
-                      </button>
-                      {openColumnMenuId === columnId ? (
-                        <div className="workflow-inline-menu">
-                          <button type="button" onClick={() => toggleColumnCollapsed(column.id)}>
-                            {isCollapsed ? t("workflowColumnExpand") : t("workflowColumnCollapse")}
-                          </button>
-                          {canManageColumns ? (
-                            <button type="button" onClick={() => renameColumnFromMenu(column)}>
-                              {t("workflowColumnRename")}
-                            </button>
-                          ) : null}
-                          {canManageColumns && !column.is_system ? (
-                            <button type="button" className="danger" onClick={() => deleteColumnFromMenu(column)}>
-                              {t("workflowColumnDelete")}
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
                   </div>
                 </div>
 
                 <div className="workflow-column-cards">
-                  {isTodoColumn && !isCollapsed ? (
+                  {isTodoColumn ? (
                     <div className="workflow-create-card">
                       <button
                         className="workflow-create-card-trigger"
@@ -5988,29 +5866,76 @@ function WorkflowBoardPanel({
                         onDragStart={(event) => {
                           event.dataTransfer.effectAllowed = "move";
                           event.dataTransfer.setData("text/workflow-card-id", String(card.id));
+                          setOpenCardMenuId("");
                           onDragStart(card.id);
                         }}
                         onDragEnd={onDragEnd}
                       >
                         <div className="workflow-card-top">
-                          <span className={`workflow-card-kind ${card.request_kind === "create_article" ? "create" : card.request_kind === "submit_article" ? "submit" : "manual"}`}>
-                            {getCardKindLabel(card)}
-                          </span>
+                          <strong className="workflow-card-title">{card.title || t("workflowCardFallbackTitle")}</strong>
                           <div className="workflow-card-top-actions">
-                            <span className="workflow-card-status">{formatPublishedStatus(card.job_status)}</span>
+                            <div className="workflow-card-menu-wrap" onClick={(event) => event.stopPropagation()}>
+                              <button
+                                className="workflow-menu-btn"
+                                type="button"
+                                onClick={() => setOpenCardMenuId((current) => current === cardId ? "" : cardId)}
+                                aria-label={t("workflowCardActions")}
+                              >
+                                <span />
+                                <span />
+                                <span />
+                              </button>
+                              {openCardMenuId === cardId ? (
+                                <div className="workflow-inline-menu card-menu">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCardFlag(card, "bug")}
+                                    disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                  >
+                                    {t("workflowFlagAsBug")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCardFlag(card, "needs_levent_attention")}
+                                    disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                  >
+                                    {t("workflowFlagAsNeedsLevent")}
+                                  </button>
+                                  {isSuperAdmin ? (
+                                    <button
+                                      type="button"
+                                      className="danger"
+                                      onClick={() => removeCard(card)}
+                                      disabled={cardDetailSavingKey === `delete:${cardId}`}
+                                    >
+                                      {cardDetailSavingKey === `delete:${cardId}` ? t("loading") : t("workflowDeleteCard")}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                        <strong className="workflow-card-title">{card.title}</strong>
                         <div className="workflow-card-badges">
-                          <span className="workflow-card-job-type">{getJobTypeDisplay(card.job_type)}</span>
+                          <span className="workflow-card-job-type">{getJobTypeLabel(card.job_type)}</span>
+                          <span className={`workflow-card-priority ${String(card.priority || "medium").toLowerCase()}`}>
+                            {getPriorityLabel(card.priority)}
+                          </span>
                           {card.flag_type ? (
                             <span className={`workflow-card-flag ${card.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
                               {getFlagLabel(card.flag_type)}
                             </span>
                           ) : null}
                         </div>
+                        <div className="workflow-card-summary">
+                          <span>
+                            <strong>{t("workflowAssignedToLabel")}:</strong> {card.assignee_name || t("notAvailable")}
+                          </span>
+                          <span>
+                            <strong>{t("workflowCreatedByLabel")}:</strong> {card.created_by_name || t("notAvailable")}
+                          </span>
+                        </div>
                         <div className="workflow-card-footer">
-                          <span>{card.created_by_name || t("notAvailable")}</span>
                           <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
                         </div>
                       </article>
@@ -6064,6 +5989,31 @@ function WorkflowBoardPanel({
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+                <label className="workflow-field-label" htmlFor="workflow-create-assignee">
+                  {t("workflowAssignedToLabel")}
+                </label>
+                <select
+                  id="workflow-create-assignee"
+                  value={createCardForm.assignee_user_id}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, assignee_user_id: event.target.value }))}
+                >
+                  <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
+                  {assignableUsers.map((user) => (
+                    <option key={user.id} value={user.id}>{user.label}</option>
+                  ))}
+                </select>
+                <label className="workflow-field-label" htmlFor="workflow-create-priority">
+                  {t("workflowPriorityLabel")}
+                </label>
+                <select
+                  id="workflow-create-priority"
+                  value={createCardForm.priority}
+                  onChange={(event) => setCreateCardForm((current) => ({ ...current, priority: event.target.value }))}
+                >
+                  {priorityOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </div>
               <label className="workflow-field-label" htmlFor="workflow-create-description">
                 {t("workflowCreateCardDescriptionLabel")}
@@ -6103,7 +6053,12 @@ function WorkflowBoardPanel({
                   className="btn small"
                   type="button"
                   onClick={submitManualCard}
-                  disabled={cardCreateBusy || !createCardForm.title.trim() || !createCardForm.job_type.trim()}
+                  disabled={
+                    cardCreateBusy
+                    || !createCardForm.title.trim()
+                    || !createCardForm.job_type.trim()
+                    || !createCardForm.assignee_user_id.trim()
+                  }
                 >
                   {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}
                 </button>
@@ -6128,10 +6083,27 @@ function WorkflowBoardPanel({
           <div className={`modal-card panel workflow-card-details-modal ${activeCard.flag_type === "bug" ? "flag-bug" : activeCard.flag_type === "needs_levent_attention" ? "flag-attention" : ""}`.trim()}>
             <div className="workflow-card-details-header">
               <div className="workflow-card-details-heading">
-                <h3 id="workflow-card-details-title">{activeCard.title}</h3>
+                {cardEditOpen ? (
+                  <div className="workflow-card-detail-editor">
+                    <label className="workflow-field-label" htmlFor="workflow-detail-title">
+                      {t("workflowCreateCardTitleLabel")}
+                    </label>
+                    <input
+                      id="workflow-detail-title"
+                      type="text"
+                      value={cardDetailDraft.title}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                      maxLength={160}
+                    />
+                  </div>
+                ) : (
+                  <h3 id="workflow-card-details-title">{activeCard.title}</h3>
+                )}
                 <div className="workflow-card-badges">
-                  <span className="workflow-card-job-type">{getJobTypeDisplay(activeCard.job_type)}</span>
-                  <span className="workflow-card-status">{formatPublishedStatus(activeCard.job_status)}</span>
+                  <span className="workflow-card-job-type">{getJobTypeLabel(activeCard.job_type)}</span>
+                  <span className={`workflow-card-priority ${String(activeCard.priority || "medium").toLowerCase()}`}>
+                    {getPriorityLabel(activeCard.priority)}
+                  </span>
                   {activeCard.flag_type ? (
                     <span className={`workflow-card-flag ${activeCard.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
                       {getFlagLabel(activeCard.flag_type)}
@@ -6145,12 +6117,20 @@ function WorkflowBoardPanel({
             </div>
 
             <div className="workflow-card-details-meta">
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowAssignedToLabel")}</span>
+                <span>{activeCard.assignee_name || t("notAvailable")}</span>
+              </div>
               {activeCard.created_by_name ? (
                 <div className="workflow-card-meta">
                   <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
                   <span>{activeCard.created_by_name}</span>
                 </div>
               ) : null}
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowPriorityLabel")}</span>
+                <span>{getPriorityLabel(activeCard.priority)}</span>
+              </div>
               <div className="workflow-card-meta">
                 <span className="workflow-card-label">{t("workflowCreatedAtLabel")}</span>
                 <span>{formatPublishedAt(activeCard.created_at)}</span>
@@ -6161,43 +6141,52 @@ function WorkflowBoardPanel({
               <div className="workflow-card-details-section-header">
                 <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
                 <div className="workflow-card-detail-actions">
-                  <button
-                    className="btn ghost small"
-                    type="button"
-                    onClick={() => updateCardFlag(activeCard.id, "bug")}
-                    disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}` || activeCard.flag_type === "bug"}
-                  >
-                    {t("workflowFlagAsBug")}
-                  </button>
-                  <button
-                    className="btn ghost small"
-                    type="button"
-                    onClick={() => updateCardFlag(activeCard.id, "needs_levent_attention")}
-                    disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}` || activeCard.flag_type === "needs_levent_attention"}
-                  >
-                    {t("workflowFlagAsNeedsLevent")}
-                  </button>
-                  {activeCard.flag_type ? (
+                  {cardEditOpen ? (
+                    <>
+                      <button
+                        className="btn ghost small"
+                        type="button"
+                        onClick={() => {
+                          setCardEditOpen(false);
+                          setCardDetailDraft({
+                            title: String(activeCard.title || ""),
+                            description: String(activeCard.description || ""),
+                          });
+                        }}
+                        disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
+                      >
+                        {t("cancel")}
+                      </button>
+                      <button
+                        className="btn small"
+                        type="button"
+                        onClick={saveCardDetails}
+                        disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}` || !String(cardDetailDraft.title || "").trim()}
+                      >
+                        {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
+                      </button>
+                    </>
+                  ) : (
                     <button
                       className="btn ghost small"
                       type="button"
-                      onClick={() => updateCardFlag(activeCard.id, "")}
-                      disabled={cardDetailSavingKey === `flag:${String(activeCard.id || "")}`}
+                      onClick={() => setCardEditOpen(true)}
                     >
-                      {t("workflowClearFlag")}
+                      {t("workflowEditDetails")}
                     </button>
-                  ) : null}
+                  )}
                 </div>
               </div>
-              <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
-              {activeCard.last_error ? (
-                <p className="workflow-card-error">{activeCard.last_error}</p>
-              ) : null}
-              {activeCard.wp_post_url ? (
-                <a className="workflow-card-link" href={activeCard.wp_post_url} target="_blank" rel="noreferrer">
-                  {t("viewPost")}
-                </a>
-              ) : null}
+              {cardEditOpen ? (
+                <textarea
+                  value={cardDetailDraft.description}
+                  onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
+                  rows={5}
+                  maxLength={4000}
+                />
+              ) : (
+                <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
+              )}
             </div>
 
             <div className="workflow-card-comments details">

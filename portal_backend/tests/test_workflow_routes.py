@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from portal_backend.api.routers import workflow_routes
+from portal_backend.api.workflow_schemas import WorkflowCardCreateIn, WorkflowCardUpdateIn
 
 
 def test_is_system_workflow_column_key_detects_core_columns() -> None:
@@ -41,3 +45,31 @@ def test_extract_anthropic_text_returns_combined_text_blocks() -> None:
         ]
     }
     assert workflow_routes._extract_anthropic_text(payload) == "First line\nSecond line"
+
+
+def test_workflow_card_create_in_accepts_research_and_priority() -> None:
+    payload = WorkflowCardCreateIn(
+        title="Research site access failures",
+        job_type="research",
+        priority="high",
+        assignee_user_id="00000000-0000-0000-0000-000000000001",
+        description="Investigate site access checks and summarize blockers.",
+    )
+    assert payload.job_type == "research"
+    assert payload.priority == "high"
+
+
+def test_workflow_card_create_in_rejects_invalid_priority() -> None:
+    with pytest.raises(ValidationError):
+        WorkflowCardCreateIn(
+            title="Broken priority",
+            job_type="develop",
+            priority="critical",
+            assignee_user_id="00000000-0000-0000-0000-000000000001",
+        )
+
+
+def test_workflow_card_update_in_allows_title_and_description_edit() -> None:
+    payload = WorkflowCardUpdateIn(title="Updated title", description="Updated notes")
+    assert payload.title == "Updated title"
+    assert payload.description == "Updated notes"

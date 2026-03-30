@@ -658,10 +658,21 @@ h3,
   letter-spacing: 0.12em;
 }
 
+.stat-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .stat-card strong {
   font-size: 28px;
   line-height: 1;
   letter-spacing: -0.03em;
+}
+
+.stat-card-actionable {
+  align-content: start;
 }
 
 .panel {
@@ -2381,6 +2392,74 @@ input:disabled {
 .admin-summary-card h3 {
   margin: 0;
   font-size: 14px;
+}
+
+.admin-site-access-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-site-access-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.admin-site-access-badge.success {
+  background: color-mix(in srgb, #2fb36d 16%, transparent);
+  color: #2fb36d;
+}
+
+.admin-site-access-badge.fail {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.admin-site-access-message {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.admin-site-access-message.success {
+  color: #2fb36d;
+}
+
+.admin-site-access-message.fail {
+  color: var(--danger);
+}
+
+.admin-site-access-failures {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.admin-site-access-failures li {
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-dim);
+}
+
+.admin-site-access-site,
+.admin-site-access-error {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.admin-site-access-site {
+  word-break: break-all;
 }
 
 .admin-trend-panel {

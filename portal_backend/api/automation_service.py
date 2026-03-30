@@ -38,6 +38,9 @@ DEFAULT_CATEGORY_LLM_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_CATEGORY_LLM_MAX_CATEGORIES = 2
 DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD = 0.55
+ACCESS_CHECK_IMAGE_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0x0AAAAASUVORK5CYII="
+)
 
 logger = logging.getLogger("portal_backend.automation")
 
@@ -772,6 +775,164 @@ def wp_get_media(
         timeout_seconds=timeout_seconds,
         allow_redirects=False,
     )
+
+
+def _wp_delete_entity(
+    *,
+    resource: str,
+    resource_id: int,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    entity_url = f"{_wp_api_base(site_url, wp_rest_base)}/{resource}/{resource_id}?force=true"
+    headers = {
+        "Authorization": _wp_auth_header(wp_username, wp_app_password),
+        "Content-Type": "application/json",
+    }
+    return _request_json(
+        "DELETE",
+        entity_url,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
+def wp_delete_post(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    post_id: int,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    return _wp_delete_entity(
+        resource="posts",
+        resource_id=post_id,
+        site_url=site_url,
+        wp_rest_base=wp_rest_base,
+        wp_username=wp_username,
+        wp_app_password=wp_app_password,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def wp_delete_media(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    media_id: int,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    return _wp_delete_entity(
+        resource="media",
+        resource_id=media_id,
+        site_url=site_url,
+        wp_rest_base=wp_rest_base,
+        wp_username=wp_username,
+        wp_app_password=wp_app_password,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def wp_check_site_access(
+    *,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    posts_url = f"{_wp_api_base(site_url, wp_rest_base)}/posts"
+    headers = {
+        "Authorization": _wp_auth_header(wp_username, wp_app_password),
+        "Content-Type": "application/json",
+    }
+    check_token = f"{int(time.time())}-{int(time.monotonic() * 1000)}"
+    slug = f"portal-access-check-{check_token}"
+    title = f"Portal access check {check_token}"
+    created_post_id: Optional[int] = None
+    uploaded_media_id: Optional[int] = None
+    cleanup_errors: List[str] = []
+
+    try:
+        created_post_payload = _request_json(
+            "POST",
+            posts_url,
+            headers=headers,
+            json_body={
+                "title": title,
+                "content": "<p>Automated access check draft. Safe to delete.</p>",
+                "status": "draft",
+                "slug": slug,
+                "format": "standard",
+            },
+            timeout_seconds=timeout_seconds,
+            allow_redirects=False,
+        )
+        raw_post_id = created_post_payload.get("id")
+        if not isinstance(raw_post_id, int) or raw_post_id <= 0:
+            raise AutomationError("WordPress post access check succeeded but response did not include a valid post ID.")
+        created_post_id = raw_post_id
+
+        uploaded_media_payload = wp_create_media_item(
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+            data=ACCESS_CHECK_IMAGE_BYTES,
+            file_name=f"{slug}.png",
+            content_type="image/png",
+            title=title,
+            alt_text=title,
+            timeout_seconds=timeout_seconds,
+        )
+        raw_media_id = uploaded_media_payload.get("id")
+        if not isinstance(raw_media_id, int) or raw_media_id <= 0:
+            raise AutomationError("WordPress media access check succeeded but response did not include a valid media ID.")
+        uploaded_media_id = raw_media_id
+        return {
+            "ok": True,
+            "post_id": created_post_id,
+            "media_id": uploaded_media_id,
+        }
+    finally:
+        if uploaded_media_id is not None:
+            try:
+                wp_delete_media(
+                    site_url=site_url,
+                    wp_rest_base=wp_rest_base,
+                    wp_username=wp_username,
+                    wp_app_password=wp_app_password,
+                    media_id=uploaded_media_id,
+                    timeout_seconds=timeout_seconds,
+                )
+            except AutomationError as exc:
+                cleanup_errors.append(f"media cleanup failed: {exc}")
+        if created_post_id is not None:
+            try:
+                wp_delete_post(
+                    site_url=site_url,
+                    wp_rest_base=wp_rest_base,
+                    wp_username=wp_username,
+                    wp_app_password=wp_app_password,
+                    post_id=created_post_id,
+                    timeout_seconds=timeout_seconds,
+                )
+            except AutomationError as exc:
+                cleanup_errors.append(f"post cleanup failed: {exc}")
+        if cleanup_errors:
+            logger.warning(
+                "WordPress access check cleanup errors for %s: %s",
+                site_url,
+                "; ".join(cleanup_errors),
+            )
 
 
 def converter_publishing_site_from_site_url(site_url: str) -> str:

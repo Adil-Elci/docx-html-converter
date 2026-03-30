@@ -75,6 +75,79 @@ def _creator_output_without_prompt_trace() -> dict[str, object]:
     }
 
 
+def test_wp_check_site_access_creates_and_cleans_up_probe_assets(monkeypatch) -> None:
+    request_calls: list[tuple[str, str, dict[str, object] | None]] = []
+    media_calls: list[dict[str, object]] = []
+
+    def fake_request_json(method: str, url: str, **kwargs):
+        request_calls.append((method, url, kwargs.get("json_body")))
+        if method == "POST" and url.endswith("/wp-json/wp/v2/posts"):
+            return {"id": 321}
+        if method == "DELETE" and url.endswith("/wp-json/wp/v2/media/654?force=true"):
+            return {"deleted": True}
+        if method == "DELETE" and url.endswith("/wp-json/wp/v2/posts/321?force=true"):
+            return {"deleted": True}
+        raise AssertionError(f"Unexpected request {method} {url}")
+
+    def fake_create_media_item(**kwargs):
+        media_calls.append(kwargs)
+        return {"id": 654}
+
+    monkeypatch.setattr(automation_service, "_request_json", fake_request_json)
+    monkeypatch.setattr(automation_service, "wp_create_media_item", fake_create_media_item)
+
+    result = automation_service.wp_check_site_access(
+        site_url="https://publisher.example.com",
+        wp_rest_base="/wp-json/wp/v2",
+        wp_username="publisher-user",
+        wp_app_password="app-password",
+        timeout_seconds=9,
+    )
+
+    assert result == {"ok": True, "post_id": 321, "media_id": 654}
+    assert request_calls[0][0] == "POST"
+    assert request_calls[0][1].endswith("/wp-json/wp/v2/posts")
+    assert request_calls[0][2]["status"] == "draft"
+    assert request_calls[-2][0] == "DELETE"
+    assert request_calls[-2][1].endswith("/wp-json/wp/v2/media/654?force=true")
+    assert request_calls[-1][0] == "DELETE"
+    assert request_calls[-1][1].endswith("/wp-json/wp/v2/posts/321?force=true")
+    assert media_calls[0]["data"] == automation_service.ACCESS_CHECK_IMAGE_BYTES
+    assert media_calls[0]["content_type"] == "image/png"
+
+
+def test_wp_check_site_access_cleans_up_post_when_media_upload_fails(monkeypatch) -> None:
+    request_calls: list[tuple[str, str]] = []
+
+    def fake_request_json(method: str, url: str, **_kwargs):
+        request_calls.append((method, url))
+        if method == "POST" and url.endswith("/wp-json/wp/v2/posts"):
+            return {"id": 321}
+        if method == "DELETE" and url.endswith("/wp-json/wp/v2/posts/321?force=true"):
+            return {"deleted": True}
+        raise AssertionError(f"Unexpected request {method} {url}")
+
+    monkeypatch.setattr(automation_service, "_request_json", fake_request_json)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_media_item",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            automation_service.AutomationError("WordPress media upload failed, HTTP 403: forbidden")
+        ),
+    )
+
+    with pytest.raises(automation_service.AutomationError, match="HTTP 403"):
+        automation_service.wp_check_site_access(
+            site_url="https://publisher.example.com",
+            wp_rest_base="/wp-json/wp/v2",
+            wp_username="publisher-user",
+            wp_app_password="app-password",
+            timeout_seconds=9,
+        )
+
+    assert ("DELETE", "https://publisher.example.com/wp-json/wp/v2/posts/321?force=true") in request_calls
+
+
 def test_run_create_article_pipeline_does_not_generate_portal_fallback_image_for_new_post(monkeypatch) -> None:
     calls: dict[str, object] = {}
 

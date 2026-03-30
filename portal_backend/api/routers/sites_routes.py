@@ -1,19 +1,39 @@
 from __future__ import annotations
 
-from typing import List, Optional
+import logging
+from datetime import datetime, timezone
+from typing import Callable, List, Optional, Sequence, Tuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+from ..automation_service import DEFAULT_TIMEOUT_SECONDS, AutomationError, wp_check_site_access
 from ..auth import get_current_user, require_admin
 from ..db import get_db
 from ..portal_models import Site, SiteCredential, User
 from ..portal_schemas import SiteCreate, SiteOut, SiteUpdate
 
 router = APIRouter(prefix="/sites", tags=["publishing_sites"])
+logger = logging.getLogger("portal_backend.site_access")
+
+
+class SiteAccessCheckFailureOut(BaseModel):
+    site_id: UUID
+    site_name: str
+    site_url: str
+    error: str
+
+
+class SiteAccessCheckSummaryOut(BaseModel):
+    tested_count: int = 0
+    accessible_count: int = 0
+    failed_count: int = 0
+    checked_at: datetime
+    failures: List[SiteAccessCheckFailureOut] = Field(default_factory=list)
 
 
 def _site_to_out(site: Site, credential: Optional[SiteCredential] = None) -> SiteOut:
@@ -29,6 +49,71 @@ def _site_to_out(site: Site, credential: Optional[SiteCredential] = None) -> Sit
         status=site.status,
         created_at=site.created_at,
         updated_at=site.updated_at,
+    )
+
+
+def _list_ready_sites_with_credentials(db: Session) -> List[Tuple[Site, SiteCredential]]:
+    return (
+        db.query(Site, SiteCredential)
+        .join(SiteCredential, SiteCredential.site_id == Site.id)
+        .filter(
+            Site.status == "active",
+            SiteCredential.enabled.is_(True),
+            SiteCredential.wp_username.isnot(None),
+            SiteCredential.wp_app_password.isnot(None),
+            func.length(func.btrim(SiteCredential.wp_username)) > 0,
+            func.length(func.btrim(SiteCredential.wp_app_password)) > 0,
+        )
+        .order_by(Site.name.asc())
+        .all()
+    )
+
+
+def _run_site_access_checks(
+    site_rows: Sequence[Tuple[Site, SiteCredential]],
+    *,
+    checker: Callable[..., dict] = wp_check_site_access,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> SiteAccessCheckSummaryOut:
+    failures: List[SiteAccessCheckFailureOut] = []
+    accessible_count = 0
+
+    for site, credential in site_rows:
+        try:
+            checker(
+                site_url=site.site_url,
+                wp_rest_base=site.wp_rest_base,
+                wp_username=credential.wp_username,
+                wp_app_password=credential.wp_app_password,
+                timeout_seconds=timeout_seconds,
+            )
+            accessible_count += 1
+        except AutomationError as exc:
+            failures.append(
+                SiteAccessCheckFailureOut(
+                    site_id=site.id,
+                    site_name=site.name,
+                    site_url=site.site_url,
+                    error=str(exc),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive guardrail for unexpected probe failures
+            logger.exception("Unexpected publishing-site access check failure for %s", site.site_url)
+            failures.append(
+                SiteAccessCheckFailureOut(
+                    site_id=site.id,
+                    site_name=site.name,
+                    site_url=site.site_url,
+                    error=f"Unexpected error: {exc}",
+                )
+            )
+
+    return SiteAccessCheckSummaryOut(
+        tested_count=len(site_rows),
+        accessible_count=accessible_count,
+        failed_count=len(failures),
+        checked_at=datetime.now(timezone.utc),
+        failures=failures,
     )
 
 
@@ -67,6 +152,14 @@ def list_sites(
     )
     credential_map = {cred.site_id: cred for cred in credentials}
     return [_site_to_out(site, credential_map.get(site.id)) for site in sites]
+
+
+@router.post("/access-check", response_model=SiteAccessCheckSummaryOut)
+def check_active_site_access(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> SiteAccessCheckSummaryOut:
+    return _run_site_access_checks(_list_ready_sites_with_credentials(db))
 
 
 @router.post("", response_model=SiteOut, status_code=status.HTTP_201_CREATED)

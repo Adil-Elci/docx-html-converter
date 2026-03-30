@@ -250,6 +250,8 @@ export default function App() {
   const [adminSavingUserId, setAdminSavingUserId] = useState("");
   const [keywordTrendDashboard, setKeywordTrendDashboard] = useState(null);
   const [keywordTrendLoading, setKeywordTrendLoading] = useState(false);
+  const [siteAccessCheckLoading, setSiteAccessCheckLoading] = useState(false);
+  const [siteAccessCheckResult, setSiteAccessCheckResult] = useState(null);
   const [siteFitDashboard, setSiteFitDashboard] = useState(null);
   const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
@@ -307,6 +309,7 @@ export default function App() {
   const allPendingSelected = pendingJobs.length > 0 && pendingJobs.every((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
+  const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -712,6 +715,9 @@ export default function App() {
     try {
       setError("");
       const isAdmin = forUser?.role === "admin";
+      if (isAdmin) {
+        setSiteAccessCheckResult(null);
+      }
       const sitesPath = forUser?.role === "client" ? "/sites?status=active&ready_only=true" : "/sites";
       if (isAdmin) {
         const [clientsData, sitesData, readySitesData] = await Promise.all([
@@ -730,6 +736,29 @@ export default function App() {
       }
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  const handleSiteAccessCheck = async () => {
+    try {
+      setError("");
+      setSuccess("");
+      setSiteAccessCheckLoading(true);
+      const result = await api.post("/sites/access-check", {});
+      setSiteAccessCheckResult(result);
+      if ((result?.failed_count || 0) === 0) {
+        setSuccess(
+          t("adminSiteAccessCheckSuccessToast").replace(
+            "{count}",
+            String(result?.accessible_count || 0),
+          ),
+        );
+      }
+    } catch (err) {
+      setSiteAccessCheckResult(null);
+      setError(err.message);
+    } finally {
+      setSiteAccessCheckLoading(false);
     }
   };
 
@@ -2922,9 +2951,51 @@ export default function App() {
                 <span className="stat-label">{t("statTotalSites")}</span>
                 <strong>{sites.length}</strong>
               </div>
-              <div className="stat-card" style={{"--i": 1}}>
-                <span className="stat-label">{t("statActiveSites")}</span>
-                <strong>{readySites.length}</strong>
+              <div className="stat-card stat-card-actionable" style={{"--i": 1}}>
+                <div className="stat-card-header">
+                  <span className="stat-label">{t("statActiveSites")}</span>
+                  {siteAccessCheckResult ? (
+                    <span className={`admin-site-access-badge ${siteAccessCheckResult.failed_count > 0 ? "fail" : "success"}`}>
+                      {siteAccessCheckResult.failed_count > 0 ? t("adminSiteAccessCheckFailBadge") : t("adminSiteAccessCheckSuccessBadge")}
+                    </span>
+                  ) : null}
+                </div>
+                <strong>{activeSitesStatCount}</strong>
+                <div className="admin-site-access-panel">
+                  <button
+                    className="btn secondary small"
+                    type="button"
+                    onClick={handleSiteAccessCheck}
+                    disabled={siteAccessCheckLoading || readySites.length === 0}
+                  >
+                    {siteAccessCheckLoading ? t("adminSiteAccessCheckRunning") : t("adminSiteAccessCheckButton")}
+                  </button>
+                  {siteAccessCheckResult ? (
+                    <p className={`admin-site-access-message ${siteAccessCheckResult.failed_count > 0 ? "fail" : "success"}`}>
+                      {siteAccessCheckResult.failed_count > 0
+                        ? t("adminSiteAccessCheckFailMessage")
+                          .replace("{available}", String(siteAccessCheckResult.accessible_count || 0))
+                          .replace("{total}", String(siteAccessCheckResult.tested_count || 0))
+                        : t("adminSiteAccessCheckSuccessMessage")
+                          .replace("{count}", String(siteAccessCheckResult.accessible_count || 0))}
+                    </p>
+                  ) : (
+                    <p className="muted-text admin-site-access-message">
+                      {readySites.length > 0 ? t("adminSiteAccessCheckHint") : t("adminSiteAccessCheckEmpty")}
+                    </p>
+                  )}
+                  {siteAccessCheckResult?.failures?.length ? (
+                    <ul className="admin-site-access-failures">
+                      {siteAccessCheckResult.failures.map((item) => (
+                        <li key={`${item.site_id}-${item.site_url}`}>
+                          <strong>{item.site_name}</strong>
+                          <span className="admin-site-access-site">{item.site_url}</span>
+                          <span className="admin-site-access-error">{item.error}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
               </div>
               <div className="stat-card" style={{"--i": 2}}>
                 <span className="stat-label">{t("kpiTotalUsers")}</span>

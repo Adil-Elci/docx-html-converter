@@ -5675,9 +5675,14 @@ function WorkflowBoardPanel({
     setOpenCardMenuId("");
   };
 
+  const stretchColumnsToViewport = columns.length <= 3 && collapsedColumnIds.length === 0;
   const gridTemplateColumns = columns
     .map((column) => (
-      collapsedColumnIds.includes(String(column.id || "")) ? "76px" : "minmax(320px, 1fr)"
+      collapsedColumnIds.includes(String(column.id || ""))
+        ? "76px"
+        : stretchColumnsToViewport
+          ? "minmax(0, 1fr)"
+          : "minmax(280px, 1fr)"
     ))
     .join(" ");
 
@@ -5856,7 +5861,7 @@ function WorkflowBoardPanel({
       {columns.length > 0 ? (
         <div
           className="workflow-board-columns"
-          style={{ gridTemplateColumns: gridTemplateColumns || "minmax(320px, 1fr)" }}
+          style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
         >
           {filteredColumns.map((column, columnIndex) => {
             const columnId = String(column.id || "");

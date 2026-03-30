@@ -2595,7 +2595,7 @@ input:disabled {
   overflow-x: auto;
   padding-bottom: 6px;
   min-width: 100%;
-  width: max-content;
+  width: 100%;
   align-items: start;
 }
 

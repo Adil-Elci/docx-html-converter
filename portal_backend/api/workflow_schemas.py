@@ -10,7 +10,8 @@ WORKFLOW_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
 WORKFLOW_COMMENT_LANGUAGES = {"en", "de"}
 WORKFLOW_JOB_TYPES = {"articles", "develop", "fix", "research"}
 WORKFLOW_PRIORITY_LEVELS = {"urgent", "high", "medium", "low"}
-WORKFLOW_FLAG_TYPES = {"bug", "needs_levent_attention", "needs_adil_attention"}
+WORKFLOW_FLAG_ORDER = ("bug", "needs_levent_attention", "needs_adil_attention")
+WORKFLOW_FLAG_TYPES = set(WORKFLOW_FLAG_ORDER)
 
 
 class WorkflowCommentOut(BaseModel):
@@ -37,7 +38,7 @@ class WorkflowCardOut(BaseModel):
     assignee_name: Optional[str] = None
     job_type: Optional[str] = None
     priority: str = "medium"
-    flag_type: Optional[str] = None
+    flag_types: List[str] = Field(default_factory=list)
     request_kind: Optional[str] = None
     job_status: str
     wp_post_url: Optional[str] = None
@@ -206,7 +207,7 @@ class WorkflowCardUpdateIn(BaseModel):
     job_type: Optional[str] = None
     priority: Optional[str] = None
     assignee_user_id: Optional[UUID] = None
-    flag_type: Optional[str] = None
+    flag_types: Optional[List[str]] = None
 
     @validator("title")
     def validate_title(cls, value: Optional[str]) -> Optional[str]:
@@ -256,13 +257,22 @@ class WorkflowCardUpdateIn(BaseModel):
             raise ValueError("assignee_user_id is required.")
         return value
 
-    @validator("flag_type")
-    def validate_flag_type(cls, value: Optional[str]) -> Optional[str]:
+    @validator("flag_types")
+    def validate_flag_types(cls, value: Optional[List[str]]) -> Optional[List[str]]:
         if value is None:
             return None
-        normalized = value.strip().lower()
-        if not normalized:
-            return None
-        if normalized not in WORKFLOW_FLAG_TYPES:
-            raise ValueError("flag_type must be bug, needs_levent_attention, or needs_adil_attention.")
-        return normalized
+        seen = set()
+        normalized_values: list[str] = []
+        for flag_type in value:
+            normalized = str(flag_type or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized not in WORKFLOW_FLAG_TYPES:
+                raise ValueError("flag_types may only include bug, needs_levent_attention, or needs_adil_attention.")
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+        for flag_type in WORKFLOW_FLAG_ORDER:
+            if flag_type in seen:
+                normalized_values.append(flag_type)
+        return normalized_values

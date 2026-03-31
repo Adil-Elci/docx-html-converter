@@ -108,6 +108,12 @@ const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
 const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
 const TREND_RECENT_LIMIT = 6;
 const SITE_FIT_RECENT_LIMIT = 6;
+const WORKFLOW_FLAG_ORDER = ["bug", "needs_levent_attention", "needs_adil_attention"];
+const WORKFLOW_FLAG_COLORS = {
+  bug: "#f87171",
+  needs_levent_attention: "#facc15",
+  needs_adil_attention: "#a855f7",
+};
 
 const generateRequestToken = (prefix) => {
   const cryptoUuid = globalThis.crypto?.randomUUID?.();
@@ -263,6 +269,7 @@ export default function App() {
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const [workflowMovingCardId, setWorkflowMovingCardId] = useState("");
   const [workflowDragCardId, setWorkflowDragCardId] = useState("");
+  const [workflowResetSignal, setWorkflowResetSignal] = useState(0);
   const [workflowColumnCreating, setWorkflowColumnCreating] = useState(false);
   const [workflowColumnSavingId, setWorkflowColumnSavingId] = useState("");
   const [workflowColumnDeletingId, setWorkflowColumnDeletingId] = useState("");
@@ -3007,7 +3014,13 @@ export default function App() {
         userRole={currentUser.role}
         activeSection={activeSection}
         onSectionChange={(next) => {
-          setActiveSection(next);
+          if (next === activeSection) {
+            if (next === "workflow") {
+              setWorkflowResetSignal((current) => current + 1);
+            }
+          } else {
+            setActiveSection(next);
+          }
           if (isMobileViewport) setMobileMenuOpen(false);
           if (isNarrowViewport && !isMobileViewport) setSidebarHidden(true);
         }}
@@ -3450,6 +3463,7 @@ export default function App() {
               currentUser={currentUser}
               adminUsers={adminUsers}
               language={language}
+              resetSignal={workflowResetSignal}
               onRefresh={() => loadWorkflowBoard(currentUser)}
               onDragStart={(cardId) => setWorkflowDragCardId(String(cardId || ""))}
               onDragEnd={() => setWorkflowDragCardId("")}
@@ -5378,6 +5392,7 @@ function WorkflowBoardPanel({
   currentUser,
   adminUsers,
   language,
+  resetSignal,
   onDragStart,
   onDragEnd,
   onMoveCard,
@@ -5435,6 +5450,7 @@ function WorkflowBoardPanel({
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMenuSection, setFilterMenuSection] = useState("");
   const filterMenuRef = useRef(null);
+  const openCardMenuRef = useRef(null);
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
@@ -5461,6 +5477,15 @@ function WorkflowBoardPanel({
       return next;
     });
   }, [columns, activeCardId]);
+
+  useEffect(() => {
+    if (!resetSignal) return;
+    setActiveCardId("");
+    setOpenCardMenuId("");
+    setFilterMenuOpen(false);
+    setFilterMenuSection("");
+    setFilterPanel("");
+  }, [resetSignal]);
 
   useEffect(() => {
     setCreateCardForm((current) => ({
@@ -5570,11 +5595,21 @@ function WorkflowBoardPanel({
     return "";
   };
 
-  const getFlagCardClass = (flagType) => {
-    const normalized = String(flagType || "").trim().toLowerCase();
-    if (normalized === "bug") return "flag-bug";
-    if (normalized === "needs_levent_attention") return "flag-attention";
-    if (normalized === "needs_adil_attention") return "flag-adil";
+  const normalizeFlagTypes = (flagTypes) => {
+    const seen = new Set(
+      (Array.isArray(flagTypes) ? flagTypes : [])
+        .map((flagType) => String(flagType || "").trim().toLowerCase())
+        .filter(Boolean),
+    );
+    return WORKFLOW_FLAG_ORDER.filter((flagType) => seen.has(flagType));
+  };
+
+  const getFlagCardClass = (flagTypes) => {
+    const normalizedFlags = normalizeFlagTypes(flagTypes);
+    if (normalizedFlags.length > 1) return "has-multi-flags";
+    if (normalizedFlags[0] === "bug") return "flag-bug";
+    if (normalizedFlags[0] === "needs_levent_attention") return "flag-attention";
+    if (normalizedFlags[0] === "needs_adil_attention") return "flag-adil";
     return "";
   };
 
@@ -5584,6 +5619,23 @@ function WorkflowBoardPanel({
     if (normalized === "needs_levent_attention") return "attention";
     if (normalized === "needs_adil_attention") return "adil";
     return "";
+  };
+
+  const getFlagSurfaceStyle = (flagTypes) => {
+    const normalizedFlags = normalizeFlagTypes(flagTypes);
+    if (normalizedFlags.length <= 1) return undefined;
+    const segments = normalizedFlags.length === 2 ? [50, 50] : [33, 33, 34];
+    let start = 0;
+    const stops = normalizedFlags.map((flagType, index) => {
+      const end = start + segments[index];
+      const color = WORKFLOW_FLAG_COLORS[flagType] || "#ffffff";
+      const segment = `${color} ${start}%, ${color} ${end}%`;
+      start = end;
+      return segment;
+    });
+    return {
+      "--workflow-flag-gradient": `linear-gradient(90deg, ${stops.join(", ")})`,
+    };
   };
 
   const getPriorityLabel = (priority) => {
@@ -5665,9 +5717,22 @@ function WorkflowBoardPanel({
   const updateCardFlag = async (card, flagType) => {
     const normalizedCardId = String(card?.id || "");
     if (!normalizedCardId) return;
-    const nextFlagType = card?.flag_type === flagType ? null : flagType;
+    const currentFlags = normalizeFlagTypes(card?.flag_types);
+    const hasFlag = currentFlags.includes(flagType);
+    const nextFlagTypes = hasFlag
+      ? currentFlags.filter((item) => item !== flagType)
+      : [...currentFlags, flagType];
     setCardDetailSavingKey(`flag:${normalizedCardId}`);
-    await onUpdateCardDetails(normalizedCardId, { flag_type: nextFlagType });
+    await onUpdateCardDetails(normalizedCardId, { flag_types: nextFlagTypes });
+    setCardDetailSavingKey("");
+    setOpenCardMenuId("");
+  };
+
+  const clearCardFlags = async (card) => {
+    const normalizedCardId = String(card?.id || "");
+    if (!normalizedCardId) return;
+    setCardDetailSavingKey(`flag:${normalizedCardId}`);
+    await onUpdateCardDetails(normalizedCardId, { flag_types: [] });
     setCardDetailSavingKey("");
     setOpenCardMenuId("");
   };
@@ -5744,6 +5809,17 @@ function WorkflowBoardPanel({
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [filterMenuOpen]);
+
+  useEffect(() => {
+    if (!openCardMenuId) return undefined;
+    const handlePointerDown = (event) => {
+      if (openCardMenuRef.current && !openCardMenuRef.current.contains(event.target)) {
+        setOpenCardMenuId("");
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [openCardMenuId]);
 
   const openFilterMenu = () => {
     setFilterMenuOpen(true);
@@ -5994,12 +6070,13 @@ function WorkflowBoardPanel({
 
                       {(column.cards || []).map((card) => {
                         const cardId = String(card.id || "");
-                        const flagCardClass = getFlagCardClass(card.flag_type);
-                        const flagBadgeClass = getFlagBadgeClass(card.flag_type);
+                        const flagTypes = normalizeFlagTypes(card.flag_types);
+                        const flagCardClass = getFlagCardClass(flagTypes);
                         return (
                           <article
                             key={card.id}
                             className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""} ${flagCardClass}`.trim()}
+                            style={getFlagSurfaceStyle(flagTypes)}
                             draggable={!movingCardId}
                             role="button"
                             tabIndex={0}
@@ -6021,7 +6098,11 @@ function WorkflowBoardPanel({
                             <div className="workflow-card-top">
                               <strong className="workflow-card-title">{card.title || t("workflowCardFallbackTitle")}</strong>
                               <div className="workflow-card-top-actions">
-                                <div className="workflow-card-menu-wrap" onClick={(event) => event.stopPropagation()}>
+                                <div
+                                  className="workflow-card-menu-wrap"
+                                  ref={openCardMenuId === cardId ? openCardMenuRef : null}
+                                  onClick={(event) => event.stopPropagation()}
+                                >
                                   <button
                                     className="workflow-menu-btn"
                                     type="button"
@@ -6055,6 +6136,13 @@ function WorkflowBoardPanel({
                                       >
                                         {t("workflowFlagAsNeedsAdil")}
                                       </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => clearCardFlags(card)}
+                                        disabled={cardDetailSavingKey === `flag:${cardId}` || flagTypes.length === 0}
+                                      >
+                                        {t("workflowRemoveAllFlags")}
+                                      </button>
                                       {isSuperAdmin ? (
                                         <button
                                           type="button"
@@ -6075,11 +6163,11 @@ function WorkflowBoardPanel({
                               <span className={`workflow-card-priority ${String(card.priority || "medium").toLowerCase()}`}>
                                 {getPriorityLabel(card.priority)}
                               </span>
-                              {card.flag_type ? (
-                                <span className={`workflow-card-flag ${flagBadgeClass}`.trim()}>
-                                  {getFlagLabel(card.flag_type)}
+                              {flagTypes.map((flagType) => (
+                                <span key={flagType} className={`workflow-card-flag ${getFlagBadgeClass(flagType)}`.trim()}>
+                                  {getFlagLabel(flagType)}
                                 </span>
-                              ) : null}
+                              ))}
                             </div>
                             <div className="workflow-card-summary">
                               <span>
@@ -6103,7 +6191,10 @@ function WorkflowBoardPanel({
           ) : null}
         </>
       ) : (
-        <section className={`workflow-card-detail-view ${getFlagCardClass(activeCard.flag_type)}`.trim()}>
+        <section
+          className={`workflow-card-detail-view ${getFlagCardClass(activeCard.flag_types)}`.trim()}
+          style={getFlagSurfaceStyle(activeCard.flag_types)}
+        >
           <button className="workflow-detail-back" type="button" onClick={() => setActiveCardId("")}>
             ← {t("workflowBackToBoard")}
           </button>
@@ -6164,17 +6255,6 @@ function WorkflowBoardPanel({
               ) : (
                 <>
                   <h3 id="workflow-card-details-title">{activeCard.title}</h3>
-                  <div className="workflow-card-badges">
-                    <span className="workflow-card-job-type">{getJobTypeLabel(activeCard.job_type)}</span>
-                    <span className={`workflow-card-priority ${String(activeCard.priority || "medium").toLowerCase()}`}>
-                      {getPriorityLabel(activeCard.priority)}
-                    </span>
-                    {activeCard.flag_type ? (
-                      <span className={`workflow-card-flag ${getFlagBadgeClass(activeCard.flag_type)}`.trim()}>
-                        {getFlagLabel(activeCard.flag_type)}
-                      </span>
-                    ) : null}
-                  </div>
                 </>
               )}
             </div>
@@ -6182,21 +6262,23 @@ function WorkflowBoardPanel({
 
           <div className="workflow-card-details-meta">
             <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowAssignedToLabel")}</span>
-              <span>{activeCard.assignee_name || t("notAvailable")}</span>
+              <span className="workflow-card-label">{t("workflowCreateCardJobTypeLabel")}:</span>
+              <span>{getJobTypeLabel(activeCard.job_type)}</span>
             </div>
-            {activeCard.created_by_name ? (
-              <div className="workflow-card-meta">
-                <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
-                <span>{activeCard.created_by_name}</span>
-              </div>
-            ) : null}
             <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowPriorityLabel")}</span>
+              <span className="workflow-card-label">{t("workflowPriorityLabel")}:</span>
               <span>{getPriorityLabel(activeCard.priority)}</span>
             </div>
             <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowCreatedAtLabel")}</span>
+              <span className="workflow-card-label">{t("workflowCreatedByLabel")}:</span>
+              <span>{activeCard.created_by_name || t("notAvailable")}</span>
+            </div>
+            <div className="workflow-card-meta">
+              <span className="workflow-card-label">{t("workflowAssignedToLabel")}:</span>
+              <span>{activeCard.assignee_name || t("notAvailable")}</span>
+            </div>
+            <div className="workflow-card-meta">
+              <span className="workflow-card-label">{t("workflowCreatedAtLabel")}:</span>
               <span>{formatPublishedAt(activeCard.created_at)}</span>
             </div>
           </div>

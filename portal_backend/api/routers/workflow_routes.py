@@ -17,6 +17,7 @@ from ..db import get_db
 from ..portal_models import User
 from ..workflow_models import WorkflowCard, WorkflowCardComment, WorkflowCardEvent, WorkflowColumn
 from ..workflow_schemas import (
+    WORKFLOW_FLAG_ORDER,
     WorkflowBoardOut,
     WorkflowCardCreateIn,
     WorkflowCardMoveIn,
@@ -79,6 +80,15 @@ def _build_actor_name(user: Optional[User]) -> str:
     if email:
         return email
     return "Unknown"
+
+
+def _normalize_flag_types(flag_types: Optional[Sequence[str]]) -> list[str]:
+    seen = {
+        str(flag_type or "").strip().lower()
+        for flag_type in (flag_types or [])
+        if str(flag_type or "").strip()
+    }
+    return [flag_type for flag_type in WORKFLOW_FLAG_ORDER if flag_type in seen]
 
 
 def _get_assignable_workflow_user(db: Session, user_id: UUID) -> Optional[User]:
@@ -229,7 +239,7 @@ def _build_workflow_board_payload(
             assignee_name=_build_actor_name(assignee) if assignee is not None else None,
             job_type=(card.job_type or "").strip() or None,
             priority=(card.priority or "medium").strip() or "medium",
-            flag_type=(card.flag_type or "").strip() or None,
+            flag_types=_normalize_flag_types(card.flag_types),
             request_kind=(card.request_kind_snapshot or "manual").strip() or "manual",
             job_status=(card.job_status_snapshot or "manual").strip() or "manual",
             wp_post_url=None,
@@ -478,12 +488,12 @@ def update_workflow_card_details(
         card.assignee_user_id = assignee.id
         changed = True
 
-    if "flag_type" in payload.__fields_set__:
-        next_flag_type = payload.flag_type
+    if "flag_types" in payload.__fields_set__:
+        next_flag_types = _normalize_flag_types(payload.flag_types)
     else:
-        next_flag_type = card.flag_type
-    if (card.flag_type or None) != next_flag_type:
-        card.flag_type = next_flag_type
+        next_flag_types = _normalize_flag_types(card.flag_types)
+    if _normalize_flag_types(card.flag_types) != next_flag_types:
+        card.flag_types = next_flag_types
         changed = True
 
     if changed:

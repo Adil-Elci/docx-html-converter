@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
 from .portal_models import Base, utcnow
 
@@ -31,8 +31,8 @@ class WorkflowCard(Base):
         CheckConstraint("job_type IN ('articles','develop','fix','research')", name="workflow_cards_job_type_check"),
         CheckConstraint("priority IN ('urgent','high','medium','low')", name="workflow_cards_priority_check"),
         CheckConstraint(
-            "flag_type IN ('bug','needs_levent_attention','needs_adil_attention') OR flag_type IS NULL",
-            name="workflow_cards_flag_type_check",
+            "flag_types <@ ARRAY['bug','needs_levent_attention','needs_adil_attention']::text[]",
+            name="workflow_cards_flag_types_check",
         ),
         UniqueConstraint("job_id", name="workflow_cards_job_unique"),
     )
@@ -50,7 +50,7 @@ class WorkflowCard(Base):
     description = Column(Text, nullable=True)
     job_type = Column(Text, nullable=True)
     priority = Column(Text, nullable=False, default="medium")
-    flag_type = Column(Text, nullable=True)
+    flag_types = Column(ARRAY(Text), nullable=False, default=list)
     request_kind_snapshot = Column(Text, nullable=True)
     job_status_snapshot = Column(Text, nullable=True)
     created_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

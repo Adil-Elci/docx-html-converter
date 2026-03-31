@@ -5433,7 +5433,7 @@ function WorkflowBoardPanel({
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterPanel, setFilterPanel] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const [filterMenuSection, setFilterMenuSection] = useState("user");
+  const [filterMenuSection, setFilterMenuSection] = useState("");
   const filterMenuRef = useRef(null);
 
   useEffect(() => {
@@ -5732,21 +5732,26 @@ function WorkflowBoardPanel({
     setFilterMenuOpen(true);
     if (filterPanel) {
       setFilterMenuSection(filterPanel);
+      setFilterPanel("");
       return;
     }
     if (filterUser) {
       setFilterMenuSection("user");
+      setFilterPanel("");
       return;
     }
     if (filterJobType) {
       setFilterMenuSection("job_type");
+      setFilterPanel("");
       return;
     }
     if (filterDateFrom || filterDateTo) {
       setFilterMenuSection("date_range");
+      setFilterPanel("");
       return;
     }
-    setFilterMenuSection("user");
+    setFilterMenuSection("");
+    setFilterPanel("");
   };
 
   const selectFilterSection = (sectionKey) => {
@@ -5824,8 +5829,9 @@ function WorkflowBoardPanel({
                   </button>
                 ))}
               </div>
-              <div className="workflow-filter-menu-panel">
-                {showUserFilter ? (
+              {filterPanel ? (
+                <div className="workflow-filter-menu-panel">
+                  {showUserFilter ? (
                   <div className="workflow-filter-menu-group">
                     <div className="workflow-filter-option-list">
                       {userOptions.map((userLabel) => (
@@ -5843,8 +5849,8 @@ function WorkflowBoardPanel({
                       ))}
                     </div>
                   </div>
-                ) : null}
-                {showJobTypeFilter ? (
+                  ) : null}
+                  {showJobTypeFilter ? (
                   <div className="workflow-filter-menu-group">
                     <div className="workflow-filter-option-list">
                       {jobTypeOptions.map((option) => (
@@ -5862,8 +5868,8 @@ function WorkflowBoardPanel({
                       ))}
                     </div>
                   </div>
-                ) : null}
-                {showDateFilters ? (
+                  ) : null}
+                  {showDateFilters ? (
                   <div className="workflow-filter-menu-group">
                     <div className="workflow-filter-date-grid">
                       <label className="workflow-field-label" htmlFor="workflow-filter-date-from">
@@ -5888,19 +5894,20 @@ function WorkflowBoardPanel({
                       />
                     </div>
                   </div>
-                ) : null}
-                {hasActiveFilters ? (
-                  <div className="workflow-filter-menu-footer">
-                    <button
-                      className="btn ghost small"
-                      type="button"
-                      onClick={clearWorkflowFilters}
-                    >
-                      {t("workflowClearFilters")}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+                  ) : null}
+                  {hasActiveFilters ? (
+                    <div className="workflow-filter-menu-footer">
+                      <button
+                        className="btn ghost small"
+                        type="button"
+                        onClick={clearWorkflowFilters}
+                      >
+                        {t("workflowClearFilters")}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

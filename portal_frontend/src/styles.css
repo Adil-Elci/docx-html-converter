@@ -2569,16 +2569,13 @@ input:disabled {
   top: calc(100% + 10px);
   left: 0;
   z-index: 30;
-  display: grid;
-  grid-template-columns: 200px minmax(280px, 320px);
-  width: max-content;
-  min-width: 500px;
-  max-width: min(560px, calc(100vw - 48px));
+  width: 200px;
+  max-width: min(200px, calc(100vw - 48px));
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
   box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  overflow: visible;
   backdrop-filter: blur(14px);
 }
 
@@ -2586,8 +2583,8 @@ input:disabled {
   display: grid;
   gap: 4px;
   padding: 10px;
-  border-right: 1px solid var(--border-dim);
   background: color-mix(in srgb, var(--panel-3) 72%, transparent);
+  border-radius: 16px;
 }
 
 .workflow-filter-menu-item {
@@ -2616,10 +2613,20 @@ input:disabled {
 }
 
 .workflow-filter-menu-panel {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
   display: grid;
   gap: 14px;
   padding: 14px;
+  width: 320px;
   min-width: 280px;
+  max-width: min(320px, calc(100vw - 268px));
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(14px);
 }
 
 .workflow-filter-menu-group {
@@ -3552,19 +3559,23 @@ input:disabled {
   }
 
   .workflow-filter-menu-list {
-    border-right: 0;
     border-bottom: 1px solid var(--border-dim);
   }
 
   .workflow-filter-menu {
     width: min(100%, calc(100vw - 32px));
     min-width: 0;
-    max-width: min(420px, calc(100vw - 32px));
-    grid-template-columns: minmax(0, 1fr);
+    max-width: min(220px, calc(100vw - 32px));
   }
 
   .workflow-filter-menu-panel {
+    position: static;
+    left: auto;
+    top: auto;
+    width: auto;
     min-width: 0;
+    max-width: none;
+    margin-top: 8px;
   }
 
   .workflow-card-top,

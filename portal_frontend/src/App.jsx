@@ -5422,7 +5422,13 @@ function WorkflowBoardPanel({
   const [commentRewriteKey, setCommentRewriteKey] = useState("");
   const [cardDetailSavingKey, setCardDetailSavingKey] = useState("");
   const [cardEditOpen, setCardEditOpen] = useState(false);
-  const [cardDetailDraft, setCardDetailDraft] = useState({ title: "", description: "" });
+  const [cardDetailDraft, setCardDetailDraft] = useState({
+    title: "",
+    description: "",
+    job_type: "",
+    priority: "medium",
+    assignee_user_id: "",
+  });
   const [filterUser, setFilterUser] = useState("");
   const [filterJobType, setFilterJobType] = useState("");
   const [filterDateFrom, setFilterDateFrom] = useState("");
@@ -5674,13 +5680,22 @@ function WorkflowBoardPanel({
   useEffect(() => {
     if (!activeCard) {
       setCardEditOpen(false);
-      setCardDetailDraft({ title: "", description: "" });
+      setCardDetailDraft({
+        title: "",
+        description: "",
+        job_type: "",
+        priority: "medium",
+        assignee_user_id: "",
+      });
       return;
     }
     setCardEditOpen(false);
     setCardDetailDraft({
       title: String(activeCard.title || ""),
       description: String(activeCard.description || ""),
+      job_type: String(activeCard.job_type || ""),
+      priority: String(activeCard.priority || "medium"),
+      assignee_user_id: String(activeCard.assignee_user_id || ""),
     });
   }, [activeCard]);
 
@@ -5693,6 +5708,9 @@ function WorkflowBoardPanel({
     const saved = await onUpdateCardDetails(normalizedCardId, {
       title,
       description: String(cardDetailDraft.description || "").trim() || null,
+      job_type: String(cardDetailDraft.job_type || "").trim(),
+      priority: String(cardDetailDraft.priority || "").trim() || "medium",
+      assignee_user_id: String(cardDetailDraft.assignee_user_id || "").trim(),
     });
     setCardDetailSavingKey("");
     if (saved) setCardEditOpen(false);
@@ -6095,6 +6113,44 @@ function WorkflowBoardPanel({
                       onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
                       maxLength={160}
                     />
+                    <label className="workflow-field-label" htmlFor="workflow-detail-job-type">
+                      {t("workflowCreateCardJobTypeLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-job-type"
+                      value={cardDetailDraft.job_type}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, job_type: event.target.value }))}
+                    >
+                      <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
+                      {jobTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <label className="workflow-field-label" htmlFor="workflow-detail-assignee">
+                      {t("workflowAssignedToLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-assignee"
+                      value={cardDetailDraft.assignee_user_id}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, assignee_user_id: event.target.value }))}
+                    >
+                      <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
+                      {assignableUsers.map((user) => (
+                        <option key={user.id} value={user.id}>{user.label}</option>
+                      ))}
+                    </select>
+                    <label className="workflow-field-label" htmlFor="workflow-detail-priority">
+                      {t("workflowPriorityLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-priority"
+                      value={cardDetailDraft.priority}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, priority: event.target.value }))}
+                    >
+                      {priorityOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
                   </div>
                 ) : (
                   <h3 id="workflow-card-details-title">{activeCard.title}</h3>
@@ -6151,6 +6207,9 @@ function WorkflowBoardPanel({
                           setCardDetailDraft({
                             title: String(activeCard.title || ""),
                             description: String(activeCard.description || ""),
+                            job_type: String(activeCard.job_type || ""),
+                            priority: String(activeCard.priority || "medium"),
+                            assignee_user_id: String(activeCard.assignee_user_id || ""),
                           });
                         }}
                         disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
@@ -6161,12 +6220,17 @@ function WorkflowBoardPanel({
                         className="btn small"
                         type="button"
                         onClick={saveCardDetails}
-                        disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}` || !String(cardDetailDraft.title || "").trim()}
+                        disabled={
+                          cardDetailSavingKey === `details:${String(activeCard.id || "")}`
+                          || !String(cardDetailDraft.title || "").trim()
+                          || !String(cardDetailDraft.job_type || "").trim()
+                          || !String(cardDetailDraft.assignee_user_id || "").trim()
+                        }
                       >
                         {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
                       </button>
                     </>
-                  ) : (
+                  ) : isSuperAdmin ? (
                     <button
                       className="btn ghost small"
                       type="button"
@@ -6174,7 +6238,7 @@ function WorkflowBoardPanel({
                     >
                       {t("workflowEditDetails")}
                     </button>
-                  )}
+                  ) : null}
                 </div>
               </div>
               {cardEditOpen ? (

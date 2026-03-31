@@ -73,3 +73,15 @@ def test_workflow_card_update_in_allows_title_and_description_edit() -> None:
     payload = WorkflowCardUpdateIn(title="Updated title", description="Updated notes")
     assert payload.title == "Updated title"
     assert payload.description == "Updated notes"
+
+
+def test_workflow_card_update_in_allows_full_super_admin_edit_fields() -> None:
+    payload = WorkflowCardUpdateIn(
+        title="Updated title",
+        description="Updated notes",
+        job_type="research",
+        priority="urgent",
+        assignee_user_id="00000000-0000-0000-0000-000000000001",
+    )
+    assert payload.job_type == "research"
+    assert payload.priority == "urgent"

@@ -203,6 +203,9 @@ class WorkflowCommentRewriteOut(BaseModel):
 class WorkflowCardUpdateIn(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    job_type: Optional[str] = None
+    priority: Optional[str] = None
+    assignee_user_id: Optional[UUID] = None
     flag_type: Optional[str] = None
 
     @validator("title")
@@ -226,6 +229,32 @@ class WorkflowCardUpdateIn(BaseModel):
         if len(normalized) > 4000:
             raise ValueError("description must be 4000 characters or fewer.")
         return normalized
+
+    @validator("job_type")
+    def validate_job_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in WORKFLOW_JOB_TYPES:
+            raise ValueError("job_type must be one of articles, develop, fix, research.")
+        return normalized
+
+    @validator("priority")
+    def validate_priority(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in WORKFLOW_PRIORITY_LEVELS:
+            raise ValueError("priority must be one of urgent, high, medium, low.")
+        return normalized
+
+    @validator("assignee_user_id")
+    def validate_assignee_user_id(cls, value: Optional[UUID]) -> Optional[UUID]:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("assignee_user_id is required.")
+        return value
 
     @validator("flag_type")
     def validate_flag_type(cls, value: Optional[str]) -> Optional[str]:

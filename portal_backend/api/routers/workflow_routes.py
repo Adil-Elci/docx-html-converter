@@ -12,7 +12,7 @@ import requests
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ..auth import require_admin, require_super_admin
+from ..auth import is_super_admin, require_admin, require_super_admin
 from ..db import get_db
 from ..portal_models import User
 from ..workflow_models import WorkflowCard, WorkflowCardComment, WorkflowCardEvent, WorkflowColumn
@@ -445,6 +445,12 @@ def update_workflow_card_details(
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
 
+    full_edit_fields = {"title", "description", "job_type", "priority", "assignee_user_id"}
+    requested_fields = set(payload.__fields_set__)
+    is_full_edit = bool(requested_fields & full_edit_fields)
+    if is_full_edit and not is_super_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
+
     changed = False
     if payload.title is not None and card.title_snapshot != payload.title:
         card.title_snapshot = payload.title
@@ -456,6 +462,21 @@ def update_workflow_card_details(
         if current_description != next_description:
             card.description = next_description
             changed = True
+
+    if payload.job_type is not None and (card.job_type or None) != payload.job_type:
+        card.job_type = payload.job_type
+        changed = True
+
+    if payload.priority is not None and (card.priority or "medium") != payload.priority:
+        card.priority = payload.priority
+        changed = True
+
+    if payload.assignee_user_id is not None and card.assignee_user_id != payload.assignee_user_id:
+        assignee = _get_assignable_workflow_user(db, payload.assignee_user_id)
+        if assignee is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found.")
+        card.assignee_user_id = assignee.id
+        changed = True
 
     if "flag_type" in payload.__fields_set__:
         next_flag_type = payload.flag_type

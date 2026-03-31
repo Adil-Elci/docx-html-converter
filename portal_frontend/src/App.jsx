@@ -5391,7 +5391,6 @@ function WorkflowBoardPanel({
   formatPublishedAt,
 }) {
   const columns = Array.isArray(board?.columns) ? board.columns : [];
-  const updatedAt = board?.updated_at ? formatPublishedAt(board.updated_at) : "—";
   const jobTypeOptions = [
     { value: "articles", label: t("workflowJobTypeArticles") },
     { value: "research", label: t("workflowJobTypeResearch") },
@@ -5540,9 +5539,9 @@ function WorkflowBoardPanel({
 
   const hasActiveFilters = Boolean(filterUser || filterJobType || filterDateFrom || filterDateTo);
   const activeFilterCount = [filterUser, filterJobType, filterDateFrom, filterDateTo].filter(Boolean).length;
-  const showUserFilter = filterPanel === "user" || filterPanel === "all";
-  const showJobTypeFilter = filterPanel === "job_type" || filterPanel === "all";
-  const showDateFilters = filterPanel === "date_range" || filterPanel === "all";
+  const showUserFilter = filterPanel === "user";
+  const showJobTypeFilter = filterPanel === "job_type";
+  const showDateFilters = filterPanel === "date_range";
 
   const openCardCount = filteredColumns.reduce((sum, column) => (
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() !== "done").length
@@ -5725,12 +5724,6 @@ function WorkflowBoardPanel({
       <div className="workflow-board-header">
         <div className="workflow-board-heading">
           <h2>{t("workflowTitle")}</h2>
-          <p className="muted-text">{t("workflowDescription")}</p>
-        </div>
-        <div className="workflow-board-actions">
-          <button className="btn secondary small" type="button" onClick={onRefresh} disabled={loading || Boolean(movingCardId)}>
-            {loading ? t("loading") : t("refresh")}
-          </button>
         </div>
       </div>
 
@@ -5741,7 +5734,6 @@ function WorkflowBoardPanel({
           <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(filteredColumns.length))}</span>
           <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
         </div>
-        <span className="workflow-updated-label">{t("workflowUpdatedAt").replace("{value}", updatedAt)}</span>
       </div>
 
       <div className="workflow-filter-shell">
@@ -5753,7 +5745,6 @@ function WorkflowBoardPanel({
             aria-label={t("workflowFilterBy")}
           >
             <option value="">{t("workflowFilterBy")}</option>
-            <option value="all">{t("workflowFilterPanelAll")}</option>
             <option value="user">{t("workflowFilterPanelUser")}</option>
             <option value="job_type">{t("workflowFilterPanelJobType")}</option>
             <option value="date_range">{t("workflowFilterPanelDateRange")}</option>

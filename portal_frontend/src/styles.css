@@ -2573,17 +2573,16 @@ input:disabled {
   max-width: min(200px, calc(100vw - 48px));
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  background: var(--surface-elevated);
   box-shadow: var(--shadow-lg);
   overflow: visible;
-  backdrop-filter: blur(14px);
 }
 
 .workflow-filter-menu-list {
   display: grid;
   gap: 4px;
   padding: 10px;
-  background: color-mix(in srgb, var(--panel-3) 72%, transparent);
+  background: var(--surface-elevated);
   border-radius: 16px;
 }
 
@@ -2615,7 +2614,7 @@ input:disabled {
 .workflow-filter-menu-panel {
   position: absolute;
   top: 0;
-  left: calc(100% + 10px);
+  left: calc(100% - 1px);
   display: grid;
   gap: 14px;
   padding: 14px;
@@ -2624,9 +2623,8 @@ input:disabled {
   max-width: min(320px, calc(100vw - 268px));
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  background: var(--surface-elevated);
   box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(14px);
 }
 
 .workflow-filter-menu-group {

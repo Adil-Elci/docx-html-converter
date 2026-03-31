@@ -5378,7 +5378,6 @@ function WorkflowBoardPanel({
   currentUser,
   adminUsers,
   language,
-  onRefresh,
   onDragStart,
   onDragEnd,
   onMoveCard,
@@ -5433,6 +5432,9 @@ function WorkflowBoardPanel({
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterPanel, setFilterPanel] = useState("");
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const [filterMenuSection, setFilterMenuSection] = useState("user");
+  const filterMenuRef = useRef(null);
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
@@ -5715,9 +5717,53 @@ function WorkflowBoardPanel({
     if (saved) setCardEditOpen(false);
   };
 
-  const gridTemplateColumns = columns.length <= 3
-    ? `repeat(${Math.max(columns.length, 1)}, minmax(0, 1fr))`
-    : `repeat(${columns.length}, minmax(280px, 1fr))`;
+  useEffect(() => {
+    if (!filterMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (filterMenuRef.current && !filterMenuRef.current.contains(event.target)) {
+        setFilterMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [filterMenuOpen]);
+
+  const openFilterMenu = () => {
+    setFilterMenuOpen(true);
+    if (filterPanel) {
+      setFilterMenuSection(filterPanel);
+      return;
+    }
+    if (filterUser) {
+      setFilterMenuSection("user");
+      return;
+    }
+    if (filterJobType) {
+      setFilterMenuSection("job_type");
+      return;
+    }
+    if (filterDateFrom || filterDateTo) {
+      setFilterMenuSection("date_range");
+      return;
+    }
+    setFilterMenuSection("user");
+  };
+
+  const selectFilterSection = (sectionKey) => {
+    setFilterPanel(sectionKey);
+    setFilterMenuSection(sectionKey);
+  };
+
+  const clearWorkflowFilters = () => {
+    setFilterUser("");
+    setFilterJobType("");
+    setFilterDateFrom("");
+    setFilterDateTo("");
+    setFilterPanel("");
+    setFilterMenuOpen(false);
+  };
+
+  const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
 
   return (
     <div className="panel form-panel workflow-board-panel">
@@ -5737,62 +5783,150 @@ function WorkflowBoardPanel({
       </div>
 
       <div className="workflow-filter-shell">
-        <div className="workflow-filter-select-wrap">
-          <select
+        <div className="workflow-filter-select-wrap" ref={filterMenuRef}>
+          <button
             className={`workflow-filter-select ${hasActiveFilters ? "active" : ""}`.trim()}
-            value={filterPanel}
-            onChange={(event) => setFilterPanel(event.target.value)}
-            aria-label={t("workflowFilterBy")}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={filterMenuOpen}
+            onClick={() => {
+              if (filterMenuOpen) {
+                setFilterMenuOpen(false);
+              } else {
+                openFilterMenu();
+              }
+            }}
           >
-            <option value="">{t("workflowFilterBy")}</option>
-            <option value="user">{t("workflowFilterPanelUser")}</option>
-            <option value="job_type">{t("workflowFilterPanelJobType")}</option>
-            <option value="date_range">{t("workflowFilterPanelDateRange")}</option>
-          </select>
+            <span>{t("workflowFilterBy")}</span>
+            <span className="workflow-filter-select-caret" aria-hidden="true">▾</span>
+          </button>
           {hasActiveFilters ? (
             <span className="workflow-filter-trigger-count">{activeFilterCount}</span>
           ) : null}
+          {filterMenuOpen ? (
+            <div className="workflow-filter-menu" role="menu" aria-label={t("workflowFilterBy")}>
+              <div className="workflow-filter-menu-list" role="presentation">
+                {[
+                  { key: "user", label: t("workflowFilterPanelUser") },
+                  { key: "job_type", label: t("workflowFilterPanelJobType") },
+                  { key: "date_range", label: t("workflowFilterPanelDateRange") },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`workflow-filter-menu-item ${filterMenuSection === item.key ? "active" : ""}`.trim()}
+                    onMouseEnter={() => selectFilterSection(item.key)}
+                    onFocus={() => selectFilterSection(item.key)}
+                    onClick={() => selectFilterSection(item.key)}
+                  >
+                    <span>{item.label}</span>
+                    <span aria-hidden="true">›</span>
+                  </button>
+                ))}
+              </div>
+              <div className="workflow-filter-menu-panel">
+                {showUserFilter ? (
+                  <div className="workflow-filter-menu-group">
+                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelUser")}</span>
+                    <div className="workflow-filter-menu-options">
+                      <button
+                        type="button"
+                        className={`workflow-filter-chip ${!filterUser ? "active" : ""}`.trim()}
+                        onClick={() => {
+                          setFilterUser("");
+                          setFilterMenuOpen(false);
+                        }}
+                      >
+                        {t("workflowFilterAllUsers")}
+                      </button>
+                      {userOptions.map((userLabel) => (
+                        <button
+                          key={userLabel}
+                          type="button"
+                          className={`workflow-filter-chip ${filterUser === userLabel ? "active" : ""}`.trim()}
+                          onClick={() => {
+                            setFilterUser(userLabel);
+                            setFilterMenuOpen(false);
+                          }}
+                        >
+                          {userLabel}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {showJobTypeFilter ? (
+                  <div className="workflow-filter-menu-group">
+                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelJobType")}</span>
+                    <div className="workflow-filter-menu-options">
+                      <button
+                        type="button"
+                        className={`workflow-filter-chip ${!filterJobType ? "active" : ""}`.trim()}
+                        onClick={() => {
+                          setFilterJobType("");
+                          setFilterMenuOpen(false);
+                        }}
+                      >
+                        {t("workflowFilterAllJobTypes")}
+                      </button>
+                      {jobTypeOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`workflow-filter-chip ${filterJobType === option.value ? "active" : ""}`.trim()}
+                          onClick={() => {
+                            setFilterJobType(option.value);
+                            setFilterMenuOpen(false);
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {showDateFilters ? (
+                  <div className="workflow-filter-menu-group">
+                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelDateRange")}</span>
+                    <div className="workflow-filter-date-grid">
+                      <label className="workflow-field-label" htmlFor="workflow-filter-date-from">
+                        {t("workflowFilterDateFrom")}
+                      </label>
+                      <input
+                        id="workflow-filter-date-from"
+                        type="date"
+                        value={filterDateFrom}
+                        onChange={(event) => setFilterDateFrom(event.target.value)}
+                        aria-label={t("workflowFilterDateFrom")}
+                      />
+                      <label className="workflow-field-label" htmlFor="workflow-filter-date-to">
+                        {t("workflowFilterDateTo")}
+                      </label>
+                      <input
+                        id="workflow-filter-date-to"
+                        type="date"
+                        value={filterDateTo}
+                        onChange={(event) => setFilterDateTo(event.target.value)}
+                        aria-label={t("workflowFilterDateTo")}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {hasActiveFilters ? (
+                  <div className="workflow-filter-menu-footer">
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      onClick={clearWorkflowFilters}
+                    >
+                      {t("workflowClearFilters")}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
-        {filterPanel ? (
-          <div className="workflow-filter-bar">
-            {showUserFilter ? (
-              <select value={filterUser} onChange={(event) => setFilterUser(event.target.value)}>
-                <option value="">{t("workflowFilterAllUsers")}</option>
-                {userOptions.map((userLabel) => (
-                  <option key={userLabel} value={userLabel}>{userLabel}</option>
-                ))}
-              </select>
-            ) : null}
-            {showJobTypeFilter ? (
-              <select value={filterJobType} onChange={(event) => setFilterJobType(event.target.value)}>
-                <option value="">{t("workflowFilterAllJobTypes")}</option>
-                {jobTypeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            ) : null}
-            {showDateFilters ? (
-              <input type="date" value={filterDateFrom} onChange={(event) => setFilterDateFrom(event.target.value)} aria-label={t("workflowFilterDateFrom")} />
-            ) : null}
-            {showDateFilters ? (
-              <input type="date" value={filterDateTo} onChange={(event) => setFilterDateTo(event.target.value)} aria-label={t("workflowFilterDateTo")} />
-            ) : null}
-            {hasActiveFilters ? (
-              <button
-                className="btn ghost small"
-                type="button"
-                onClick={() => {
-                  setFilterUser("");
-                  setFilterJobType("");
-                  setFilterDateFrom("");
-                  setFilterDateTo("");
-                }}
-              >
-                {t("workflowClearFilters")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       {loading && columns.length === 0 ? (

@@ -2505,15 +2505,21 @@ input:disabled {
   display: grid;
   gap: 10px;
   justify-items: start;
+  position: relative;
+  z-index: 8;
 }
 
 .workflow-filter-select-wrap {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  position: relative;
 }
 
 .workflow-filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   min-height: 38px;
   padding: 0 14px;
   border: 1px solid var(--border-dim);
@@ -2531,6 +2537,11 @@ input:disabled {
   background: color-mix(in srgb, var(--accent) 10%, var(--surface-elevated));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
   outline: none;
+}
+
+.workflow-filter-select-caret {
+  font-size: 12px;
+  color: inherit;
 }
 
 .workflow-filter-select.active {
@@ -2551,22 +2562,119 @@ input:disabled {
   font-weight: 800;
 }
 
-.workflow-filter-bar {
+.workflow-filter-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 30;
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(4, minmax(160px, 180px)) auto;
-  align-items: center;
-  padding: 14px;
+  grid-template-columns: minmax(180px, 220px) minmax(240px, 320px);
+  min-width: min(560px, calc(100vw - 48px));
   border: 1px solid var(--border-subtle);
-  border-radius: calc(var(--radius) + 2px);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-3) 86%, transparent), color-mix(in srgb, var(--panel) 94%, transparent));
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  backdrop-filter: blur(14px);
 }
 
-.workflow-filter-bar select,
-.workflow-filter-bar input {
+.workflow-filter-menu-list {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-right: 1px solid var(--border-dim);
+  background: color-mix(in srgb, var(--panel-3) 72%, transparent);
+}
+
+.workflow-filter-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  width: 100%;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-filter-menu-item:hover,
+.workflow-filter-menu-item:focus-visible,
+.workflow-filter-menu-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
+  outline: none;
+}
+
+.workflow-filter-menu-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.workflow-filter-menu-group {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-filter-menu-label {
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workflow-filter-menu-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workflow-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-dim);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.workflow-filter-chip:hover,
+.workflow-filter-chip:focus-visible,
+.workflow-filter-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 92%, white);
+  outline: none;
+}
+
+.workflow-filter-date-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-filter-date-grid input {
   min-width: 0;
   background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
   border-color: var(--border-dim);
+}
+
+.workflow-filter-menu-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .workflow-column-editor {
@@ -2651,10 +2759,12 @@ input:disabled {
   grid-template-columns: repeat(var(--workflow-column-count, 1), minmax(0, 1fr));
   gap: var(--space-3);
   overflow-x: auto;
+  overflow-y: visible;
   padding: 2px 2px 8px;
   min-width: 100%;
   width: 100%;
   align-items: start;
+  isolation: isolate;
 }
 
 .workflow-column {
@@ -3039,11 +3149,10 @@ input:disabled {
 
 .workflow-card-top,
 .workflow-card-meta {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 8px;
-  flex-wrap: nowrap;
 }
 
 .workflow-card-kind,
@@ -3103,6 +3212,7 @@ input:disabled {
   line-height: 1.35;
   color: var(--ink);
   min-width: 0;
+  word-break: break-word;
 }
 
 .workflow-card-description {
@@ -3428,8 +3538,9 @@ input:disabled {
 }
 
 @media (max-width: 860px) {
-  .workflow-filter-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .workflow-filter-menu {
+    grid-template-columns: 1fr;
+    min-width: min(360px, calc(100vw - 32px));
   }
 
   .workflow-inline-menu {
@@ -3441,6 +3552,21 @@ input:disabled {
   .workflow-create-card-form-row,
   .workflow-create-card-form-row.two-up {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-filter-menu-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-dim);
+  }
+
+  .workflow-card-top,
+  .workflow-card-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-card-top-actions {
+    justify-content: flex-end;
+    margin-left: 0;
   }
 }
 

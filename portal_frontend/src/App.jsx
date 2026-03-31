@@ -5828,10 +5828,10 @@ function WorkflowBoardPanel({
                 {showUserFilter ? (
                   <div className="workflow-filter-menu-group">
                     <span className="workflow-filter-menu-label">{t("workflowFilterPanelUser")}</span>
-                    <div className="workflow-filter-menu-options">
+                    <div className="workflow-filter-option-list">
                       <button
                         type="button"
-                        className={`workflow-filter-chip ${!filterUser ? "active" : ""}`.trim()}
+                        className={`workflow-filter-option ${!filterUser ? "active" : ""}`.trim()}
                         onClick={() => {
                           setFilterUser("");
                           setFilterMenuOpen(false);
@@ -5843,7 +5843,7 @@ function WorkflowBoardPanel({
                         <button
                           key={userLabel}
                           type="button"
-                          className={`workflow-filter-chip ${filterUser === userLabel ? "active" : ""}`.trim()}
+                          className={`workflow-filter-option ${filterUser === userLabel ? "active" : ""}`.trim()}
                           onClick={() => {
                             setFilterUser(userLabel);
                             setFilterMenuOpen(false);
@@ -5858,10 +5858,10 @@ function WorkflowBoardPanel({
                 {showJobTypeFilter ? (
                   <div className="workflow-filter-menu-group">
                     <span className="workflow-filter-menu-label">{t("workflowFilterPanelJobType")}</span>
-                    <div className="workflow-filter-menu-options">
+                    <div className="workflow-filter-option-list">
                       <button
                         type="button"
-                        className={`workflow-filter-chip ${!filterJobType ? "active" : ""}`.trim()}
+                        className={`workflow-filter-option ${!filterJobType ? "active" : ""}`.trim()}
                         onClick={() => {
                           setFilterJobType("");
                           setFilterMenuOpen(false);
@@ -5873,7 +5873,7 @@ function WorkflowBoardPanel({
                         <button
                           key={option.value}
                           type="button"
-                          className={`workflow-filter-chip ${filterJobType === option.value ? "active" : ""}`.trim()}
+                          className={`workflow-filter-option ${filterJobType === option.value ? "active" : ""}`.trim()}
                           onClick={() => {
                             setFilterJobType(option.value);
                             setFilterMenuOpen(false);

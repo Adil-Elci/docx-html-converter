@@ -2631,31 +2631,32 @@ input:disabled {
   text-transform: uppercase;
 }
 
-.workflow-filter-menu-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.workflow-filter-option-list {
+  display: grid;
+  gap: 4px;
 }
 
-.workflow-filter-chip {
-  display: inline-flex;
+.workflow-filter-option {
+  display: flex;
   align-items: center;
-  min-height: 34px;
+  justify-content: space-between;
+  min-height: 38px;
+  width: 100%;
   padding: 0 12px;
-  border: 1px solid var(--border-dim);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
   color: var(--ink);
   font-size: 12px;
   font-weight: 700;
+  text-align: left;
   cursor: pointer;
-  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.workflow-filter-chip:hover,
-.workflow-filter-chip:focus-visible,
-.workflow-filter-chip.active {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+.workflow-filter-option:hover,
+.workflow-filter-option:focus-visible,
+.workflow-filter-option.active {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: color-mix(in srgb, var(--accent-hover) 92%, white);
   outline: none;

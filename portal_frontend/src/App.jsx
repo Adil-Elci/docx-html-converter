@@ -5566,6 +5566,23 @@ function WorkflowBoardPanel({
     const normalized = String(flagType || "").trim().toLowerCase();
     if (normalized === "bug") return t("workflowFlagBug");
     if (normalized === "needs_levent_attention") return t("workflowFlagNeedsLevent");
+    if (normalized === "needs_adil_attention") return t("workflowFlagNeedsAdil");
+    return "";
+  };
+
+  const getFlagCardClass = (flagType) => {
+    const normalized = String(flagType || "").trim().toLowerCase();
+    if (normalized === "bug") return "flag-bug";
+    if (normalized === "needs_levent_attention") return "flag-attention";
+    if (normalized === "needs_adil_attention") return "flag-adil";
+    return "";
+  };
+
+  const getFlagBadgeClass = (flagType) => {
+    const normalized = String(flagType || "").trim().toLowerCase();
+    if (normalized === "bug") return "bug";
+    if (normalized === "needs_levent_attention") return "attention";
+    if (normalized === "needs_adil_attention") return "adil";
     return "";
   };
 
@@ -5778,302 +5795,588 @@ function WorkflowBoardPanel({
         </div>
       </div>
 
-      <div className="workflow-board-toolbar">
-        <div className="workflow-board-meta">
-          <span className="workflow-meta-pill">{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
-          <span className="workflow-meta-pill">{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
-          <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(filteredColumns.length))}</span>
-          <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
-        </div>
-      </div>
+      {!activeCard ? (
+        <>
+          <div className="workflow-board-toolbar">
+            <div className="workflow-board-meta">
+              <span className="workflow-meta-pill">{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
+              <span className="workflow-meta-pill">{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
+              <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(filteredColumns.length))}</span>
+              <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
+            </div>
+          </div>
 
-      <div className="workflow-filter-shell">
-        <div className="workflow-filter-select-wrap" ref={filterMenuRef}>
-          <button
-            className={`workflow-filter-select ${hasActiveFilters ? "active" : ""}`.trim()}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={filterMenuOpen}
-            onClick={() => {
-              if (filterMenuOpen) {
-                setFilterMenuOpen(false);
-              } else {
-                openFilterMenu();
-              }
-            }}
-          >
-            <span>{t("workflowFilterBy")}</span>
-            <span className="workflow-filter-select-caret" aria-hidden="true">▾</span>
-          </button>
-          {hasActiveFilters ? (
-            <span className="workflow-filter-trigger-count">{activeFilterCount}</span>
-          ) : null}
-          {filterMenuOpen ? (
-            <div className="workflow-filter-menu" role="menu" aria-label={t("workflowFilterBy")}>
-              <div className="workflow-filter-menu-list" role="presentation">
-                {[
-                  { key: "user", label: t("workflowFilterPanelUser") },
-                  { key: "job_type", label: t("workflowFilterPanelJobType") },
-                  { key: "date_range", label: t("workflowFilterPanelDateRange") },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={`workflow-filter-menu-item ${filterMenuSection === item.key ? "active" : ""}`.trim()}
-                    onMouseEnter={() => selectFilterSection(item.key)}
-                    onFocus={() => selectFilterSection(item.key)}
-                    onClick={() => selectFilterSection(item.key)}
-                  >
-                    <span>{item.label}</span>
-                    <span aria-hidden="true">›</span>
-                  </button>
-                ))}
-              </div>
-              {filterPanel ? (
-                <div className="workflow-filter-menu-panel">
-                  {showUserFilter ? (
-                  <div className="workflow-filter-menu-group">
-                    <div className="workflow-filter-option-list">
-                      {userOptions.map((userLabel) => (
-                        <button
-                          key={userLabel}
-                          type="button"
-                          className={`workflow-filter-option ${filterUser === userLabel ? "active" : ""}`.trim()}
-                          onClick={() => {
-                            setFilterUser(userLabel);
-                            setFilterMenuOpen(false);
-                          }}
-                        >
-                          {userLabel}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  ) : null}
-                  {showJobTypeFilter ? (
-                  <div className="workflow-filter-menu-group">
-                    <div className="workflow-filter-option-list">
-                      {jobTypeOptions.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`workflow-filter-option ${filterJobType === option.value ? "active" : ""}`.trim()}
-                          onClick={() => {
-                            setFilterJobType(option.value);
-                            setFilterMenuOpen(false);
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  ) : null}
-                  {showDateFilters ? (
-                  <div className="workflow-filter-menu-group">
-                    <div className="workflow-filter-date-grid">
-                      <label className="workflow-field-label" htmlFor="workflow-filter-date-from">
-                        {t("workflowFilterDateFrom")}
-                      </label>
-                      <input
-                        id="workflow-filter-date-from"
-                        type="date"
-                        value={filterDateFrom}
-                        onChange={(event) => setFilterDateFrom(event.target.value)}
-                        aria-label={t("workflowFilterDateFrom")}
-                      />
-                      <label className="workflow-field-label" htmlFor="workflow-filter-date-to">
-                        {t("workflowFilterDateTo")}
-                      </label>
-                      <input
-                        id="workflow-filter-date-to"
-                        type="date"
-                        value={filterDateTo}
-                        onChange={(event) => setFilterDateTo(event.target.value)}
-                        aria-label={t("workflowFilterDateTo")}
-                      />
-                    </div>
-                  </div>
-                  ) : null}
-                  {hasActiveFilters ? (
-                    <div className="workflow-filter-menu-footer">
+          <div className="workflow-filter-shell">
+            <div className="workflow-filter-select-wrap" ref={filterMenuRef}>
+              <button
+                className={`workflow-filter-select ${hasActiveFilters ? "active" : ""}`.trim()}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={filterMenuOpen}
+                onClick={() => {
+                  if (filterMenuOpen) {
+                    setFilterMenuOpen(false);
+                  } else {
+                    openFilterMenu();
+                  }
+                }}
+              >
+                <span>{t("workflowFilterBy")}</span>
+                <span className="workflow-filter-select-caret" aria-hidden="true">▾</span>
+              </button>
+              {hasActiveFilters ? (
+                <span className="workflow-filter-trigger-count">{activeFilterCount}</span>
+              ) : null}
+              {filterMenuOpen ? (
+                <div className="workflow-filter-menu" role="menu" aria-label={t("workflowFilterBy")}>
+                  <div className="workflow-filter-menu-list" role="presentation">
+                    {[
+                      { key: "user", label: t("workflowFilterPanelUser") },
+                      { key: "job_type", label: t("workflowFilterPanelJobType") },
+                      { key: "date_range", label: t("workflowFilterPanelDateRange") },
+                    ].map((item) => (
                       <button
-                        className="btn ghost small"
+                        key={item.key}
                         type="button"
-                        onClick={clearWorkflowFilters}
+                        className={`workflow-filter-menu-item ${filterMenuSection === item.key ? "active" : ""}`.trim()}
+                        onMouseEnter={() => selectFilterSection(item.key)}
+                        onFocus={() => selectFilterSection(item.key)}
+                        onClick={() => selectFilterSection(item.key)}
                       >
-                        {t("workflowClearFilters")}
+                        <span>{item.label}</span>
+                        <span aria-hidden="true">›</span>
                       </button>
+                    ))}
+                  </div>
+                  {filterPanel ? (
+                    <div className="workflow-filter-menu-panel">
+                      {showUserFilter ? (
+                        <div className="workflow-filter-menu-group">
+                          <div className="workflow-filter-option-list">
+                            {userOptions.map((userLabel) => (
+                              <button
+                                key={userLabel}
+                                type="button"
+                                className={`workflow-filter-option ${filterUser === userLabel ? "active" : ""}`.trim()}
+                                onClick={() => {
+                                  setFilterUser(userLabel);
+                                  setFilterMenuOpen(false);
+                                }}
+                              >
+                                {userLabel}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {showJobTypeFilter ? (
+                        <div className="workflow-filter-menu-group">
+                          <div className="workflow-filter-option-list">
+                            {jobTypeOptions.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                className={`workflow-filter-option ${filterJobType === option.value ? "active" : ""}`.trim()}
+                                onClick={() => {
+                                  setFilterJobType(option.value);
+                                  setFilterMenuOpen(false);
+                                }}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {showDateFilters ? (
+                        <div className="workflow-filter-menu-group">
+                          <div className="workflow-filter-date-grid">
+                            <label className="workflow-field-label" htmlFor="workflow-filter-date-from">
+                              {t("workflowFilterDateFrom")}
+                            </label>
+                            <input
+                              id="workflow-filter-date-from"
+                              type="date"
+                              value={filterDateFrom}
+                              onChange={(event) => setFilterDateFrom(event.target.value)}
+                              aria-label={t("workflowFilterDateFrom")}
+                            />
+                            <label className="workflow-field-label" htmlFor="workflow-filter-date-to">
+                              {t("workflowFilterDateTo")}
+                            </label>
+                            <input
+                              id="workflow-filter-date-to"
+                              type="date"
+                              value={filterDateTo}
+                              onChange={(event) => setFilterDateTo(event.target.value)}
+                              aria-label={t("workflowFilterDateTo")}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                      {hasActiveFilters ? (
+                        <div className="workflow-filter-menu-footer">
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={clearWorkflowFilters}
+                          >
+                            {t("workflowClearFilters")}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
               ) : null}
             </div>
+          </div>
+
+          {loading && columns.length === 0 ? (
+            <div className="loading-inline" role="status" aria-live="polite">
+              <span className="sr-only">{t("loading")}</span>
+            </div>
           ) : null}
-        </div>
-      </div>
 
-      {loading && columns.length === 0 ? (
-        <div className="loading-inline" role="status" aria-live="polite">
-          <span className="sr-only">{t("loading")}</span>
-        </div>
-      ) : null}
+          {!loading && columns.length === 0 ? (
+            <p className="muted-text">{t("workflowEmpty")}</p>
+          ) : null}
 
-      {!loading && columns.length === 0 ? (
-        <p className="muted-text">{t("workflowEmpty")}</p>
-      ) : null}
-
-      {columns.length > 0 ? (
-        <div
-          className="workflow-board-columns"
-          style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
-        >
-          {filteredColumns.map((column, columnIndex) => {
-            const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";
-            return (
-              <section
-                key={column.id}
-                className="workflow-column"
-                onDragOver={(event) => {
-                  event.preventDefault();
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const cardId = draggingCardId || event.dataTransfer.getData("text/workflow-card-id");
-                  if (!cardId) return;
-                  onMoveCard(cardId, column.id);
-                }}
-              >
-                <div className="workflow-column-header">
-                  <div className="workflow-column-title-row">
-                    <span className="workflow-column-color" style={{ backgroundColor: column.color || "var(--accent)" }} />
-                    <div className="workflow-column-title-copy">
-                      <h3>{column.name || t("workflowColumnName")}</h3>
-                      <span className="workflow-column-subtitle">
-                        {t("workflowColumnCards").replace("{count}", String(Array.isArray(column.cards) ? column.cards.length : 0))}
-                      </span>
+          {columns.length > 0 ? (
+            <div
+              className="workflow-board-columns"
+              style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
+            >
+              {filteredColumns.map((column, columnIndex) => {
+                const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";
+                return (
+                  <section
+                    key={column.id}
+                    className="workflow-column"
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const cardId = draggingCardId || event.dataTransfer.getData("text/workflow-card-id");
+                      if (!cardId) return;
+                      onMoveCard(cardId, column.id);
+                    }}
+                  >
+                    <div className="workflow-column-header">
+                      <div className="workflow-column-title-row">
+                        <span className="workflow-column-color" style={{ backgroundColor: column.color || "var(--accent)" }} />
+                        <div className="workflow-column-title-copy">
+                          <h3>{column.name || t("workflowColumnName")}</h3>
+                          <span className="workflow-column-subtitle">
+                            {t("workflowColumnCards").replace("{count}", String(Array.isArray(column.cards) ? column.cards.length : 0))}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="workflow-column-header-actions">
+                        <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="workflow-column-header-actions">
-                    <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
-                  </div>
-                </div>
 
-                <div className="workflow-column-cards">
-                  {isTodoColumn ? (
-                    <div className="workflow-create-card">
-                      <button
-                        className="workflow-create-card-trigger"
-                        type="button"
-                        onClick={() => setCreateCardOpen(true)}
-                        disabled={cardCreateBusy || Boolean(movingCardId)}
-                      >
-                        {t("workflowCreateCard")}
-                      </button>
-                    </div>
-                  ) : null}
+                    <div className="workflow-column-cards">
+                      {isTodoColumn ? (
+                        <div className="workflow-create-card">
+                          <button
+                            className="workflow-create-card-trigger"
+                            type="button"
+                            onClick={() => setCreateCardOpen(true)}
+                            disabled={cardCreateBusy || Boolean(movingCardId)}
+                          >
+                            {t("workflowCreateCard")}
+                          </button>
+                        </div>
+                      ) : null}
 
-                  {(column.cards || []).map((card) => {
-                    const cardId = String(card.id || "");
-                    const comments = Array.isArray(card.comments) ? card.comments : [];
-                    return (
-                      <article
-                        key={card.id}
-                        className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""} ${card.flag_type === "bug" ? "flag-bug" : card.flag_type === "needs_levent_attention" ? "flag-attention" : ""}`.trim()}
-                        draggable={!movingCardId}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openCardDetails(card.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            openCardDetails(card.id);
-                          }
-                        }}
-                        onDragStart={(event) => {
-                          event.dataTransfer.effectAllowed = "move";
-                          event.dataTransfer.setData("text/workflow-card-id", String(card.id));
-                          setOpenCardMenuId("");
-                          onDragStart(card.id);
-                        }}
-                        onDragEnd={onDragEnd}
-                      >
-                        <div className="workflow-card-top">
-                          <strong className="workflow-card-title">{card.title || t("workflowCardFallbackTitle")}</strong>
-                          <div className="workflow-card-top-actions">
-                            <div className="workflow-card-menu-wrap" onClick={(event) => event.stopPropagation()}>
-                              <button
-                                className="workflow-menu-btn"
-                                type="button"
-                                onClick={() => setOpenCardMenuId((current) => current === cardId ? "" : cardId)}
-                                aria-label={t("workflowCardActions")}
-                              >
-                                <span />
-                                <span />
-                                <span />
-                              </button>
-                              {openCardMenuId === cardId ? (
-                                <div className="workflow-inline-menu card-menu">
+                      {(column.cards || []).map((card) => {
+                        const cardId = String(card.id || "");
+                        const flagCardClass = getFlagCardClass(card.flag_type);
+                        const flagBadgeClass = getFlagBadgeClass(card.flag_type);
+                        return (
+                          <article
+                            key={card.id}
+                            className={`workflow-card ${(movingCardId && movingCardId === cardId) ? "moving" : ""} ${(draggingCardId && draggingCardId === cardId) ? "dragging" : ""} ${flagCardClass}`.trim()}
+                            draggable={!movingCardId}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => openCardDetails(card.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                openCardDetails(card.id);
+                              }
+                            }}
+                            onDragStart={(event) => {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/workflow-card-id", String(card.id));
+                              setOpenCardMenuId("");
+                              onDragStart(card.id);
+                            }}
+                            onDragEnd={onDragEnd}
+                          >
+                            <div className="workflow-card-top">
+                              <strong className="workflow-card-title">{card.title || t("workflowCardFallbackTitle")}</strong>
+                              <div className="workflow-card-top-actions">
+                                <div className="workflow-card-menu-wrap" onClick={(event) => event.stopPropagation()}>
                                   <button
+                                    className="workflow-menu-btn"
                                     type="button"
-                                    onClick={() => updateCardFlag(card, "bug")}
-                                    disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                    onClick={() => setOpenCardMenuId((current) => current === cardId ? "" : cardId)}
+                                    aria-label={t("workflowCardActions")}
                                   >
-                                    {t("workflowFlagAsBug")}
+                                    <span />
+                                    <span />
+                                    <span />
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => updateCardFlag(card, "needs_levent_attention")}
-                                    disabled={cardDetailSavingKey === `flag:${cardId}`}
-                                  >
-                                    {t("workflowFlagAsNeedsLevent")}
-                                  </button>
-                                  {isSuperAdmin ? (
-                                    <button
-                                      type="button"
-                                      className="danger"
-                                      onClick={() => removeCard(card)}
-                                      disabled={cardDetailSavingKey === `delete:${cardId}`}
-                                    >
-                                      {cardDetailSavingKey === `delete:${cardId}` ? t("loading") : t("workflowDeleteCard")}
-                                    </button>
+                                  {openCardMenuId === cardId ? (
+                                    <div className="workflow-inline-menu card-menu">
+                                      <button
+                                        type="button"
+                                        onClick={() => updateCardFlag(card, "bug")}
+                                        disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                      >
+                                        {t("workflowFlagAsBug")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateCardFlag(card, "needs_levent_attention")}
+                                        disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                      >
+                                        {t("workflowFlagAsNeedsLevent")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateCardFlag(card, "needs_adil_attention")}
+                                        disabled={cardDetailSavingKey === `flag:${cardId}`}
+                                      >
+                                        {t("workflowFlagAsNeedsAdil")}
+                                      </button>
+                                      {isSuperAdmin ? (
+                                        <button
+                                          type="button"
+                                          className="danger"
+                                          onClick={() => removeCard(card)}
+                                          disabled={cardDetailSavingKey === `delete:${cardId}`}
+                                        >
+                                          {cardDetailSavingKey === `delete:${cardId}` ? t("loading") : t("workflowDeleteCard")}
+                                        </button>
+                                      ) : null}
+                                    </div>
                                   ) : null}
                                 </div>
+                              </div>
+                            </div>
+                            <div className="workflow-card-badges">
+                              <span className="workflow-card-job-type">{getJobTypeLabel(card.job_type)}</span>
+                              <span className={`workflow-card-priority ${String(card.priority || "medium").toLowerCase()}`}>
+                                {getPriorityLabel(card.priority)}
+                              </span>
+                              {card.flag_type ? (
+                                <span className={`workflow-card-flag ${flagBadgeClass}`.trim()}>
+                                  {getFlagLabel(card.flag_type)}
+                                </span>
                               ) : null}
                             </div>
-                          </div>
-                        </div>
-                        <div className="workflow-card-badges">
-                          <span className="workflow-card-job-type">{getJobTypeLabel(card.job_type)}</span>
-                          <span className={`workflow-card-priority ${String(card.priority || "medium").toLowerCase()}`}>
-                            {getPriorityLabel(card.priority)}
-                          </span>
-                          {card.flag_type ? (
-                            <span className={`workflow-card-flag ${card.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
-                              {getFlagLabel(card.flag_type)}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="workflow-card-summary">
-                          <span>
-                            <strong>{t("workflowAssignedToLabel")}:</strong> {card.assignee_name || t("notAvailable")}
-                          </span>
-                          <span>
-                            <strong>{t("workflowCreatedByLabel")}:</strong> {card.created_by_name || t("notAvailable")}
-                          </span>
-                        </div>
-                        <div className="workflow-card-footer">
-                          <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
-                        </div>
-                      </article>
-                    );
-                  })}
+                            <div className="workflow-card-summary">
+                              <span>
+                                <strong>{t("workflowAssignedToLabel")}:</strong> {card.assignee_name || t("notAvailable")}
+                              </span>
+                              <span>
+                                <strong>{t("workflowCreatedByLabel")}:</strong> {card.created_by_name || t("notAvailable")}
+                              </span>
+                            </div>
+                            <div className="workflow-card-footer">
+                              <span>{t("workflowCreatedAt").replace("{value}", formatPublishedAt(card.created_at))}</span>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <section className={`workflow-card-detail-view ${getFlagCardClass(activeCard.flag_type)}`.trim()}>
+          <button className="workflow-detail-back" type="button" onClick={() => setActiveCardId("")}>
+            ← {t("workflowBackToBoard")}
+          </button>
+
+          <div className="workflow-card-details-header">
+            <div className="workflow-card-details-heading">
+              {cardEditOpen ? (
+                <div className="workflow-card-detail-editor">
+                  <label className="workflow-field-label" htmlFor="workflow-detail-title">
+                    {t("workflowCreateCardTitleLabel")}
+                  </label>
+                  <input
+                    id="workflow-detail-title"
+                    type="text"
+                    value={cardDetailDraft.title}
+                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                    maxLength={160}
+                  />
+                  <label className="workflow-field-label" htmlFor="workflow-detail-job-type">
+                    {t("workflowCreateCardJobTypeLabel")}
+                  </label>
+                  <select
+                    id="workflow-detail-job-type"
+                    value={cardDetailDraft.job_type}
+                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, job_type: event.target.value }))}
+                  >
+                    <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
+                    {jobTypeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <label className="workflow-field-label" htmlFor="workflow-detail-assignee">
+                    {t("workflowAssignedToLabel")}
+                  </label>
+                  <select
+                    id="workflow-detail-assignee"
+                    value={cardDetailDraft.assignee_user_id}
+                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, assignee_user_id: event.target.value }))}
+                  >
+                    <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
+                    {assignableUsers.map((user) => (
+                      <option key={user.id} value={user.id}>{user.label}</option>
+                    ))}
+                  </select>
+                  <label className="workflow-field-label" htmlFor="workflow-detail-priority">
+                    {t("workflowPriorityLabel")}
+                  </label>
+                  <select
+                    id="workflow-detail-priority"
+                    value={cardDetailDraft.priority}
+                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, priority: event.target.value }))}
+                  >
+                    {priorityOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
                 </div>
-              </section>
-            );
-          })}
-        </div>
-      ) : null}
+              ) : (
+                <>
+                  <h3 id="workflow-card-details-title">{activeCard.title}</h3>
+                  <div className="workflow-card-badges">
+                    <span className="workflow-card-job-type">{getJobTypeLabel(activeCard.job_type)}</span>
+                    <span className={`workflow-card-priority ${String(activeCard.priority || "medium").toLowerCase()}`}>
+                      {getPriorityLabel(activeCard.priority)}
+                    </span>
+                    {activeCard.flag_type ? (
+                      <span className={`workflow-card-flag ${getFlagBadgeClass(activeCard.flag_type)}`.trim()}>
+                        {getFlagLabel(activeCard.flag_type)}
+                      </span>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="workflow-card-details-meta">
+            <div className="workflow-card-meta">
+              <span className="workflow-card-label">{t("workflowAssignedToLabel")}</span>
+              <span>{activeCard.assignee_name || t("notAvailable")}</span>
+            </div>
+            {activeCard.created_by_name ? (
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
+                <span>{activeCard.created_by_name}</span>
+              </div>
+            ) : null}
+            <div className="workflow-card-meta">
+              <span className="workflow-card-label">{t("workflowPriorityLabel")}</span>
+              <span>{getPriorityLabel(activeCard.priority)}</span>
+            </div>
+            <div className="workflow-card-meta">
+              <span className="workflow-card-label">{t("workflowCreatedAtLabel")}</span>
+              <span>{formatPublishedAt(activeCard.created_at)}</span>
+            </div>
+          </div>
+
+          <div className="workflow-card-details-section">
+            <div className="workflow-card-details-section-header">
+              <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
+              <div className="workflow-card-detail-actions">
+                {cardEditOpen ? (
+                  <>
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      onClick={() => {
+                        setCardEditOpen(false);
+                        setCardDetailDraft({
+                          title: String(activeCard.title || ""),
+                          description: String(activeCard.description || ""),
+                          job_type: String(activeCard.job_type || ""),
+                          priority: String(activeCard.priority || "medium"),
+                          assignee_user_id: String(activeCard.assignee_user_id || ""),
+                        });
+                      }}
+                      disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
+                    >
+                      {t("cancel")}
+                    </button>
+                    <button
+                      className="btn small"
+                      type="button"
+                      onClick={saveCardDetails}
+                      disabled={
+                        cardDetailSavingKey === `details:${String(activeCard.id || "")}`
+                        || !String(cardDetailDraft.title || "").trim()
+                        || !String(cardDetailDraft.job_type || "").trim()
+                        || !String(cardDetailDraft.assignee_user_id || "").trim()
+                      }
+                    >
+                      {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
+                    </button>
+                  </>
+                ) : isSuperAdmin ? (
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => setCardEditOpen(true)}
+                  >
+                    {t("workflowEditDetails")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {cardEditOpen ? (
+              <textarea
+                value={cardDetailDraft.description}
+                onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
+                rows={5}
+                maxLength={4000}
+              />
+            ) : (
+              <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
+            )}
+          </div>
+
+          <div className="workflow-card-comments details">
+            <span className="workflow-card-label">{t("workflowCommentsSectionTitle")}</span>
+            <div className="workflow-card-comments-list">
+              {(activeCard.comments || []).length === 0 ? (
+                <p className="workflow-comments-empty">{t("workflowCommentsEmpty")}</p>
+              ) : (activeCard.comments || []).map((comment) => {
+                const commentId = String(comment.id || "");
+                const editValue = editingComments[commentId];
+                const isEditing = typeof editValue === "string";
+                const isOwnComment = comment.can_edit || (comment.author_user_id && String(comment.author_user_id) === currentUserId);
+                const createdLabel = t("workflowCommentCreatedAt").replace("{value}", formatPublishedAt(comment.created_at));
+                const editedLabel = comment.updated_at !== comment.created_at
+                  ? t("workflowCommentEditedAt").replace("{value}", formatPublishedAt(comment.updated_at))
+                  : "";
+                return (
+                  <div key={comment.id} className="workflow-comment">
+                    <div className="workflow-comment-header">
+                      <strong>{comment.author_name}</strong>
+                      <span>{createdLabel}</span>
+                      {editedLabel ? <span>{editedLabel}</span> : null}
+                    </div>
+                    {isEditing ? (
+                      <div className="workflow-comment-editor">
+                        <textarea
+                          value={editValue}
+                          onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
+                          rows={3}
+                          maxLength={4000}
+                        />
+                        <div className="workflow-comment-actions">
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => improveDraft(
+                              `edit:${commentId}`,
+                              editValue,
+                              (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
+                            )}
+                            disabled={commentRewriteKey === `edit:${commentId}` || !String(editValue || "").trim()}
+                          >
+                            {commentRewriteKey === `edit:${commentId}` ? t("loading") : t("workflowImproveComment")}
+                          </button>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => setEditingComments((current) => {
+                              const next = { ...current };
+                              delete next[commentId];
+                              return next;
+                            })}
+                            disabled={commentSavingKey === `edit:${commentId}`}
+                          >
+                            {t("cancel")}
+                          </button>
+                          <button
+                            className="btn secondary small"
+                            type="button"
+                            onClick={() => saveEditedComment(commentId)}
+                            disabled={commentSavingKey === `edit:${commentId}` || !String(editValue || "").trim()}
+                          >
+                            {commentSavingKey === `edit:${commentId}` ? t("loading") : t("workflowSaveComment")}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="workflow-comment-body">{comment.body}</p>
+                        {isOwnComment ? (
+                          <button
+                            className="workflow-comment-inline-action"
+                            type="button"
+                            onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
+                          >
+                            {t("workflowEditComment")}
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="workflow-comment-composer">
+              <textarea
+                value={commentDrafts[String(activeCard.id || "")] || ""}
+                onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
+                placeholder={t("workflowCommentPlaceholder")}
+                rows={3}
+                maxLength={4000}
+              />
+              <div className="workflow-comment-actions">
+                <button
+                  className="btn ghost small"
+                  type="button"
+                  onClick={() => improveDraft(
+                    `new:${String(activeCard.id || "")}`,
+                    commentDrafts[String(activeCard.id || "")] || "",
+                    (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
+                  )}
+                  disabled={commentRewriteKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
+                >
+                  {commentRewriteKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowImproveComment")}
+                </button>
+                <button
+                  className="btn small"
+                  type="button"
+                  onClick={() => submitComment(String(activeCard.id || ""))}
+                  disabled={commentSavingKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
+                >
+                  {commentSavingKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowAddComment")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {createCardOpen ? (
         <div
@@ -6195,290 +6498,6 @@ function WorkflowBoardPanel({
         </div>
       ) : null}
 
-      {activeCard ? (
-        <div
-          className="modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workflow-card-details-title"
-          onClick={(event) => {
-            if (event.target === event.currentTarget && !commentSavingKey && !cardDetailSavingKey) {
-              setActiveCardId("");
-            }
-          }}
-        >
-          <div className={`modal-card panel workflow-card-details-modal ${activeCard.flag_type === "bug" ? "flag-bug" : activeCard.flag_type === "needs_levent_attention" ? "flag-attention" : ""}`.trim()}>
-            <div className="workflow-card-details-header">
-              <div className="workflow-card-details-heading">
-                {cardEditOpen ? (
-                  <div className="workflow-card-detail-editor">
-                    <label className="workflow-field-label" htmlFor="workflow-detail-title">
-                      {t("workflowCreateCardTitleLabel")}
-                    </label>
-                    <input
-                      id="workflow-detail-title"
-                      type="text"
-                      value={cardDetailDraft.title}
-                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
-                      maxLength={160}
-                    />
-                    <label className="workflow-field-label" htmlFor="workflow-detail-job-type">
-                      {t("workflowCreateCardJobTypeLabel")}
-                    </label>
-                    <select
-                      id="workflow-detail-job-type"
-                      value={cardDetailDraft.job_type}
-                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, job_type: event.target.value }))}
-                    >
-                      <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
-                      {jobTypeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                    <label className="workflow-field-label" htmlFor="workflow-detail-assignee">
-                      {t("workflowAssignedToLabel")}
-                    </label>
-                    <select
-                      id="workflow-detail-assignee"
-                      value={cardDetailDraft.assignee_user_id}
-                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, assignee_user_id: event.target.value }))}
-                    >
-                      <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
-                      {assignableUsers.map((user) => (
-                        <option key={user.id} value={user.id}>{user.label}</option>
-                      ))}
-                    </select>
-                    <label className="workflow-field-label" htmlFor="workflow-detail-priority">
-                      {t("workflowPriorityLabel")}
-                    </label>
-                    <select
-                      id="workflow-detail-priority"
-                      value={cardDetailDraft.priority}
-                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, priority: event.target.value }))}
-                    >
-                      {priorityOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <h3 id="workflow-card-details-title">{activeCard.title}</h3>
-                )}
-                <div className="workflow-card-badges">
-                  <span className="workflow-card-job-type">{getJobTypeLabel(activeCard.job_type)}</span>
-                  <span className={`workflow-card-priority ${String(activeCard.priority || "medium").toLowerCase()}`}>
-                    {getPriorityLabel(activeCard.priority)}
-                  </span>
-                  {activeCard.flag_type ? (
-                    <span className={`workflow-card-flag ${activeCard.flag_type === "bug" ? "bug" : "attention"}`.trim()}>
-                      {getFlagLabel(activeCard.flag_type)}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              <button className="btn ghost small" type="button" onClick={() => setActiveCardId("")}>
-                {t("close")}
-              </button>
-            </div>
-
-            <div className="workflow-card-details-meta">
-              <div className="workflow-card-meta">
-                <span className="workflow-card-label">{t("workflowAssignedToLabel")}</span>
-                <span>{activeCard.assignee_name || t("notAvailable")}</span>
-              </div>
-              {activeCard.created_by_name ? (
-                <div className="workflow-card-meta">
-                  <span className="workflow-card-label">{t("workflowCreatedByLabel")}</span>
-                  <span>{activeCard.created_by_name}</span>
-                </div>
-              ) : null}
-              <div className="workflow-card-meta">
-                <span className="workflow-card-label">{t("workflowPriorityLabel")}</span>
-                <span>{getPriorityLabel(activeCard.priority)}</span>
-              </div>
-              <div className="workflow-card-meta">
-                <span className="workflow-card-label">{t("workflowCreatedAtLabel")}</span>
-                <span>{formatPublishedAt(activeCard.created_at)}</span>
-              </div>
-            </div>
-
-            <div className="workflow-card-details-section">
-              <div className="workflow-card-details-section-header">
-                <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
-                <div className="workflow-card-detail-actions">
-                  {cardEditOpen ? (
-                    <>
-                      <button
-                        className="btn ghost small"
-                        type="button"
-                        onClick={() => {
-                          setCardEditOpen(false);
-                          setCardDetailDraft({
-                            title: String(activeCard.title || ""),
-                            description: String(activeCard.description || ""),
-                            job_type: String(activeCard.job_type || ""),
-                            priority: String(activeCard.priority || "medium"),
-                            assignee_user_id: String(activeCard.assignee_user_id || ""),
-                          });
-                        }}
-                        disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
-                      >
-                        {t("cancel")}
-                      </button>
-                      <button
-                        className="btn small"
-                        type="button"
-                        onClick={saveCardDetails}
-                        disabled={
-                          cardDetailSavingKey === `details:${String(activeCard.id || "")}`
-                          || !String(cardDetailDraft.title || "").trim()
-                          || !String(cardDetailDraft.job_type || "").trim()
-                          || !String(cardDetailDraft.assignee_user_id || "").trim()
-                        }
-                      >
-                        {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
-                      </button>
-                    </>
-                  ) : isSuperAdmin ? (
-                    <button
-                      className="btn ghost small"
-                      type="button"
-                      onClick={() => setCardEditOpen(true)}
-                    >
-                      {t("workflowEditDetails")}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              {cardEditOpen ? (
-                <textarea
-                  value={cardDetailDraft.description}
-                  onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
-                  rows={5}
-                  maxLength={4000}
-                />
-              ) : (
-                <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
-              )}
-            </div>
-
-            <div className="workflow-card-comments details">
-              <span className="workflow-card-label">{t("workflowCommentsSectionTitle")}</span>
-              <div className="workflow-card-comments-list">
-                {(activeCard.comments || []).length === 0 ? (
-                  <p className="workflow-comments-empty">{t("workflowCommentsEmpty")}</p>
-                ) : (activeCard.comments || []).map((comment) => {
-                  const commentId = String(comment.id || "");
-                  const editValue = editingComments[commentId];
-                  const isEditing = typeof editValue === "string";
-                  const isOwnComment = comment.can_edit || (comment.author_user_id && String(comment.author_user_id) === currentUserId);
-                  const createdLabel = t("workflowCommentCreatedAt").replace("{value}", formatPublishedAt(comment.created_at));
-                  const editedLabel = comment.updated_at !== comment.created_at
-                    ? t("workflowCommentEditedAt").replace("{value}", formatPublishedAt(comment.updated_at))
-                    : "";
-                  return (
-                    <div key={comment.id} className="workflow-comment">
-                      <div className="workflow-comment-header">
-                        <strong>{comment.author_name}</strong>
-                        <span>{createdLabel}</span>
-                        {editedLabel ? <span>{editedLabel}</span> : null}
-                      </div>
-                      {isEditing ? (
-                        <div className="workflow-comment-editor">
-                          <textarea
-                            value={editValue}
-                            onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
-                            rows={3}
-                            maxLength={4000}
-                          />
-                          <div className="workflow-comment-actions">
-                            <button
-                              className="btn ghost small"
-                              type="button"
-                              onClick={() => improveDraft(
-                                `edit:${commentId}`,
-                                editValue,
-                                (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
-                              )}
-                              disabled={commentRewriteKey === `edit:${commentId}` || !String(editValue || "").trim()}
-                            >
-                              {commentRewriteKey === `edit:${commentId}` ? t("loading") : t("workflowImproveComment")}
-                            </button>
-                            <button
-                              className="btn ghost small"
-                              type="button"
-                              onClick={() => setEditingComments((current) => {
-                                const next = { ...current };
-                                delete next[commentId];
-                                return next;
-                              })}
-                              disabled={commentSavingKey === `edit:${commentId}`}
-                            >
-                              {t("cancel")}
-                            </button>
-                            <button
-                              className="btn secondary small"
-                              type="button"
-                              onClick={() => saveEditedComment(commentId)}
-                              disabled={commentSavingKey === `edit:${commentId}` || !String(editValue || "").trim()}
-                            >
-                              {commentSavingKey === `edit:${commentId}` ? t("loading") : t("workflowSaveComment")}
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <p className="workflow-comment-body">{comment.body}</p>
-                          {isOwnComment ? (
-                            <button
-                              className="workflow-comment-inline-action"
-                              type="button"
-                              onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
-                            >
-                              {t("workflowEditComment")}
-                            </button>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="workflow-comment-composer">
-                <textarea
-                  value={commentDrafts[String(activeCard.id || "")] || ""}
-                  onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
-                  placeholder={t("workflowCommentPlaceholder")}
-                  rows={3}
-                  maxLength={4000}
-                />
-                <div className="workflow-comment-actions">
-                  <button
-                    className="btn ghost small"
-                    type="button"
-                    onClick={() => improveDraft(
-                      `new:${String(activeCard.id || "")}`,
-                      commentDrafts[String(activeCard.id || "")] || "",
-                      (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
-                    )}
-                    disabled={commentRewriteKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
-                  >
-                    {commentRewriteKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowImproveComment")}
-                  </button>
-                  <button
-                    className="btn small"
-                    type="button"
-                    onClick={() => submitComment(String(activeCard.id || ""))}
-                    disabled={commentSavingKey === `new:${String(activeCard.id || "")}` || !String(commentDrafts[String(activeCard.id || "")] || "").trim()}
-                  >
-                    {commentSavingKey === `new:${String(activeCard.id || "")}` ? t("loading") : t("workflowAddComment")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

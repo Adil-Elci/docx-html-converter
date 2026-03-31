@@ -75,6 +75,16 @@ def test_workflow_card_update_in_allows_title_and_description_edit() -> None:
     assert payload.description == "Updated notes"
 
 
+def test_workflow_card_update_in_accepts_adil_attention_flag() -> None:
+    payload = WorkflowCardUpdateIn(flag_type="needs_adil_attention")
+    assert payload.flag_type == "needs_adil_attention"
+
+
+def test_workflow_card_update_in_rejects_invalid_flag() -> None:
+    with pytest.raises(ValidationError):
+        WorkflowCardUpdateIn(flag_type="needs_ops_attention")
+
+
 def test_workflow_card_update_in_allows_full_super_admin_edit_fields() -> None:
     payload = WorkflowCardUpdateIn(
         title="Updated title",

@@ -10,7 +10,7 @@ WORKFLOW_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
 WORKFLOW_COMMENT_LANGUAGES = {"en", "de"}
 WORKFLOW_JOB_TYPES = {"articles", "develop", "fix", "research"}
 WORKFLOW_PRIORITY_LEVELS = {"urgent", "high", "medium", "low"}
-WORKFLOW_FLAG_TYPES = {"bug", "needs_levent_attention"}
+WORKFLOW_FLAG_TYPES = {"bug", "needs_levent_attention", "needs_adil_attention"}
 
 
 class WorkflowCommentOut(BaseModel):
@@ -264,5 +264,5 @@ class WorkflowCardUpdateIn(BaseModel):
         if not normalized:
             return None
         if normalized not in WORKFLOW_FLAG_TYPES:
-            raise ValueError("flag_type must be bug or needs_levent_attention.")
+            raise ValueError("flag_type must be bug, needs_levent_attention, or needs_adil_attention.")
         return normalized

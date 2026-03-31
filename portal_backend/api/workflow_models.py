@@ -30,7 +30,10 @@ class WorkflowCard(Base):
         CheckConstraint("card_kind IN ('job','manual')", name="workflow_cards_kind_check"),
         CheckConstraint("job_type IN ('articles','develop','fix','research')", name="workflow_cards_job_type_check"),
         CheckConstraint("priority IN ('urgent','high','medium','low')", name="workflow_cards_priority_check"),
-        CheckConstraint("flag_type IN ('bug','needs_levent_attention') OR flag_type IS NULL", name="workflow_cards_flag_type_check"),
+        CheckConstraint(
+            "flag_type IN ('bug','needs_levent_attention','needs_adil_attention') OR flag_type IS NULL",
+            name="workflow_cards_flag_type_check",
+        ),
         UniqueConstraint("job_id", name="workflow_cards_job_unique"),
     )
 

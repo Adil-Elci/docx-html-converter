@@ -114,6 +114,105 @@ const WORKFLOW_FLAG_COLORS = {
   needs_levent_attention: "#facc15",
   needs_adil_attention: "#a855f7",
 };
+const INLINE_FORMAT_PATTERN = /(\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
+
+const renderInlineFormattedText = (text, keyPrefix = "inline") => (
+  String(text || "")
+    .split(INLINE_FORMAT_PATTERN)
+    .filter((part) => part !== "")
+    .map((part, index) => {
+      const key = `${keyPrefix}-${index}`;
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+        return <strong key={key}>{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+        return <em key={key}>{part.slice(1, -1)}</em>;
+      }
+      return <span key={key}>{part}</span>;
+    })
+);
+
+const renderFormattedText = (value, className = "workflow-rich-text") => {
+  const text = String(value || "").replace(/\r\n?/g, "\n");
+  if (!text.trim()) return null;
+
+  const lines = text.split("\n");
+  const blocks = [];
+  let index = 0;
+  let blockIndex = 0;
+  const isUnorderedItem = (line) => /^\s*[-*]\s+/.test(line);
+  const isOrderedItem = (line) => /^\s*\d+\.\s+/.test(line);
+  const renderParagraphLines = (paragraphLines, key) => (
+    <p key={key}>
+      {paragraphLines.flatMap((line, lineIndex) => {
+        const nodes = renderInlineFormattedText(line, `${key}-line-${lineIndex}`);
+        if (lineIndex === 0) return nodes;
+        return [<br key={`${key}-br-${lineIndex}`} />, ...nodes];
+      })}
+    </p>
+  );
+
+  while (index < lines.length) {
+    const currentLine = lines[index];
+    if (!currentLine.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (isUnorderedItem(currentLine)) {
+      const items = [];
+      while (index < lines.length && isUnorderedItem(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <ul key={`block-${blockIndex}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`block-${blockIndex}-item-${itemIndex}`}>
+              {renderInlineFormattedText(item, `block-${blockIndex}-item-${itemIndex}`)}
+            </li>
+          ))}
+        </ul>,
+      );
+      blockIndex += 1;
+      continue;
+    }
+
+    if (isOrderedItem(currentLine)) {
+      const items = [];
+      while (index < lines.length && isOrderedItem(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+\.\s+/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <ol key={`block-${blockIndex}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`block-${blockIndex}-item-${itemIndex}`}>
+              {renderInlineFormattedText(item, `block-${blockIndex}-item-${itemIndex}`)}
+            </li>
+          ))}
+        </ol>,
+      );
+      blockIndex += 1;
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !isUnorderedItem(lines[index])
+      && !isOrderedItem(lines[index])
+    ) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    blocks.push(renderParagraphLines(paragraphLines, `block-${blockIndex}`));
+    blockIndex += 1;
+  }
+
+  return <div className={className}>{blocks}</div>;
+};
 
 const generateRequestToken = (prefix) => {
   const cryptoUuid = globalThis.crypto?.randomUUID?.();
@@ -6339,7 +6438,9 @@ function WorkflowBoardPanel({
                 maxLength={4000}
               />
             ) : (
-              <p className="workflow-card-description details">{activeCard.description || t("workflowDescriptionEmpty")}</p>
+              <div className="workflow-card-description details">
+                {renderFormattedText(activeCard.description || t("workflowDescriptionEmpty"))}
+              </div>
             )}
           </div>
 
@@ -6409,7 +6510,9 @@ function WorkflowBoardPanel({
                       </div>
                     ) : (
                       <>
-                        <p className="workflow-comment-body">{comment.body}</p>
+                        <div className="workflow-comment-body">
+                          {renderFormattedText(comment.body)}
+                        </div>
                         {isOwnComment ? (
                           <button
                             className="workflow-comment-inline-action"

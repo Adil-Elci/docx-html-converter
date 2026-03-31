@@ -2514,6 +2514,8 @@ input:disabled {
   align-items: center;
   gap: 10px;
   position: relative;
+  width: max-content;
+  max-width: 100%;
 }
 
 .workflow-filter-select {
@@ -2568,8 +2570,10 @@ input:disabled {
   left: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(180px, 220px) minmax(240px, 320px);
-  min-width: min(560px, calc(100vw - 48px));
+  grid-template-columns: 200px minmax(280px, 320px);
+  width: max-content;
+  min-width: 500px;
+  max-width: min(560px, calc(100vw - 48px));
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
@@ -2615,20 +2619,12 @@ input:disabled {
   display: grid;
   gap: 14px;
   padding: 14px;
-  min-width: 0;
+  min-width: 280px;
 }
 
 .workflow-filter-menu-group {
   display: grid;
   gap: 10px;
-}
-
-.workflow-filter-menu-label {
-  color: var(--ink-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .workflow-filter-option-list {
@@ -3558,6 +3554,17 @@ input:disabled {
   .workflow-filter-menu-list {
     border-right: 0;
     border-bottom: 1px solid var(--border-dim);
+  }
+
+  .workflow-filter-menu {
+    width: min(100%, calc(100vw - 32px));
+    min-width: 0;
+    max-width: min(420px, calc(100vw - 32px));
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-filter-menu-panel {
+    min-width: 0;
   }
 
   .workflow-card-top,

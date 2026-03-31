@@ -5827,7 +5827,6 @@ function WorkflowBoardPanel({
               <div className="workflow-filter-menu-panel">
                 {showUserFilter ? (
                   <div className="workflow-filter-menu-group">
-                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelUser")}</span>
                     <div className="workflow-filter-option-list">
                       {userOptions.map((userLabel) => (
                         <button
@@ -5847,7 +5846,6 @@ function WorkflowBoardPanel({
                 ) : null}
                 {showJobTypeFilter ? (
                   <div className="workflow-filter-menu-group">
-                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelJobType")}</span>
                     <div className="workflow-filter-option-list">
                       {jobTypeOptions.map((option) => (
                         <button
@@ -5867,7 +5865,6 @@ function WorkflowBoardPanel({
                 ) : null}
                 {showDateFilters ? (
                   <div className="workflow-filter-menu-group">
-                    <span className="workflow-filter-menu-label">{t("workflowFilterPanelDateRange")}</span>
                     <div className="workflow-filter-date-grid">
                       <label className="workflow-field-label" htmlFor="workflow-filter-date-from">
                         {t("workflowFilterDateFrom")}

@@ -5829,16 +5829,6 @@ function WorkflowBoardPanel({
                   <div className="workflow-filter-menu-group">
                     <span className="workflow-filter-menu-label">{t("workflowFilterPanelUser")}</span>
                     <div className="workflow-filter-option-list">
-                      <button
-                        type="button"
-                        className={`workflow-filter-option ${!filterUser ? "active" : ""}`.trim()}
-                        onClick={() => {
-                          setFilterUser("");
-                          setFilterMenuOpen(false);
-                        }}
-                      >
-                        {t("workflowFilterAllUsers")}
-                      </button>
                       {userOptions.map((userLabel) => (
                         <button
                           key={userLabel}
@@ -5859,16 +5849,6 @@ function WorkflowBoardPanel({
                   <div className="workflow-filter-menu-group">
                     <span className="workflow-filter-menu-label">{t("workflowFilterPanelJobType")}</span>
                     <div className="workflow-filter-option-list">
-                      <button
-                        type="button"
-                        className={`workflow-filter-option ${!filterJobType ? "active" : ""}`.trim()}
-                        onClick={() => {
-                          setFilterJobType("");
-                          setFilterMenuOpen(false);
-                        }}
-                      >
-                        {t("workflowFilterAllJobTypes")}
-                      </button>
                       {jobTypeOptions.map((option) => (
                         <button
                           key={option.value}

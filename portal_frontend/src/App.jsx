@@ -214,6 +214,13 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
   return <div className={className}>{blocks}</div>;
 };
 
+const FORMAT_ACTIONS = [
+  { key: "bold", label: "B" },
+  { key: "italic", label: "I" },
+  { key: "bullet", label: "• List" },
+  { key: "number", label: "1. List" },
+];
+
 const generateRequestToken = (prefix) => {
   const cryptoUuid = globalThis.crypto?.randomUUID?.();
   if (cryptoUuid) return `${prefix}-${cryptoUuid}`;
@@ -5550,6 +5557,7 @@ function WorkflowBoardPanel({
   const [filterMenuSection, setFilterMenuSection] = useState("");
   const filterMenuRef = useRef(null);
   const openCardMenuRef = useRef(null);
+  const textAreaRefs = useRef({});
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
@@ -5811,6 +5819,57 @@ function WorkflowBoardPanel({
     setCommentRewriteKey("");
     if (!rewritten) return;
     applyValue(rewritten);
+  };
+
+  const registerTextAreaRef = (key) => (node) => {
+    if (node) {
+      textAreaRefs.current[key] = node;
+      return;
+    }
+    delete textAreaRefs.current[key];
+  };
+
+  const applyFormatting = (fieldKey, value, applyValue, formatType) => {
+    const textarea = textAreaRefs.current[fieldKey];
+    const currentValue = String(value || "");
+    const selectionStart = textarea?.selectionStart ?? currentValue.length;
+    const selectionEnd = textarea?.selectionEnd ?? currentValue.length;
+    const selectedText = currentValue.slice(selectionStart, selectionEnd);
+    let replacement = "";
+    let nextSelectionStart = selectionStart;
+    let nextSelectionEnd = selectionEnd;
+
+    if (formatType === "bold") {
+      const content = selectedText || "bold text";
+      replacement = `**${content}**`;
+      nextSelectionStart = selectionStart + 2;
+      nextSelectionEnd = nextSelectionStart + content.length;
+    } else if (formatType === "italic") {
+      const content = selectedText || "italic text";
+      replacement = `*${content}*`;
+      nextSelectionStart = selectionStart + 1;
+      nextSelectionEnd = nextSelectionStart + content.length;
+    } else if (formatType === "bullet") {
+      const lines = (selectedText || "List item").split("\n");
+      replacement = lines.map((line) => `- ${line.replace(/^\s*[-*]\s+/, "")}`).join("\n");
+      nextSelectionStart = selectionStart;
+      nextSelectionEnd = selectionStart + replacement.length;
+    } else if (formatType === "number") {
+      const lines = (selectedText || "List item").split("\n");
+      replacement = lines.map((line, index) => `${index + 1}. ${line.replace(/^\s*\d+\.\s+/, "")}`).join("\n");
+      nextSelectionStart = selectionStart;
+      nextSelectionEnd = selectionStart + replacement.length;
+    }
+
+    if (!replacement) return;
+    const nextValue = `${currentValue.slice(0, selectionStart)}${replacement}${currentValue.slice(selectionEnd)}`;
+    applyValue(nextValue);
+    window.requestAnimationFrame(() => {
+      const target = textAreaRefs.current[fieldKey];
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange(nextSelectionStart, nextSelectionEnd);
+    });
   };
 
   const updateCardFlag = async (card, flagType) => {
@@ -6431,12 +6490,32 @@ function WorkflowBoardPanel({
               </div>
             </div>
             {cardEditOpen ? (
-              <textarea
-                value={cardDetailDraft.description}
-                onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
-                rows={5}
-                maxLength={4000}
-              />
+              <>
+                <div className="workflow-format-toolbar" role="toolbar" aria-label="Task description formatting">
+                  {FORMAT_ACTIONS.map((action) => (
+                    <button
+                      key={action.key}
+                      className="workflow-format-btn"
+                      type="button"
+                      onClick={() => applyFormatting(
+                        "detail-description",
+                        cardDetailDraft.description,
+                        (nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue })),
+                        action.key,
+                      )}
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  ref={registerTextAreaRef("detail-description")}
+                  value={cardDetailDraft.description}
+                  onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
+                  rows={5}
+                  maxLength={4000}
+                />
+              </>
             ) : (
               <div className="workflow-card-description details">
                 {renderFormattedText(activeCard.description || t("workflowDescriptionEmpty"))}
@@ -6467,7 +6546,25 @@ function WorkflowBoardPanel({
                     </div>
                     {isEditing ? (
                       <div className="workflow-comment-editor">
+                        <div className="workflow-format-toolbar" role="toolbar" aria-label="Comment formatting">
+                          {FORMAT_ACTIONS.map((action) => (
+                            <button
+                              key={action.key}
+                              className="workflow-format-btn"
+                              type="button"
+                              onClick={() => applyFormatting(
+                                `comment-edit-${commentId}`,
+                                editValue,
+                                (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
+                                action.key,
+                              )}
+                            >
+                              {action.label}
+                            </button>
+                          ))}
+                        </div>
                         <textarea
+                          ref={registerTextAreaRef(`comment-edit-${commentId}`)}
                           value={editValue}
                           onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
                           rows={3}
@@ -6529,7 +6626,25 @@ function WorkflowBoardPanel({
               })}
             </div>
             <div className="workflow-comment-composer">
+              <div className="workflow-format-toolbar" role="toolbar" aria-label="Comment formatting">
+                {FORMAT_ACTIONS.map((action) => (
+                  <button
+                    key={action.key}
+                    className="workflow-format-btn"
+                    type="button"
+                    onClick={() => applyFormatting(
+                      `comment-new-${String(activeCard.id || "")}`,
+                      commentDrafts[String(activeCard.id || "")] || "",
+                      (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
+                      action.key,
+                    )}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
               <textarea
+                ref={registerTextAreaRef(`comment-new-${String(activeCard.id || "")}`)}
                 value={commentDrafts[String(activeCard.id || "")] || ""}
                 onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
                 placeholder={t("workflowCommentPlaceholder")}
@@ -6633,7 +6748,25 @@ function WorkflowBoardPanel({
               <label className="workflow-field-label" htmlFor="workflow-create-description">
                 {t("workflowCreateCardDescriptionLabel")}
               </label>
+              <div className="workflow-format-toolbar" role="toolbar" aria-label="Task description formatting">
+                {FORMAT_ACTIONS.map((action) => (
+                  <button
+                    key={action.key}
+                    className="workflow-format-btn"
+                    type="button"
+                    onClick={() => applyFormatting(
+                      "create-description",
+                      createCardForm.description,
+                      (nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue })),
+                      action.key,
+                    )}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
               <textarea
+                ref={registerTextAreaRef("create-description")}
                 id="workflow-create-description"
                 value={createCardForm.description}
                 onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}

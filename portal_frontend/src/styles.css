@@ -3256,13 +3256,17 @@ input:disabled {
 
 .workflow-rich-text ul,
 .workflow-rich-text ol {
-  display: grid;
-  gap: 6px;
+  display: block;
   padding-left: 20px;
+  list-style-position: outside;
 }
 
 .workflow-rich-text li {
   line-height: 1.55;
+}
+
+.workflow-rich-text li + li {
+  margin-top: 6px;
 }
 
 .workflow-rich-text strong,
@@ -3361,6 +3365,30 @@ input:disabled {
 .workflow-comment-composer {
   display: grid;
   gap: 8px;
+}
+
+.workflow-format-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-format-btn {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-dim);
+  border-radius: 999px;
+  background: var(--surface-solid-muted);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.workflow-format-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-dim));
+  background: color-mix(in srgb, var(--surface-solid-muted) 82%, var(--accent) 18%);
 }
 
 .workflow-comments-empty {
@@ -3699,6 +3727,12 @@ input:disabled {
 :root[data-theme="light"] .workflow-card-description.details {
   background: #1f2937;
   border-color: rgba(15, 23, 42, 0.12);
+}
+
+:root[data-theme="light"] .workflow-format-btn {
+  background: #f8faff;
+  color: #1e293b;
+  border-color: color-mix(in srgb, var(--border) 86%, #cfd8ea);
 }
 
 @media (max-width: 860px) {

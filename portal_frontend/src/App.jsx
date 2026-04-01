@@ -6704,6 +6704,24 @@ function TaskBoardPanel({
                   rows={5}
                   maxLength={4000}
                 />
+                <div className="workflow-create-card-helper-row">
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => improveDraft(
+                      `detail:${String(activeCard.id || "")}:description`,
+                      cardDetailDraft.description || "",
+                      (nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue })),
+                    )}
+                    disabled={
+                      commentRewriteKey === `detail:${String(activeCard.id || "")}:description`
+                      || !String(cardDetailDraft.description || "").trim()
+                      || cardDetailSavingKey === `details:${String(activeCard.id || "")}`
+                    }
+                  >
+                    {commentRewriteKey === `detail:${String(activeCard.id || "")}:description` ? t("loading") : t("workflowImproveComment")}
+                  </button>
+                </div>
               </>
             ) : (
               <div className="workflow-card-description details">

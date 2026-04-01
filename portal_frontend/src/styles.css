@@ -2767,7 +2767,7 @@ input:disabled {
   padding: 2px 2px 8px;
   min-width: 100%;
   width: 100%;
-  align-items: start;
+  align-items: stretch;
   isolation: isolate;
 }
 
@@ -2775,7 +2775,7 @@ input:disabled {
   display: grid;
   gap: 14px;
   align-content: start;
-  min-height: 440px;
+  min-height: calc(180px + (var(--task-board-page-slots, 10) * 128px));
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--border-subtle);
@@ -2993,6 +2993,7 @@ input:disabled {
   display: grid;
   gap: 10px;
   align-content: start;
+  min-height: calc(var(--task-board-page-slots, 10) * 128px);
   min-width: 0;
 }
 

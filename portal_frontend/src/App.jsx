@@ -6157,6 +6157,10 @@ function TaskBoardPanel({
   };
 
   const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
+  const boardSurfaceStyle = {
+    gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)",
+    "--task-board-page-slots": String(pageSize || STANDARD_PAGE_SIZE),
+  };
 
   return (
     <div className="panel form-panel workflow-board-panel">
@@ -6316,7 +6320,7 @@ function TaskBoardPanel({
           {columns.length > 0 ? (
             <div
               className="workflow-board-columns"
-              style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
+              style={boardSurfaceStyle}
             >
               {paginatedColumns.map((column, columnIndex) => {
                 const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";

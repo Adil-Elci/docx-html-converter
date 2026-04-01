@@ -104,6 +104,8 @@ const isClientRole = (role) => (role || "").trim().toLowerCase() === "client";
 const getRoleStorageBucket = (role) => (isAdminRole(role) ? "admin" : "client");
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
+const STANDARD_PAGE_SIZE = 10;
+const STANDARD_PAGE_SIZES = [10, 25, 50, 100];
 const CREATE_ARTICLE_BLOCKS_STORAGE_PREFIX = "portal_create_article_blocks_v1";
 const CREATOR_JOBS_STORAGE_PREFIX = "portal_creator_jobs_by_block_v1";
 const TREND_RECENT_LIMIT = 6;
@@ -414,6 +416,10 @@ export default function App() {
   const [rejectedSiteId, setRejectedSiteId] = useState("");
   const [rejectedSort, setRejectedSort] = useState("rejected_at");
   const [savingClientNotificationId, setSavingClientNotificationId] = useState("");
+  const [websitesPage, setWebsitesPage] = useState(1);
+  const [websitesPageSize, setWebsitesPageSize] = useState(STANDARD_PAGE_SIZE);
+  const [clientsPage, setClientsPage] = useState(1);
+  const [clientsPageSize, setClientsPageSize] = useState(STANDARD_PAGE_SIZE);
   const [queueStats, setQueueStats] = useState(null);
   const [queueStatsLoading, setQueueStatsLoading] = useState(false);
   const [queueAutoRefresh, setQueueAutoRefresh] = useState(true);
@@ -2701,6 +2707,22 @@ export default function App() {
   const isCreateArticleSection = activeSection === "create-article";
   const isSubmitArticleSection = activeSection === "submit-article";
   const activeClient = clients[0] || null;
+  const websitesPageCount = Math.max(1, Math.ceil(sites.length / websitesPageSize));
+  const safeWebsitesPage = Math.min(websitesPage, websitesPageCount);
+  const paginatedSites = useMemo(() => {
+    const start = (safeWebsitesPage - 1) * websitesPageSize;
+    return sites.slice(start, start + websitesPageSize);
+  }, [safeWebsitesPage, websitesPageSize, sites]);
+  const websitesFrom = sites.length === 0 ? 0 : (safeWebsitesPage - 1) * websitesPageSize + 1;
+  const websitesTo = sites.length === 0 ? 0 : Math.min(sites.length, websitesFrom + paginatedSites.length - 1);
+  const clientsPageCount = Math.max(1, Math.ceil(clients.length / clientsPageSize));
+  const safeClientsPage = Math.min(clientsPage, clientsPageCount);
+  const paginatedClients = useMemo(() => {
+    const start = (safeClientsPage - 1) * clientsPageSize;
+    return clients.slice(start, start + clientsPageSize);
+  }, [clients, clientsPageSize, safeClientsPage]);
+  const clientsFrom = clients.length === 0 ? 0 : (safeClientsPage - 1) * clientsPageSize + 1;
+  const clientsTo = clients.length === 0 ? 0 : Math.min(clients.length, clientsFrom + paginatedClients.length - 1);
   const resolvedClientName = ((activeClient?.name) || "").trim();
   const clientTargetSites = getClientTargetSites();
   const clientTargetSitesCount = clientTargetSites.length;
@@ -3022,6 +3044,14 @@ export default function App() {
       );
     });
   };
+
+  useEffect(() => {
+    setWebsitesPage((current) => Math.min(current, Math.max(1, Math.ceil(sites.length / websitesPageSize))));
+  }, [sites.length, websitesPageSize]);
+
+  useEffect(() => {
+    setClientsPage((current) => Math.min(current, Math.max(1, Math.ceil(clients.length / clientsPageSize))));
+  }, [clients.length, clientsPageSize]);
 
   if (authLoading) {
     return (
@@ -3554,12 +3584,52 @@ export default function App() {
             <div className="panel form-panel">
               <h2>{t("navWebsites")}</h2>
               <div className="admin-entity-list">
-                {sites.map((site, index) => (
+                {paginatedSites.map((site, index) => (
                   <div key={site.id} className="admin-entity-card" style={{"--i": index}}>
                     <strong>{site.name}</strong>
                     <span className="muted-text">{site.site_url}</span>
                   </div>
                 ))}
+              </div>
+              <div className="published-pagination">
+                <span className="muted-text">
+                  {t("paginationShowingLabel")} {websitesFrom}-{websitesTo} {t("paginationOfLabel")} {sites.length}
+                </span>
+                <div className="pagination-actions">
+                  <label className="published-field pagination-page-size">
+                    <span>{t("paginationPageSizeLabel")}</span>
+                    <select
+                      value={websitesPageSize}
+                      onChange={(e) => {
+                        setWebsitesPageSize(Number(e.target.value) || STANDARD_PAGE_SIZE);
+                        setWebsitesPage(1);
+                      }}
+                    >
+                      {STANDARD_PAGE_SIZES.map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => setWebsitesPage((current) => Math.max(1, current - 1))}
+                    disabled={safeWebsitesPage <= 1}
+                  >
+                    {t("paginationPrevious")}
+                  </button>
+                  <span className="muted-text">
+                    {t("paginationPageLabel")} {safeWebsitesPage} {t("paginationOfLabel")} {websitesPageCount}
+                  </span>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => setWebsitesPage((current) => Math.min(websitesPageCount, current + 1))}
+                    disabled={safeWebsitesPage >= websitesPageCount}
+                  >
+                    {t("paginationNext")}
+                  </button>
+                </div>
               </div>
             </div>
           ) : isTaskBoardSection ? (
@@ -3652,7 +3722,7 @@ export default function App() {
             <div className="panel form-panel">
               <h2>{t("navClients")}</h2>
               <div className="admin-entity-list">
-                {clients.map((client, index) => (
+                {paginatedClients.map((client, index) => (
                   <div key={client.id} className="admin-entity-card" style={{"--i": index}}>
                     <div className="admin-entity-card-row">
                       <div className="admin-entity-card-copy">
@@ -3683,6 +3753,46 @@ export default function App() {
                     <span className="muted-text small-text">{t("clientPublishEmailsHelp")}</span>
                   </div>
                 ))}
+              </div>
+              <div className="published-pagination">
+                <span className="muted-text">
+                  {t("paginationShowingLabel")} {clientsFrom}-{clientsTo} {t("paginationOfLabel")} {clients.length}
+                </span>
+                <div className="pagination-actions">
+                  <label className="published-field pagination-page-size">
+                    <span>{t("paginationPageSizeLabel")}</span>
+                    <select
+                      value={clientsPageSize}
+                      onChange={(e) => {
+                        setClientsPageSize(Number(e.target.value) || STANDARD_PAGE_SIZE);
+                        setClientsPage(1);
+                      }}
+                    >
+                      {STANDARD_PAGE_SIZES.map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => setClientsPage((current) => Math.max(1, current - 1))}
+                    disabled={safeClientsPage <= 1}
+                  >
+                    {t("paginationPrevious")}
+                  </button>
+                  <span className="muted-text">
+                    {t("paginationPageLabel")} {safeClientsPage} {t("paginationOfLabel")} {clientsPageCount}
+                  </span>
+                  <button
+                    className="btn secondary"
+                    type="button"
+                    onClick={() => setClientsPage((current) => Math.min(clientsPageCount, current + 1))}
+                    disabled={safeClientsPage >= clientsPageCount}
+                  >
+                    {t("paginationNext")}
+                  </button>
+                </div>
               </div>
             </div>
           ) : isPublishedArticlesSection ? (
@@ -5558,6 +5668,8 @@ function TaskBoardPanel({
   const [filterPanel, setFilterPanel] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMenuSection, setFilterMenuSection] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(STANDARD_PAGE_SIZE);
   const filterMenuRef = useRef(null);
   const openCardMenuRef = useRef(null);
   const textAreaRefs = useRef({});
@@ -5595,6 +5707,7 @@ function TaskBoardPanel({
     setFilterMenuOpen(false);
     setFilterMenuSection("");
     setFilterPanel("");
+    setPage(1);
   }, [resetSignal]);
 
   useEffect(() => {
@@ -5668,6 +5781,22 @@ function TaskBoardPanel({
       cards: (column.cards || []).filter(cardMatchesFilters),
     }))
   ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
+  const filteredCards = useMemo(
+    () => filteredColumns.flatMap((column) => (column.cards || [])),
+    [filteredColumns],
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredCards.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visibleCardIds = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return new Set(filteredCards.slice(start, start + pageSize).map((card) => String(card?.id || "")));
+  }, [filteredCards, pageSize, safePage]);
+  const paginatedColumns = useMemo(() => (
+    filteredColumns.map((column) => ({
+      ...column,
+      cards: (column.cards || []).filter((card) => visibleCardIds.has(String(card?.id || ""))),
+    }))
+  ), [filteredColumns, visibleCardIds]);
   const allCards = useMemo(() => columns.flatMap((column) => (column.cards || [])), [columns]);
   const activeCard = useMemo(
     () => allCards.find((card) => String(card?.id || "") === activeCardId) || null,
@@ -5687,6 +5816,16 @@ function TaskBoardPanel({
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() === "done").length
   ), 0);
   const totalCardCount = openCardCount + completedCardCount;
+  const pageFrom = filteredCards.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const pageTo = filteredCards.length === 0 ? 0 : Math.min(filteredCards.length, pageFrom + pageSize - 1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterUser, filterJobType, filterDateFrom, filterDateTo, pageSize]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(1, Math.ceil(filteredCards.length / pageSize))));
+  }, [filteredCards.length, pageSize]);
 
   const getJobTypeLabel = (jobType) => {
     const normalized = String(jobType || "").trim().toLowerCase();
@@ -6179,7 +6318,7 @@ function TaskBoardPanel({
               className="workflow-board-columns"
               style={{ gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)" }}
             >
-              {filteredColumns.map((column, columnIndex) => {
+              {paginatedColumns.map((column, columnIndex) => {
                 const isTodoColumn = columnIndex === 0 && String(column.key || "").toLowerCase() === "todo";
                 return (
                   <section
@@ -6345,6 +6484,44 @@ function TaskBoardPanel({
               })}
             </div>
           ) : null}
+
+          <div className="published-pagination">
+            <span className="muted-text">
+              {t("paginationShowingLabel")} {pageFrom}-{pageTo} {t("paginationOfLabel")} {filteredCards.length}
+            </span>
+            <div className="pagination-actions">
+              <label className="published-field pagination-page-size">
+                <span>{t("paginationPageSizeLabel")}</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value) || STANDARD_PAGE_SIZE)}
+                >
+                  {STANDARD_PAGE_SIZES.map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={safePage <= 1}
+              >
+                {t("paginationPrevious")}
+              </button>
+              <span className="muted-text">
+                {t("paginationPageLabel")} {safePage} {t("paginationOfLabel")} {pageCount}
+              </span>
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                disabled={safePage >= pageCount}
+              >
+                {t("paginationNext")}
+              </button>
+            </div>
+          </div>
         </>
       ) : (
         <section

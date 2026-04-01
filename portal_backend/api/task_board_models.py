@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from .portal_models import Base, utcnow
 
 
-class WorkflowColumn(Base):
+class TaskBoardColumn(Base):
     __tablename__ = "task_board_columns"
     __table_args__ = (
         UniqueConstraint("column_key", name="task_board_columns_key_unique"),
@@ -23,7 +23,7 @@ class WorkflowColumn(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
-class WorkflowCard(Base):
+class TaskBoardCard(Base):
     __tablename__ = "task_board_cards"
     __table_args__ = (
         CheckConstraint("column_source IN ('auto','manual')", name="task_board_cards_column_source_check"),
@@ -60,7 +60,7 @@ class WorkflowCard(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
-class WorkflowCardEvent(Base):
+class TaskBoardCardEvent(Base):
     __tablename__ = "task_board_card_events"
     __table_args__ = (
         CheckConstraint(
@@ -80,7 +80,7 @@ class WorkflowCardEvent(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
-class WorkflowCardComment(Base):
+class TaskBoardCardComment(Base):
     __tablename__ = "task_board_card_comments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

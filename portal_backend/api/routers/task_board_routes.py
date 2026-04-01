@@ -15,42 +15,42 @@ from sqlalchemy.orm import Session
 from ..auth import is_super_admin, require_admin, require_super_admin
 from ..db import get_db
 from ..portal_models import User
-from ..workflow_models import WorkflowCard, WorkflowCardComment, WorkflowCardEvent, WorkflowColumn
-from ..workflow_schemas import (
-    WORKFLOW_FLAG_ORDER,
-    WorkflowBoardOut,
-    WorkflowCardCreateIn,
-    WorkflowCardMoveIn,
-    WorkflowCardOut,
-    WorkflowCardUpdateIn,
-    WorkflowColumnCreateIn,
-    WorkflowColumnOut,
-    WorkflowColumnUpdateIn,
-    WorkflowCommentCreateIn,
-    WorkflowCommentOut,
-    WorkflowCommentRewriteIn,
-    WorkflowCommentRewriteOut,
-    WorkflowCommentUpdateIn,
+from ..task_board_models import TaskBoardCard, TaskBoardCardComment, TaskBoardCardEvent, TaskBoardColumn
+from ..task_board_schemas import (
+    TASK_BOARD_FLAG_ORDER,
+    TaskBoardCardCreateIn,
+    TaskBoardCardMoveIn,
+    TaskBoardCardOut,
+    TaskBoardCardUpdateIn,
+    TaskBoardColumnCreateIn,
+    TaskBoardColumnOut,
+    TaskBoardColumnUpdateIn,
+    TaskBoardCommentCreateIn,
+    TaskBoardCommentOut,
+    TaskBoardCommentRewriteIn,
+    TaskBoardCommentRewriteOut,
+    TaskBoardCommentUpdateIn,
+    TaskBoardOut,
 )
 
 router = APIRouter(prefix="/task-board", tags=["task_board"], dependencies=[Depends(require_admin)])
 
-DEFAULT_WORKFLOW_COLUMNS = (
+DEFAULT_TASK_BOARD_COLUMNS = (
     {"key": "todo", "name": "TO DO", "color": "#5e6c84", "position": 100},
     {"key": "in_progress", "name": "IN PROGRESS", "color": "#0c66e4", "position": 200},
     {"key": "done", "name": "DONE", "color": "#1f845a", "position": 300},
 )
-SYSTEM_WORKFLOW_COLUMN_KEYS = {item["key"] for item in DEFAULT_WORKFLOW_COLUMNS}
-CUSTOM_WORKFLOW_COLUMN_COLOR = "#7c8aa5"
-WORKFLOW_COMMENT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
-WORKFLOW_COMMENT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+SYSTEM_TASK_BOARD_COLUMN_KEYS = {item["key"] for item in DEFAULT_TASK_BOARD_COLUMNS}
+CUSTOM_TASK_BOARD_COLUMN_COLOR = "#7c8aa5"
+TASK_BOARD_COMMENT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+TASK_BOARD_COMMENT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 
-def _is_system_workflow_column_key(column_key: str) -> bool:
-    return (column_key or "").strip().lower() in SYSTEM_WORKFLOW_COLUMN_KEYS
+def _is_system_task_board_column_key(column_key: str) -> bool:
+    return (column_key or "").strip().lower() in SYSTEM_TASK_BOARD_COLUMN_KEYS
 
 
-def _build_custom_workflow_column_key(name: str, existing_keys: Sequence[str]) -> str:
+def _build_custom_task_board_column_key(name: str, existing_keys: Sequence[str]) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
     if not slug:
         slug = "column"
@@ -58,16 +58,16 @@ def _build_custom_workflow_column_key(name: str, existing_keys: Sequence[str]) -
     normalized_existing = {(item or "").strip().lower() for item in existing_keys}
     key = base
     suffix = 2
-    while key in normalized_existing or _is_system_workflow_column_key(key):
+    while key in normalized_existing or _is_system_task_board_column_key(key):
         key = f"{base}_{suffix}"
         suffix += 1
     return key
 
 
-def _build_workflow_card_title(title_snapshot: str) -> str:
+def _build_task_board_card_title(title_snapshot: str) -> str:
     if title_snapshot.strip():
         return title_snapshot.strip()
-    return "Workflow task"
+    return "Task Board task"
 
 
 def _build_actor_name(user: Optional[User]) -> str:
@@ -88,10 +88,10 @@ def _normalize_flag_types(flag_types: Optional[Sequence[str]]) -> list[str]:
         for flag_type in (flag_types or [])
         if str(flag_type or "").strip()
     }
-    return [flag_type for flag_type in WORKFLOW_FLAG_ORDER if flag_type in seen]
+    return [flag_type for flag_type in TASK_BOARD_FLAG_ORDER if flag_type in seen]
 
 
-def _get_assignable_workflow_user(db: Session, user_id: UUID) -> Optional[User]:
+def _get_assignable_task_board_user(db: Session, user_id: UUID) -> Optional[User]:
     return (
         db.query(User)
         .filter(
@@ -103,14 +103,14 @@ def _get_assignable_workflow_user(db: Session, user_id: UUID) -> Optional[User]:
     )
 
 
-def _ensure_default_workflow_columns(db: Session) -> List[WorkflowColumn]:
-    existing = db.query(WorkflowColumn).order_by(WorkflowColumn.position.asc(), WorkflowColumn.created_at.asc()).all()
+def _ensure_default_task_board_columns(db: Session) -> List[TaskBoardColumn]:
+    existing = db.query(TaskBoardColumn).order_by(TaskBoardColumn.position.asc(), TaskBoardColumn.created_at.asc()).all()
     existing_by_key = {item.column_key: item for item in existing}
     changed = False
-    for spec in DEFAULT_WORKFLOW_COLUMNS:
+    for spec in DEFAULT_TASK_BOARD_COLUMNS:
         column = existing_by_key.get(spec["key"])
         if column is None:
-            column = WorkflowColumn(
+            column = TaskBoardColumn(
                 column_key=spec["key"],
                 name=spec["name"],
                 color=spec["color"],
@@ -131,7 +131,7 @@ def _ensure_default_workflow_columns(db: Session) -> List[WorkflowColumn]:
     return sorted(existing, key=lambda item: (item.position, item.created_at))
 
 
-def _next_workflow_column_position(columns: Sequence[WorkflowColumn]) -> int:
+def _next_task_board_column_position(columns: Sequence[TaskBoardColumn]) -> int:
     if not columns:
         return 100
     return max(int(item.position or 0) for item in columns) + 100
@@ -146,7 +146,7 @@ def _next_position(positions_by_column: Dict[UUID, int], column_id: UUID) -> int
 def _record_card_event(
     db: Session,
     *,
-    card: WorkflowCard,
+    card: TaskBoardCard,
     actor_user_id: Optional[UUID],
     event_type: str,
     from_column_id: Optional[UUID],
@@ -154,7 +154,7 @@ def _record_card_event(
     payload: dict,
 ) -> None:
     db.add(
-        WorkflowCardEvent(
+        TaskBoardCardEvent(
             card_id=card.id,
             job_id=card.job_id,
             actor_user_id=actor_user_id,
@@ -166,36 +166,36 @@ def _record_card_event(
     )
 
 
-def _select_workflow_card_rows(
+def _select_task_board_card_rows(
     db: Session,
-) -> list[tuple[WorkflowCard, Optional[User]]]:
+) -> list[tuple[TaskBoardCard, Optional[User]]]:
     return (
-        db.query(WorkflowCard, User)
-        .outerjoin(User, User.id == WorkflowCard.assignee_user_id)
-        .filter(WorkflowCard.card_kind == "manual")
-        .order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc())
+        db.query(TaskBoardCard, User)
+        .outerjoin(User, User.id == TaskBoardCard.assignee_user_id)
+        .filter(TaskBoardCard.card_kind == "manual")
+        .order_by(TaskBoardCard.position.asc(), TaskBoardCard.created_at.asc())
         .all()
     )
 
 
-def _load_workflow_card_comments(
+def _load_task_board_card_comments(
     db: Session,
     *,
     card_ids: Sequence[UUID],
     current_user_id: Optional[UUID],
-) -> dict[UUID, list[WorkflowCommentOut]]:
+) -> dict[UUID, list[TaskBoardCommentOut]]:
     if not card_ids:
         return {}
     rows = (
-        db.query(WorkflowCardComment)
-        .filter(WorkflowCardComment.card_id.in_(card_ids))
-        .order_by(WorkflowCardComment.created_at.asc(), WorkflowCardComment.updated_at.asc())
+        db.query(TaskBoardCardComment)
+        .filter(TaskBoardCardComment.card_id.in_(card_ids))
+        .order_by(TaskBoardCardComment.created_at.asc(), TaskBoardCardComment.updated_at.asc())
         .all()
     )
-    comments_by_card: dict[UUID, list[WorkflowCommentOut]] = defaultdict(list)
+    comments_by_card: dict[UUID, list[TaskBoardCommentOut]] = defaultdict(list)
     for row in rows:
         comments_by_card[row.card_id].append(
-            WorkflowCommentOut(
+            TaskBoardCommentOut(
                 id=row.id,
                 author_user_id=row.author_user_id,
                 author_name=str(row.author_name_snapshot or "").strip() or "Unknown",
@@ -208,13 +208,13 @@ def _load_workflow_card_comments(
     return comments_by_card
 
 
-def _build_workflow_board_payload(
-    columns: Sequence[WorkflowColumn],
-    rows: Iterable[tuple[WorkflowCard, Optional[User]]],
+def _build_task_board_payload(
+    columns: Sequence[TaskBoardColumn],
+    rows: Iterable[tuple[TaskBoardCard, Optional[User]]],
     *,
-    comments_by_card: dict[UUID, list[WorkflowCommentOut]],
-) -> WorkflowBoardOut:
-    cards_by_column: Dict[UUID, List[WorkflowCardOut]] = defaultdict(list)
+    comments_by_card: dict[UUID, list[TaskBoardCommentOut]],
+) -> TaskBoardOut:
+    cards_by_column: Dict[UUID, List[TaskBoardCardOut]] = defaultdict(list)
     open_card_count = 0
     completed_card_count = 0
     updated_at = max((item.updated_at for item in columns), default=datetime.now(timezone.utc))
@@ -223,9 +223,9 @@ def _build_workflow_board_payload(
     for card, assignee in rows:
         column = columns_by_id.get(card.column_id)
         column_key = column.column_key if column is not None else ""
-        title = _build_workflow_card_title(str(card.title_snapshot or ""))
+        title = _build_task_board_card_title(str(card.title_snapshot or ""))
         card_comments = comments_by_card.get(card.id, [])
-        card_out = WorkflowCardOut(
+        card_out = TaskBoardCardOut(
             id=card.id,
             job_id=None,
             submission_id=card.submission_id,
@@ -262,18 +262,18 @@ def _build_workflow_board_payload(
     for column in sorted(columns, key=lambda item: (item.position, item.created_at)):
         column_cards = sorted(cards_by_column.get(column.id, []), key=lambda item: (item.position, item.created_at))
         columns_out.append(
-            WorkflowColumnOut(
+            TaskBoardColumnOut(
                 id=column.id,
                 key=column.column_key,
                 name=column.name,
                 color=column.color,
-                is_system=_is_system_workflow_column_key(column.column_key),
+                is_system=_is_system_task_board_column_key(column.column_key),
                 position=column.position,
                 cards=column_cards,
             )
         )
 
-    return WorkflowBoardOut(
+    return TaskBoardOut(
         columns=columns_out,
         open_card_count=open_card_count,
         completed_card_count=completed_card_count,
@@ -281,21 +281,21 @@ def _build_workflow_board_payload(
     )
 
 
-def _load_workflow_board(db: Session, *, actor_user_id: Optional[UUID] = None) -> WorkflowBoardOut:
-    columns = _ensure_default_workflow_columns(db)
-    rows = _select_workflow_card_rows(db)
-    comments_by_card = _load_workflow_card_comments(
+def _load_task_board(db: Session, *, actor_user_id: Optional[UUID] = None) -> TaskBoardOut:
+    columns = _ensure_default_task_board_columns(db)
+    rows = _select_task_board_card_rows(db)
+    comments_by_card = _load_task_board_card_comments(
         db,
         card_ids=[card.id for card, *_ in rows],
         current_user_id=actor_user_id,
     )
-    return _build_workflow_board_payload(columns, rows, comments_by_card=comments_by_card)
+    return _build_task_board_payload(columns, rows, comments_by_card=comments_by_card)
 
 
 def _extract_anthropic_text(payload: dict) -> str:
     content = payload.get("content")
     if not isinstance(content, list):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Workflow AI returned invalid content.")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Task Board AI returned invalid content.")
     parts: list[str] = []
     for item in content:
         if not isinstance(item, dict):
@@ -306,11 +306,11 @@ def _extract_anthropic_text(payload: dict) -> str:
         if isinstance(text, str) and text.strip():
             parts.append(text.strip())
     if not parts:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Workflow AI returned empty content.")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Task Board AI returned empty content.")
     return "\n".join(parts).strip()
 
 
-def _rewrite_comment_body_with_haiku(body: str, language: str) -> str:
+def _rewrite_task_board_comment_body_with_haiku(body: str, language: str) -> str:
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         raise HTTPException(
@@ -318,8 +318,8 @@ def _rewrite_comment_body_with_haiku(body: str, language: str) -> str:
             detail="ANTHROPIC_API_KEY is not configured.",
         )
 
-    model = (os.getenv("WORKFLOW_COMMENT_ANTHROPIC_MODEL") or WORKFLOW_COMMENT_ANTHROPIC_MODEL).strip()
-    base_url = (os.getenv("WORKFLOW_COMMENT_ANTHROPIC_BASE_URL") or WORKFLOW_COMMENT_ANTHROPIC_BASE_URL).strip()
+    model = (os.getenv("WORKFLOW_COMMENT_ANTHROPIC_MODEL") or TASK_BOARD_COMMENT_ANTHROPIC_MODEL).strip()
+    base_url = (os.getenv("WORKFLOW_COMMENT_ANTHROPIC_BASE_URL") or TASK_BOARD_COMMENT_ANTHROPIC_BASE_URL).strip()
     target_language = "German" if (language or "").strip().lower() == "de" else "English"
     system_prompt = (
         "You rewrite internal workflow comments for an operations board. "
@@ -328,7 +328,7 @@ def _rewrite_comment_body_with_haiku(body: str, language: str) -> str:
         "Do not add new claims. Return plain text only."
     )
     user_prompt = (
-        f"Rewrite this workflow comment in {target_language}.\n\n"
+        f"Rewrite this task board comment in {target_language}.\n\n"
         "Original comment:\n"
         f"{body.strip()}"
     )
@@ -352,63 +352,63 @@ def _rewrite_comment_body_with_haiku(body: str, language: str) -> str:
     except requests.RequestException as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Workflow AI request failed: {exc}",
+            detail=f"Task Board AI request failed: {exc}",
         ) from exc
 
     if response.status_code >= 400:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Workflow AI HTTP {response.status_code}: {response.text[:300]}",
+            detail=f"Task Board AI HTTP {response.status_code}: {response.text[:300]}",
         )
     try:
         payload = response.json()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Workflow AI returned non-JSON response.",
+            detail="Task Board AI returned non-JSON response.",
         ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Workflow AI returned unexpected payload type.",
+            detail="Task Board AI returned unexpected payload type.",
         )
     rewritten = _extract_anthropic_text(payload)
     if not rewritten:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Workflow AI returned empty text.",
+            detail="Task Board AI returned empty text.",
         )
     return rewritten
 
 
-@router.get("/board", response_model=WorkflowBoardOut)
-def get_workflow_board(
+@router.get("/board", response_model=TaskBoardOut)
+def get_task_board(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+) -> TaskBoardOut:
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.post("/cards", response_model=WorkflowBoardOut)
-def create_workflow_card(
-    payload: WorkflowCardCreateIn,
+@router.post("/cards", response_model=TaskBoardOut)
+def create_task_board_card(
+    payload: TaskBoardCardCreateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    columns = _ensure_default_workflow_columns(db)
+) -> TaskBoardOut:
+    columns = _ensure_default_task_board_columns(db)
     todo_column = next((item for item in columns if item.column_key == "todo"), None)
     if todo_column is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="TO DO column is missing.")
 
-    assignee = _get_assignable_workflow_user(db, payload.assignee_user_id)
+    assignee = _get_assignable_task_board_user(db, payload.assignee_user_id)
     if assignee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found.")
 
     positions_by_column: Dict[UUID, int] = defaultdict(int)
-    for item in db.query(WorkflowCard).order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc()).all():
+    for item in db.query(TaskBoardCard).order_by(TaskBoardCard.position.asc(), TaskBoardCard.created_at.asc()).all():
         positions_by_column[item.column_id] = max(positions_by_column[item.column_id], int(item.position or 0))
 
-    card = WorkflowCard(
+    card = TaskBoardCard(
         job_id=None,
         submission_id=None,
         column_id=todo_column.id,
@@ -441,19 +441,19 @@ def create_workflow_card(
         },
     )
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.patch("/cards/{card_id}/details", response_model=WorkflowBoardOut)
-def update_workflow_card_details(
+@router.patch("/cards/{card_id}/details", response_model=TaskBoardOut)
+def update_task_board_card_details(
     card_id: UUID,
-    payload: WorkflowCardUpdateIn,
+    payload: TaskBoardCardUpdateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+) -> TaskBoardOut:
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == card_id).first()
     if card is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
 
     full_edit_fields = {"title", "description", "job_type", "priority", "assignee_user_id"}
     requested_fields = set(payload.__fields_set__)
@@ -482,7 +482,7 @@ def update_workflow_card_details(
         changed = True
 
     if payload.assignee_user_id is not None and card.assignee_user_id != payload.assignee_user_id:
-        assignee = _get_assignable_workflow_user(db, payload.assignee_user_id)
+        assignee = _get_assignable_task_board_user(db, payload.assignee_user_id)
         if assignee is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found.")
         card.assignee_user_id = assignee.id
@@ -500,28 +500,28 @@ def update_workflow_card_details(
         card.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.patch("/cards/{card_id}", response_model=WorkflowBoardOut)
-def move_workflow_card(
+@router.patch("/cards/{card_id}", response_model=TaskBoardOut)
+def move_task_board_card(
     card_id: UUID,
-    payload: WorkflowCardMoveIn,
+    payload: TaskBoardCardMoveIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    columns = _ensure_default_workflow_columns(db)
+) -> TaskBoardOut:
+    columns = _ensure_default_task_board_columns(db)
     target_column = next((item for item in columns if item.id == payload.column_id), None)
     if target_column is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow column not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board column not found.")
 
-    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == card_id).first()
     if card is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
 
     if card.column_id != target_column.id:
         positions_by_column = defaultdict(int)
-        existing_cards = db.query(WorkflowCard).order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc()).all()
+        existing_cards = db.query(TaskBoardCard).order_by(TaskBoardCard.position.asc(), TaskBoardCard.created_at.asc()).all()
         for item in existing_cards:
             positions_by_column[item.column_id] = max(positions_by_column[item.column_id], int(item.position or 0))
         previous_column_id = card.column_id
@@ -540,36 +540,36 @@ def move_workflow_card(
         )
         db.commit()
 
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.delete("/cards/{card_id}", response_model=WorkflowBoardOut)
-def delete_workflow_card(
+@router.delete("/cards/{card_id}", response_model=TaskBoardOut)
+def delete_task_board_card(
     card_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_super_admin),
-) -> WorkflowBoardOut:
-    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+) -> TaskBoardOut:
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == card_id).first()
     if card is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
     db.delete(card)
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.post("/cards/{card_id}/comments", response_model=WorkflowBoardOut)
-def create_workflow_comment(
+@router.post("/cards/{card_id}/comments", response_model=TaskBoardOut)
+def create_task_board_comment(
     card_id: UUID,
-    payload: WorkflowCommentCreateIn,
+    payload: TaskBoardCommentCreateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    card = db.query(WorkflowCard).filter(WorkflowCard.id == card_id).first()
+) -> TaskBoardOut:
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == card_id).first()
     if card is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
 
     now = datetime.now(timezone.utc)
-    comment = WorkflowCardComment(
+    comment = TaskBoardCardComment(
         card_id=card.id,
         author_user_id=current_user.id,
         author_name_snapshot=_build_actor_name(current_user),
@@ -590,25 +590,25 @@ def create_workflow_comment(
         payload={"comment_id": str(comment.id)},
     )
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.patch("/comments/{comment_id}", response_model=WorkflowBoardOut)
-def update_workflow_comment(
+@router.patch("/comments/{comment_id}", response_model=TaskBoardOut)
+def update_task_board_comment(
     comment_id: UUID,
-    payload: WorkflowCommentUpdateIn,
+    payload: TaskBoardCommentUpdateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
-) -> WorkflowBoardOut:
-    comment = db.query(WorkflowCardComment).filter(WorkflowCardComment.id == comment_id).first()
+) -> TaskBoardOut:
+    comment = db.query(TaskBoardCardComment).filter(TaskBoardCardComment.id == comment_id).first()
     if comment is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow comment not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board comment not found.")
     if comment.author_user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only edit your own comments.")
 
-    card = db.query(WorkflowCard).filter(WorkflowCard.id == comment.card_id).first()
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == comment.card_id).first()
     if card is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow card not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
 
     now = datetime.now(timezone.utc)
     comment.body = payload.body
@@ -624,69 +624,69 @@ def update_workflow_comment(
         payload={"comment_id": str(comment.id)},
     )
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.post("/comments/rewrite", response_model=WorkflowCommentRewriteOut)
-def rewrite_workflow_comment(
-    payload: WorkflowCommentRewriteIn,
+@router.post("/comments/rewrite", response_model=TaskBoardCommentRewriteOut)
+def rewrite_task_board_comment(
+    payload: TaskBoardCommentRewriteIn,
     current_user: User = Depends(require_admin),
-) -> WorkflowCommentRewriteOut:
+) -> TaskBoardCommentRewriteOut:
     _ = current_user
-    return WorkflowCommentRewriteOut(body=_rewrite_comment_body_with_haiku(payload.body, payload.language))
+    return TaskBoardCommentRewriteOut(body=_rewrite_task_board_comment_body_with_haiku(payload.body, payload.language))
 
 
-@router.post("/columns", response_model=WorkflowBoardOut)
-def create_workflow_column(
-    payload: WorkflowColumnCreateIn,
+@router.post("/columns", response_model=TaskBoardOut)
+def create_task_board_column(
+    payload: TaskBoardColumnCreateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_super_admin),
-) -> WorkflowBoardOut:
-    columns = _ensure_default_workflow_columns(db)
-    column = WorkflowColumn(
-        column_key=_build_custom_workflow_column_key(payload.name, [item.column_key for item in columns]),
+) -> TaskBoardOut:
+    columns = _ensure_default_task_board_columns(db)
+    column = TaskBoardColumn(
+        column_key=_build_custom_task_board_column_key(payload.name, [item.column_key for item in columns]),
         name=payload.name,
-        color=CUSTOM_WORKFLOW_COLUMN_COLOR,
-        position=_next_workflow_column_position(columns),
+        color=CUSTOM_TASK_BOARD_COLUMN_COLOR,
+        position=_next_task_board_column_position(columns),
     )
     db.add(column)
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.patch("/columns/{column_id}", response_model=WorkflowBoardOut)
-def rename_workflow_column(
+@router.patch("/columns/{column_id}", response_model=TaskBoardOut)
+def rename_task_board_column(
     column_id: UUID,
-    payload: WorkflowColumnUpdateIn,
+    payload: TaskBoardColumnUpdateIn,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_super_admin),
-) -> WorkflowBoardOut:
-    column = db.query(WorkflowColumn).filter(WorkflowColumn.id == column_id).first()
+) -> TaskBoardOut:
+    column = db.query(TaskBoardColumn).filter(TaskBoardColumn.id == column_id).first()
     if column is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow column not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board column not found.")
 
     if column.name != payload.name:
         column.name = payload.name
         column.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)
 
 
-@router.delete("/columns/{column_id}", response_model=WorkflowBoardOut)
-def delete_workflow_column(
+@router.delete("/columns/{column_id}", response_model=TaskBoardOut)
+def delete_task_board_column(
     column_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_super_admin),
-) -> WorkflowBoardOut:
-    columns = _ensure_default_workflow_columns(db)
+) -> TaskBoardOut:
+    columns = _ensure_default_task_board_columns(db)
     column = next((item for item in columns if item.id == column_id), None)
     if column is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow column not found.")
-    if _is_system_workflow_column_key(column.column_key):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board column not found.")
+    if _is_system_task_board_column_key(column.column_key):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="System workflow columns cannot be deleted.",
+            detail="System task board columns cannot be deleted.",
         )
 
     todo_column = next((item for item in columns if item.column_key == "todo"), None)
@@ -694,13 +694,13 @@ def delete_workflow_column(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="TO DO column is missing.")
 
     cards = (
-        db.query(WorkflowCard)
-        .filter(WorkflowCard.column_id == column.id)
-        .order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc())
+        db.query(TaskBoardCard)
+        .filter(TaskBoardCard.column_id == column.id)
+        .order_by(TaskBoardCard.position.asc(), TaskBoardCard.created_at.asc())
         .all()
     )
     positions_by_column: Dict[UUID, int] = defaultdict(int)
-    for item in db.query(WorkflowCard).order_by(WorkflowCard.position.asc(), WorkflowCard.created_at.asc()).all():
+    for item in db.query(TaskBoardCard).order_by(TaskBoardCard.position.asc(), TaskBoardCard.created_at.asc()).all():
         positions_by_column[item.column_id] = max(positions_by_column[item.column_id], int(item.position or 0))
 
     for card in cards:
@@ -727,4 +727,4 @@ def delete_workflow_column(
     db.flush()
     db.delete(column)
     db.commit()
-    return _load_workflow_board(db, actor_user_id=current_user.id)
+    return _load_task_board(db, actor_user_id=current_user.id)

@@ -377,9 +377,9 @@ export default function App() {
   const [taskBoardMovingCardId, setTaskBoardMovingCardId] = useState("");
   const [taskBoardDragCardId, setTaskBoardDragCardId] = useState("");
   const [taskBoardResetSignal, setTaskBoardResetSignal] = useState(0);
-  const [workflowColumnCreating, setWorkflowColumnCreating] = useState(false);
-  const [workflowColumnSavingId, setWorkflowColumnSavingId] = useState("");
-  const [workflowColumnDeletingId, setWorkflowColumnDeletingId] = useState("");
+  const [taskBoardColumnCreating, setTaskBoardColumnCreating] = useState(false);
+  const [taskBoardColumnSavingId, setTaskBoardColumnSavingId] = useState("");
+  const [taskBoardColumnDeletingId, setTaskBoardColumnDeletingId] = useState("");
   const [siteFitDashboard, setSiteFitDashboard] = useState(null);
   const [siteFitLoading, setSiteFitLoading] = useState(false);
   const [pendingJobs, setPendingJobs] = useState([]);
@@ -951,11 +951,11 @@ export default function App() {
     }
   };
 
-  const createWorkflowColumn = async (name) => {
+  const createTaskBoardColumn = async (name) => {
     const normalizedName = String(name || "").trim();
     if (!normalizedName) return false;
     try {
-      setWorkflowColumnCreating(true);
+      setTaskBoardColumnCreating(true);
       setError("");
       setSuccess("");
       const payload = await api.post("/task-board/columns", { name: normalizedName });
@@ -966,16 +966,16 @@ export default function App() {
       setError(err.message);
       return false;
     } finally {
-      setWorkflowColumnCreating(false);
+      setTaskBoardColumnCreating(false);
     }
   };
 
-  const renameWorkflowColumn = async (columnId, name) => {
+  const renameTaskBoardColumn = async (columnId, name) => {
     const normalizedColumnId = String(columnId || "").trim();
     const normalizedName = String(name || "").trim();
     if (!normalizedColumnId || !normalizedName) return;
     try {
-      setWorkflowColumnSavingId(normalizedColumnId);
+      setTaskBoardColumnSavingId(normalizedColumnId);
       setError("");
       setSuccess("");
       const payload = await api.patch(`/task-board/columns/${normalizedColumnId}`, { name: normalizedName });
@@ -984,15 +984,15 @@ export default function App() {
     } catch (err) {
       setError(err.message);
     } finally {
-      setWorkflowColumnSavingId("");
+      setTaskBoardColumnSavingId("");
     }
   };
 
-  const deleteWorkflowColumn = async (columnId) => {
+  const deleteTaskBoardColumn = async (columnId) => {
     const normalizedColumnId = String(columnId || "").trim();
     if (!normalizedColumnId) return;
     try {
-      setWorkflowColumnDeletingId(normalizedColumnId);
+      setTaskBoardColumnDeletingId(normalizedColumnId);
       setError("");
       setSuccess("");
       const payload = await api.delete(`/task-board/columns/${normalizedColumnId}`);
@@ -1001,7 +1001,7 @@ export default function App() {
     } catch (err) {
       setError(err.message);
     } finally {
-      setWorkflowColumnDeletingId("");
+      setTaskBoardColumnDeletingId("");
     }
   };
 

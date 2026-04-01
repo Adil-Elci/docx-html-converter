@@ -28,7 +28,7 @@ from .routers import (
     site_credentials_router,
     sites_router,
     submissions_router,
-    workflow_router,
+    task_board_router,
 )
 
 load_dotenv()
@@ -60,7 +60,7 @@ app.include_router(sites_router)
 app.include_router(site_credentials_router)
 app.include_router(submissions_router)
 app.include_router(jobs_router)
-app.include_router(workflow_router)
+app.include_router(task_board_router)
 
 
 def _configure_automation_logger() -> None:

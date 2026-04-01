@@ -6,15 +6,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
 
-WORKFLOW_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
-WORKFLOW_COMMENT_LANGUAGES = {"en", "de"}
-WORKFLOW_JOB_TYPES = {"articles", "develop", "fix", "research"}
-WORKFLOW_PRIORITY_LEVELS = {"urgent", "high", "medium", "low"}
-WORKFLOW_FLAG_ORDER = ("bug", "needs_levent_attention", "needs_adil_attention")
-WORKFLOW_FLAG_TYPES = set(WORKFLOW_FLAG_ORDER)
+TASK_BOARD_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
+TASK_BOARD_COMMENT_LANGUAGES = {"en", "de"}
+TASK_BOARD_JOB_TYPES = {"articles", "develop", "fix", "research"}
+TASK_BOARD_PRIORITY_LEVELS = {"urgent", "high", "medium", "low"}
+TASK_BOARD_FLAG_ORDER = ("bug", "needs_levent_attention", "needs_adil_attention")
+TASK_BOARD_FLAG_TYPES = set(TASK_BOARD_FLAG_ORDER)
 
 
-class WorkflowCommentOut(BaseModel):
+class TaskBoardCommentOut(BaseModel):
     id: UUID
     author_user_id: Optional[UUID] = None
     author_name: str
@@ -24,7 +24,7 @@ class WorkflowCommentOut(BaseModel):
     can_edit: bool = False
 
 
-class WorkflowCardOut(BaseModel):
+class TaskBoardCardOut(BaseModel):
     id: UUID
     job_id: Optional[UUID] = None
     submission_id: Optional[UUID] = None
@@ -46,27 +46,27 @@ class WorkflowCardOut(BaseModel):
     position: int
     created_at: datetime
     updated_at: datetime
-    comments: List[WorkflowCommentOut] = Field(default_factory=list)
+    comments: List[TaskBoardCommentOut] = Field(default_factory=list)
 
 
-class WorkflowColumnOut(BaseModel):
+class TaskBoardColumnOut(BaseModel):
     id: UUID
     key: str
     name: str
     color: Optional[str] = None
     is_system: bool = False
     position: int
-    cards: List[WorkflowCardOut] = Field(default_factory=list)
+    cards: List[TaskBoardCardOut] = Field(default_factory=list)
 
 
-class WorkflowBoardOut(BaseModel):
-    columns: List[WorkflowColumnOut] = Field(default_factory=list)
+class TaskBoardOut(BaseModel):
+    columns: List[TaskBoardColumnOut] = Field(default_factory=list)
     open_card_count: int = 0
     completed_card_count: int = 0
     updated_at: datetime
 
 
-class WorkflowCardMoveIn(BaseModel):
+class TaskBoardCardMoveIn(BaseModel):
     column_id: UUID
 
     @validator("column_id")
@@ -76,7 +76,7 @@ class WorkflowCardMoveIn(BaseModel):
         return value
 
 
-class WorkflowColumnCreateIn(BaseModel):
+class TaskBoardColumnCreateIn(BaseModel):
     name: str
 
     @validator("name")
@@ -89,7 +89,7 @@ class WorkflowColumnCreateIn(BaseModel):
         return normalized
 
 
-class WorkflowColumnUpdateIn(BaseModel):
+class TaskBoardColumnUpdateIn(BaseModel):
     name: str
 
     @validator("name")
@@ -102,7 +102,7 @@ class WorkflowColumnUpdateIn(BaseModel):
         return normalized
 
 
-class WorkflowCardCreateIn(BaseModel):
+class TaskBoardCardCreateIn(BaseModel):
     title: str
     job_type: str
     priority: str = "medium"
@@ -121,14 +121,14 @@ class WorkflowCardCreateIn(BaseModel):
     @validator("job_type")
     def validate_job_type(cls, value: str) -> str:
         normalized = (value or "").strip().lower()
-        if normalized not in WORKFLOW_JOB_TYPES:
+        if normalized not in TASK_BOARD_JOB_TYPES:
             raise ValueError("job_type must be one of articles, develop, fix, research.")
         return normalized
 
     @validator("priority")
     def validate_priority(cls, value: str) -> str:
         normalized = (value or "").strip().lower()
-        if normalized not in WORKFLOW_PRIORITY_LEVELS:
+        if normalized not in TASK_BOARD_PRIORITY_LEVELS:
             raise ValueError("priority must be one of urgent, high, medium, low.")
         return normalized
 
@@ -150,7 +150,7 @@ class WorkflowCardCreateIn(BaseModel):
         return normalized
 
 
-class WorkflowCommentCreateIn(BaseModel):
+class TaskBoardCommentCreateIn(BaseModel):
     body: str
 
     @validator("body")
@@ -163,7 +163,7 @@ class WorkflowCommentCreateIn(BaseModel):
         return normalized
 
 
-class WorkflowCommentUpdateIn(BaseModel):
+class TaskBoardCommentUpdateIn(BaseModel):
     body: str
 
     @validator("body")
@@ -176,7 +176,7 @@ class WorkflowCommentUpdateIn(BaseModel):
         return normalized
 
 
-class WorkflowCommentRewriteIn(BaseModel):
+class TaskBoardCommentRewriteIn(BaseModel):
     body: str
     language: str = "en"
 
@@ -192,16 +192,16 @@ class WorkflowCommentRewriteIn(BaseModel):
     @validator("language")
     def validate_language(cls, value: str) -> str:
         normalized = (value or "").strip().lower()
-        if normalized not in WORKFLOW_COMMENT_LANGUAGES:
+        if normalized not in TASK_BOARD_COMMENT_LANGUAGES:
             raise ValueError("language must be en or de.")
         return normalized
 
 
-class WorkflowCommentRewriteOut(BaseModel):
+class TaskBoardCommentRewriteOut(BaseModel):
     body: str
 
 
-class WorkflowCardUpdateIn(BaseModel):
+class TaskBoardCardUpdateIn(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     job_type: Optional[str] = None
@@ -236,7 +236,7 @@ class WorkflowCardUpdateIn(BaseModel):
         if value is None:
             return None
         normalized = value.strip().lower()
-        if normalized not in WORKFLOW_JOB_TYPES:
+        if normalized not in TASK_BOARD_JOB_TYPES:
             raise ValueError("job_type must be one of articles, develop, fix, research.")
         return normalized
 
@@ -245,7 +245,7 @@ class WorkflowCardUpdateIn(BaseModel):
         if value is None:
             return None
         normalized = value.strip().lower()
-        if normalized not in WORKFLOW_PRIORITY_LEVELS:
+        if normalized not in TASK_BOARD_PRIORITY_LEVELS:
             raise ValueError("priority must be one of urgent, high, medium, low.")
         return normalized
 
@@ -267,12 +267,12 @@ class WorkflowCardUpdateIn(BaseModel):
             normalized = str(flag_type or "").strip().lower()
             if not normalized:
                 continue
-            if normalized not in WORKFLOW_FLAG_TYPES:
+            if normalized not in TASK_BOARD_FLAG_TYPES:
                 raise ValueError("flag_types may only include bug, needs_levent_attention, or needs_adil_attention.")
             if normalized in seen:
                 continue
             seen.add(normalized)
-        for flag_type in WORKFLOW_FLAG_ORDER:
+        for flag_type in TASK_BOARD_FLAG_ORDER:
             if flag_type in seen:
                 normalized_values.append(flag_type)
         return normalized_values

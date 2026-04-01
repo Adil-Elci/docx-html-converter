@@ -258,8 +258,7 @@ const resolveSectionForRole = (role, section) => {
   return allowed.includes(normalizedSection) ? normalizedSection : getDefaultSectionForRole(role);
 };
 
-const getLandingSectionForRole = (role) =>
-  isAdminRole(role) ? getDefaultSectionForRole(role) : resolveSectionForRole(role, getStoredSectionForRole(role));
+const getLandingSectionForRole = (role) => resolveSectionForRole(role, getStoredSectionForRole(role));
 
 const getUserStorageSuffix = (user) => (
   (user?.id || user?.email || user?.role || "default").toString().trim().toLowerCase()
@@ -5543,60 +5542,42 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
 
 function LanguageToggle({ language, onChange }) {
   return (
-    <div className="inline">
-      <span className="icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" role="img" focusable="false">
-          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
-          <path
-            d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-          />
-        </svg>
-      </span>
-      <div className="toggle">
-        {["en", "de"].map((lang) => (
-          <button
-            key={lang}
-            className={language === lang ? "active" : ""}
-            onClick={() => onChange(lang)}
-            type="button"
-          >
-            {lang.toUpperCase()}
-          </button>
-        ))}
-      </div>
+    <div className="toggle">
+      {["en", "de"].map((lang) => (
+        <button
+          key={lang}
+          className={language === lang ? "active" : ""}
+          onClick={() => onChange(lang)}
+          type="button"
+        >
+          {lang.toUpperCase()}
+        </button>
+      ))}
     </div>
   );
 }
 
 function ThemeToggle({ theme, onChange, t }) {
   return (
-    <div className="inline">
-      <span className="icon" aria-hidden="true">
+    <div className="toggle theme-toggle">
+      <button
+        type="button"
+        className={theme === "light" ? "active" : ""}
+        onClick={() => onChange("light")}
+        aria-label={t("lightTheme")}
+        title={t("lightTheme")}
+      >
         <SunIcon />
-      </span>
-      <div className="toggle theme-toggle">
-        <button
-          type="button"
-          className={theme === "light" ? "active" : ""}
-          onClick={() => onChange("light")}
-          aria-label={t("lightTheme")}
-          title={t("lightTheme")}
-        >
-          <SunIcon />
-        </button>
-        <button
-          type="button"
-          className={theme === "dark" ? "active" : ""}
-          onClick={() => onChange("dark")}
-          aria-label={t("darkTheme")}
-          title={t("darkTheme")}
-        >
-          <MoonIcon />
-        </button>
-      </div>
+      </button>
+      <button
+        type="button"
+        className={theme === "dark" ? "active" : ""}
+        onClick={() => onChange("dark")}
+        aria-label={t("darkTheme")}
+        title={t("darkTheme")}
+      >
+        <MoonIcon />
+      </button>
     </div>
   );
 }

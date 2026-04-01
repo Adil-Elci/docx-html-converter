@@ -5788,7 +5788,7 @@ function TaskBoardPanel({
   const safePage = Math.min(page, pageCount);
   const paginatedColumns = useMemo(() => {
     const start = (safePage - 1) * pageSize;
-    filteredColumns.map((column) => ({
+    return filteredColumns.map((column) => ({
       ...column,
       cards: (column.cards || []).slice(start, start + pageSize),
     }));

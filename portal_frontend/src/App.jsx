@@ -91,7 +91,7 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "websites", "workflow", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "task-board", "websites", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
 const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
@@ -249,8 +249,9 @@ const getAllowedSectionsForRole = (role) => (isAdminRole(role) ? ADMIN_SECTIONS 
 const getStoredSectionForRole = (role) => (localStorage.getItem(`active_section_${getRoleStorageBucket(role)}`) || "").trim();
 
 const resolveSectionForRole = (role, section) => {
+  const normalizedSection = section === "workflow" ? "task-board" : section;
   const allowed = getAllowedSectionsForRole(role);
-  return allowed.includes(section) ? section : getDefaultSectionForRole(role);
+  return allowed.includes(normalizedSection) ? normalizedSection : getDefaultSectionForRole(role);
 };
 
 const getLandingSectionForRole = (role) =>
@@ -371,11 +372,11 @@ export default function App() {
   const [keywordTrendLoading, setKeywordTrendLoading] = useState(false);
   const [siteAccessCheckLoading, setSiteAccessCheckLoading] = useState(false);
   const [siteAccessCheckResult, setSiteAccessCheckResult] = useState(null);
-  const [workflowBoard, setWorkflowBoard] = useState(null);
-  const [workflowLoading, setWorkflowLoading] = useState(false);
-  const [workflowMovingCardId, setWorkflowMovingCardId] = useState("");
-  const [workflowDragCardId, setWorkflowDragCardId] = useState("");
-  const [workflowResetSignal, setWorkflowResetSignal] = useState(0);
+  const [taskBoard, setTaskBoard] = useState(null);
+  const [taskBoardLoading, setTaskBoardLoading] = useState(false);
+  const [taskBoardMovingCardId, setTaskBoardMovingCardId] = useState("");
+  const [taskBoardDragCardId, setTaskBoardDragCardId] = useState("");
+  const [taskBoardResetSignal, setTaskBoardResetSignal] = useState(0);
   const [workflowColumnCreating, setWorkflowColumnCreating] = useState(false);
   const [workflowColumnSavingId, setWorkflowColumnSavingId] = useState("");
   const [workflowColumnDeletingId, setWorkflowColumnDeletingId] = useState("");
@@ -918,35 +919,35 @@ export default function App() {
     }
   };
 
-  const loadWorkflowBoard = async (forUser = currentUser) => {
+  const loadTaskBoard = async (forUser = currentUser) => {
     if (!isAdminRole(forUser?.role)) return;
     try {
-      setWorkflowLoading(true);
-      const payload = await api.get("/workflow/board");
-      setWorkflowBoard(payload || null);
+      setTaskBoardLoading(true);
+      const payload = await api.get("/task-board/board");
+      setTaskBoard(payload || null);
     } catch (err) {
       setError(err.message);
     } finally {
-      setWorkflowLoading(false);
+      setTaskBoardLoading(false);
     }
   };
 
-  const moveWorkflowCard = async (cardId, columnId) => {
+  const moveTaskBoardCard = async (cardId, columnId) => {
     const normalizedCardId = String(cardId || "").trim();
     const normalizedColumnId = String(columnId || "").trim();
     if (!normalizedCardId || !normalizedColumnId) return;
     try {
-      setWorkflowMovingCardId(normalizedCardId);
+      setTaskBoardMovingCardId(normalizedCardId);
       setError("");
-      const payload = await api.patch(`/workflow/cards/${normalizedCardId}`, {
+      const payload = await api.patch(`/task-board/cards/${normalizedCardId}`, {
         column_id: normalizedColumnId,
       });
-      setWorkflowBoard(payload || null);
+      setTaskBoard(payload || null);
     } catch (err) {
       setError(err.message);
     } finally {
-      setWorkflowMovingCardId("");
-      setWorkflowDragCardId("");
+      setTaskBoardMovingCardId("");
+      setTaskBoardDragCardId("");
     }
   };
 
@@ -957,8 +958,8 @@ export default function App() {
       setWorkflowColumnCreating(true);
       setError("");
       setSuccess("");
-      const payload = await api.post("/workflow/columns", { name: normalizedName });
-      setWorkflowBoard(payload || null);
+      const payload = await api.post("/task-board/columns", { name: normalizedName });
+      setTaskBoard(payload || null);
       setSuccess(t("workflowColumnsUpdated"));
       return true;
     } catch (err) {
@@ -977,8 +978,8 @@ export default function App() {
       setWorkflowColumnSavingId(normalizedColumnId);
       setError("");
       setSuccess("");
-      const payload = await api.patch(`/workflow/columns/${normalizedColumnId}`, { name: normalizedName });
-      setWorkflowBoard(payload || null);
+      const payload = await api.patch(`/task-board/columns/${normalizedColumnId}`, { name: normalizedName });
+      setTaskBoard(payload || null);
       setSuccess(t("workflowColumnsUpdated"));
     } catch (err) {
       setError(err.message);
@@ -994,8 +995,8 @@ export default function App() {
       setWorkflowColumnDeletingId(normalizedColumnId);
       setError("");
       setSuccess("");
-      const payload = await api.delete(`/workflow/columns/${normalizedColumnId}`);
-      setWorkflowBoard(payload || null);
+      const payload = await api.delete(`/task-board/columns/${normalizedColumnId}`);
+      setTaskBoard(payload || null);
       setSuccess(t("workflowColumnsUpdated"));
     } catch (err) {
       setError(err.message);
@@ -1004,12 +1005,12 @@ export default function App() {
     }
   };
 
-  const createWorkflowCard = async (payload) => {
+  const createTaskBoardCard = async (payload) => {
     try {
       setError("");
       setSuccess("");
-      const nextBoard = await api.post("/workflow/cards", payload);
-      setWorkflowBoard(nextBoard || null);
+      const nextBoard = await api.post("/task-board/cards", payload);
+      setTaskBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -1017,13 +1018,13 @@ export default function App() {
     }
   };
 
-  const deleteWorkflowCard = async (cardId) => {
+  const deleteTaskBoardCard = async (cardId) => {
     const normalizedCardId = String(cardId || "").trim();
     if (!normalizedCardId) return false;
     try {
       setError("");
-      const nextBoard = await api.delete(`/workflow/cards/${normalizedCardId}`);
-      setWorkflowBoard(nextBoard || null);
+      const nextBoard = await api.delete(`/task-board/cards/${normalizedCardId}`);
+      setTaskBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -1031,13 +1032,13 @@ export default function App() {
     }
   };
 
-  const addWorkflowComment = async (cardId, body) => {
+  const addTaskBoardComment = async (cardId, body) => {
     const normalizedCardId = String(cardId || "").trim();
     if (!normalizedCardId) return false;
     try {
       setError("");
-      const nextBoard = await api.post(`/workflow/cards/${normalizedCardId}/comments`, { body });
-      setWorkflowBoard(nextBoard || null);
+      const nextBoard = await api.post(`/task-board/cards/${normalizedCardId}/comments`, { body });
+      setTaskBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -1045,13 +1046,13 @@ export default function App() {
     }
   };
 
-  const updateWorkflowComment = async (commentId, body) => {
+  const updateTaskBoardComment = async (commentId, body) => {
     const normalizedCommentId = String(commentId || "").trim();
     if (!normalizedCommentId) return false;
     try {
       setError("");
-      const nextBoard = await api.patch(`/workflow/comments/${normalizedCommentId}`, { body });
-      setWorkflowBoard(nextBoard || null);
+      const nextBoard = await api.patch(`/task-board/comments/${normalizedCommentId}`, { body });
+      setTaskBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -1059,10 +1060,10 @@ export default function App() {
     }
   };
 
-  const rewriteWorkflowComment = async (body, languageCode) => {
+  const rewriteTaskBoardComment = async (body, languageCode) => {
     try {
       setError("");
-      const payload = await api.post("/workflow/comments/rewrite", {
+      const payload = await api.post("/task-board/comments/rewrite", {
         body,
         language: languageCode === "de" ? "de" : "en",
       });
@@ -1073,13 +1074,13 @@ export default function App() {
     }
   };
 
-  const updateWorkflowCardDetails = async (cardId, details) => {
+  const updateTaskBoardCardDetails = async (cardId, details) => {
     const normalizedCardId = String(cardId || "").trim();
     if (!normalizedCardId) return false;
     try {
       setError("");
-      const nextBoard = await api.patch(`/workflow/cards/${normalizedCardId}/details`, details || {});
-      setWorkflowBoard(nextBoard || null);
+      const nextBoard = await api.patch(`/task-board/cards/${normalizedCardId}/details`, details || {});
+      setTaskBoard(nextBoard || null);
       return true;
     } catch (err) {
       setError(err.message);
@@ -1854,8 +1855,8 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser || !isAdminRole(currentUser.role)) return;
-    if (activeSection !== "workflow") return;
-    loadWorkflowBoard();
+    if (activeSection !== "task-board") return;
+    loadTaskBoard();
   }, [currentUser, activeSection]);
 
   useEffect(() => {
@@ -1910,8 +1911,8 @@ export default function App() {
       try {
         await loadAll(currentUser);
         if (isAdminRole(currentUser.role)) {
-          if (activeSection === "workflow") {
-            await loadWorkflowBoard(currentUser);
+          if (activeSection === "task-board") {
+            await loadTaskBoard(currentUser);
           }
           if (activeSection === "pending-jobs") {
             await loadPendingJobs(currentUser);
@@ -2686,7 +2687,7 @@ export default function App() {
 
   const isAdminSection = activeSection === "admin";
   const isWebsitesSection = activeSection === "websites";
-  const isWorkflowSection = activeSection === "workflow";
+  const isTaskBoardSection = activeSection === "task-board";
   const isSiteAccessSection = activeSection === "site-access";
   const isClientsSection = activeSection === "clients";
   const isAdminUser = isAdminRole(currentUser?.role);
@@ -3121,8 +3122,8 @@ export default function App() {
         activeSection={activeSection}
         onSectionChange={(next) => {
           if (next === activeSection) {
-            if (next === "workflow") {
-              setWorkflowResetSignal((current) => current + 1);
+            if (next === "task-board") {
+              setTaskBoardResetSignal((current) => current + 1);
             }
           } else {
             setActiveSection(next);
@@ -3253,7 +3254,7 @@ export default function App() {
       </div>
       <div className="app-main">
 
-        <div className={`container ${(isWorkflowSection || isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
+        <div className={`container ${(isTaskBoardSection || isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
               <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
@@ -3559,27 +3560,27 @@ export default function App() {
                 ))}
               </div>
             </div>
-          ) : isWorkflowSection ? (
-            <WorkflowBoardPanel
+          ) : isTaskBoardSection ? (
+            <TaskBoardPanel
               t={t}
-              board={workflowBoard}
-              loading={workflowLoading}
-              movingCardId={workflowMovingCardId}
-              draggingCardId={workflowDragCardId}
+              board={taskBoard}
+              loading={taskBoardLoading}
+              movingCardId={taskBoardMovingCardId}
+              draggingCardId={taskBoardDragCardId}
               currentUser={currentUser}
               adminUsers={adminUsers}
               language={language}
-              resetSignal={workflowResetSignal}
-              onRefresh={() => loadWorkflowBoard(currentUser)}
-              onDragStart={(cardId) => setWorkflowDragCardId(String(cardId || ""))}
-              onDragEnd={() => setWorkflowDragCardId("")}
-              onMoveCard={moveWorkflowCard}
-              onCreateCard={createWorkflowCard}
-              onDeleteCard={deleteWorkflowCard}
-              onAddComment={addWorkflowComment}
-              onUpdateComment={updateWorkflowComment}
-              onRewriteComment={rewriteWorkflowComment}
-              onUpdateCardDetails={updateWorkflowCardDetails}
+              resetSignal={taskBoardResetSignal}
+              onRefresh={() => loadTaskBoard(currentUser)}
+              onDragStart={(cardId) => setTaskBoardDragCardId(String(cardId || ""))}
+              onDragEnd={() => setTaskBoardDragCardId("")}
+              onMoveCard={moveTaskBoardCard}
+              onCreateCard={createTaskBoardCard}
+              onDeleteCard={deleteTaskBoardCard}
+              onAddComment={addTaskBoardComment}
+              onUpdateComment={updateTaskBoardComment}
+              onRewriteComment={rewriteTaskBoardComment}
+              onUpdateCardDetails={updateTaskBoardCardDetails}
               formatPublishedAt={formatPublishedAt}
             />
           ) : isSiteAccessSection ? (
@@ -5273,7 +5274,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         <path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18" fill="none" stroke="currentColor" strokeWidth="1.6" />
       </svg>
     ),
-    workflow: (
+    "task-board": (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <rect x="3" y="5" width="5" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
         <rect x="10" y="5" width="5" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
@@ -5357,8 +5358,8 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
   const sections = isAdminRole(userRole)
     ? [
         { id: "admin", label: t("navAdmin") },
+        { id: "task-board", label: t("navWorkflow") },
         { id: "websites", label: t("navWebsites") },
-        { id: "workflow", label: t("navWorkflow") },
         { id: "site-access", label: t("navSiteAccess") },
         { id: "clients", label: t("navClients") },
         { id: "submit-article", label: t("navSubmitArticle") },
@@ -5489,7 +5490,7 @@ function MoonIcon() {
   );
 }
 
-function WorkflowBoardPanel({
+function TaskBoardPanel({
   t,
   board,
   loading,

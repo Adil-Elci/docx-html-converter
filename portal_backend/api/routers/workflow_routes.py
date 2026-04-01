@@ -33,7 +33,7 @@ from ..workflow_schemas import (
     WorkflowCommentUpdateIn,
 )
 
-router = APIRouter(prefix="/workflow", tags=["workflow"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/task-board", tags=["task_board"], dependencies=[Depends(require_admin)])
 
 DEFAULT_WORKFLOW_COLUMNS = (
     {"key": "todo", "name": "TO DO", "color": "#5e6c84", "position": 100},

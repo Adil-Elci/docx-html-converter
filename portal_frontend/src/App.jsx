@@ -116,7 +116,22 @@ const WORKFLOW_FLAG_COLORS = {
   needs_levent_attention: "#facc15",
   needs_adil_attention: "#a855f7",
 };
-const INLINE_FORMAT_PATTERN = /(__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
+const INLINE_FORMAT_PATTERN = /(\[size=(?:12|14|16|18)\][\s\S]*?\[\/size\]|__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
+const FONT_SIZE_OPTIONS = [12, 14, 16, 18];
+const DEFAULT_FORMAT_FONT_SIZE = 12;
+const TASK_BOARD_SORT_DEFAULTS = {
+  priority: "desc",
+  user: "asc",
+  created_at: "desc",
+  latest_commented: "desc",
+  task_type: "asc",
+};
+const TASK_BOARD_PRIORITY_ORDER = {
+  urgent: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
 
 const renderInlineFormattedText = (text, keyPrefix = "inline") => (
   String(text || "")
@@ -124,6 +139,15 @@ const renderInlineFormattedText = (text, keyPrefix = "inline") => (
     .filter((part) => part !== "")
     .map((part, index) => {
       const key = `${keyPrefix}-${index}`;
+      const sizeMatch = part.match(/^\[size=(12|14|16|18)\]([\s\S]*?)\[\/size\]$/);
+      if (sizeMatch) {
+        const [, sizeValue, innerText] = sizeMatch;
+        return (
+          <span key={key} style={{ fontSize: `${sizeValue}px`, lineHeight: 1.6 }}>
+            {renderInlineFormattedText(innerText, `${key}-size`)}
+          </span>
+        );
+      }
       if (part.startsWith("__") && part.endsWith("__") && part.length > 4) {
         return <u key={key}>{part.slice(2, -2)}</u>;
       }
@@ -5679,9 +5703,15 @@ function TaskBoardPanel({
   const [filterPanel, setFilterPanel] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMenuSection, setFilterMenuSection] = useState("");
+  const [sortField, setSortField] = useState("priority");
+  const [sortDirection, setSortDirection] = useState(TASK_BOARD_SORT_DEFAULTS.priority);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(STANDARD_PAGE_SIZE);
   const filterMenuRef = useRef(null);
+  const sortMenuRef = useRef(null);
+  const statsMenuRef = useRef(null);
   const openCardMenuRef = useRef(null);
   const textAreaRefs = useRef({});
 
@@ -5718,6 +5748,8 @@ function TaskBoardPanel({
     setFilterMenuOpen(false);
     setFilterMenuSection("");
     setFilterPanel("");
+    setSortMenuOpen(false);
+    setStatsOpen(false);
     setPage(1);
   }, [resetSignal]);
 
@@ -5792,18 +5824,72 @@ function TaskBoardPanel({
       cards: (column.cards || []).filter(cardMatchesFilters),
     }))
   ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
+  const compareByDefaultOrder = useCallback((cardA, cardB) => {
+    const priorityA = TASK_BOARD_PRIORITY_ORDER[String(cardA?.priority || "").trim().toLowerCase()] || 0;
+    const priorityB = TASK_BOARD_PRIORITY_ORDER[String(cardB?.priority || "").trim().toLowerCase()] || 0;
+    if (priorityA !== priorityB) return priorityB - priorityA;
+    const createdA = cardA?.created_at ? new Date(cardA.created_at).getTime() : 0;
+    const createdB = cardB?.created_at ? new Date(cardB.created_at).getTime() : 0;
+    if (createdA !== createdB) return createdB - createdA;
+    const positionA = Number(cardA?.position || 0);
+    const positionB = Number(cardB?.position || 0);
+    if (positionA !== positionB) return positionA - positionB;
+    return String(cardA?.id || "").localeCompare(String(cardB?.id || ""));
+  }, []);
+  const sortedFilteredColumns = useMemo(() => {
+    const getLatestCommentTimestamp = (card) => {
+      const comments = Array.isArray(card?.comments) ? card.comments : [];
+      if (comments.length === 0) return 0;
+      return comments.reduce((latest, comment) => {
+        const timestamp = comment?.updated_at || comment?.created_at;
+        const value = timestamp ? new Date(timestamp).getTime() : 0;
+        return Math.max(latest, value);
+      }, 0);
+    };
+
+    const compareCards = (cardA, cardB) => {
+      let comparison = 0;
+      if (sortField === "priority") {
+        const priorityA = TASK_BOARD_PRIORITY_ORDER[String(cardA?.priority || "").trim().toLowerCase()] || 0;
+        const priorityB = TASK_BOARD_PRIORITY_ORDER[String(cardB?.priority || "").trim().toLowerCase()] || 0;
+        comparison = priorityA - priorityB;
+      } else if (sortField === "user") {
+        const assigneeA = String(cardA?.assignee_name || "").trim().toLowerCase();
+        const assigneeB = String(cardB?.assignee_name || "").trim().toLowerCase();
+        comparison = assigneeA.localeCompare(assigneeB, undefined, { sensitivity: "base" });
+      } else if (sortField === "created_at") {
+        const createdA = cardA?.created_at ? new Date(cardA.created_at).getTime() : 0;
+        const createdB = cardB?.created_at ? new Date(cardB.created_at).getTime() : 0;
+        comparison = createdA - createdB;
+      } else if (sortField === "latest_commented") {
+        comparison = getLatestCommentTimestamp(cardA) - getLatestCommentTimestamp(cardB);
+      } else if (sortField === "task_type") {
+        const jobTypeA = getJobTypeLabel(cardA?.job_type).toLowerCase();
+        const jobTypeB = getJobTypeLabel(cardB?.job_type).toLowerCase();
+        comparison = jobTypeA.localeCompare(jobTypeB, undefined, { sensitivity: "base" });
+      }
+
+      if (comparison !== 0) return sortDirection === "asc" ? comparison : -comparison;
+      return compareByDefaultOrder(cardA, cardB);
+    };
+
+    return filteredColumns.map((column) => ({
+      ...column,
+      cards: [...(column.cards || [])].sort(compareCards),
+    }));
+  }, [compareByDefaultOrder, filteredColumns, sortDirection, sortField]);
   const maxColumnCardCount = useMemo(() => (
-    filteredColumns.reduce((maxCards, column) => Math.max(maxCards, Array.isArray(column.cards) ? column.cards.length : 0), 0)
-  ), [filteredColumns]);
+    sortedFilteredColumns.reduce((maxCards, column) => Math.max(maxCards, Array.isArray(column.cards) ? column.cards.length : 0), 0)
+  ), [sortedFilteredColumns]);
   const pageCount = Math.max(1, Math.ceil(maxColumnCardCount / pageSize));
   const safePage = Math.min(page, pageCount);
   const paginatedColumns = useMemo(() => {
     const start = (safePage - 1) * pageSize;
-    return filteredColumns.map((column) => ({
+    return sortedFilteredColumns.map((column) => ({
       ...column,
       cards: (column.cards || []).slice(start, start + pageSize),
     }));
-  }, [filteredColumns, pageSize, safePage]);
+  }, [pageSize, safePage, sortedFilteredColumns]);
   const allCards = useMemo(() => columns.flatMap((column) => (column.cards || [])), [columns]);
   const activeCard = useMemo(
     () => allCards.find((card) => String(card?.id || "") === activeCardId) || null,
@@ -5816,10 +5902,10 @@ function TaskBoardPanel({
   const showJobTypeFilter = filterPanel === "job_type";
   const showDateFilters = filterPanel === "date_range";
 
-  const openCardCount = filteredColumns.reduce((sum, column) => (
+  const openCardCount = sortedFilteredColumns.reduce((sum, column) => (
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() !== "done").length
   ), 0);
-  const completedCardCount = filteredColumns.reduce((sum, column) => (
+  const completedCardCount = sortedFilteredColumns.reduce((sum, column) => (
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() === "done").length
   ), 0);
   const totalCardCount = openCardCount + completedCardCount;
@@ -5830,6 +5916,15 @@ function TaskBoardPanel({
   useEffect(() => {
     setPage((current) => Math.min(current, Math.max(1, Math.ceil(maxColumnCardCount / pageSize))));
   }, [maxColumnCardCount, pageSize]);
+
+  const getSortFieldLabel = (field) => {
+    if (field === "priority") return t("workflowSortPriority");
+    if (field === "user") return t("workflowSortUser");
+    if (field === "created_at") return t("workflowSortCreatedAt");
+    if (field === "latest_commented") return t("workflowSortLatestCommented");
+    if (field === "task_type") return t("workflowSortTaskType");
+    return "";
+  };
 
   const getJobTypeLabel = (jobType) => {
     const normalized = String(jobType || "").trim().toLowerCase();
@@ -5899,6 +5994,8 @@ function TaskBoardPanel({
     if (normalized === "low") return t("workflowPriorityLow");
     return t("workflowPriorityMedium");
   };
+
+  const sortSummaryLabel = `${t("workflowSortBy")}: ${getSortFieldLabel(sortField)} ${sortDirection === "asc" ? "↑" : "↓"}`;
 
   const resetCreateCardForm = () => {
     setCreateCardOpen(false);
@@ -5999,6 +6096,12 @@ function TaskBoardPanel({
       const content = selectedText || "underlined text";
       replacement = `__${content}__`;
       nextSelectionStart = selectionStart + 2;
+      nextSelectionEnd = nextSelectionStart + content.length;
+    } else if (formatType.startsWith("size:")) {
+      const sizeValue = formatType.split(":")[1];
+      const content = selectedText || "text";
+      replacement = `[size=${sizeValue}]${content}[/size]`;
+      nextSelectionStart = selectionStart + `[size=${sizeValue}]`.length;
       nextSelectionEnd = nextSelectionStart + content.length;
     }
 
@@ -6113,6 +6216,28 @@ function TaskBoardPanel({
   }, [filterMenuOpen]);
 
   useEffect(() => {
+    if (!sortMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(event.target)) {
+        setSortMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [sortMenuOpen]);
+
+  useEffect(() => {
+    if (!statsOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (statsMenuRef.current && !statsMenuRef.current.contains(event.target)) {
+        setStatsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [statsOpen]);
+
+  useEffect(() => {
     if (!openCardMenuId) return undefined;
     const handlePointerDown = (event) => {
       if (openCardMenuRef.current && !openCardMenuRef.current.contains(event.target)) {
@@ -6163,6 +6288,48 @@ function TaskBoardPanel({
     setFilterMenuOpen(false);
   };
 
+  const handleSortSelection = (nextField) => {
+    if (nextField === sortField) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(nextField);
+      setSortDirection(TASK_BOARD_SORT_DEFAULTS[nextField] || "asc");
+    }
+    setSortMenuOpen(false);
+    setPage(1);
+  };
+
+  const renderFormatToolbar = (toolbarKey, value, applyValue, ariaLabel) => (
+    <div className="workflow-format-toolbar" role="toolbar" aria-label={ariaLabel}>
+      {FORMAT_ACTIONS.map((action) => (
+        <button
+          key={`${toolbarKey}-${action.key}`}
+          className="workflow-format-btn"
+          type="button"
+          onClick={() => applyFormatting(toolbarKey, value, applyValue, action.key)}
+        >
+          {action.label}
+        </button>
+      ))}
+      <select
+        className="workflow-format-size-select"
+        defaultValue={String(DEFAULT_FORMAT_FONT_SIZE)}
+        aria-label={t("workflowFormatFontSize")}
+        onChange={(event) => {
+          const sizeValue = String(event.target.value || "");
+          if (sizeValue) applyFormatting(toolbarKey, value, applyValue, `size:${sizeValue}`);
+          event.target.value = String(DEFAULT_FORMAT_FONT_SIZE);
+        }}
+      >
+        {FONT_SIZE_OPTIONS.map((sizeOption) => (
+          <option key={`${toolbarKey}-size-${sizeOption}`} value={String(sizeOption)}>
+            {sizeOption}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
   const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
   const boardSurfaceStyle = {
     gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)",
@@ -6175,20 +6342,77 @@ function TaskBoardPanel({
         <div className="workflow-board-heading">
           <h2>{t("workflowTitle")}</h2>
         </div>
+        {!activeCard ? (
+          <div className="workflow-board-header-actions">
+            <div className="workflow-stats-wrap" ref={statsMenuRef}>
+              <button
+                className="workflow-stats-btn"
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={statsOpen}
+                aria-label={t("workflowStatsLabel")}
+                onClick={() => setStatsOpen((current) => !current)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 18V11M12 18V6M19 18v-8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M3.5 18.5h17" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </button>
+              {statsOpen ? (
+                <div className="workflow-stats-popover" role="dialog" aria-label={t("workflowStatsLabel")}>
+                  <div className="workflow-stats-row">
+                    <span>{t("workflowStatsOpenCards")}</span>
+                    <strong>{openCardCount}</strong>
+                  </div>
+                  <div className="workflow-stats-row">
+                    <span>{t("workflowStatsCompletedCards")}</span>
+                    <strong>{completedCardCount}</strong>
+                  </div>
+                  <div className="workflow-stats-row">
+                    <span>{t("workflowStatsColumns")}</span>
+                    <strong>{sortedFilteredColumns.length}</strong>
+                  </div>
+                  <div className="workflow-stats-row">
+                    <span>{t("workflowStatsTotalCards")}</span>
+                    <strong>{totalCardCount}</strong>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {!activeCard ? (
         <>
-          <div className="workflow-board-toolbar">
-            <div className="workflow-board-meta">
-              <span className="workflow-meta-pill">{t("workflowOpenCount").replace("{count}", String(openCardCount))}</span>
-              <span className="workflow-meta-pill">{t("workflowCompletedCount").replace("{count}", String(completedCardCount))}</span>
-              <span className="workflow-meta-pill">{t("workflowColumnTotal").replace("{count}", String(filteredColumns.length))}</span>
-              <span className="workflow-meta-pill">{t("workflowCardTotal").replace("{count}", String(totalCardCount))}</span>
-            </div>
-          </div>
-
           <div className="workflow-filter-shell">
+            <div className="workflow-sort-wrap" ref={sortMenuRef}>
+              <button
+                className={`workflow-filter-select workflow-sort-select ${sortMenuOpen ? "active" : ""}`.trim()}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={sortMenuOpen}
+                onClick={() => setSortMenuOpen((current) => !current)}
+              >
+                <span>{sortSummaryLabel}</span>
+                <span className="workflow-filter-select-caret" aria-hidden="true">▾</span>
+              </button>
+              {sortMenuOpen ? (
+                <div className="workflow-sort-menu" role="menu" aria-label={t("workflowSortBy")}>
+                  {["priority", "user", "created_at", "latest_commented", "task_type"].map((field) => (
+                    <button
+                      key={field}
+                      type="button"
+                      className={`workflow-sort-option ${sortField === field ? "active" : ""}`.trim()}
+                      onClick={() => handleSortSelection(field)}
+                    >
+                      <span>{getSortFieldLabel(field)}</span>
+                      {sortField === field ? <span aria-hidden="true">{sortDirection === "asc" ? "↑" : "↓"}</span> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <div className="workflow-filter-select-wrap" ref={filterMenuRef}>
               <button
                 className={`workflow-filter-select ${hasActiveFilters ? "active" : ""}`.trim()}
@@ -6542,161 +6766,151 @@ function TaskBoardPanel({
           className={`workflow-card-detail-view ${getFlagCardClass(activeCard.flag_types)}`.trim()}
           style={getFlagSurfaceStyle(activeCard.flag_types)}
         >
-          <button className="workflow-detail-back" type="button" onClick={() => setActiveCardId("")}>
-            ← {t("workflowBackToBoard")}
-          </button>
-
-          <div className="workflow-card-details-header">
-            <div className="workflow-card-details-heading">
+          <div className="workflow-card-detail-topbar">
+            <button className="workflow-detail-back" type="button" onClick={() => setActiveCardId("")}>
+              ← {t("workflowBackToBoard")}
+            </button>
+            <div className="workflow-card-detail-actions workflow-card-detail-actions-top">
               {cardEditOpen ? (
-                <div className="workflow-card-detail-editor">
-                  <label className="workflow-field-label" htmlFor="workflow-detail-title">
-                    {t("workflowCreateCardTitleLabel")}
-                  </label>
-                  <input
-                    id="workflow-detail-title"
-                    type="text"
-                    value={cardDetailDraft.title}
-                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
-                    maxLength={160}
-                  />
-                  <label className="workflow-field-label" htmlFor="workflow-detail-job-type">
-                    {t("workflowCreateCardJobTypeLabel")}
-                  </label>
-                  <select
-                    id="workflow-detail-job-type"
-                    value={cardDetailDraft.job_type}
-                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, job_type: event.target.value }))}
-                  >
-                    <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
-                    {jobTypeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <label className="workflow-field-label" htmlFor="workflow-detail-assignee">
-                    {t("workflowAssignedToLabel")}
-                  </label>
-                  <select
-                    id="workflow-detail-assignee"
-                    value={cardDetailDraft.assignee_user_id}
-                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, assignee_user_id: event.target.value }))}
-                  >
-                    <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
-                    {assignableUsers.map((user) => (
-                      <option key={user.id} value={user.id}>{user.label}</option>
-                    ))}
-                  </select>
-                  <label className="workflow-field-label" htmlFor="workflow-detail-priority">
-                    {t("workflowPriorityLabel")}
-                  </label>
-                  <select
-                    id="workflow-detail-priority"
-                    value={cardDetailDraft.priority}
-                    onChange={(event) => setCardDetailDraft((current) => ({ ...current, priority: event.target.value }))}
-                  >
-                    {priorityOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
                 <>
-                  <h3 id="workflow-card-details-title">{activeCard.title}</h3>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="workflow-card-details-meta">
-            <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowCreateCardJobTypeLabel")}:</span>
-              <span>{getJobTypeLabel(activeCard.job_type)}</span>
-            </div>
-            <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowPriorityLabel")}:</span>
-              <span>{getPriorityLabel(activeCard.priority)}</span>
-            </div>
-            <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowCreatedByLabel")}:</span>
-              <span>{activeCard.created_by_name || t("notAvailable")}</span>
-            </div>
-            <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowAssignedToLabel")}:</span>
-              <span>{activeCard.assignee_name || t("notAvailable")}</span>
-            </div>
-            <div className="workflow-card-meta">
-              <span className="workflow-card-label">{t("workflowCreatedAtLabel")}:</span>
-              <span>{formatPublishedAt(activeCard.created_at)}</span>
-            </div>
-          </div>
-
-          <div className="workflow-card-details-section">
-            <div className="workflow-card-details-section-header">
-              <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
-              <div className="workflow-card-detail-actions">
-                {cardEditOpen ? (
-                  <>
-                    <button
-                      className="btn ghost small"
-                      type="button"
-                      onClick={() => {
-                        setCardEditOpen(false);
-                        setCardDetailDraft({
-                          title: String(activeCard.title || ""),
-                          description: String(activeCard.description || ""),
-                          job_type: String(activeCard.job_type || ""),
-                          priority: String(activeCard.priority || "medium"),
-                          assignee_user_id: String(activeCard.assignee_user_id || ""),
-                        });
-                      }}
-                      disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
-                    >
-                      {t("cancel")}
-                    </button>
-                    <button
-                      className="btn small"
-                      type="button"
-                      onClick={saveCardDetails}
-                      disabled={
-                        cardDetailSavingKey === `details:${String(activeCard.id || "")}`
-                        || !String(cardDetailDraft.title || "").trim()
-                        || !String(cardDetailDraft.job_type || "").trim()
-                        || !String(cardDetailDraft.assignee_user_id || "").trim()
-                      }
-                    >
-                      {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
-                    </button>
-                  </>
-                ) : isSuperAdmin ? (
                   <button
                     className="btn ghost small"
                     type="button"
-                    onClick={() => setCardEditOpen(true)}
+                    onClick={() => {
+                      setCardEditOpen(false);
+                      setCardDetailDraft({
+                        title: String(activeCard.title || ""),
+                        description: String(activeCard.description || ""),
+                        job_type: String(activeCard.job_type || ""),
+                        priority: String(activeCard.priority || "medium"),
+                        assignee_user_id: String(activeCard.assignee_user_id || ""),
+                      });
+                    }}
+                    disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
                   >
-                    {t("workflowEditDetails")}
+                    {t("cancel")}
                   </button>
-                ) : null}
+                  <button
+                    className="btn small"
+                    type="button"
+                    onClick={saveCardDetails}
+                    disabled={
+                      cardDetailSavingKey === `details:${String(activeCard.id || "")}`
+                      || !String(cardDetailDraft.title || "").trim()
+                      || !String(cardDetailDraft.job_type || "").trim()
+                      || !String(cardDetailDraft.assignee_user_id || "").trim()
+                    }
+                  >
+                    {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
+                  </button>
+                </>
+              ) : isSuperAdmin ? (
+                <button
+                  className="btn ghost small"
+                  type="button"
+                  onClick={() => setCardEditOpen(true)}
+                >
+                  {t("workflowEditDetails")}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="workflow-card-detail-body">
+            <div className="workflow-card-details-header">
+              <div className="workflow-card-details-heading">
+                {cardEditOpen ? (
+                  <div className="workflow-card-detail-editor">
+                    <label className="workflow-field-label" htmlFor="workflow-detail-title">
+                      {t("workflowCreateCardTitleLabel")}
+                    </label>
+                    <input
+                      id="workflow-detail-title"
+                      type="text"
+                      value={cardDetailDraft.title}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                      maxLength={160}
+                    />
+                    <label className="workflow-field-label" htmlFor="workflow-detail-job-type">
+                      {t("workflowCreateCardJobTypeLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-job-type"
+                      value={cardDetailDraft.job_type}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, job_type: event.target.value }))}
+                    >
+                      <option value="">{t("workflowCreateCardJobTypePlaceholder")}</option>
+                      {jobTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <label className="workflow-field-label" htmlFor="workflow-detail-assignee">
+                      {t("workflowAssignedToLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-assignee"
+                      value={cardDetailDraft.assignee_user_id}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, assignee_user_id: event.target.value }))}
+                    >
+                      <option value="">{t("workflowCreateCardAssigneePlaceholder")}</option>
+                      {assignableUsers.map((user) => (
+                        <option key={user.id} value={user.id}>{user.label}</option>
+                      ))}
+                    </select>
+                    <label className="workflow-field-label" htmlFor="workflow-detail-priority">
+                      {t("workflowPriorityLabel")}
+                    </label>
+                    <select
+                      id="workflow-detail-priority"
+                      value={cardDetailDraft.priority}
+                      onChange={(event) => setCardDetailDraft((current) => ({ ...current, priority: event.target.value }))}
+                    >
+                      {priorityOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <h3 id="workflow-card-details-title">{activeCard.title}</h3>
+                )}
               </div>
             </div>
+
+            <div className="workflow-card-details-meta">
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowCreateCardJobTypeLabel")}:</span>
+                <span>{getJobTypeLabel(activeCard.job_type)}</span>
+              </div>
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowPriorityLabel")}:</span>
+                <span>{getPriorityLabel(activeCard.priority)}</span>
+              </div>
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowCreatedByLabel")}:</span>
+                <span>{activeCard.created_by_name || t("notAvailable")}</span>
+              </div>
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowAssignedToLabel")}:</span>
+                <span>{activeCard.assignee_name || t("notAvailable")}</span>
+              </div>
+              <div className="workflow-card-meta">
+                <span className="workflow-card-label">{t("workflowCreatedAtLabel")}:</span>
+                <span>{formatPublishedAt(activeCard.created_at)}</span>
+              </div>
+            </div>
+
+            <div className="workflow-card-details-section">
+              <div className="workflow-card-details-section-header">
+                <span className="workflow-card-label">{t("workflowCreateCardDescriptionLabel")}</span>
+              </div>
             {cardEditOpen ? (
               <>
-                <div className="workflow-format-toolbar" role="toolbar" aria-label="Task description formatting">
-                  {FORMAT_ACTIONS.map((action) => (
-                    <button
-                      key={action.key}
-                      className="workflow-format-btn"
-                      type="button"
-                      onClick={() => applyFormatting(
-                        "detail-description",
-                        cardDetailDraft.description,
-                        (nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue })),
-                        action.key,
-                      )}
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                </div>
+                {renderFormatToolbar(
+                  "detail-description",
+                  cardDetailDraft.description,
+                  (nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue })),
+                  t("workflowFormatToolbarDescription"),
+                )}
                 <textarea
                   ref={registerTextAreaRef("detail-description")}
                   value={cardDetailDraft.description}
@@ -6728,14 +6942,13 @@ function TaskBoardPanel({
                 {renderFormattedText(activeCard.description || t("workflowDescriptionEmpty"))}
               </div>
             )}
-          </div>
+            </div>
 
-          <div className="workflow-card-comments details">
-            <span className="workflow-card-label">{t("workflowCommentsSectionTitle")}</span>
-            <div className="workflow-card-comments-list">
-              {(activeCard.comments || []).length === 0 ? (
-                <p className="workflow-comments-empty">{t("workflowCommentsEmpty")}</p>
-              ) : (activeCard.comments || []).map((comment) => {
+            <div className="workflow-card-comments details">
+              <span className="workflow-card-label">{t("workflowCommentsSectionTitle")}</span>
+              {(activeCard.comments || []).length > 0 ? (
+                <div className="workflow-card-comments-list">
+                  {(activeCard.comments || []).map((comment) => {
                 const commentId = String(comment.id || "");
                 const editValue = editingComments[commentId];
                 const isEditing = typeof editValue === "string";
@@ -6745,31 +6958,20 @@ function TaskBoardPanel({
                   ? t("workflowCommentEditedAt").replace("{value}", formatPublishedAt(comment.updated_at))
                   : "";
                 return (
-                  <div key={comment.id} className="workflow-comment">
-                    <div className="workflow-comment-header">
-                      <strong>{comment.author_name}</strong>
+                    <div key={comment.id} className="workflow-comment">
+                      <div className="workflow-comment-header">
+                        <strong>{comment.author_name}</strong>
                       <span>{createdLabel}</span>
                       {editedLabel ? <span>{editedLabel}</span> : null}
                     </div>
                     {isEditing ? (
                       <div className="workflow-comment-editor">
-                        <div className="workflow-format-toolbar" role="toolbar" aria-label="Comment formatting">
-                          {FORMAT_ACTIONS.map((action) => (
-                            <button
-                              key={action.key}
-                              className="workflow-format-btn"
-                              type="button"
-                              onClick={() => applyFormatting(
-                                `comment-edit-${commentId}`,
-                                editValue,
-                                (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
-                                action.key,
-                              )}
-                            >
-                              {action.label}
-                            </button>
-                          ))}
-                        </div>
+                        {renderFormatToolbar(
+                          `comment-edit-${commentId}`,
+                          editValue,
+                          (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
+                          t("workflowFormatToolbarComment"),
+                        )}
                         <textarea
                           ref={registerTextAreaRef(`comment-edit-${commentId}`)}
                           value={editValue}
@@ -6831,25 +7033,15 @@ function TaskBoardPanel({
                   </div>
                 );
               })}
-            </div>
-            <div className="workflow-comment-composer">
-              <div className="workflow-format-toolbar" role="toolbar" aria-label="Comment formatting">
-                {FORMAT_ACTIONS.map((action) => (
-                  <button
-                    key={action.key}
-                    className="workflow-format-btn"
-                    type="button"
-                    onClick={() => applyFormatting(
-                      `comment-new-${String(activeCard.id || "")}`,
-                      commentDrafts[String(activeCard.id || "")] || "",
-                      (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
-                      action.key,
-                    )}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
+                </div>
+              ) : null}
+              <div className="workflow-comment-composer">
+                {renderFormatToolbar(
+                  `comment-new-${String(activeCard.id || "")}`,
+                  commentDrafts[String(activeCard.id || "")] || "",
+                  (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
+                  t("workflowFormatToolbarComment"),
+                )}
               <textarea
                 ref={registerTextAreaRef(`comment-new-${String(activeCard.id || "")}`)}
                 value={commentDrafts[String(activeCard.id || "")] || ""}
@@ -6882,12 +7074,13 @@ function TaskBoardPanel({
               </div>
             </div>
           </div>
+          </div>
         </section>
       )}
 
       {createCardOpen ? (
         <div
-          className="modal-overlay"
+          className="modal-overlay workflow-create-card-overlay"
           role="dialog"
           aria-modal="true"
           aria-labelledby="workflow-create-card-title"
@@ -6955,23 +7148,12 @@ function TaskBoardPanel({
               <label className="workflow-field-label" htmlFor="workflow-create-description">
                 {t("workflowCreateCardDescriptionLabel")}
               </label>
-              <div className="workflow-format-toolbar" role="toolbar" aria-label="Task description formatting">
-                {FORMAT_ACTIONS.map((action) => (
-                  <button
-                    key={action.key}
-                    className="workflow-format-btn"
-                    type="button"
-                    onClick={() => applyFormatting(
-                      "create-description",
-                      createCardForm.description,
-                      (nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue })),
-                      action.key,
-                    )}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
+              {renderFormatToolbar(
+                "create-description",
+                createCardForm.description,
+                (nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue })),
+                t("workflowFormatToolbarDescription"),
+              )}
               <textarea
                 ref={registerTextAreaRef("create-description")}
                 id="workflow-create-description"

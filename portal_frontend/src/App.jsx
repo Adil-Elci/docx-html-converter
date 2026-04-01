@@ -5781,22 +5781,18 @@ function TaskBoardPanel({
       cards: (column.cards || []).filter(cardMatchesFilters),
     }))
   ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
-  const filteredCards = useMemo(
-    () => filteredColumns.flatMap((column) => (column.cards || [])),
-    [filteredColumns],
-  );
-  const pageCount = Math.max(1, Math.ceil(filteredCards.length / pageSize));
+  const maxColumnCardCount = useMemo(() => (
+    filteredColumns.reduce((maxCards, column) => Math.max(maxCards, Array.isArray(column.cards) ? column.cards.length : 0), 0)
+  ), [filteredColumns]);
+  const pageCount = Math.max(1, Math.ceil(maxColumnCardCount / pageSize));
   const safePage = Math.min(page, pageCount);
-  const visibleCardIds = useMemo(() => {
+  const paginatedColumns = useMemo(() => {
     const start = (safePage - 1) * pageSize;
-    return new Set(filteredCards.slice(start, start + pageSize).map((card) => String(card?.id || "")));
-  }, [filteredCards, pageSize, safePage]);
-  const paginatedColumns = useMemo(() => (
     filteredColumns.map((column) => ({
       ...column,
-      cards: (column.cards || []).filter((card) => visibleCardIds.has(String(card?.id || ""))),
-    }))
-  ), [filteredColumns, visibleCardIds]);
+      cards: (column.cards || []).slice(start, start + pageSize),
+    }));
+  }, [filteredColumns, pageSize, safePage]);
   const allCards = useMemo(() => columns.flatMap((column) => (column.cards || [])), [columns]);
   const activeCard = useMemo(
     () => allCards.find((card) => String(card?.id || "") === activeCardId) || null,
@@ -5821,8 +5817,8 @@ function TaskBoardPanel({
   }, [filterUser, filterJobType, filterDateFrom, filterDateTo, pageSize]);
 
   useEffect(() => {
-    setPage((current) => Math.min(current, Math.max(1, Math.ceil(filteredCards.length / pageSize))));
-  }, [filteredCards.length, pageSize]);
+    setPage((current) => Math.min(current, Math.max(1, Math.ceil(maxColumnCardCount / pageSize))));
+  }, [maxColumnCardCount, pageSize]);
 
   const getJobTypeLabel = (jobType) => {
     const normalized = String(jobType || "").trim().toLowerCase();
@@ -6153,12 +6149,10 @@ function TaskBoardPanel({
     setFilterMenuOpen(false);
   };
 
-  const columnCount = Math.max(filteredColumns.length, 1);
-  const perColumnPageSlots = Math.max(1, Math.ceil(pageSize / columnCount));
   const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
   const boardSurfaceStyle = {
     gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)",
-    "--task-board-page-slots": String(perColumnPageSlots || 1),
+    "--task-board-page-slots": String(pageSize || STANDARD_PAGE_SIZE),
   };
 
   return (

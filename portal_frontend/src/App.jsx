@@ -114,7 +114,7 @@ const WORKFLOW_FLAG_COLORS = {
   needs_levent_attention: "#facc15",
   needs_adil_attention: "#a855f7",
 };
-const INLINE_FORMAT_PATTERN = /(\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
+const INLINE_FORMAT_PATTERN = /(__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
 
 const renderInlineFormattedText = (text, keyPrefix = "inline") => (
   String(text || "")
@@ -122,6 +122,9 @@ const renderInlineFormattedText = (text, keyPrefix = "inline") => (
     .filter((part) => part !== "")
     .map((part, index) => {
       const key = `${keyPrefix}-${index}`;
+      if (part.startsWith("__") && part.endsWith("__") && part.length > 4) {
+        return <u key={key}>{part.slice(2, -2)}</u>;
+      }
       if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
         return <strong key={key}>{part.slice(2, -2)}</strong>;
       }
@@ -215,10 +218,9 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
 };
 
 const FORMAT_ACTIONS = [
-  { key: "bold", label: "B" },
-  { key: "italic", label: "I" },
-  { key: "bullet", label: "• List" },
-  { key: "number", label: "1. List" },
+  { key: "bold", label: "Bold" },
+  { key: "italic", label: "Italic" },
+  { key: "underline", label: "Underline" },
 ];
 
 const generateRequestToken = (prefix) => {
@@ -5850,16 +5852,11 @@ function TaskBoardPanel({
       replacement = `*${content}*`;
       nextSelectionStart = selectionStart + 1;
       nextSelectionEnd = nextSelectionStart + content.length;
-    } else if (formatType === "bullet") {
-      const lines = (selectedText || "List item").split("\n");
-      replacement = lines.map((line) => `- ${line.replace(/^\s*[-*]\s+/, "")}`).join("\n");
-      nextSelectionStart = selectionStart;
-      nextSelectionEnd = selectionStart + replacement.length;
-    } else if (formatType === "number") {
-      const lines = (selectedText || "List item").split("\n");
-      replacement = lines.map((line, index) => `${index + 1}. ${line.replace(/^\s*\d+\.\s+/, "")}`).join("\n");
-      nextSelectionStart = selectionStart;
-      nextSelectionEnd = selectionStart + replacement.length;
+    } else if (formatType === "underline") {
+      const content = selectedText || "underlined text";
+      replacement = `__${content}__`;
+      nextSelectionStart = selectionStart + 2;
+      nextSelectionEnd = nextSelectionStart + content.length;
     }
 
     if (!replacement) return;

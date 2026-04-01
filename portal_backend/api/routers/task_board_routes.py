@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..auth import is_super_admin, require_admin, require_super_admin
 from ..db import get_db
 from ..portal_models import User
-from ..task_board_models import TaskBoardCard, TaskBoardCardComment, TaskBoardCardEvent, TaskBoardColumn
+from ..task_board_models import TaskBoardCard, TaskBoardCardComment, TaskBoardCardEvent, TaskBoardCardReadState, TaskBoardColumn
 from ..task_board_schemas import (
     TASK_BOARD_FLAG_ORDER,
     TaskBoardCardCreateIn,
@@ -208,15 +208,64 @@ def _load_task_board_card_comments(
     return comments_by_card
 
 
+def _load_task_board_read_states(
+    db: Session,
+    *,
+    card_ids: Sequence[UUID],
+    current_user_id: Optional[UUID],
+) -> dict[UUID, datetime]:
+    if not card_ids or current_user_id is None:
+        return {}
+    rows = (
+        db.query(TaskBoardCardReadState)
+        .filter(
+            TaskBoardCardReadState.user_id == current_user_id,
+            TaskBoardCardReadState.card_id.in_(card_ids),
+        )
+        .all()
+    )
+    return {row.card_id: row.last_seen_at for row in rows}
+
+
+def _card_has_unseen_updates(
+    card: TaskBoardCard,
+    *,
+    comments: Sequence[TaskBoardCommentOut],
+    read_seen_at: Optional[datetime],
+    actor_user_id: Optional[UUID],
+) -> bool:
+    if actor_user_id is None:
+        return False
+
+    latest_external_activity_at: Optional[datetime] = None
+    if card.created_by_user_id != actor_user_id:
+        latest_external_activity_at = card.created_at
+
+    for comment in comments:
+        if comment.author_user_id == actor_user_id:
+            continue
+        if latest_external_activity_at is None or comment.created_at > latest_external_activity_at:
+            latest_external_activity_at = comment.created_at
+
+    if latest_external_activity_at is None:
+        return False
+    if read_seen_at is None:
+        return True
+    return latest_external_activity_at > read_seen_at
+
+
 def _build_task_board_payload(
     columns: Sequence[TaskBoardColumn],
     rows: Iterable[tuple[TaskBoardCard, Optional[User]]],
     *,
     comments_by_card: dict[UUID, list[TaskBoardCommentOut]],
+    read_states_by_card: dict[UUID, datetime],
+    actor_user_id: Optional[UUID],
 ) -> TaskBoardOut:
     cards_by_column: Dict[UUID, List[TaskBoardCardOut]] = defaultdict(list)
     open_card_count = 0
     completed_card_count = 0
+    unseen_card_count = 0
     updated_at = max((item.updated_at for item in columns), default=datetime.now(timezone.utc))
     columns_by_id = {item.id: item for item in columns}
 
@@ -225,6 +274,12 @@ def _build_task_board_payload(
         column_key = column.column_key if column is not None else ""
         title = _build_task_board_card_title(str(card.title_snapshot or ""))
         card_comments = comments_by_card.get(card.id, [])
+        has_unseen_updates = _card_has_unseen_updates(
+            card,
+            comments=card_comments,
+            read_seen_at=read_states_by_card.get(card.id),
+            actor_user_id=actor_user_id,
+        )
         card_out = TaskBoardCardOut(
             id=card.id,
             job_id=None,
@@ -240,6 +295,7 @@ def _build_task_board_payload(
             job_type=(card.job_type or "").strip() or None,
             priority=(card.priority or "medium").strip() or "medium",
             flag_types=_normalize_flag_types(card.flag_types),
+            has_unseen_updates=has_unseen_updates,
             request_kind=(card.request_kind_snapshot or "manual").strip() or "manual",
             job_status=(card.job_status_snapshot or "manual").strip() or "manual",
             wp_post_url=None,
@@ -250,6 +306,8 @@ def _build_task_board_payload(
             comments=card_comments,
         )
         cards_by_column[card.column_id].append(card_out)
+        if has_unseen_updates:
+            unseen_card_count += 1
         if column_key == "done":
             completed_card_count += 1
         else:
@@ -277,6 +335,7 @@ def _build_task_board_payload(
         columns=columns_out,
         open_card_count=open_card_count,
         completed_card_count=completed_card_count,
+        unseen_card_count=unseen_card_count,
         updated_at=updated_at,
     )
 
@@ -284,12 +343,24 @@ def _build_task_board_payload(
 def _load_task_board(db: Session, *, actor_user_id: Optional[UUID] = None) -> TaskBoardOut:
     columns = _ensure_default_task_board_columns(db)
     rows = _select_task_board_card_rows(db)
+    card_ids = [card.id for card, *_ in rows]
     comments_by_card = _load_task_board_card_comments(
         db,
-        card_ids=[card.id for card, *_ in rows],
+        card_ids=card_ids,
         current_user_id=actor_user_id,
     )
-    return _build_task_board_payload(columns, rows, comments_by_card=comments_by_card)
+    read_states_by_card = _load_task_board_read_states(
+        db,
+        card_ids=card_ids,
+        current_user_id=actor_user_id,
+    )
+    return _build_task_board_payload(
+        columns,
+        rows,
+        comments_by_card=comments_by_card,
+        read_states_by_card=read_states_by_card,
+        actor_user_id=actor_user_id,
+    )
 
 
 def _extract_anthropic_text(payload: dict) -> str:
@@ -623,6 +694,41 @@ def update_task_board_comment(
         to_column_id=card.column_id,
         payload={"comment_id": str(comment.id)},
     )
+    db.commit()
+    return _load_task_board(db, actor_user_id=current_user.id)
+
+
+@router.post("/cards/{card_id}/seen", response_model=TaskBoardOut)
+def mark_task_board_card_seen(
+    card_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> TaskBoardOut:
+    card = db.query(TaskBoardCard).filter(TaskBoardCard.id == card_id).first()
+    if card is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task Board card not found.")
+
+    now = datetime.now(timezone.utc)
+    read_state = (
+        db.query(TaskBoardCardReadState)
+        .filter(
+            TaskBoardCardReadState.card_id == card.id,
+            TaskBoardCardReadState.user_id == current_user.id,
+        )
+        .first()
+    )
+    if read_state is None:
+        read_state = TaskBoardCardReadState(
+            card_id=card.id,
+            user_id=current_user.id,
+            last_seen_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(read_state)
+    else:
+        read_state.last_seen_at = now
+        read_state.updated_at = now
     db.commit()
     return _load_task_board(db, actor_user_id=current_user.id)
 

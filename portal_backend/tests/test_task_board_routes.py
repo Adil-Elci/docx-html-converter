@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from portal_backend.api.routers import task_board_routes
-from portal_backend.api.task_board_schemas import TaskBoardCardCreateIn, TaskBoardCardUpdateIn
+from portal_backend.api.task_board_schemas import TaskBoardCardCreateIn, TaskBoardCardUpdateIn, TaskBoardCommentOut
 
 
 def test_is_system_task_board_column_key_detects_core_columns() -> None:
@@ -95,3 +97,56 @@ def test_task_board_card_update_in_allows_full_super_admin_edit_fields() -> None
     )
     assert payload.job_type == "research"
     assert payload.priority == "urgent"
+
+
+def test_card_has_unseen_updates_for_card_created_by_other_user() -> None:
+    actor_user_id = uuid4()
+    card = SimpleNamespace(created_by_user_id=uuid4(), created_at=datetime.now(timezone.utc))
+    assert task_board_routes._card_has_unseen_updates(
+        card,
+        comments=[],
+        read_seen_at=None,
+        actor_user_id=actor_user_id,
+    ) is True
+
+
+def test_card_has_unseen_updates_ignores_own_comments_and_seen_external_comments() -> None:
+    actor_user_id = uuid4()
+    now = datetime.now(timezone.utc)
+    comment = TaskBoardCommentOut(
+        id=uuid4(),
+        author_user_id=uuid4(),
+        author_name="Other Admin",
+        body="Please review this task.",
+        created_at=now - timedelta(minutes=5),
+        updated_at=now - timedelta(minutes=5),
+        can_edit=False,
+    )
+    card = SimpleNamespace(created_by_user_id=actor_user_id, created_at=now - timedelta(hours=1))
+    assert task_board_routes._card_has_unseen_updates(
+        card,
+        comments=[comment],
+        read_seen_at=now,
+        actor_user_id=actor_user_id,
+    ) is False
+
+
+def test_card_has_unseen_updates_detects_external_comment_after_last_seen() -> None:
+    actor_user_id = uuid4()
+    now = datetime.now(timezone.utc)
+    comment = TaskBoardCommentOut(
+        id=uuid4(),
+        author_user_id=uuid4(),
+        author_name="Other Admin",
+        body="There is a blocker here.",
+        created_at=now,
+        updated_at=now,
+        can_edit=False,
+    )
+    card = SimpleNamespace(created_by_user_id=actor_user_id, created_at=now - timedelta(hours=1))
+    assert task_board_routes._card_has_unseen_updates(
+        card,
+        comments=[comment],
+        read_seen_at=now - timedelta(minutes=1),
+        actor_user_id=actor_user_id,
+    ) is True

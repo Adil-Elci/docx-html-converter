@@ -940,6 +940,20 @@ export default function App() {
     }
   };
 
+  const markTaskBoardCardSeen = async (cardId) => {
+    const normalizedCardId = String(cardId || "").trim();
+    if (!normalizedCardId) return false;
+    try {
+      setError("");
+      const nextBoard = await api.post(`/task-board/cards/${normalizedCardId}/seen`);
+      setTaskBoard(nextBoard || null);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    }
+  };
+
   const moveTaskBoardCard = async (cardId, columnId) => {
     const normalizedCardId = String(cardId || "").trim();
     const normalizedColumnId = String(columnId || "").trim();
@@ -1869,6 +1883,21 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser || !isAdminRole(currentUser.role)) return;
+    if (taskBoard) return;
+    loadTaskBoard(currentUser);
+  }, [currentUser, taskBoard]);
+
+  useEffect(() => {
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
+    if (activeSection === "task-board") return;
+    const intervalId = window.setInterval(() => {
+      loadTaskBoard(currentUser);
+    }, 30000);
+    return () => window.clearInterval(intervalId);
+  }, [currentUser, activeSection]);
+
+  useEffect(() => {
+    if (!currentUser || !isAdminRole(currentUser.role)) return;
     if (activeSection !== "pending-jobs") return;
     loadPendingJobs();
   }, [currentUser, activeSection]);
@@ -1919,19 +1948,16 @@ export default function App() {
       try {
         await loadAll(currentUser);
         if (isAdminRole(currentUser.role)) {
+          await loadTaskBoard(currentUser);
           if (activeSection === "task-board") {
-            await loadTaskBoard(currentUser);
-          }
-          if (activeSection === "pending-jobs") {
+            return;
+          } else if (activeSection === "pending-jobs") {
             await loadPendingJobs(currentUser);
-          }
-          if (activeSection === "published-articles") {
+          } else if (activeSection === "published-articles") {
             await loadPublishedArticles(currentUser);
-          }
-          if (activeSection === "rejected-articles") {
+          } else if (activeSection === "rejected-articles") {
             await loadRejectedArticles(currentUser);
-          }
-          if (activeSection === "admin") {
+          } else if (activeSection === "admin") {
             await loadAdminUsers(currentUser);
             await loadKeywordTrendDashboard(currentUser);
             await loadSiteFitDashboard(currentUser);
@@ -2706,6 +2732,7 @@ export default function App() {
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isCreateArticleSection = activeSection === "create-article";
   const isSubmitArticleSection = activeSection === "submit-article";
+  const taskBoardUnreadCount = Number(taskBoard?.unseen_card_count || 0);
   const activeClient = clients[0] || null;
   const websitesPageCount = Math.max(1, Math.ceil(sites.length / websitesPageSize));
   const safeWebsitesPage = Math.min(websitesPage, websitesPageCount);
@@ -3164,6 +3191,7 @@ export default function App() {
           if (isNarrowViewport && !isMobileViewport) setSidebarHidden(true);
         }}
         pendingJobsCount={pendingJobs.length}
+        taskBoardUnreadCount={taskBoardUnreadCount}
       />
       {!isMobileViewport ? (
         <button
@@ -3653,6 +3681,7 @@ export default function App() {
               onUpdateComment={updateTaskBoardComment}
               onRewriteComment={rewriteTaskBoardComment}
               onUpdateCardDetails={updateTaskBoardCardDetails}
+              onMarkCardSeen={markTaskBoardCardSeen}
               formatPublishedAt={formatPublishedAt}
             />
           ) : isSiteAccessSection ? (
@@ -5367,7 +5396,7 @@ function AuthGate({
   );
 }
 
-function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0 }) {
+function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount = 0, taskBoardUnreadCount = 0 }) {
   const sectionIcons = {
     admin: (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
@@ -5470,7 +5499,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
   const sections = isAdminRole(userRole)
     ? [
         { id: "admin", label: t("navAdmin") },
-        { id: "task-board", label: t("navWorkflow") },
+        { id: "task-board", label: t("navWorkflow"), badge: taskBoardUnreadCount > 0 ? taskBoardUnreadCount : undefined },
         { id: "websites", label: t("navWebsites") },
         { id: "site-access", label: t("navSiteAccess") },
         { id: "clients", label: t("navClients") },
@@ -5503,7 +5532,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
               </span>
               <span className="nav-label">{section.label}</span>
             </span>
-            {typeof section.badge === "number" ? <span className="nav-badge">{section.badge}</span> : null}
+            {typeof section.badge === "number" && section.badge > 0 ? <span className="nav-badge">{section.badge}</span> : null}
           </button>
         ))}
       </nav>
@@ -5621,6 +5650,7 @@ function TaskBoardPanel({
   onUpdateComment,
   onRewriteComment,
   onUpdateCardDetails,
+  onMarkCardSeen,
   formatPublishedAt,
 }) {
   const columns = Array.isArray(board?.columns) ? board.columns : [];
@@ -6041,11 +6071,14 @@ function TaskBoardPanel({
     }
   };
 
-  const openCardDetails = (cardId) => {
-    const normalizedCardId = String(cardId || "");
+  const openCardDetails = (card) => {
+    const normalizedCardId = String(card?.id || "");
     if (!normalizedCardId || movingCardId) return;
     setOpenCardMenuId("");
     setActiveCardId(normalizedCardId);
+    if (card?.has_unseen_updates) {
+      void onMarkCardSeen(normalizedCardId);
+    }
   };
 
   useEffect(() => {
@@ -6372,11 +6405,11 @@ function TaskBoardPanel({
                             draggable={!movingCardId}
                             role="button"
                             tabIndex={0}
-                            onClick={() => openCardDetails(card.id)}
+                            onClick={() => openCardDetails(card)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter" || event.key === " ") {
                                 event.preventDefault();
-                                openCardDetails(card.id);
+                                openCardDetails(card);
                               }
                             }}
                             onDragStart={(event) => {
@@ -6390,6 +6423,9 @@ function TaskBoardPanel({
                             <div className="workflow-card-top">
                               <strong className="workflow-card-title">{card.title || t("workflowCardFallbackTitle")}</strong>
                               <div className="workflow-card-top-actions">
+                                {card.has_unseen_updates ? (
+                                  <span className="workflow-card-notice-badge">{t("workflowUnreadBadge")}</span>
+                                ) : null}
                                 <div
                                   className="workflow-card-menu-wrap"
                                   ref={openCardMenuId === cardId ? openCardMenuRef : null}

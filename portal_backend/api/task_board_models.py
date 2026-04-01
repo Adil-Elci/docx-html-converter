@@ -90,3 +90,17 @@ class TaskBoardCardComment(Base):
     body = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class TaskBoardCardReadState(Base):
+    __tablename__ = "task_board_card_read_states"
+    __table_args__ = (
+        UniqueConstraint("card_id", "user_id", name="task_board_card_read_states_card_user_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    card_id = Column(UUID(as_uuid=True), ForeignKey("task_board_cards.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

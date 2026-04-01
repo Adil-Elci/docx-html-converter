@@ -3170,6 +3170,23 @@ input:disabled {
   margin-left: auto;
 }
 
+.workflow-card-notice-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #ff6b7a 36%, var(--border));
+  background: color-mix(in srgb, #ff6b7a 16%, var(--surface-solid));
+  color: #ff96a2;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .workflow-card-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

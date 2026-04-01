@@ -39,6 +39,7 @@ class TaskBoardCardOut(BaseModel):
     job_type: Optional[str] = None
     priority: str = "medium"
     flag_types: List[str] = Field(default_factory=list)
+    has_unseen_updates: bool = False
     request_kind: Optional[str] = None
     job_status: str
     wp_post_url: Optional[str] = None
@@ -63,6 +64,7 @@ class TaskBoardOut(BaseModel):
     columns: List[TaskBoardColumnOut] = Field(default_factory=list)
     open_card_count: int = 0
     completed_card_count: int = 0
+    unseen_card_count: int = 0
     updated_at: datetime
 
 

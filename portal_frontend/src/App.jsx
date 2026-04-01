@@ -5816,9 +5816,6 @@ function TaskBoardPanel({
     sum + (column.cards || []).filter((card) => String(card?.column_key || "").toLowerCase() === "done").length
   ), 0);
   const totalCardCount = openCardCount + completedCardCount;
-  const pageFrom = filteredCards.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
-  const pageTo = filteredCards.length === 0 ? 0 : Math.min(filteredCards.length, pageFrom + pageSize - 1);
-
   useEffect(() => {
     setPage(1);
   }, [filterUser, filterJobType, filterDateFrom, filterDateTo, pageSize]);
@@ -6156,10 +6153,12 @@ function TaskBoardPanel({
     setFilterMenuOpen(false);
   };
 
+  const columnCount = Math.max(filteredColumns.length, 1);
+  const perColumnPageSlots = Math.max(1, Math.ceil(pageSize / columnCount));
   const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
   const boardSurfaceStyle = {
     gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)",
-    "--task-board-page-slots": String(pageSize || STANDARD_PAGE_SIZE),
+    "--task-board-page-slots": String(perColumnPageSlots || 1),
   };
 
   return (
@@ -6489,14 +6488,12 @@ function TaskBoardPanel({
             </div>
           ) : null}
 
-          <div className="published-pagination">
-            <span className="muted-text">
-              {t("paginationShowingLabel")} {pageFrom}-{pageTo} {t("paginationOfLabel")} {filteredCards.length}
-            </span>
-            <div className="pagination-actions">
-              <label className="published-field pagination-page-size">
-                <span>{t("paginationPageSizeLabel")}</span>
+          <div className="task-board-pagination" aria-label={t("paginationPageLabel")}>
+            <label className="task-board-page-size" htmlFor="task-board-page-size">
+              <span className="task-board-page-size-label">{t("paginationPageSizeLabel")}</span>
+              <div className="task-board-page-size-field">
                 <select
+                  id="task-board-page-size"
                   value={pageSize}
                   onChange={(e) => setPageSize(Number(e.target.value) || STANDARD_PAGE_SIZE)}
                 >
@@ -6504,20 +6501,22 @@ function TaskBoardPanel({
                     <option key={size} value={size}>{size}</option>
                   ))}
                 </select>
-              </label>
+              </div>
+            </label>
+            <div className="task-board-pagination-controls">
               <button
-                className="btn secondary"
+                className="task-board-pagination-btn"
                 type="button"
                 onClick={() => setPage((current) => Math.max(1, current - 1))}
                 disabled={safePage <= 1}
               >
                 {t("paginationPrevious")}
               </button>
-              <span className="muted-text">
+              <span className="task-board-pagination-status">
                 {t("paginationPageLabel")} {safePage} {t("paginationOfLabel")} {pageCount}
               </span>
               <button
-                className="btn secondary"
+                className="task-board-pagination-btn"
                 type="button"
                 onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
                 disabled={safePage >= pageCount}

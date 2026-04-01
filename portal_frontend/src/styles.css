@@ -4634,6 +4634,92 @@ input:disabled {
   color: var(--ink-secondary);
 }
 
+.task-board-pagination {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  flex-wrap: wrap;
+}
+
+.task-board-page-size {
+  display: grid;
+  gap: 8px;
+  min-width: 132px;
+}
+
+.task-board-page-size-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+
+.task-board-page-size-field {
+  position: relative;
+  min-width: 112px;
+}
+
+.task-board-page-size-field select {
+  min-height: 42px;
+  padding: 0 38px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 14px;
+  background: var(--surface-solid);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.task-board-pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.task-board-pagination-btn {
+  min-width: 104px;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 14px;
+  background: var(--surface-solid);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.task-board-pagination-btn:hover,
+.task-board-pagination-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: var(--surface-solid-muted);
+  outline: none;
+}
+
+.task-board-pagination-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.task-board-pagination-status {
+  min-width: 118px;
+  text-align: center;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
 @media (max-width: 1280px) {
   .request-container .request-form-panel .submission-block:not(.create-article-block) {
     grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto;
@@ -4971,6 +5057,16 @@ input:disabled {
     align-items: flex-start;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .task-board-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-board-pagination-controls {
+    justify-content: flex-start;
+    margin-left: 0;
   }
 
   .auth-card h1 {

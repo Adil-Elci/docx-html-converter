@@ -2969,26 +2969,12 @@ input:disabled {
   height: 6px;
 }
 
-.workflow-column-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border-dim);
-  background: var(--surface-solid);
-  color: var(--ink-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .workflow-column-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .workflow-column.collapsed .workflow-column-header-actions {
@@ -3124,6 +3110,30 @@ input:disabled {
   border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
   background: var(--surface-solid-muted);
   outline: none;
+}
+
+.workflow-create-card-trigger-header {
+  min-height: 34px;
+  padding: 0 12px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-solid));
+  color: var(--accent-hover);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.workflow-create-card-trigger-label {
+  display: inline;
+}
+
+.workflow-create-card-trigger-plus {
+  display: none;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .workflow-create-card-form {
@@ -5371,6 +5381,22 @@ input:disabled {
 
   .workflow-board-columns {
     grid-template-columns: repeat(var(--workflow-column-count, 1), minmax(280px, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workflow-create-card-trigger-header {
+    min-width: 34px;
+    width: 34px;
+    padding: 0;
+  }
+
+  .workflow-create-card-trigger-label {
+    display: none;
+  }
+
+  .workflow-create-card-trigger-plus {
+    display: inline;
   }
 }
 

@@ -6803,25 +6803,23 @@ function TaskBoardPanel({
                           </span>
                         </div>
                       </div>
-                      <div className="workflow-column-header-actions">
-                        <span className="workflow-column-count">{Array.isArray(column.cards) ? column.cards.length : 0}</span>
-                      </div>
-                    </div>
-
-                    <div className="workflow-column-cards">
                       {isTodoColumn ? (
-                        <div className="workflow-create-card">
+                        <div className="workflow-column-header-actions">
                           <button
-                            className="workflow-create-card-trigger"
+                            className="workflow-create-card-trigger workflow-create-card-trigger-header"
                             type="button"
                             onClick={() => setCreateCardOpen(true)}
                             disabled={cardCreateBusy || Boolean(movingCardId)}
+                            aria-label={t("workflowCreateCard")}
                           >
-                            {t("workflowCreateCard")}
+                            <span className="workflow-create-card-trigger-label">{t("workflowCreateCard")}</span>
+                            <span className="workflow-create-card-trigger-plus" aria-hidden="true">+</span>
                           </button>
                         </div>
                       ) : null}
+                    </div>
 
+                    <div className="workflow-column-cards">
                       {(column.cards || []).map((card) => {
                         const cardId = String(card.id || "");
                         const flagTypes = normalizeFlagTypes(card.flag_types);

@@ -473,9 +473,10 @@ function RichTextEditor({
     }
     const fragment = range.extractContents();
     stripFontSizeFormatting(fragment);
-    let insertedNode = null;
+    const startMarker = document.createComment("task-board-selection-start");
+    const endMarker = document.createComment("task-board-selection-end");
+    range.insertNode(endMarker);
     if (nextSize === DEFAULT_FORMAT_FONT_SIZE) {
-      insertedNode = fragment;
       range.insertNode(fragment);
     } else {
       const span = document.createElement("span");
@@ -483,13 +484,16 @@ function RichTextEditor({
       span.style.lineHeight = "1.6";
       span.appendChild(fragment);
       range.insertNode(span);
-      insertedNode = span;
     }
+    range.insertNode(startMarker);
     normalizeEditorDom(editor);
     selection.removeAllRanges();
     const nextRange = document.createRange();
-    nextRange.selectNodeContents(insertedNode?.isConnected ? insertedNode : editor);
+    nextRange.setStartAfter(startMarker);
+    nextRange.setEndBefore(endMarker);
     selection.addRange(nextRange);
+    startMarker.remove();
+    endMarker.remove();
     onChange(editorHtmlToValue(editor));
     setSelectedFontSize(nextSize);
     editor.focus();

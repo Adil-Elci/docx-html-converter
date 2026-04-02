@@ -309,16 +309,66 @@ const editorValueToHtml = (value) => {
     .join("<br>");
 };
 
-const serializeEditorNode = (node) => {
+const unwrapElement = (element) => {
+  const parent = element?.parentNode;
+  if (!parent) return;
+  while (element.firstChild) {
+    parent.insertBefore(element.firstChild, element);
+  }
+  parent.removeChild(element);
+};
+
+const normalizeEditorDom = (root) => {
+  if (!root) return;
+  const spans = Array.from(root.querySelectorAll("span"));
+  for (const span of spans) {
+    const spanSize = Number.parseInt(span.style?.fontSize || "", 10);
+    const parent = span.parentElement;
+    const parentSize = parent ? Number.parseInt(parent.style?.fontSize || "", 10) : NaN;
+    if (!span.textContent?.trim()) {
+      span.remove();
+      continue;
+    }
+    if ((Number.isFinite(spanSize) && spanSize === DEFAULT_FORMAT_FONT_SIZE) || (Number.isFinite(spanSize) && Number.isFinite(parentSize) && spanSize === parentSize)) {
+      unwrapElement(span);
+    }
+  }
+  const mergeAdjacent = (node) => {
+    if (!node) return;
+    let child = node.firstChild;
+    while (child) {
+      const next = child.nextSibling;
+      if (
+        child.nodeType === Node.ELEMENT_NODE
+        && next?.nodeType === Node.ELEMENT_NODE
+        && child.tagName === "SPAN"
+        && next.tagName === "SPAN"
+        && child.getAttribute("style") === next.getAttribute("style")
+      ) {
+        while (next.firstChild) {
+          child.appendChild(next.firstChild);
+        }
+        next.remove();
+        continue;
+      }
+      if (child.nodeType === Node.ELEMENT_NODE) mergeAdjacent(child);
+      child = next;
+    }
+  };
+  mergeAdjacent(root);
+};
+
+const serializeEditorNode = (node, inheritedFontSize = DEFAULT_FORMAT_FONT_SIZE) => {
   if (!node) return "";
   if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const element = node;
   const tagName = element.tagName.toLowerCase();
   if (tagName === "br") return "\n";
-  const children = Array.from(element.childNodes).map(serializeEditorNode).join("");
   const inlineSize = Number.parseInt(element.style?.fontSize || "", 10);
-  if (Number.isFinite(inlineSize) && inlineSize > 0 && inlineSize !== DEFAULT_FORMAT_FONT_SIZE) {
+  const effectiveFontSize = Number.isFinite(inlineSize) && inlineSize > 0 ? inlineSize : inheritedFontSize;
+  const children = Array.from(element.childNodes).map((child) => serializeEditorNode(child, effectiveFontSize)).join("");
+  if (Number.isFinite(inlineSize) && inlineSize > 0 && inlineSize !== DEFAULT_FORMAT_FONT_SIZE && inlineSize !== inheritedFontSize) {
     return `[size=${inlineSize}]${children}[/size]`;
   }
   if (tagName === "strong" || tagName === "b") return `**${children}**`;
@@ -329,6 +379,7 @@ const serializeEditorNode = (node) => {
 };
 
 const editorHtmlToValue = (element) => {
+  normalizeEditorDom(element);
   const serialized = Array.from(element?.childNodes || []).map(serializeEditorNode).join("");
   return serialized
     .replace(/\u00a0/g, " ")
@@ -403,9 +454,10 @@ function RichTextEditor({
     const fragment = range.extractContents();
     span.appendChild(fragment);
     range.insertNode(span);
+    normalizeEditorDom(editor);
     selection.removeAllRanges();
     const nextRange = document.createRange();
-    nextRange.selectNodeContents(span);
+    nextRange.selectNodeContents(span.isConnected ? span : editor);
     selection.addRange(nextRange);
     onChange(editorHtmlToValue(editor));
     setSelectedFontSize(nextSize);

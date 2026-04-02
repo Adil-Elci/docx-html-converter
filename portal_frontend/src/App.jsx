@@ -116,12 +116,12 @@ const WORKFLOW_FLAG_COLORS = {
   needs_levent_attention: "#facc15",
   needs_adil_attention: "#a855f7",
 };
-const INLINE_FORMAT_PATTERN = /(\[size=(?:12|14|16|18)\][\s\S]*?\[\/size\]|__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
-const FONT_SIZE_OPTIONS = [12, 14, 16, 18];
+const FONT_SIZE_TAG_PATTERN = /^\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]$/;
+const INLINE_FORMAT_PATTERN = /(\[size=(?:8|10|12|14|16|18)\][\s\S]*?\[\/size\]|__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
+const FONT_SIZE_OPTIONS = [8, 10, 12, 14, 16, 18];
 const DEFAULT_FORMAT_FONT_SIZE = 12;
 const TASK_BOARD_SORT_DEFAULTS = {
   priority: "desc",
-  user: "asc",
   created_at: "desc",
   latest_commented: "desc",
   task_type: "asc",
@@ -133,13 +133,36 @@ const TASK_BOARD_PRIORITY_ORDER = {
   low: 1,
 };
 
+const parseStoredFontSize = (value) => {
+  const text = String(value || "");
+  const match = text.match(FONT_SIZE_TAG_PATTERN);
+  if (!match) {
+    return {
+      fontSize: DEFAULT_FORMAT_FONT_SIZE,
+      text,
+    };
+  }
+  return {
+    fontSize: Number(match[1]) || DEFAULT_FORMAT_FONT_SIZE,
+    text: match[2] || "",
+  };
+};
+
+const encodeTextWithFontSize = (value, fontSize) => {
+  const text = String(value || "");
+  const normalizedSize = Number(fontSize) || DEFAULT_FORMAT_FONT_SIZE;
+  if (!text) return "";
+  if (normalizedSize === DEFAULT_FORMAT_FONT_SIZE) return text;
+  return `[size=${normalizedSize}]${text}[/size]`;
+};
+
 const renderInlineFormattedText = (text, keyPrefix = "inline") => (
   String(text || "")
     .split(INLINE_FORMAT_PATTERN)
     .filter((part) => part !== "")
     .map((part, index) => {
       const key = `${keyPrefix}-${index}`;
-      const sizeMatch = part.match(/^\[size=(12|14|16|18)\]([\s\S]*?)\[\/size\]$/);
+      const sizeMatch = part.match(/^\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]$/);
       if (sizeMatch) {
         const [, sizeValue, innerText] = sizeMatch;
         return (
@@ -162,7 +185,8 @@ const renderInlineFormattedText = (text, keyPrefix = "inline") => (
 );
 
 const renderFormattedText = (value, className = "workflow-rich-text") => {
-  const text = String(value || "").replace(/\r\n?/g, "\n");
+  const parsedValue = parseStoredFontSize(value);
+  const text = String(parsedValue.text || "").replace(/\r\n?/g, "\n");
   if (!text.trim()) return null;
 
   const lines = text.split("\n");
@@ -240,7 +264,14 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
     blockIndex += 1;
   }
 
-  return <div className={className}>{blocks}</div>;
+  return (
+    <div
+      className={className}
+      style={parsedValue.fontSize !== DEFAULT_FORMAT_FONT_SIZE ? { fontSize: `${parsedValue.fontSize}px`, lineHeight: 1.6 } : undefined}
+    >
+      {blocks}
+    </div>
+  );
 };
 
 const FORMAT_ACTIONS = [
@@ -5685,6 +5716,10 @@ function TaskBoardPanel({
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
   const [commentDrafts, setCommentDrafts] = useState({});
   const [editingComments, setEditingComments] = useState({});
+  const [formatFontSizes, setFormatFontSizes] = useState({
+    "create-description": DEFAULT_FORMAT_FONT_SIZE,
+    "detail-description": DEFAULT_FORMAT_FONT_SIZE,
+  });
   const [commentSavingKey, setCommentSavingKey] = useState("");
   const [commentRewriteKey, setCommentRewriteKey] = useState("");
   const [cardDetailSavingKey, setCardDetailSavingKey] = useState("");
@@ -5853,10 +5888,6 @@ function TaskBoardPanel({
         const priorityA = TASK_BOARD_PRIORITY_ORDER[String(cardA?.priority || "").trim().toLowerCase()] || 0;
         const priorityB = TASK_BOARD_PRIORITY_ORDER[String(cardB?.priority || "").trim().toLowerCase()] || 0;
         comparison = priorityA - priorityB;
-      } else if (sortField === "user") {
-        const assigneeA = String(cardA?.assignee_name || "").trim().toLowerCase();
-        const assigneeB = String(cardB?.assignee_name || "").trim().toLowerCase();
-        comparison = assigneeA.localeCompare(assigneeB, undefined, { sensitivity: "base" });
       } else if (sortField === "created_at") {
         const createdA = cardA?.created_at ? new Date(cardA.created_at).getTime() : 0;
         const createdB = cardB?.created_at ? new Date(cardB.created_at).getTime() : 0;
@@ -5864,8 +5895,8 @@ function TaskBoardPanel({
       } else if (sortField === "latest_commented") {
         comparison = getLatestCommentTimestamp(cardA) - getLatestCommentTimestamp(cardB);
       } else if (sortField === "task_type") {
-        const jobTypeA = getJobTypeLabel(cardA?.job_type).toLowerCase();
-        const jobTypeB = getJobTypeLabel(cardB?.job_type).toLowerCase();
+        const jobTypeA = String(cardA?.job_type || "").trim().toLowerCase();
+        const jobTypeB = String(cardB?.job_type || "").trim().toLowerCase();
         comparison = jobTypeA.localeCompare(jobTypeB, undefined, { sensitivity: "base" });
       }
 
@@ -5919,7 +5950,6 @@ function TaskBoardPanel({
 
   const getSortFieldLabel = (field) => {
     if (field === "priority") return t("workflowSortPriority");
-    if (field === "user") return t("workflowSortUser");
     if (field === "created_at") return t("workflowSortCreatedAt");
     if (field === "latest_commented") return t("workflowSortLatestCommented");
     if (field === "task_type") return t("workflowSortTaskType");
@@ -5996,6 +6026,12 @@ function TaskBoardPanel({
   };
 
   const sortSummaryLabel = `${t("workflowSortBy")}: ${getSortFieldLabel(sortField)} ${sortDirection === "asc" ? "↑" : "↓"}`;
+  const resetToBoardView = () => {
+    setActiveCardId("");
+    setOpenCardMenuId("");
+    setSortMenuOpen(false);
+    setStatsOpen(false);
+  };
 
   const resetCreateCardForm = () => {
     setCreateCardOpen(false);
@@ -6006,6 +6042,7 @@ function TaskBoardPanel({
       priority: "medium",
       description: "",
     });
+    setEditorFontSize("create-description", DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const submitManualCard = async () => {
@@ -6014,14 +6051,15 @@ function TaskBoardPanel({
     const jobType = createCardForm.job_type.trim();
     const assigneeUserId = createCardForm.assignee_user_id.trim();
     const priority = createCardForm.priority.trim() || "medium";
-    if (!title || !jobType || !assigneeUserId || !priority) return;
+    const description = createCardForm.description.trim();
+    if (!title || !jobType || !assigneeUserId || !priority || !description) return;
     setCardCreateBusy(true);
     const created = await onCreateCard({
       title,
       job_type: jobType,
       assignee_user_id: assigneeUserId,
       priority,
-      description: createCardForm.description.trim() || null,
+      description: encodeTextWithFontSize(description, getEditorFontSize("create-description")),
     });
     setCardCreateBusy(false);
     if (!created) return;
@@ -6033,10 +6071,14 @@ function TaskBoardPanel({
     const body = String(commentDrafts[normalizedCardId] || "").trim();
     if (!normalizedCardId || !body) return;
     setCommentSavingKey(`new:${normalizedCardId}`);
-    const saved = await onAddComment(normalizedCardId, body);
+    const saved = await onAddComment(
+      normalizedCardId,
+      encodeTextWithFontSize(body, getEditorFontSize(`comment-new-${normalizedCardId}`)),
+    );
     setCommentSavingKey("");
     if (!saved) return;
     setCommentDrafts((current) => ({ ...current, [normalizedCardId]: "" }));
+    setEditorFontSize(`comment-new-${normalizedCardId}`, DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const saveEditedComment = async (commentId) => {
@@ -6044,7 +6086,10 @@ function TaskBoardPanel({
     const body = String(editingComments[normalizedCommentId] || "").trim();
     if (!normalizedCommentId || !body) return;
     setCommentSavingKey(`edit:${normalizedCommentId}`);
-    const saved = await onUpdateComment(normalizedCommentId, body);
+    const saved = await onUpdateComment(
+      normalizedCommentId,
+      encodeTextWithFontSize(body, getEditorFontSize(`comment-edit-${normalizedCommentId}`)),
+    );
     setCommentSavingKey("");
     if (!saved) return;
     setEditingComments((current) => {
@@ -6052,6 +6097,7 @@ function TaskBoardPanel({
       delete next[normalizedCommentId];
       return next;
     });
+    setEditorFontSize(`comment-edit-${normalizedCommentId}`, DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const improveDraft = async (key, body, applyValue) => {
@@ -6070,6 +6116,14 @@ function TaskBoardPanel({
       return;
     }
     delete textAreaRefs.current[key];
+  };
+
+  const getEditorFontSize = (fieldKey) => Number(formatFontSizes[fieldKey] || DEFAULT_FORMAT_FONT_SIZE);
+  const setEditorFontSize = (fieldKey, nextSize) => {
+    setFormatFontSizes((current) => ({
+      ...current,
+      [fieldKey]: Number(nextSize) || DEFAULT_FORMAT_FONT_SIZE,
+    }));
   };
 
   const applyFormatting = (fieldKey, value, applyValue, formatType) => {
@@ -6177,14 +6231,16 @@ function TaskBoardPanel({
       });
       return;
     }
+    const parsedDescription = parseStoredFontSize(activeCard.description || "");
     setCardEditOpen(false);
     setCardDetailDraft({
       title: String(activeCard.title || ""),
-      description: String(activeCard.description || ""),
+      description: parsedDescription.text,
       job_type: String(activeCard.job_type || ""),
       priority: String(activeCard.priority || "medium"),
       assignee_user_id: String(activeCard.assignee_user_id || ""),
     });
+    setEditorFontSize("detail-description", parsedDescription.fontSize);
   }, [activeCard]);
 
   const saveCardDetails = async () => {
@@ -6195,7 +6251,9 @@ function TaskBoardPanel({
     setCardDetailSavingKey(`details:${normalizedCardId}`);
     const saved = await onUpdateCardDetails(normalizedCardId, {
       title,
-      description: String(cardDetailDraft.description || "").trim() || null,
+      description: String(cardDetailDraft.description || "").trim()
+        ? encodeTextWithFontSize(String(cardDetailDraft.description || "").trim(), getEditorFontSize("detail-description"))
+        : null,
       job_type: String(cardDetailDraft.job_type || "").trim(),
       priority: String(cardDetailDraft.priority || "").trim() || "medium",
       assignee_user_id: String(cardDetailDraft.assignee_user_id || "").trim(),
@@ -6313,17 +6371,17 @@ function TaskBoardPanel({
       ))}
       <select
         className="workflow-format-size-select"
-        defaultValue={String(DEFAULT_FORMAT_FONT_SIZE)}
+        value={String(getEditorFontSize(toolbarKey))}
         aria-label={t("workflowFormatFontSize")}
         onChange={(event) => {
           const sizeValue = String(event.target.value || "");
-          if (sizeValue) applyFormatting(toolbarKey, value, applyValue, `size:${sizeValue}`);
-          event.target.value = String(DEFAULT_FORMAT_FONT_SIZE);
+          if (!sizeValue) return;
+          setEditorFontSize(toolbarKey, Number(sizeValue));
         }}
       >
         {FONT_SIZE_OPTIONS.map((sizeOption) => (
           <option key={`${toolbarKey}-size-${sizeOption}`} value={String(sizeOption)}>
-            {sizeOption}
+            {sizeOption}pt
           </option>
         ))}
       </select>
@@ -6340,7 +6398,11 @@ function TaskBoardPanel({
     <div className="panel form-panel workflow-board-panel">
       <div className="workflow-board-header">
         <div className="workflow-board-heading">
-          <h2>{t("workflowTitle")}</h2>
+          <h2>
+            <button className="workflow-board-title-btn" type="button" onClick={resetToBoardView}>
+              {t("workflowTitle")}
+            </button>
+          </h2>
         </div>
         {!activeCard ? (
           <div className="workflow-board-header-actions">
@@ -6399,7 +6461,7 @@ function TaskBoardPanel({
               </button>
               {sortMenuOpen ? (
                 <div className="workflow-sort-menu" role="menu" aria-label={t("workflowSortBy")}>
-                  {["priority", "user", "created_at", "latest_commented", "task_type"].map((field) => (
+                  {["priority", "created_at", "latest_commented", "task_type"].map((field) => (
                     <button
                       key={field}
                       type="button"
@@ -6767,7 +6829,7 @@ function TaskBoardPanel({
           style={getFlagSurfaceStyle(activeCard.flag_types)}
         >
           <div className="workflow-card-detail-topbar">
-            <button className="workflow-detail-back" type="button" onClick={() => setActiveCardId("")}>
+            <button className="workflow-detail-back" type="button" onClick={resetToBoardView}>
               ← {t("workflowBackToBoard")}
             </button>
             <div className="workflow-card-detail-actions workflow-card-detail-actions-top">
@@ -6778,13 +6840,15 @@ function TaskBoardPanel({
                     type="button"
                     onClick={() => {
                       setCardEditOpen(false);
+                      const parsedDescription = parseStoredFontSize(activeCard.description || "");
                       setCardDetailDraft({
                         title: String(activeCard.title || ""),
-                        description: String(activeCard.description || ""),
+                        description: parsedDescription.text,
                         job_type: String(activeCard.job_type || ""),
                         priority: String(activeCard.priority || "medium"),
                         assignee_user_id: String(activeCard.assignee_user_id || ""),
                       });
+                      setEditorFontSize("detail-description", parsedDescription.fontSize);
                     }}
                     disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
                   >
@@ -6915,6 +6979,7 @@ function TaskBoardPanel({
                   ref={registerTextAreaRef("detail-description")}
                   value={cardDetailDraft.description}
                   onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
+                  style={{ fontSize: `${getEditorFontSize("detail-description")}px`, lineHeight: 1.6 }}
                   rows={5}
                   maxLength={4000}
                 />
@@ -6976,6 +7041,7 @@ function TaskBoardPanel({
                           ref={registerTextAreaRef(`comment-edit-${commentId}`)}
                           value={editValue}
                           onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
+                          style={{ fontSize: `${getEditorFontSize(`comment-edit-${commentId}`)}px`, lineHeight: 1.6 }}
                           rows={3}
                           maxLength={4000}
                         />
@@ -6995,11 +7061,14 @@ function TaskBoardPanel({
                           <button
                             className="btn ghost small"
                             type="button"
-                            onClick={() => setEditingComments((current) => {
-                              const next = { ...current };
-                              delete next[commentId];
-                              return next;
-                            })}
+                            onClick={() => {
+                              setEditingComments((current) => {
+                                const next = { ...current };
+                                delete next[commentId];
+                                return next;
+                              });
+                              setEditorFontSize(`comment-edit-${commentId}`, DEFAULT_FORMAT_FONT_SIZE);
+                            }}
                             disabled={commentSavingKey === `edit:${commentId}`}
                           >
                             {t("cancel")}
@@ -7023,7 +7092,11 @@ function TaskBoardPanel({
                           <button
                             className="workflow-comment-inline-action"
                             type="button"
-                            onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
+                            onClick={() => {
+                              const parsedComment = parseStoredFontSize(comment.body || "");
+                              setEditingComments((current) => ({ ...current, [commentId]: parsedComment.text }));
+                              setEditorFontSize(`comment-edit-${commentId}`, parsedComment.fontSize);
+                            }}
                           >
                             {t("workflowEditComment")}
                           </button>
@@ -7046,6 +7119,7 @@ function TaskBoardPanel({
                 ref={registerTextAreaRef(`comment-new-${String(activeCard.id || "")}`)}
                 value={commentDrafts[String(activeCard.id || "")] || ""}
                 onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
+                style={{ fontSize: `${getEditorFontSize(`comment-new-${String(activeCard.id || "")}`)}px`, lineHeight: 1.6 }}
                 placeholder={t("workflowCommentPlaceholder")}
                 rows={3}
                 maxLength={4000}
@@ -7159,6 +7233,7 @@ function TaskBoardPanel({
                 id="workflow-create-description"
                 value={createCardForm.description}
                 onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
+                style={{ fontSize: `${getEditorFontSize("create-description")}px`, lineHeight: 1.6 }}
                 placeholder={t("workflowCreateCardDescriptionPlaceholder")}
                 rows={4}
                 maxLength={4000}
@@ -7195,6 +7270,7 @@ function TaskBoardPanel({
                     || !createCardForm.title.trim()
                     || !createCardForm.job_type.trim()
                     || !createCardForm.assignee_user_id.trim()
+                    || !createCardForm.description.trim()
                   }
                 >
                   {cardCreateBusy ? t("loading") : t("workflowCreateCardSubmit")}

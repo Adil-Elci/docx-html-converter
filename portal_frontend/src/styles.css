@@ -2463,6 +2463,21 @@ input:disabled {
   gap: 4px;
 }
 
+.workflow-board-title-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.workflow-board-title-btn:hover,
+.workflow-board-title-btn:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
 .workflow-board-header-actions,
 .workflow-board-actions {
   display: flex;
@@ -3519,6 +3534,7 @@ input:disabled {
   color: var(--ink);
   font-size: 12px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .workflow-format-size-select:focus-visible {

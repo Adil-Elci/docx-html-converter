@@ -148,14 +148,6 @@ const parseStoredFontSize = (value) => {
   };
 };
 
-const encodeTextWithFontSize = (value, fontSize) => {
-  const text = String(value || "");
-  const normalizedSize = Number(fontSize) || DEFAULT_FORMAT_FONT_SIZE;
-  if (!text) return "";
-  if (normalizedSize === DEFAULT_FORMAT_FONT_SIZE) return text;
-  return `[size=${normalizedSize}]${text}[/size]`;
-};
-
 const renderInlineFormattedText = (text, keyPrefix = "inline") => (
   String(text || "")
     .split(INLINE_FORMAT_PATTERN)
@@ -290,6 +282,11 @@ const escapeHtml = (value) => String(value || "")
 const inlineMarkupToHtml = (text) => {
   const parts = String(text || "").split(INLINE_FORMAT_PATTERN).filter((part) => part !== "");
   return parts.map((part) => {
+    const sizeMatch = part.match(/^\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]$/);
+    if (sizeMatch) {
+      const [, sizeValue, innerText] = sizeMatch;
+      return `<span style="font-size:${sizeValue}px;line-height:1.6;">${inlineMarkupToHtml(innerText)}</span>`;
+    }
     if (part.startsWith("__") && part.endsWith("__") && part.length > 4) {
       return `<u>${inlineMarkupToHtml(part.slice(2, -2))}</u>`;
     }
@@ -320,6 +317,10 @@ const serializeEditorNode = (node) => {
   const tagName = element.tagName.toLowerCase();
   if (tagName === "br") return "\n";
   const children = Array.from(element.childNodes).map(serializeEditorNode).join("");
+  const inlineSize = Number.parseInt(element.style?.fontSize || "", 10);
+  if (Number.isFinite(inlineSize) && inlineSize > 0 && inlineSize !== DEFAULT_FORMAT_FONT_SIZE) {
+    return `[size=${inlineSize}]${children}[/size]`;
+  }
   if (tagName === "strong" || tagName === "b") return `**${children}**`;
   if (tagName === "em" || tagName === "i") return `*${children}*`;
   if (tagName === "u") return `__${children}__`;
@@ -342,11 +343,25 @@ function RichTextEditor({
   onChange,
   placeholder,
   ariaLabel,
-  fontSize,
-  onFontSizeChange,
   disabled = false,
 }) {
   const editorRef = useRef(null);
+  const [selectedFontSize, setSelectedFontSize] = useState(DEFAULT_FORMAT_FONT_SIZE);
+
+  const getSelectionFontSize = useCallback(() => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return DEFAULT_FORMAT_FONT_SIZE;
+    let node = selection.anchorNode;
+    while (node && node !== editor) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const size = Number.parseInt(node.style?.fontSize || "", 10);
+        if (Number.isFinite(size) && size > 0) return size;
+      }
+      node = node.parentNode;
+    }
+    return DEFAULT_FORMAT_FONT_SIZE;
+  }, []);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -358,6 +373,10 @@ function RichTextEditor({
     }
   }, [value]);
 
+  useEffect(() => {
+    setSelectedFontSize(parseStoredFontSize(value).fontSize);
+  }, [value]);
+
   const runInlineCommand = (command) => {
     if (disabled) return;
     const editor = editorRef.current;
@@ -365,6 +384,32 @@ function RichTextEditor({
     editor.focus();
     document.execCommand(command, false);
     onChange(editorHtmlToValue(editor));
+    setSelectedFontSize(getSelectionFontSize());
+  };
+
+  const applyFontSizeToSelection = (nextSize) => {
+    if (disabled) return;
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer) || range.collapsed) {
+      setSelectedFontSize(nextSize);
+      return;
+    }
+    const span = document.createElement("span");
+    span.style.fontSize = `${nextSize}px`;
+    span.style.lineHeight = "1.6";
+    const fragment = range.extractContents();
+    span.appendChild(fragment);
+    range.insertNode(span);
+    selection.removeAllRanges();
+    const nextRange = document.createRange();
+    nextRange.selectNodeContents(span);
+    selection.addRange(nextRange);
+    onChange(editorHtmlToValue(editor));
+    setSelectedFontSize(nextSize);
+    editor.focus();
   };
 
   return (
@@ -383,9 +428,9 @@ function RichTextEditor({
         ))}
         <select
           className="workflow-format-size-select"
-          value={String(fontSize || DEFAULT_FORMAT_FONT_SIZE)}
+          value={String(selectedFontSize)}
           aria-label="Font size"
-          onChange={(event) => onFontSizeChange(Number(event.target.value) || DEFAULT_FORMAT_FONT_SIZE)}
+          onChange={(event) => applyFontSizeToSelection(Number(event.target.value) || DEFAULT_FORMAT_FONT_SIZE)}
           disabled={disabled}
         >
           {FONT_SIZE_OPTIONS.map((sizeOption) => (
@@ -409,8 +454,11 @@ function RichTextEditor({
             event.currentTarget.innerHTML = "";
           }
           onChange(nextValue);
+          setSelectedFontSize(getSelectionFontSize());
         }}
-        style={{ fontSize: `${fontSize || DEFAULT_FORMAT_FONT_SIZE}px`, lineHeight: 1.6 }}
+        onKeyUp={() => setSelectedFontSize(getSelectionFontSize())}
+        onMouseUp={() => setSelectedFontSize(getSelectionFontSize())}
+        style={{ lineHeight: 1.6 }}
       />
     </div>
   );
@@ -5852,10 +5900,6 @@ function TaskBoardPanel({
   const [cardCreateBusy, setCardCreateBusy] = useState(false);
   const [commentDrafts, setCommentDrafts] = useState({});
   const [editingComments, setEditingComments] = useState({});
-  const [formatFontSizes, setFormatFontSizes] = useState({
-    "create-description": DEFAULT_FORMAT_FONT_SIZE,
-    "detail-description": DEFAULT_FORMAT_FONT_SIZE,
-  });
   const [commentSavingKey, setCommentSavingKey] = useState("");
   const [commentRewriteKey, setCommentRewriteKey] = useState("");
   const [cardDetailSavingKey, setCardDetailSavingKey] = useState("");
@@ -6177,7 +6221,6 @@ function TaskBoardPanel({
       priority: "medium",
       description: "",
     });
-    setEditorFontSize("create-description", DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const submitManualCard = async () => {
@@ -6194,7 +6237,7 @@ function TaskBoardPanel({
       job_type: jobType,
       assignee_user_id: assigneeUserId,
       priority,
-      description: encodeTextWithFontSize(description, getEditorFontSize("create-description")),
+      description,
     });
     setCardCreateBusy(false);
     if (!created) return;
@@ -6206,14 +6249,10 @@ function TaskBoardPanel({
     const body = String(commentDrafts[normalizedCardId] || "").trim();
     if (!normalizedCardId || !body) return;
     setCommentSavingKey(`new:${normalizedCardId}`);
-    const saved = await onAddComment(
-      normalizedCardId,
-      encodeTextWithFontSize(body, getEditorFontSize(`comment-new-${normalizedCardId}`)),
-    );
+    const saved = await onAddComment(normalizedCardId, body);
     setCommentSavingKey("");
     if (!saved) return;
     setCommentDrafts((current) => ({ ...current, [normalizedCardId]: "" }));
-    setEditorFontSize(`comment-new-${normalizedCardId}`, DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const saveEditedComment = async (commentId) => {
@@ -6221,10 +6260,7 @@ function TaskBoardPanel({
     const body = String(editingComments[normalizedCommentId] || "").trim();
     if (!normalizedCommentId || !body) return;
     setCommentSavingKey(`edit:${normalizedCommentId}`);
-    const saved = await onUpdateComment(
-      normalizedCommentId,
-      encodeTextWithFontSize(body, getEditorFontSize(`comment-edit-${normalizedCommentId}`)),
-    );
+    const saved = await onUpdateComment(normalizedCommentId, body);
     setCommentSavingKey("");
     if (!saved) return;
     setEditingComments((current) => {
@@ -6232,7 +6268,6 @@ function TaskBoardPanel({
       delete next[normalizedCommentId];
       return next;
     });
-    setEditorFontSize(`comment-edit-${normalizedCommentId}`, DEFAULT_FORMAT_FONT_SIZE);
   };
 
   const improveDraft = async (key, body, applyValue) => {
@@ -6243,14 +6278,6 @@ function TaskBoardPanel({
     setCommentRewriteKey("");
     if (!rewritten) return;
     applyValue(rewritten);
-  };
-
-  const getEditorFontSize = (fieldKey) => Number(formatFontSizes[fieldKey] || DEFAULT_FORMAT_FONT_SIZE);
-  const setEditorFontSize = (fieldKey, nextSize) => {
-    setFormatFontSizes((current) => ({
-      ...current,
-      [fieldKey]: Number(nextSize) || DEFAULT_FORMAT_FONT_SIZE,
-    }));
   };
 
   const updateCardFlag = async (card, flagType) => {
@@ -6314,16 +6341,14 @@ function TaskBoardPanel({
       });
       return;
     }
-    const parsedDescription = parseStoredFontSize(activeCard.description || "");
     setCardEditOpen(false);
     setCardDetailDraft({
       title: String(activeCard.title || ""),
-      description: parsedDescription.text,
+      description: String(activeCard.description || ""),
       job_type: String(activeCard.job_type || ""),
       priority: String(activeCard.priority || "medium"),
       assignee_user_id: String(activeCard.assignee_user_id || ""),
     });
-    setEditorFontSize("detail-description", parsedDescription.fontSize);
   }, [activeCard]);
 
   const saveCardDetails = async () => {
@@ -6334,9 +6359,7 @@ function TaskBoardPanel({
     setCardDetailSavingKey(`details:${normalizedCardId}`);
     const saved = await onUpdateCardDetails(normalizedCardId, {
       title,
-      description: String(cardDetailDraft.description || "").trim()
-        ? encodeTextWithFontSize(String(cardDetailDraft.description || "").trim(), getEditorFontSize("detail-description"))
-        : null,
+      description: String(cardDetailDraft.description || "").trim() || null,
       job_type: String(cardDetailDraft.job_type || "").trim(),
       priority: String(cardDetailDraft.priority || "").trim() || "medium",
       assignee_user_id: String(cardDetailDraft.assignee_user_id || "").trim(),
@@ -6892,15 +6915,13 @@ function TaskBoardPanel({
                     type="button"
                     onClick={() => {
                       setCardEditOpen(false);
-                      const parsedDescription = parseStoredFontSize(activeCard.description || "");
                       setCardDetailDraft({
                         title: String(activeCard.title || ""),
-                        description: parsedDescription.text,
+                        description: String(activeCard.description || ""),
                         job_type: String(activeCard.job_type || ""),
                         priority: String(activeCard.priority || "medium"),
                         assignee_user_id: String(activeCard.assignee_user_id || ""),
                       });
-                      setEditorFontSize("detail-description", parsedDescription.fontSize);
                     }}
                     disabled={cardDetailSavingKey === `details:${String(activeCard.id || "")}`}
                   >
@@ -7027,8 +7048,6 @@ function TaskBoardPanel({
                   onChange={(nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue }))}
                   placeholder={t("workflowCreateCardDescriptionPlaceholder")}
                   ariaLabel={t("workflowFormatToolbarDescription")}
-                  fontSize={getEditorFontSize("detail-description")}
-                  onFontSizeChange={(nextSize) => setEditorFontSize("detail-description", nextSize)}
                 />
                 <div className="workflow-create-card-helper-row">
                   <button
@@ -7084,8 +7103,6 @@ function TaskBoardPanel({
                           onChange={(nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue }))}
                           placeholder={t("workflowCommentPlaceholder")}
                           ariaLabel={t("workflowFormatToolbarComment")}
-                          fontSize={getEditorFontSize(`comment-edit-${commentId}`)}
-                          onFontSizeChange={(nextSize) => setEditorFontSize(`comment-edit-${commentId}`, nextSize)}
                         />
                         <div className="workflow-comment-actions">
                           <button
@@ -7109,7 +7126,6 @@ function TaskBoardPanel({
                                 delete next[commentId];
                                 return next;
                               });
-                              setEditorFontSize(`comment-edit-${commentId}`, DEFAULT_FORMAT_FONT_SIZE);
                             }}
                             disabled={commentSavingKey === `edit:${commentId}`}
                           >
@@ -7134,11 +7150,7 @@ function TaskBoardPanel({
                           <button
                             className="workflow-comment-inline-action"
                             type="button"
-                            onClick={() => {
-                              const parsedComment = parseStoredFontSize(comment.body || "");
-                              setEditingComments((current) => ({ ...current, [commentId]: parsedComment.text }));
-                              setEditorFontSize(`comment-edit-${commentId}`, parsedComment.fontSize);
-                            }}
+                            onClick={() => setEditingComments((current) => ({ ...current, [commentId]: comment.body || "" }))}
                           >
                             {t("workflowEditComment")}
                           </button>
@@ -7157,8 +7169,6 @@ function TaskBoardPanel({
                   onChange={(nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue }))}
                   placeholder={t("workflowCommentPlaceholder")}
                   ariaLabel={t("workflowFormatToolbarComment")}
-                  fontSize={getEditorFontSize(`comment-new-${String(activeCard.id || "")}`)}
-                  onFontSizeChange={(nextSize) => setEditorFontSize(`comment-new-${String(activeCard.id || "")}`, nextSize)}
                 />
               <div className="workflow-comment-actions">
                 <button
@@ -7264,8 +7274,6 @@ function TaskBoardPanel({
                 onChange={(nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue }))}
                 placeholder={t("workflowCreateCardDescriptionPlaceholder")}
                 ariaLabel={t("workflowFormatToolbarDescription")}
-                fontSize={getEditorFontSize("create-description")}
-                onFontSizeChange={(nextSize) => setEditorFontSize("create-description", nextSize)}
               />
               <div className="workflow-create-card-helper-row">
                 <button

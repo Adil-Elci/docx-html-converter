@@ -280,6 +280,142 @@ const FORMAT_ACTIONS = [
   { key: "underline", label: "Underline" },
 ];
 
+const escapeHtml = (value) => String(value || "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
+
+const inlineMarkupToHtml = (text) => {
+  const parts = String(text || "").split(INLINE_FORMAT_PATTERN).filter((part) => part !== "");
+  return parts.map((part) => {
+    if (part.startsWith("__") && part.endsWith("__") && part.length > 4) {
+      return `<u>${inlineMarkupToHtml(part.slice(2, -2))}</u>`;
+    }
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return `<strong>${inlineMarkupToHtml(part.slice(2, -2))}</strong>`;
+    }
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+      return `<em>${inlineMarkupToHtml(part.slice(1, -1))}</em>`;
+    }
+    return escapeHtml(part);
+  }).join("");
+};
+
+const editorValueToHtml = (value) => {
+  const text = String(value || "").replace(/\r\n?/g, "\n");
+  if (!text) return "";
+  return text
+    .split("\n")
+    .map((line) => line ? inlineMarkupToHtml(line) : "<br>")
+    .join("<br>");
+};
+
+const serializeEditorNode = (node) => {
+  if (!node) return "";
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const element = node;
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === "br") return "\n";
+  const children = Array.from(element.childNodes).map(serializeEditorNode).join("");
+  if (tagName === "strong" || tagName === "b") return `**${children}**`;
+  if (tagName === "em" || tagName === "i") return `*${children}*`;
+  if (tagName === "u") return `__${children}__`;
+  if (tagName === "div" || tagName === "p") return `${children}\n`;
+  return children;
+};
+
+const editorHtmlToValue = (element) => {
+  const serialized = Array.from(element?.childNodes || []).map(serializeEditorNode).join("");
+  return serialized
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n+$/g, "");
+};
+
+function RichTextEditor({
+  editorKey,
+  value,
+  onChange,
+  placeholder,
+  ariaLabel,
+  fontSize,
+  onFontSizeChange,
+  disabled = false,
+}) {
+  const editorRef = useRef(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (document.activeElement === editor) return;
+    const nextHtml = editorValueToHtml(value);
+    if (editor.innerHTML !== nextHtml) {
+      editor.innerHTML = nextHtml;
+    }
+  }, [value]);
+
+  const runInlineCommand = (command) => {
+    if (disabled) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    document.execCommand(command, false);
+    onChange(editorHtmlToValue(editor));
+  };
+
+  return (
+    <div className="workflow-rich-editor-wrap">
+      <div className="workflow-format-toolbar" role="toolbar" aria-label={ariaLabel}>
+        {FORMAT_ACTIONS.map((action) => (
+          <button
+            key={`${editorKey}-${action.key}`}
+            className="workflow-format-btn"
+            type="button"
+            onClick={() => runInlineCommand(action.key)}
+            disabled={disabled}
+          >
+            {action.label}
+          </button>
+        ))}
+        <select
+          className="workflow-format-size-select"
+          value={String(fontSize || DEFAULT_FORMAT_FONT_SIZE)}
+          aria-label="Font size"
+          onChange={(event) => onFontSizeChange(Number(event.target.value) || DEFAULT_FORMAT_FONT_SIZE)}
+          disabled={disabled}
+        >
+          {FONT_SIZE_OPTIONS.map((sizeOption) => (
+            <option key={`${editorKey}-size-${sizeOption}`} value={String(sizeOption)}>
+              {sizeOption}pt
+            </option>
+          ))}
+        </select>
+      </div>
+      <div
+        ref={editorRef}
+        className={`workflow-rich-editor ${String(value || "").trim() ? "" : "is-empty"}`.trim()}
+        contentEditable={!disabled}
+        suppressContentEditableWarning
+        data-placeholder={placeholder || ""}
+        role="textbox"
+        aria-label={ariaLabel}
+        onInput={(event) => {
+          const nextValue = editorHtmlToValue(event.currentTarget);
+          if (!nextValue) {
+            event.currentTarget.innerHTML = "";
+          }
+          onChange(nextValue);
+        }}
+        style={{ fontSize: `${fontSize || DEFAULT_FORMAT_FONT_SIZE}px`, lineHeight: 1.6 }}
+      />
+    </div>
+  );
+}
+
 const generateRequestToken = (prefix) => {
   const cryptoUuid = globalThis.crypto?.randomUUID?.();
   if (cryptoUuid) return `${prefix}-${cryptoUuid}`;
@@ -5748,7 +5884,6 @@ function TaskBoardPanel({
   const sortMenuRef = useRef(null);
   const statsMenuRef = useRef(null);
   const openCardMenuRef = useRef(null);
-  const textAreaRefs = useRef({});
 
   useEffect(() => {
     const allowedCardIds = new Set(columns.flatMap((column) => (column.cards || []).map((card) => String(card?.id || ""))));
@@ -6110,64 +6245,12 @@ function TaskBoardPanel({
     applyValue(rewritten);
   };
 
-  const registerTextAreaRef = (key) => (node) => {
-    if (node) {
-      textAreaRefs.current[key] = node;
-      return;
-    }
-    delete textAreaRefs.current[key];
-  };
-
   const getEditorFontSize = (fieldKey) => Number(formatFontSizes[fieldKey] || DEFAULT_FORMAT_FONT_SIZE);
   const setEditorFontSize = (fieldKey, nextSize) => {
     setFormatFontSizes((current) => ({
       ...current,
       [fieldKey]: Number(nextSize) || DEFAULT_FORMAT_FONT_SIZE,
     }));
-  };
-
-  const applyFormatting = (fieldKey, value, applyValue, formatType) => {
-    const textarea = textAreaRefs.current[fieldKey];
-    const currentValue = String(value || "");
-    const selectionStart = textarea?.selectionStart ?? currentValue.length;
-    const selectionEnd = textarea?.selectionEnd ?? currentValue.length;
-    const selectedText = currentValue.slice(selectionStart, selectionEnd);
-    let replacement = "";
-    let nextSelectionStart = selectionStart;
-    let nextSelectionEnd = selectionEnd;
-
-    if (formatType === "bold") {
-      const content = selectedText || "bold text";
-      replacement = `**${content}**`;
-      nextSelectionStart = selectionStart + 2;
-      nextSelectionEnd = nextSelectionStart + content.length;
-    } else if (formatType === "italic") {
-      const content = selectedText || "italic text";
-      replacement = `*${content}*`;
-      nextSelectionStart = selectionStart + 1;
-      nextSelectionEnd = nextSelectionStart + content.length;
-    } else if (formatType === "underline") {
-      const content = selectedText || "underlined text";
-      replacement = `__${content}__`;
-      nextSelectionStart = selectionStart + 2;
-      nextSelectionEnd = nextSelectionStart + content.length;
-    } else if (formatType.startsWith("size:")) {
-      const sizeValue = formatType.split(":")[1];
-      const content = selectedText || "text";
-      replacement = `[size=${sizeValue}]${content}[/size]`;
-      nextSelectionStart = selectionStart + `[size=${sizeValue}]`.length;
-      nextSelectionEnd = nextSelectionStart + content.length;
-    }
-
-    if (!replacement) return;
-    const nextValue = `${currentValue.slice(0, selectionStart)}${replacement}${currentValue.slice(selectionEnd)}`;
-    applyValue(nextValue);
-    window.requestAnimationFrame(() => {
-      const target = textAreaRefs.current[fieldKey];
-      if (!target) return;
-      target.focus();
-      target.setSelectionRange(nextSelectionStart, nextSelectionEnd);
-    });
   };
 
   const updateCardFlag = async (card, flagType) => {
@@ -6356,37 +6439,6 @@ function TaskBoardPanel({
     setSortMenuOpen(false);
     setPage(1);
   };
-
-  const renderFormatToolbar = (toolbarKey, value, applyValue, ariaLabel) => (
-    <div className="workflow-format-toolbar" role="toolbar" aria-label={ariaLabel}>
-      {FORMAT_ACTIONS.map((action) => (
-        <button
-          key={`${toolbarKey}-${action.key}`}
-          className="workflow-format-btn"
-          type="button"
-          onClick={() => applyFormatting(toolbarKey, value, applyValue, action.key)}
-        >
-          {action.label}
-        </button>
-      ))}
-      <select
-        className="workflow-format-size-select"
-        value={String(getEditorFontSize(toolbarKey))}
-        aria-label={t("workflowFormatFontSize")}
-        onChange={(event) => {
-          const sizeValue = String(event.target.value || "");
-          if (!sizeValue) return;
-          setEditorFontSize(toolbarKey, Number(sizeValue));
-        }}
-      >
-        {FONT_SIZE_OPTIONS.map((sizeOption) => (
-          <option key={`${toolbarKey}-size-${sizeOption}`} value={String(sizeOption)}>
-            {sizeOption}pt
-          </option>
-        ))}
-      </select>
-    </div>
-  );
 
   const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
   const boardSurfaceStyle = {
@@ -6969,19 +7021,14 @@ function TaskBoardPanel({
               </div>
             {cardEditOpen ? (
               <>
-                {renderFormatToolbar(
-                  "detail-description",
-                  cardDetailDraft.description,
-                  (nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue })),
-                  t("workflowFormatToolbarDescription"),
-                )}
-                <textarea
-                  ref={registerTextAreaRef("detail-description")}
+                <RichTextEditor
+                  editorKey="detail-description"
                   value={cardDetailDraft.description}
-                  onChange={(event) => setCardDetailDraft((current) => ({ ...current, description: event.target.value }))}
-                  style={{ fontSize: `${getEditorFontSize("detail-description")}px`, lineHeight: 1.6 }}
-                  rows={5}
-                  maxLength={4000}
+                  onChange={(nextValue) => setCardDetailDraft((current) => ({ ...current, description: nextValue }))}
+                  placeholder={t("workflowCreateCardDescriptionPlaceholder")}
+                  ariaLabel={t("workflowFormatToolbarDescription")}
+                  fontSize={getEditorFontSize("detail-description")}
+                  onFontSizeChange={(nextSize) => setEditorFontSize("detail-description", nextSize)}
                 />
                 <div className="workflow-create-card-helper-row">
                   <button
@@ -7031,19 +7078,14 @@ function TaskBoardPanel({
                     </div>
                     {isEditing ? (
                       <div className="workflow-comment-editor">
-                        {renderFormatToolbar(
-                          `comment-edit-${commentId}`,
-                          editValue,
-                          (nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue })),
-                          t("workflowFormatToolbarComment"),
-                        )}
-                        <textarea
-                          ref={registerTextAreaRef(`comment-edit-${commentId}`)}
+                        <RichTextEditor
+                          editorKey={`comment-edit-${commentId}`}
                           value={editValue}
-                          onChange={(event) => setEditingComments((current) => ({ ...current, [commentId]: event.target.value }))}
-                          style={{ fontSize: `${getEditorFontSize(`comment-edit-${commentId}`)}px`, lineHeight: 1.6 }}
-                          rows={3}
-                          maxLength={4000}
+                          onChange={(nextValue) => setEditingComments((current) => ({ ...current, [commentId]: nextValue }))}
+                          placeholder={t("workflowCommentPlaceholder")}
+                          ariaLabel={t("workflowFormatToolbarComment")}
+                          fontSize={getEditorFontSize(`comment-edit-${commentId}`)}
+                          onFontSizeChange={(nextSize) => setEditorFontSize(`comment-edit-${commentId}`, nextSize)}
                         />
                         <div className="workflow-comment-actions">
                           <button
@@ -7109,21 +7151,15 @@ function TaskBoardPanel({
                 </div>
               ) : null}
               <div className="workflow-comment-composer">
-                {renderFormatToolbar(
-                  `comment-new-${String(activeCard.id || "")}`,
-                  commentDrafts[String(activeCard.id || "")] || "",
-                  (nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue })),
-                  t("workflowFormatToolbarComment"),
-                )}
-              <textarea
-                ref={registerTextAreaRef(`comment-new-${String(activeCard.id || "")}`)}
-                value={commentDrafts[String(activeCard.id || "")] || ""}
-                onChange={(event) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: event.target.value }))}
-                style={{ fontSize: `${getEditorFontSize(`comment-new-${String(activeCard.id || "")}`)}px`, lineHeight: 1.6 }}
-                placeholder={t("workflowCommentPlaceholder")}
-                rows={3}
-                maxLength={4000}
-              />
+                <RichTextEditor
+                  editorKey={`comment-new-${String(activeCard.id || "")}`}
+                  value={commentDrafts[String(activeCard.id || "")] || ""}
+                  onChange={(nextValue) => setCommentDrafts((current) => ({ ...current, [String(activeCard.id || "")]: nextValue }))}
+                  placeholder={t("workflowCommentPlaceholder")}
+                  ariaLabel={t("workflowFormatToolbarComment")}
+                  fontSize={getEditorFontSize(`comment-new-${String(activeCard.id || "")}`)}
+                  onFontSizeChange={(nextSize) => setEditorFontSize(`comment-new-${String(activeCard.id || "")}`, nextSize)}
+                />
               <div className="workflow-comment-actions">
                 <button
                   className="btn ghost small"
@@ -7222,21 +7258,14 @@ function TaskBoardPanel({
               <label className="workflow-field-label" htmlFor="workflow-create-description">
                 {t("workflowCreateCardDescriptionLabel")}
               </label>
-              {renderFormatToolbar(
-                "create-description",
-                createCardForm.description,
-                (nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue })),
-                t("workflowFormatToolbarDescription"),
-              )}
-              <textarea
-                ref={registerTextAreaRef("create-description")}
-                id="workflow-create-description"
+              <RichTextEditor
+                editorKey="create-description"
                 value={createCardForm.description}
-                onChange={(event) => setCreateCardForm((current) => ({ ...current, description: event.target.value }))}
-                style={{ fontSize: `${getEditorFontSize("create-description")}px`, lineHeight: 1.6 }}
+                onChange={(nextValue) => setCreateCardForm((current) => ({ ...current, description: nextValue }))}
                 placeholder={t("workflowCreateCardDescriptionPlaceholder")}
-                rows={4}
-                maxLength={4000}
+                ariaLabel={t("workflowFormatToolbarDescription")}
+                fontSize={getEditorFontSize("create-description")}
+                onFontSizeChange={(nextSize) => setEditorFontSize("create-description", nextSize)}
               />
               <div className="workflow-create-card-helper-row">
                 <button

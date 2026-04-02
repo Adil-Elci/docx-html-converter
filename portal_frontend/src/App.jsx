@@ -132,6 +132,8 @@ const TASK_BOARD_PRIORITY_ORDER = {
   medium: 2,
   low: 1,
 };
+const RICH_TEXT_ALLOWED_TAGS = new Set(["strong", "b", "em", "i", "u", "span", "br", "div", "p", "ul", "ol", "li"]);
+const RICH_TEXT_HTML_PATTERN = /<\/?(strong|b|em|i|u|span|br|div|p|ul|ol|li)\b/i;
 
 const parseStoredFontSize = (value) => {
   const text = String(value || "");
@@ -146,6 +148,20 @@ const parseStoredFontSize = (value) => {
     fontSize: Number(match[1]) || DEFAULT_FORMAT_FONT_SIZE,
     text: match[2] || "",
   };
+};
+
+const collapseLegacySizeTags = (value) => {
+  let text = String(value || "");
+  let previous = "";
+  while (previous !== text) {
+    previous = text;
+    text = text.replace(/\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]/g, (match, size, inner) => {
+      const collapsedInner = inner.replace(/\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]/g, (nestedMatch, _nestedSize, nestedInner) => nestedInner);
+      if (Number(size) === DEFAULT_FORMAT_FONT_SIZE) return collapsedInner;
+      return `[size=${size}]${collapsedInner}[/size]`;
+    });
+  }
+  return text;
 };
 
 const renderInlineFormattedText = (text, keyPrefix = "inline") => (
@@ -176,26 +192,54 @@ const renderInlineFormattedText = (text, keyPrefix = "inline") => (
     })
 );
 
-const renderFormattedText = (value, className = "workflow-rich-text") => {
-  const parsedValue = parseStoredFontSize(value);
+const normalizeRichTextFontSize = (value) => {
+  const size = Number.parseInt(String(value || ""), 10);
+  return FONT_SIZE_OPTIONS.includes(size) ? size : null;
+};
+
+const sanitizeRichTextHtml = (html) => {
+  if (typeof DOMParser === "undefined") return "";
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${String(html || "")}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  const sanitizeNode = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || "");
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const tagName = node.tagName.toLowerCase();
+    const children = Array.from(node.childNodes).map(sanitizeNode).join("");
+    if (!RICH_TEXT_ALLOWED_TAGS.has(tagName)) return children;
+    if (tagName === "br") return "<br>";
+    if (tagName === "strong" || tagName === "b") return `<strong>${children}</strong>`;
+    if (tagName === "em" || tagName === "i") return `<em>${children}</em>`;
+    if (tagName === "u") return `<u>${children}</u>`;
+    if (tagName === "ul" || tagName === "ol" || tagName === "li" || tagName === "div" || tagName === "p") {
+      return `<${tagName}>${children}</${tagName}>`;
+    }
+    if (tagName === "span") {
+      const normalizedSize = normalizeRichTextFontSize(node.style?.fontSize);
+      if (normalizedSize && normalizedSize !== DEFAULT_FORMAT_FONT_SIZE) {
+        return `<span style="font-size:${normalizedSize}px;line-height:1.6;">${children}</span>`;
+      }
+      return children;
+    }
+    return children;
+  };
+  return Array.from(root?.childNodes || []).map(sanitizeNode).join("");
+};
+
+const isRichTextHtml = (value) => RICH_TEXT_HTML_PATTERN.test(String(value || ""));
+
+const legacyTextToHtml = (value) => {
+  const parsedValue = parseStoredFontSize(collapseLegacySizeTags(value));
   const text = String(parsedValue.text || "").replace(/\r\n?/g, "\n");
-  if (!text.trim()) return null;
+  if (!text.trim()) return "";
 
   const lines = text.split("\n");
   const blocks = [];
   let index = 0;
-  let blockIndex = 0;
   const isUnorderedItem = (line) => /^\s*[-*]\s+/.test(line);
   const isOrderedItem = (line) => /^\s*\d+\.\s+/.test(line);
-  const renderParagraphLines = (paragraphLines, key) => (
-    <p key={key}>
-      {paragraphLines.flatMap((line, lineIndex) => {
-        const nodes = renderInlineFormattedText(line, `${key}-line-${lineIndex}`);
-        if (lineIndex === 0) return nodes;
-        return [<br key={`${key}-br-${lineIndex}`} />, ...nodes];
-      })}
-    </p>
-  );
+  const renderParagraphLines = (paragraphLines) => `<p>${paragraphLines.map((line) => inlineMarkupToHtml(line)).join("<br>")}</p>`;
 
   while (index < lines.length) {
     const currentLine = lines[index];
@@ -210,16 +254,7 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
         items.push(lines[index].replace(/^\s*[-*]\s+/, ""));
         index += 1;
       }
-      blocks.push(
-        <ul key={`block-${blockIndex}`}>
-          {items.map((item, itemIndex) => (
-            <li key={`block-${blockIndex}-item-${itemIndex}`}>
-              {renderInlineFormattedText(item, `block-${blockIndex}-item-${itemIndex}`)}
-            </li>
-          ))}
-        </ul>,
-      );
-      blockIndex += 1;
+      blocks.push(`<ul>${items.map((item) => `<li>${inlineMarkupToHtml(item)}</li>`).join("")}</ul>`);
       continue;
     }
 
@@ -229,16 +264,7 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
         items.push(lines[index].replace(/^\s*\d+\.\s+/, ""));
         index += 1;
       }
-      blocks.push(
-        <ol key={`block-${blockIndex}`}>
-          {items.map((item, itemIndex) => (
-            <li key={`block-${blockIndex}-item-${itemIndex}`}>
-              {renderInlineFormattedText(item, `block-${blockIndex}-item-${itemIndex}`)}
-            </li>
-          ))}
-        </ol>,
-      );
-      blockIndex += 1;
+      blocks.push(`<ol>${items.map((item) => `<li>${inlineMarkupToHtml(item)}</li>`).join("")}</ol>`);
       continue;
     }
 
@@ -252,18 +278,24 @@ const renderFormattedText = (value, className = "workflow-rich-text") => {
       paragraphLines.push(lines[index]);
       index += 1;
     }
-    blocks.push(renderParagraphLines(paragraphLines, `block-${blockIndex}`));
-    blockIndex += 1;
+    blocks.push(renderParagraphLines(paragraphLines));
   }
 
-  return (
-    <div
-      className={className}
-      style={parsedValue.fontSize !== DEFAULT_FORMAT_FONT_SIZE ? { fontSize: `${parsedValue.fontSize}px`, lineHeight: 1.6 } : undefined}
-    >
-      {blocks}
-    </div>
-  );
+  const innerHtml = blocks.join("");
+  if (parsedValue.fontSize !== DEFAULT_FORMAT_FONT_SIZE) {
+    return `<div style="font-size:${parsedValue.fontSize}px;line-height:1.6;">${innerHtml}</div>`;
+  }
+  return innerHtml;
+};
+
+const renderFormattedText = (value, className = "workflow-rich-text") => {
+  const rawValue = String(value || "");
+  if (!rawValue.trim()) return null;
+  const html = isRichTextHtml(rawValue)
+    ? sanitizeRichTextHtml(rawValue)
+    : legacyTextToHtml(rawValue);
+  if (!html) return null;
+  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
 const FORMAT_ACTIONS = [
@@ -280,7 +312,7 @@ const escapeHtml = (value) => String(value || "")
   .replaceAll("'", "&#39;");
 
 const inlineMarkupToHtml = (text) => {
-  const parts = String(text || "").split(INLINE_FORMAT_PATTERN).filter((part) => part !== "");
+  const parts = collapseLegacySizeTags(text).split(INLINE_FORMAT_PATTERN).filter((part) => part !== "");
   return parts.map((part) => {
     const sizeMatch = part.match(/^\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]$/);
     if (sizeMatch) {
@@ -301,12 +333,11 @@ const inlineMarkupToHtml = (text) => {
 };
 
 const editorValueToHtml = (value) => {
-  const text = String(value || "").replace(/\r\n?/g, "\n");
-  if (!text) return "";
-  return text
-    .split("\n")
-    .map((line) => line ? inlineMarkupToHtml(line) : "<br>")
-    .join("<br>");
+  const rawValue = String(value || "");
+  if (!rawValue) return "";
+  return isRichTextHtml(rawValue)
+    ? sanitizeRichTextHtml(rawValue)
+    : legacyTextToHtml(rawValue);
 };
 
 const unwrapElement = (element) => {
@@ -358,34 +389,26 @@ const normalizeEditorDom = (root) => {
   mergeAdjacent(root);
 };
 
-const serializeEditorNode = (node, inheritedFontSize = DEFAULT_FORMAT_FONT_SIZE) => {
-  if (!node) return "";
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
-  if (node.nodeType !== Node.ELEMENT_NODE) return "";
-  const element = node;
-  const tagName = element.tagName.toLowerCase();
-  if (tagName === "br") return "\n";
-  const inlineSize = Number.parseInt(element.style?.fontSize || "", 10);
-  const effectiveFontSize = Number.isFinite(inlineSize) && inlineSize > 0 ? inlineSize : inheritedFontSize;
-  const children = Array.from(element.childNodes).map((child) => serializeEditorNode(child, effectiveFontSize)).join("");
-  if (Number.isFinite(inlineSize) && inlineSize > 0 && inlineSize !== DEFAULT_FORMAT_FONT_SIZE && inlineSize !== inheritedFontSize) {
-    return `[size=${inlineSize}]${children}[/size]`;
+const stripFontSizeFormatting = (root) => {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  const elements = [];
+  let current = walker.nextNode();
+  while (current) {
+    elements.push(current);
+    current = walker.nextNode();
   }
-  if (tagName === "strong" || tagName === "b") return `**${children}**`;
-  if (tagName === "em" || tagName === "i") return `*${children}*`;
-  if (tagName === "u") return `__${children}__`;
-  if (tagName === "div" || tagName === "p") return `${children}\n`;
-  return children;
+  for (const element of elements) {
+    if (element.nodeType !== Node.ELEMENT_NODE) continue;
+    if (element.style?.fontSize) element.style.fontSize = "";
+    if (element.style?.lineHeight) element.style.lineHeight = "";
+  }
+  normalizeEditorDom(root);
 };
 
 const editorHtmlToValue = (element) => {
   normalizeEditorDom(element);
-  const serialized = Array.from(element?.childNodes || []).map(serializeEditorNode).join("");
-  return serialized
-    .replace(/\u00a0/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n+$/g, "");
+  return sanitizeRichTextHtml(element?.innerHTML || "");
 };
 
 function RichTextEditor({
@@ -448,16 +471,24 @@ function RichTextEditor({
       setSelectedFontSize(nextSize);
       return;
     }
-    const span = document.createElement("span");
-    span.style.fontSize = `${nextSize}px`;
-    span.style.lineHeight = "1.6";
     const fragment = range.extractContents();
-    span.appendChild(fragment);
-    range.insertNode(span);
+    stripFontSizeFormatting(fragment);
+    let insertedNode = null;
+    if (nextSize === DEFAULT_FORMAT_FONT_SIZE) {
+      insertedNode = fragment;
+      range.insertNode(fragment);
+    } else {
+      const span = document.createElement("span");
+      span.style.fontSize = `${nextSize}px`;
+      span.style.lineHeight = "1.6";
+      span.appendChild(fragment);
+      range.insertNode(span);
+      insertedNode = span;
+    }
     normalizeEditorDom(editor);
     selection.removeAllRanges();
     const nextRange = document.createRange();
-    nextRange.selectNodeContents(span.isConnected ? span : editor);
+    nextRange.selectNodeContents(insertedNode?.isConnected ? insertedNode : editor);
     selection.addRange(nextRange);
     onChange(editorHtmlToValue(editor));
     setSelectedFontSize(nextSize);

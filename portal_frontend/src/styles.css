@@ -103,6 +103,14 @@
   --shadow-glow: 0 0 0 1px rgba(74, 110, 231, 0.2), 0 10px 22px rgba(74, 110, 231, 0.12);
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
@@ -316,6 +324,9 @@ h3,
 
 .app-shell {
   min-height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 .sidebar {
@@ -554,6 +565,8 @@ h3,
 
 .app-main {
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
   margin-left: var(--portal-sidebar-width);
   padding-top: var(--header-height);
 }
@@ -573,6 +586,11 @@ h3,
   align-items: center;
   gap: var(--space-4);
   height: var(--header-height);
+  max-width: 100vw;
+}
+
+.header > * {
+  min-width: 0;
 }
 
 .title {
@@ -584,6 +602,7 @@ h3,
 .container {
   max-width: 1120px;
   margin: 0 auto;
+  width: 100%;
   padding: clamp(20px, 3vw, 32px);
   display: grid;
   gap: var(--space-4);
@@ -5758,8 +5777,11 @@ input:disabled {
 
   .header {
     left: 0 !important;
+    width: 100%;
     padding: 0 12px;
     gap: 10px;
+    overflow-x: hidden;
+    justify-content: space-between;
   }
 
   .app-shell.sidebar-hidden .header {
@@ -5783,6 +5805,7 @@ input:disabled {
     align-items: center;
     justify-content: center;
     margin-left: auto;
+    flex: 0 0 auto;
     z-index: 62;
   }
 
@@ -5896,6 +5919,19 @@ input:disabled {
   .app-main,
   .app-shell.sidebar-hidden .app-main {
     margin-left: 0;
+    width: 100%;
+    max-width: 100%;
     padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
+  }
+
+  .container,
+  .container-wide,
+  .request-container {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 12px;
+    padding-right: 12px;
+    overflow-x: hidden;
   }
 }

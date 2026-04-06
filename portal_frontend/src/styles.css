@@ -5780,7 +5780,7 @@ input:disabled {
     width: 100%;
     padding: 0 12px;
     gap: 10px;
-    overflow-x: hidden;
+    overflow: visible;
     justify-content: space-between;
   }
 

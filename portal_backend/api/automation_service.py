@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import mimetypes
@@ -8,14 +9,17 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from html import escape
 from html import unescape
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 from .creator_prompt_trace import ensure_prompt_trace_in_creator_output
+from .four_llm_schemas import CompetitorReference, ContentBrief, KeywordMetric, LinkCandidate, QualityCheckResult, QualityReport
 
 
 DEFAULT_CONVERTER_ENDPOINT = "https://elci.live/convert"
@@ -38,6 +42,7 @@ DEFAULT_CATEGORY_LLM_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_CATEGORY_LLM_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_CATEGORY_LLM_MAX_CATEGORIES = 2
 DEFAULT_CATEGORY_LLM_CONFIDENCE_THRESHOLD = 0.55
+DEFAULT_4LLM_WORD_COUNT = 1800
 ACCESS_CHECK_IMAGE_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0x0AAAAASUVORK5CYII="
 )
@@ -122,6 +127,11 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _read_pipeline_mode() -> str:
+    raw = os.getenv("CREATOR_PIPELINE_MODE", "legacy").strip().lower()
+    return raw if raw in {"legacy", "supervisor", "4llm"} else "legacy"
+
+
 def _normalize_site_selection_url(value: str) -> str:
     cleaned = (value or "").strip()
     if not cleaned:
@@ -186,6 +196,10 @@ def _strip_html_to_text(value: str) -> str:
     text = re.sub(r"<[^>]+>", " ", without_styles)
     compact = re.sub(r"\s+", " ", text).strip()
     return compact
+
+
+def _normalize_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
 
 
 def _build_category_selection_messages(
@@ -1193,6 +1207,1063 @@ def _call_creator_stream(
     return result
 
 
+def _call_creator_4llm_endpoint(
+    *,
+    creator_endpoint: str,
+    path: str,
+    body: Dict[str, Any],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    return _request_json(
+        "POST",
+        creator_endpoint.rstrip("/") + path,
+        json_body=body,
+        timeout_seconds=timeout_seconds,
+        allow_redirects=False,
+    )
+
+
+def call_creator_site_understanding(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    timeout_seconds: int,
+    max_pages: int = 10,
+) -> Dict[str, Any]:
+    return _call_creator_4llm_endpoint(
+        creator_endpoint=creator_endpoint,
+        path="/site-understanding",
+        body={"target_site_url": target_site_url, "max_pages": max_pages},
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def call_creator_draft_article(
+    *,
+    creator_endpoint: str,
+    content_brief: Dict[str, Any],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    return _call_creator_4llm_endpoint(
+        creator_endpoint=creator_endpoint,
+        path="/draft-article",
+        body={"content_brief": content_brief},
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def call_creator_integrate_links(
+    *,
+    creator_endpoint: str,
+    article_markdown: str,
+    internal_links: List[Dict[str, Any]],
+    external_links: List[Dict[str, Any]],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    return _call_creator_4llm_endpoint(
+        creator_endpoint=creator_endpoint,
+        path="/integrate-links",
+        body={
+            "article_markdown": article_markdown,
+            "internal_links": internal_links,
+            "external_links": external_links,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def call_creator_generate_meta(
+    *,
+    creator_endpoint: str,
+    target_keyword: str,
+    article_title: str,
+    article_intro: str,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    return _call_creator_4llm_endpoint(
+        creator_endpoint=creator_endpoint,
+        path="/generate-meta",
+        body={
+            "target_keyword": target_keyword,
+            "article_title": article_title,
+            "article_intro": article_intro,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _normalize_text_tokens(value: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", " ", str(value or "").lower())
+    cleaned = cleaned.translate(str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"}))
+    cleaned = re.sub(r"[^\w\s-]", " ", cleaned)
+    cleaned = re.sub(r"[_-]+", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _token_set(value: str) -> set[str]:
+    return {token for token in re.findall(r"\b[a-z0-9]{3,}\b", _normalize_text_tokens(value))}
+
+
+def _similarity_score(text: str, reference: str) -> float:
+    left = _token_set(text)
+    right = _token_set(reference)
+    if not left or not right:
+        return 0.0
+    overlap = len(left & right)
+    return overlap / float(max(len(right), 1))
+
+
+def _flatten_candidate_text(candidate: Dict[str, Any]) -> str:
+    profile = candidate.get("publishing_profile_payload") or {}
+    notes = " ".join(str(item).strip() for item in (candidate.get("notes") or []) if str(item).strip())
+    profile_text = " ".join(
+        str(profile.get(key) or "").strip()
+        for key in ("primary_context", "secondary_contexts", "taxonomy_terms", "editorial_terms")
+    )
+    inventory_titles = " ".join(
+        str(item.get("title") or "").strip()
+        for item in (candidate.get("internal_link_inventory") or [])[:8]
+        if isinstance(item, dict)
+    )
+    return " ".join([notes, profile_text, inventory_titles]).strip()
+
+
+def _select_publish_target_for_4llm(
+    *,
+    site_understanding: Dict[str, Any],
+    fallback_target: Dict[str, Any],
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    topic_text = " ".join(
+        [
+            str(site_understanding.get("primary_niche") or ""),
+            str(site_understanding.get("main_topic") or ""),
+            " ".join(str(item) for item in (site_understanding.get("seed_keywords") or [])),
+        ]
+    ).strip()
+    best = dict(fallback_target)
+    best_score = -1.0
+    for candidate in publishing_candidates or []:
+        candidate_text = _flatten_candidate_text(candidate)
+        score = float(candidate.get("fit_score") or 0) / 100.0
+        score += _similarity_score(candidate_text, topic_text) * 3.0
+        language = str((candidate.get("publishing_profile_payload") or {}).get("language") or "").strip().lower()
+        target_language = str(site_understanding.get("language") or "").strip().lower()
+        if language and target_language and language == target_language:
+            score += 1.0
+        if score > best_score:
+            best_score = score
+            best = dict(candidate)
+    return best
+
+
+def _safe_get(url: str, timeout_seconds: int) -> requests.Response:
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout_seconds,
+            headers={"User-Agent": "portal-backend-4llm/1.0"},
+        )
+    except requests.RequestException as exc:
+        raise AutomationError(f"Request failed for {url}: {exc}") from exc
+    if response.status_code >= 400:
+        raise AutomationError(f"HTTP {response.status_code} from {url}: {response.text[:200]}")
+    return response
+
+
+def _dataforseo_auth() -> tuple[str, str]:
+    login = os.getenv("DATAFORSEO_LOGIN", "").strip()
+    password = os.getenv("DATAFORSEO_PASSWORD", "").strip()
+    if not login or not password:
+        raise AutomationError("DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD are required in 4llm mode.")
+    return login, password
+
+
+def _call_dataforseo_keyword(
+    *,
+    keyword: str,
+    timeout_seconds: int,
+) -> KeywordMetric:
+    login, password = _dataforseo_auth()
+    endpoint = os.getenv(
+        "DATAFORSEO_SERP_ENDPOINT",
+        "https://api.dataforseo.com/v3/serp/google/organic/live/advanced",
+    ).strip()
+    body = [
+        {
+            "keyword": keyword,
+            "language_code": os.getenv("DATAFORSEO_LANGUAGE_CODE", "de"),
+            "location_code": int(os.getenv("DATAFORSEO_LOCATION_CODE", "2276")),
+            "device": "desktop",
+            "os": "windows",
+            "depth": 10,
+        }
+    ]
+    try:
+        response = requests.post(endpoint, auth=(login, password), json=body, timeout=timeout_seconds)
+    except requests.RequestException as exc:
+        raise AutomationError(f"DataForSEO request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise AutomationError(f"DataForSEO HTTP {response.status_code}: {response.text[:300]}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError("DataForSEO returned non-JSON response.") from exc
+    tasks = payload.get("tasks") if isinstance(payload, dict) else None
+    result = ((tasks or [{}])[0] or {}).get("result") if isinstance((tasks or [{}])[0], dict) else None
+    first_result = (result or [{}])[0] if isinstance(result, list) and result else {}
+    items = first_result.get("items") if isinstance(first_result, dict) else []
+    top_urls: List[str] = []
+    if isinstance(items, list):
+        for item in items[:10]:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if url:
+                top_urls.append(url)
+    search_volume = int(first_result.get("search_volume") or 0) if isinstance(first_result, dict) else 0
+    keyword_difficulty = float(first_result.get("keyword_difficulty") or 0.0) if isinstance(first_result, dict) else 0.0
+    score = float(search_volume) / float(keyword_difficulty + 1.0)
+    return KeywordMetric(
+        keyword=keyword,
+        search_volume=search_volume,
+        keyword_difficulty=keyword_difficulty,
+        score=score,
+        top_urls=top_urls,
+    )
+
+
+def _derive_content_format(title: str, h2s: List[str]) -> str:
+    normalized = _normalize_text_tokens(" ".join([title] + h2s))
+    if any(token in normalized for token in ("vergleich", "vs", "oder", "unterschied")):
+        return "comparison"
+    if any(token in normalized for token in ("schritt", "anleitung", "so geht", "how to")):
+        return "how-to"
+    if any(token in normalized for token in ("liste", "tipps", "ideen", "checkliste")):
+        return "listicle"
+    return "guide"
+
+
+def _scrape_competitor_reference(url: str, *, timeout_seconds: int) -> CompetitorReference:
+    response = _safe_get(url, timeout_seconds)
+    soup = BeautifulSoup(response.text, "lxml")
+    title = _normalize_text_tokens(soup.title.get_text(" ", strip=True)) if soup.title else ""
+    h1_node = soup.find("h1")
+    h1 = h1_node.get_text(" ", strip=True) if h1_node else ""
+    h2s = [_normalize_whitespace(node.get_text(" ", strip=True)) for node in soup.find_all("h2")][:10]
+    h3s = [_normalize_whitespace(node.get_text(" ", strip=True)) for node in soup.find_all("h3")][:12]
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text = _normalize_whitespace(soup.get_text(" ", strip=True))
+    key_topics = [token for token in list(_token_set(" ".join(h2s + h3s)))[:8]]
+    return CompetitorReference(
+        url=url,
+        title=title or h1 or url,
+        h1=h1,
+        h2s=h2s,
+        h3s=h3s,
+        word_count=len(text.split()),
+        content_format=_derive_content_format(title or h1, h2s),
+        key_topics=key_topics,
+    )
+
+
+def _select_target_keyword(site_understanding: Dict[str, Any], *, timeout_seconds: int) -> tuple[KeywordMetric, List[CompetitorReference]]:
+    seed_keywords = [str(item).strip() for item in (site_understanding.get("seed_keywords") or []) if str(item).strip()]
+    if not seed_keywords:
+        seed_keywords = [
+            str(site_understanding.get("main_topic") or "").strip(),
+            str(site_understanding.get("primary_niche") or "").strip(),
+        ]
+    metrics: List[KeywordMetric] = []
+    for keyword in seed_keywords[:10]:
+        metric = _call_dataforseo_keyword(keyword=keyword, timeout_seconds=timeout_seconds)
+        metrics.append(metric)
+    if not metrics:
+        raise AutomationError("No keyword research results were returned.")
+    selected = max(metrics, key=lambda item: item.score)
+    competitor_references: List[CompetitorReference] = []
+    for url in list(selected.top_urls)[:5]:
+        try:
+            competitor_references.append(_scrape_competitor_reference(url, timeout_seconds=timeout_seconds))
+        except AutomationError:
+            logger.warning("automation.4llm.competitor_scrape_failed url=%s", url)
+    return selected, competitor_references
+
+
+def _infer_search_intent(keyword: str, references: List[CompetitorReference]) -> str:
+    normalized = _normalize_text_tokens(keyword + " " + " ".join(ref.title for ref in references))
+    if any(token in normalized for token in ("kaufen", "preis", "kosten", "angebot")):
+        return "transactional"
+    if any(token in normalized for token in ("vergleich", "beste", "test", "bewertung")):
+        return "commercial"
+    if any(token in normalized for token in ("login", "konto", "kontakt")):
+        return "navigational"
+    return "informational"
+
+
+def _infer_recommended_format(keyword: str, references: List[CompetitorReference]) -> str:
+    if references:
+        formats = [ref.content_format for ref in references if ref.content_format]
+        if formats:
+            return max(set(formats), key=formats.count)
+    return _derive_content_format(keyword, [])
+
+
+def _select_internal_link_candidates(
+    *,
+    inventory: List[Dict[str, Any]],
+    topic_text: str,
+    limit: int = 5,
+) -> List[LinkCandidate]:
+    ranked: List[tuple[float, Dict[str, Any]]] = []
+    for item in inventory:
+        title = str(item.get("title") or "")
+        excerpt = str(item.get("excerpt") or "")
+        score = _similarity_score(f"{title} {excerpt}", topic_text)
+        if score <= 0:
+            continue
+        ranked.append((score, item))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    out: List[LinkCandidate] = []
+    for score, item in ranked[:limit]:
+        out.append(
+            LinkCandidate(
+                url=str(item.get("url") or ""),
+                title=str(item.get("title") or ""),
+                excerpt=str(item.get("excerpt") or ""),
+                relevance_score=min(1.0, round(score, 4)),
+                link_type="internal",
+                target_kind="owned_network",
+            )
+        )
+    return out
+
+
+def _select_target_page_candidates(
+    *,
+    site_understanding: Dict[str, Any],
+    topic_text: str,
+    limit: int = 3,
+) -> List[LinkCandidate]:
+    ranked: List[tuple[float, Dict[str, Any]]] = []
+    for page in site_understanding.get("scraped_pages") or []:
+        if not isinstance(page, dict):
+            continue
+        text = " ".join(
+            [
+                str(page.get("title") or ""),
+                str(page.get("h1") or ""),
+                str(page.get("text_excerpt") or ""),
+            ]
+        )
+        score = _similarity_score(text, topic_text)
+        if score <= 0:
+            continue
+        ranked.append((score, page))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    out: List[LinkCandidate] = []
+    for score, page in ranked[:limit]:
+        out.append(
+            LinkCandidate(
+                url=str(page.get("url") or ""),
+                title=str(page.get("title") or page.get("h1") or ""),
+                excerpt=str(page.get("text_excerpt") or ""),
+                relevance_score=min(1.0, round(score, 4)),
+                link_type="target_backlink",
+                target_kind="target_site",
+            )
+        )
+    return out
+
+
+def _select_cross_network_candidates(
+    *,
+    publishing_candidates: List[Dict[str, Any]],
+    selected_site_url: str,
+    topic_text: str,
+    limit: int = 2,
+) -> List[LinkCandidate]:
+    ranked: List[tuple[float, Dict[str, Any]]] = []
+    for candidate in publishing_candidates:
+        if _normalize_site_selection_url(str(candidate.get("site_url") or "")) == _normalize_site_selection_url(selected_site_url):
+            continue
+        for item in candidate.get("internal_link_inventory") or []:
+            if not isinstance(item, dict):
+                continue
+            text = f"{item.get('title') or ''} {item.get('excerpt') or ''}"
+            score = _similarity_score(text, topic_text)
+            if score <= 0:
+                continue
+            ranked.append((score, item))
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    out: List[LinkCandidate] = []
+    seen: set[str] = set()
+    for score, item in ranked:
+        url = str(item.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(
+            LinkCandidate(
+                url=url,
+                title=str(item.get("title") or ""),
+                excerpt=str(item.get("excerpt") or ""),
+                relevance_score=min(1.0, round(score, 4)),
+                link_type="external",
+                target_kind="owned_network",
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _build_outline(keyword: str, references: List[CompetitorReference]) -> List[str]:
+    topic = keyword.strip()
+    reference_topics: List[str] = []
+    for reference in references[:3]:
+        for heading in reference.h2s[:3]:
+            if heading and heading not in reference_topics:
+                reference_topics.append(heading)
+    outline = [
+        "Einleitung",
+        f"{topic}: Wichtige Grundlagen",
+        reference_topics[0] if len(reference_topics) > 0 else f"{topic}: Praktische Kriterien",
+        reference_topics[1] if len(reference_topics) > 1 else f"{topic}: Häufige Fehler vermeiden",
+        "FAQ",
+        "Fazit",
+    ]
+    return outline[:6]
+
+
+def _recommended_word_count(references: List[CompetitorReference]) -> int:
+    counts = [ref.word_count for ref in references if ref.word_count > 0]
+    if not counts:
+        return DEFAULT_4LLM_WORD_COUNT
+    average = sum(counts) / float(len(counts))
+    bounded = max(900, min(2600, int(round(average / 50.0) * 50)))
+    return bounded
+
+
+def _build_content_brief_4llm(
+    *,
+    target_site_url: str,
+    selected_target: Dict[str, Any],
+    site_understanding: Dict[str, Any],
+    keyword_metric: KeywordMetric,
+    competitor_references: List[CompetitorReference],
+    internal_links: List[LinkCandidate],
+    external_links: List[LinkCandidate],
+) -> ContentBrief:
+    keyword = keyword_metric.keyword
+    topic = str(site_understanding.get("main_topic") or keyword).strip()
+    intent = _infer_search_intent(keyword, competitor_references)
+    recommended_format = _infer_recommended_format(keyword, competitor_references)
+    outline = _build_outline(keyword, competitor_references)
+    title = f"{topic}: {keyword} sinnvoll einordnen"
+    key_topics = list(dict.fromkeys(
+        [topic, keyword] + [topic for ref in competitor_references for topic in ref.key_topics[:2]]
+    ))
+    return ContentBrief(
+        target_keyword=keyword,
+        secondary_keywords=[str(item).strip() for item in (site_understanding.get("seed_keywords") or []) if str(item).strip() and str(item).strip() != keyword][:5],
+        search_intent=intent,
+        recommended_format=recommended_format,
+        recommended_word_count=_recommended_word_count(competitor_references),
+        tone=str(site_understanding.get("content_tone") or "informativ").strip() or "informativ",
+        target_audience=str(site_understanding.get("target_audience") or "Leserinnen und Leser").strip(),
+        suggested_title=title,
+        outline=outline,
+        key_topics_to_cover=key_topics[:8],
+        internal_link_candidates=internal_links,
+        external_link_candidates=external_links,
+        competitor_references=competitor_references,
+        target_site_url=target_site_url,
+        publishing_site_url=str(selected_target.get("site_url") or ""),
+        publishing_site_id=str(selected_target.get("site_id") or "").strip() or None,
+        target_site_language=str(site_understanding.get("language") or "de").strip() or "de",
+        seed_keywords=[str(item).strip() for item in (site_understanding.get("seed_keywords") or []) if str(item).strip()][:10],
+        chosen_topic=topic,
+        notes=[
+            f"Primary niche: {str(site_understanding.get('primary_niche') or '').strip()}",
+            f"Main topic: {topic}",
+        ],
+    )
+
+
+def _extract_markdown_title(markdown: str) -> str:
+    for line in (markdown or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    return ""
+
+
+def _extract_markdown_intro(markdown: str) -> str:
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", markdown or "") if block.strip()]
+    for block in blocks:
+        if block.startswith("#"):
+            continue
+        return re.sub(r"\s+", " ", block).strip()
+    return ""
+
+
+def _extract_markdown_h2s(markdown: str) -> List[str]:
+    return [line.strip()[3:].strip() for line in (markdown or "").splitlines() if line.strip().startswith("## ")]
+
+
+def _extract_plain_text(markdown: str) -> str:
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1", markdown or "")
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"`{1,3}", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _keyword_density(text: str, keyword: str) -> float:
+    normalized_text = _normalize_text_tokens(text)
+    normalized_keyword = _normalize_text_tokens(keyword)
+    if not normalized_text or not normalized_keyword:
+        return 0.0
+    occurrences = normalized_text.count(normalized_keyword)
+    words = max(1, len(normalized_text.split()))
+    return occurrences / float(words)
+
+
+def _extract_markdown_link_targets(markdown: str) -> List[str]:
+    return [url.strip() for _, url in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", markdown or "")]
+
+
+def _classify_link(url: str, target_site_url: str, publishing_site_url: str) -> str:
+    normalized = _normalize_site_selection_url(url)
+    if normalized.startswith(_normalize_site_selection_url(target_site_url)):
+        return "target_backlink"
+    if normalized.startswith(_normalize_site_selection_url(publishing_site_url)):
+        return "internal"
+    return "external"
+
+
+def _validate_links(urls: List[str], timeout_seconds: int) -> tuple[bool, List[str]]:
+    invalid: List[str] = []
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=timeout_seconds, allow_redirects=True, headers={"User-Agent": "portal-backend-4llm/1.0"})
+            if response.status_code >= 400:
+                invalid.append(url)
+        except requests.RequestException:
+            invalid.append(url)
+    return (not invalid, invalid)
+
+
+def _copyscape_credentials() -> tuple[str, str]:
+    username = os.getenv("COPYSCAPE_USERNAME", "").strip()
+    api_key = os.getenv("COPYSCAPE_API_KEY", "").strip()
+    if not username or not api_key:
+        raise AutomationError("COPYSCAPE_USERNAME and COPYSCAPE_API_KEY are required in 4llm mode.")
+    return username, api_key
+
+
+def _run_copyscape_check(content_text: str, timeout_seconds: int) -> float:
+    username, api_key = _copyscape_credentials()
+    endpoint = os.getenv("COPYSCAPE_API_ENDPOINT", "https://www.copyscape.com/api/").strip()
+    try:
+        response = requests.post(
+            endpoint,
+            data={
+                "u": username,
+                "k": api_key,
+                "o": "csearch",
+                "e": "UTF-8",
+                "t": content_text[:8000],
+            },
+            timeout=timeout_seconds,
+        )
+    except requests.RequestException as exc:
+        raise AutomationError(f"Copyscape request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise AutomationError(f"Copyscape HTTP {response.status_code}: {response.text[:300]}")
+    match = re.search(r"<percent>([\d.]+)</percent>", response.text, flags=re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _render_inline_markdown(text: str) -> str:
+    escaped = escape(text)
+    escaped = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r'<a href="\2">\1</a>', escaped)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"\*(.+?)\*", r"<em>\1</em>", escaped)
+    return escaped
+
+
+def markdown_to_html(markdown: str) -> str:
+    lines = (markdown or "").splitlines()
+    parts: List[str] = []
+    in_list = False
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            continue
+        if stripped.startswith("# "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<h1>{_render_inline_markdown(stripped[2:].strip())}</h1>")
+            continue
+        if stripped.startswith("## "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<h2>{_render_inline_markdown(stripped[3:].strip())}</h2>")
+            continue
+        if stripped.startswith("### "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<h3>{_render_inline_markdown(stripped[4:].strip())}</h3>")
+            continue
+        if stripped.startswith("- "):
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{_render_inline_markdown(stripped[2:].strip())}</li>")
+            continue
+        if in_list:
+            parts.append("</ul>")
+            in_list = False
+        parts.append(f"<p>{_render_inline_markdown(stripped)}</p>")
+    if in_list:
+        parts.append("</ul>")
+    return "\n".join(parts).strip()
+
+
+def _build_quality_report(
+    *,
+    linked_markdown: str,
+    content_brief: ContentBrief,
+    meta_preview: Dict[str, Any],
+    timeout_seconds: int,
+) -> QualityReport:
+    plain_text = _extract_plain_text(linked_markdown)
+    word_count = len(plain_text.split())
+    title = _extract_markdown_title(linked_markdown)
+    intro = _extract_markdown_intro(linked_markdown)
+    h2s = _extract_markdown_h2s(linked_markdown)
+    keyword = content_brief.target_keyword
+    normalized_keyword = _normalize_text_tokens(keyword)
+    density = _keyword_density(plain_text, keyword)
+    urls = _extract_markdown_link_targets(linked_markdown)
+    internal_count = 0
+    external_count = 0
+    for url in urls:
+        link_type = _classify_link(url, str(content_brief.target_site_url), str(content_brief.publishing_site_url))
+        if link_type == "internal":
+            internal_count += 1
+        else:
+            external_count += 1
+    links_ok, invalid_links = _validate_links(urls, timeout_seconds)
+    duplicate_percent = _run_copyscape_check(plain_text, timeout_seconds)
+    html_body = markdown_to_html(linked_markdown)
+
+    checks: List[QualityCheckResult] = []
+    blockers: List[str] = []
+    warnings: List[str] = []
+
+    def add_check(name: str, passed: bool, severity: str, details: Dict[str, object]) -> None:
+        checks.append(QualityCheckResult(name=name, passed=passed, severity=severity, details=details))
+        if not passed:
+            if severity == "critical":
+                blockers.append(name)
+            else:
+                warnings.append(name)
+
+    title_has_keyword = normalized_keyword in _normalize_text_tokens(title)
+    intro_has_keyword = normalized_keyword in _normalize_text_tokens(" ".join(intro.split()[:100]))
+    h2_keyword_hits = sum(1 for heading in h2s if normalized_keyword in _normalize_text_tokens(heading))
+    target_min = int(content_brief.recommended_word_count * 0.9)
+    target_max = int(content_brief.recommended_word_count * 1.1)
+
+    add_check("word_count", target_min <= word_count <= target_max, "warning", {"word_count": word_count, "target_min": target_min, "target_max": target_max})
+    add_check("keyword_in_title", title_has_keyword, "critical", {"title": title, "keyword": keyword})
+    add_check("keyword_in_first_100_words", intro_has_keyword, "critical", {"intro": intro[:220], "keyword": keyword})
+    add_check("keyword_in_h2s", h2_keyword_hits >= 2, "warning", {"matches": h2_keyword_hits, "keyword": keyword})
+    add_check("keyword_density", 0.005 <= density <= 0.025, "warning", {"density": density})
+    add_check("meta_description_length", 120 <= len(str(meta_preview.get("meta_description") or "")) <= 160, "warning", {"length": len(str(meta_preview.get("meta_description") or ""))})
+    add_check("internal_links_count", 2 <= internal_count <= 5, "warning", {"count": internal_count})
+    add_check("external_links_count", 1 <= external_count <= 3, "warning", {"count": external_count})
+    add_check("link_validity", links_ok, "critical", {"invalid_links": invalid_links})
+    add_check("duplicate_content", duplicate_percent < 20.0, "critical", {"duplicate_percent": duplicate_percent})
+    add_check("html_conversion", bool(html_body and "<h1>" in html_body), "critical", {"html_length": len(html_body)})
+    return QualityReport(passed=not blockers, blockers=blockers, warnings=warnings, checks=checks)
+
+
+def _slugify(value: str) -> str:
+    normalized = _normalize_text_tokens(value)
+    slug = re.sub(r"\s+", "-", normalized).strip("-")
+    return slug[:90] or "artikel"
+
+
+def _build_creator_output_for_4llm(
+    *,
+    target_site_url: str,
+    selected_site_url: str,
+    selected_site_id: Optional[str],
+    site_understanding: Dict[str, Any],
+    keyword_metric: KeywordMetric,
+    competitor_references: List[CompetitorReference],
+    content_brief: ContentBrief,
+    draft_markdown: str,
+    linked_markdown: str,
+    meta_preview: Dict[str, Any],
+    quality_report: QualityReport,
+    article_html: str,
+) -> Dict[str, Any]:
+    title = _extract_markdown_title(linked_markdown) or content_brief.suggested_title
+    excerpt = _extract_markdown_intro(linked_markdown)[:220]
+    return {
+        "ok": True,
+        "pipeline_mode": "4llm",
+        "target_site_url": target_site_url,
+        "host_site_url": selected_site_url,
+        "host_site_id": selected_site_id,
+        "phase1": site_understanding,
+        "phase2": {
+            "selected_publishing_site_url": selected_site_url,
+            "selected_publishing_site_id": selected_site_id,
+        },
+        "phase3": {
+            "target_keyword": keyword_metric.model_dump(),
+            "competitor_references": [item.model_dump() for item in competitor_references],
+            "internal_link_candidates": [item.model_dump() for item in content_brief.internal_link_candidates],
+            "external_link_candidates": [item.model_dump() for item in content_brief.external_link_candidates],
+        },
+        "phase4": {"content_brief": content_brief.model_dump()},
+        "phase5": {
+            "title": title,
+            "meta_title": str(meta_preview.get("meta_title") or title),
+            "meta_description": str(meta_preview.get("meta_description") or ""),
+            "slug": _slugify(str(meta_preview.get("meta_title") or title)),
+            "excerpt": excerpt,
+            "article_markdown": draft_markdown,
+            "linked_markdown": linked_markdown,
+            "article_html": article_html,
+        },
+        "debug": {
+            "quality_report": quality_report.model_dump(),
+            "meta_preview": meta_preview,
+        },
+    }
+
+
+def _run_create_article_pipeline_4llm(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+    internal_link_inventory: Optional[List[Dict[str, Any]]],
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    existing_wp_post_id: Optional[int],
+    post_status: str,
+    author_id: int,
+    category_ids: Optional[List[int]],
+    category_candidates: Optional[List[Dict[str, Any]]],
+    timeout_seconds: int,
+    creator_timeout_seconds: int,
+    category_llm_enabled: bool,
+    category_llm_api_key: str,
+    category_llm_base_url: str,
+    category_llm_model: str,
+    category_llm_max_categories: int,
+    category_llm_confidence_threshold: float,
+    trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
+) -> Dict[str, Any]:
+    def _trace(level: str, phase: str, event: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        if trace_event is not None:
+            trace_event(level, phase, event, message, details)
+
+    _trace("info", "site_understanding", "start", "Calling creator site-understanding endpoint.")
+    site_understanding = call_creator_site_understanding(
+        creator_endpoint=creator_endpoint,
+        target_site_url=target_site_url,
+        timeout_seconds=creator_timeout_seconds,
+    )
+    _trace(
+        "info",
+        "site_understanding",
+        "complete",
+        "Target site understanding generated.",
+        {"primary_niche": site_understanding.get("primary_niche"), "main_topic": site_understanding.get("main_topic")},
+    )
+
+    selected_target = _select_publish_target_for_4llm(
+        site_understanding=site_understanding,
+        fallback_target={
+            "site_url": site_url,
+            "site_id": publishing_site_id,
+            "wp_rest_base": wp_rest_base,
+            "wp_username": wp_username,
+            "wp_app_password": wp_app_password,
+            "category_ids": list(category_ids or []),
+            "category_candidates": list(category_candidates or []),
+            "internal_link_inventory": list(internal_link_inventory or []),
+        },
+        publishing_candidates=publishing_candidates,
+    )
+    selected_publish_site_url = str(selected_target.get("site_url") or site_url).strip() or site_url
+    selected_publish_site_id = str(selected_target.get("site_id") or publishing_site_id or "").strip() or None
+    selected_wp_rest_base = str(selected_target.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
+    selected_wp_username = str(selected_target.get("wp_username") or wp_username).strip() or wp_username
+    selected_wp_app_password = str(selected_target.get("wp_app_password") or wp_app_password).strip() or wp_app_password
+    selected_category_ids = list(selected_target.get("category_ids") or category_ids or [])
+    selected_category_candidates = list(selected_target.get("category_candidates") or category_candidates or [])
+    selected_inventory = list(selected_target.get("internal_link_inventory") or internal_link_inventory or [])
+    _trace(
+        "info",
+        "site_match",
+        "selected",
+        "Deterministic publishing-site match selected.",
+        {"selected_site_url": selected_publish_site_url, "selected_site_id": selected_publish_site_id},
+    )
+
+    keyword_metric, competitor_references = _select_target_keyword(
+        site_understanding,
+        timeout_seconds=timeout_seconds,
+    )
+    topic_text = " ".join(
+        [
+            keyword_metric.keyword,
+            str(site_understanding.get("main_topic") or ""),
+            str(site_understanding.get("primary_niche") or ""),
+        ]
+    ).strip()
+    internal_candidates = _select_internal_link_candidates(
+        inventory=selected_inventory,
+        topic_text=topic_text,
+        limit=5,
+    )
+    target_page_candidates = _select_target_page_candidates(
+        site_understanding=site_understanding,
+        topic_text=topic_text,
+        limit=3,
+    )
+    cross_network_candidates = _select_cross_network_candidates(
+        publishing_candidates=list(publishing_candidates or []),
+        selected_site_url=selected_publish_site_url,
+        topic_text=topic_text,
+        limit=2,
+    )
+    external_candidates = target_page_candidates + cross_network_candidates
+    content_brief = _build_content_brief_4llm(
+        target_site_url=target_site_url,
+        selected_target=selected_target,
+        site_understanding=site_understanding,
+        keyword_metric=keyword_metric,
+        competitor_references=competitor_references,
+        internal_links=internal_candidates,
+        external_links=external_candidates,
+    )
+    _trace(
+        "info",
+        "content_brief",
+        "ready",
+        "Deterministic content brief assembled.",
+        {"target_keyword": content_brief.target_keyword, "internal_links": len(internal_candidates), "external_links": len(external_candidates)},
+    )
+
+    attempts: List[Dict[str, Any]] = []
+    final_markdown = ""
+    final_meta: Dict[str, Any] = {}
+    final_quality: Optional[QualityReport] = None
+    for attempt_index in range(2):
+        _trace("info", "draft", "start", "Calling creator draft-article endpoint.", {"attempt": attempt_index + 1})
+        draft_payload = call_creator_draft_article(
+            creator_endpoint=creator_endpoint,
+            content_brief=content_brief.model_dump(),
+            timeout_seconds=creator_timeout_seconds,
+        )
+        linked_payload = call_creator_integrate_links(
+            creator_endpoint=creator_endpoint,
+            article_markdown=str(draft_payload.get("markdown") or ""),
+            internal_links=[item.model_dump() for item in internal_candidates],
+            external_links=[item.model_dump() for item in external_candidates],
+            timeout_seconds=creator_timeout_seconds,
+        )
+        linked_markdown = str(linked_payload.get("markdown") or "").strip()
+        title = _extract_markdown_title(linked_markdown) or content_brief.suggested_title
+        intro = _extract_markdown_intro(linked_markdown)
+        meta_payload = call_creator_generate_meta(
+            creator_endpoint=creator_endpoint,
+            target_keyword=content_brief.target_keyword,
+            article_title=title,
+            article_intro=intro,
+            timeout_seconds=creator_timeout_seconds,
+        )
+        quality_report = _build_quality_report(
+            linked_markdown=linked_markdown,
+            content_brief=content_brief,
+            meta_preview=meta_payload,
+            timeout_seconds=timeout_seconds,
+        )
+        attempts.append(
+            {
+                "attempt": attempt_index + 1,
+                "draft_markdown": str(draft_payload.get("markdown") or ""),
+                "linked_markdown": linked_markdown,
+                "meta_preview": meta_payload,
+                "quality_report": quality_report.model_dump(),
+            }
+        )
+        if quality_report.passed:
+            final_markdown = linked_markdown
+            final_meta = meta_payload
+            final_quality = quality_report
+            break
+        _trace(
+            "warning",
+            "quality",
+            "retry",
+            "4llm quality gate requested another draft attempt.",
+            {"attempt": attempt_index + 1, "blockers": list(quality_report.blockers)},
+        )
+
+    if not final_quality:
+        latest = attempts[-1]
+        failed_html = markdown_to_html(str(latest.get("linked_markdown") or ""))
+        failed_quality = QualityReport.model_validate(latest["quality_report"])
+        creator_output = _build_creator_output_for_4llm(
+            target_site_url=target_site_url,
+            selected_site_url=selected_publish_site_url,
+            selected_site_id=selected_publish_site_id,
+            site_understanding=site_understanding,
+            keyword_metric=keyword_metric,
+            competitor_references=competitor_references,
+            content_brief=content_brief,
+            draft_markdown=str(latest.get("draft_markdown") or ""),
+            linked_markdown=str(latest.get("linked_markdown") or ""),
+            meta_preview=dict(latest.get("meta_preview") or {}),
+            quality_report=failed_quality,
+            article_html=failed_html,
+        )
+        raise AutomationError(
+            "4llm quality checks failed.",
+            details={
+                "creator_output": creator_output,
+                "quality_report": failed_quality.model_dump(),
+            },
+        )
+
+    article_html = markdown_to_html(final_markdown)
+    if category_llm_enabled and selected_category_candidates and category_llm_api_key:
+        try:
+            llm_selected_ids = _select_categories_with_llm(
+                title=_extract_markdown_title(final_markdown) or content_brief.suggested_title,
+                excerpt=_extract_markdown_intro(final_markdown),
+                clean_html=article_html,
+                category_candidates=selected_category_candidates,
+                api_key=category_llm_api_key,
+                base_url=category_llm_base_url,
+                model=category_llm_model,
+                max_categories=max(1, category_llm_max_categories),
+                confidence_threshold=max(0.0, min(1.0, category_llm_confidence_threshold)),
+                timeout_seconds=timeout_seconds,
+            )
+            selected_category_ids = llm_selected_ids
+        except AutomationError as exc:
+            _trace("warning", "categories", "llm_fallback", "Category LLM selection failed; using defaults.", {"error": str(exc)})
+
+    featured_media_id = 0 if existing_wp_post_id else None
+    title = _extract_markdown_title(final_markdown) or content_brief.suggested_title
+    excerpt = _extract_markdown_intro(final_markdown)[:220]
+    slug = _slugify(str(final_meta.get("meta_title") or title))
+    if existing_wp_post_id:
+        post_payload = wp_update_post(
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
+            post_id=existing_wp_post_id,
+            title=title,
+            clean_html=_strip_leading_h1_from_article_html(article_html),
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_updated"
+    else:
+        post_payload = wp_create_post(
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
+            title=title,
+            clean_html=_strip_leading_h1_from_article_html(article_html),
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_created"
+
+    creator_output = _build_creator_output_for_4llm(
+        target_site_url=target_site_url,
+        selected_site_url=selected_publish_site_url,
+        selected_site_id=selected_publish_site_id,
+        site_understanding=site_understanding,
+        keyword_metric=keyword_metric,
+        competitor_references=competitor_references,
+        content_brief=content_brief,
+        draft_markdown=str(attempts[-1].get("draft_markdown") or ""),
+        linked_markdown=final_markdown,
+        meta_preview=final_meta,
+        quality_report=final_quality,
+        article_html=article_html,
+    )
+    creator_output["pipeline_state"] = {
+        "site_understanding": site_understanding,
+        "selected_publishing_site": {
+            "site_url": selected_publish_site_url,
+            "site_id": selected_publish_site_id,
+        },
+        "keyword_research": keyword_metric.model_dump(),
+        "content_brief": content_brief.model_dump(),
+        "quality_report": final_quality.model_dump(),
+        "meta_preview": final_meta,
+    }
+    creator_output["phase5"]["quality_report"] = final_quality.model_dump()
+    return {
+        "creator_output": creator_output,
+        "image_url": "",
+        "media_payload": {},
+        "media_url": None,
+        "post_payload": post_payload,
+        "post_event_type": post_event_type,
+        "selected_category_ids": selected_category_ids,
+        "selected_site_id": selected_publish_site_id,
+        "selected_site_url": selected_publish_site_url,
+    }
+
+
 def run_create_article_pipeline(
     *,
     creator_endpoint: str,
@@ -1242,6 +2313,34 @@ def run_create_article_pipeline(
     trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
+    if _read_pipeline_mode() == "4llm":
+        return _run_create_article_pipeline_4llm(
+            creator_endpoint=creator_endpoint,
+            target_site_url=target_site_url,
+            publishing_site_url=publishing_site_url,
+            publishing_site_id=publishing_site_id,
+            publishing_candidates=publishing_candidates,
+            internal_link_inventory=internal_link_inventory,
+            site_url=site_url,
+            wp_rest_base=wp_rest_base,
+            wp_username=wp_username,
+            wp_app_password=wp_app_password,
+            existing_wp_post_id=existing_wp_post_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=category_ids,
+            category_candidates=category_candidates,
+            timeout_seconds=timeout_seconds,
+            creator_timeout_seconds=creator_timeout_seconds,
+            category_llm_enabled=category_llm_enabled,
+            category_llm_api_key=category_llm_api_key,
+            category_llm_base_url=category_llm_base_url,
+            category_llm_model=category_llm_model,
+            category_llm_max_categories=category_llm_max_categories,
+            category_llm_confidence_threshold=category_llm_confidence_threshold,
+            trace_event=trace_event,
+        )
+
     def _trace(
         level: str,
         phase: str,
@@ -1726,6 +2825,7 @@ def get_runtime_config() -> Dict[str, Any]:
         category_llm_model = DEFAULT_CATEGORY_LLM_OPENAI_MODEL
 
     return {
+        "creator_pipeline_mode": _read_pipeline_mode(),
         "converter_endpoint": os.getenv("AUTOMATION_CONVERTER_ENDPOINT", DEFAULT_CONVERTER_ENDPOINT).strip(),
         "creator_endpoint": os.getenv("AUTOMATION_CREATOR_ENDPOINT", DEFAULT_CREATOR_ENDPOINT).strip(),
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),

@@ -76,6 +76,11 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _creator_pipeline_mode() -> str:
+    raw = os.getenv("CREATOR_PIPELINE_MODE", "legacy").strip().lower()
+    return raw if raw in {"legacy", "supervisor", "4llm"} else "legacy"
+
+
 def _request_origin_base_url(request: Request) -> str:
     forced = (os.getenv("AUTOMATION_PUBLIC_BASE_URL") or "").strip()
     if forced:
@@ -307,6 +312,7 @@ def _resolve_or_auto_select_publishing_site(
     client_target_site: Optional[ClientTargetSite],
     creator_endpoint: str,
 ) -> Site:
+    pipeline_mode = _creator_pipeline_mode()
     explicit_site = (payload.publishing_site or "").strip()
     target_url = (
         (client_target_site.target_site_url or "").strip()
@@ -335,6 +341,8 @@ def _resolve_or_auto_select_publishing_site(
     exclude_topics = list(creator_history.get("exclude_topics") or [])
     if explicit_site:
         site = _resolve_publishing_site(db, explicit_site)
+        if pipeline_mode == "4llm":
+            return site
         target_profile, target_profile_content_hash, candidate_rankings = top_ranked_publishing_sites_for_target(
             db,
             target_site_url=target_url,
@@ -411,7 +419,7 @@ def _resolve_or_auto_select_publishing_site(
                 "details": top_reason,
             },
         )
-    if _read_bool_env("CREATOR_SUPERVISOR_PIPELINE_ENABLED", False):
+    if pipeline_mode in {"supervisor", "4llm"}:
         provisional = ranked[0]
         provisional_site = next((site for site in candidate_sites if str(site.id) == str(provisional.get("site_id"))), None)
         if provisional_site is None:

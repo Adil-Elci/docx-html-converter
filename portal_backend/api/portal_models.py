@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import ARRAY, BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base
+
+from .vector_types import Vector
 
 Base = declarative_base()
 
@@ -290,6 +292,8 @@ class Job(Base):
     last_error = Column(Text, nullable=True)
     wp_post_id = Column(BigInteger, nullable=True)
     wp_post_url = Column(Text, nullable=True)
+    pipeline_mode = Column(Text, nullable=False, default="legacy")
+    pipeline_state = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -298,7 +302,7 @@ class JobEvent(Base):
     __tablename__ = "job_events"
     __table_args__ = (
         CheckConstraint(
-            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed','creator_phase','canceled')",
+            "event_type IN ('converter_called','converter_ok','image_prompt_ok','image_generated','wp_post_created','wp_post_updated','failed','creator_phase','canceled','site_understood','site_matched','keyword_research_complete','link_mapping_complete','content_brief_ready','quality_checked','review_ready','published')",
             name="job_events_event_type_check",
         ),
     )
@@ -492,6 +496,14 @@ class PublishingSiteArticle(Base):
     slug = Column(Text, nullable=True)
     title = Column(Text, nullable=True)
     excerpt = Column(Text, nullable=True)
+    content_text = Column(Text, nullable=True)
+    content_hash = Column(Text, nullable=True)
+    language = Column(Text, nullable=True)
+    topic = Column(Text, nullable=True)
+    keywords = Column(ARRAY(Text), nullable=True)
+    embedding = Column(Vector(), nullable=True)
+    embedding_model = Column(Text, nullable=True)
+    embedding_updated_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(Text, nullable=False, default="unknown")
     published_at = Column(DateTime(timezone=True), nullable=True)
     modified_at = Column(DateTime(timezone=True), nullable=True)
@@ -499,6 +511,76 @@ class PublishingSiteArticle(Base):
     last_synced_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class TargetSitePage(Base):
+    __tablename__ = "target_site_pages"
+    __table_args__ = (
+        UniqueConstraint("target_site_url", "page_url", name="target_site_pages_target_page_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_target_site_id = Column(UUID(as_uuid=True), ForeignKey("client_target_sites.id", ondelete="SET NULL"), nullable=True)
+    target_site_url = Column(Text, nullable=False)
+    page_url = Column(Text, nullable=False)
+    title = Column(Text, nullable=True)
+    excerpt = Column(Text, nullable=True)
+    content_text = Column(Text, nullable=True)
+    content_hash = Column(Text, nullable=True)
+    language = Column(Text, nullable=True)
+    embedding = Column(Vector(), nullable=True)
+    embedding_model = Column(Text, nullable=True)
+    last_scraped_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class SEOResearchCache(Base):
+    __tablename__ = "seo_research_cache"
+    __table_args__ = (
+        CheckConstraint("provider IN ('dataforseo','copyscape')", name="seo_research_cache_provider_check"),
+        CheckConstraint(
+            "cache_kind IN ('keyword_metrics','serp_results','duplicate_check')",
+            name="seo_research_cache_kind_check",
+        ),
+        UniqueConstraint("provider", "cache_kind", "lookup_key", "locale", name="seo_research_cache_lookup_unique"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider = Column(Text, nullable=False)
+    cache_kind = Column(Text, nullable=False)
+    lookup_key = Column(Text, nullable=False)
+    locale = Column(Text, nullable=True)
+    content_hash = Column(Text, nullable=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    fetched_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PlacedLink(Base):
+    __tablename__ = "placed_links"
+    __table_args__ = (
+        CheckConstraint(
+            "link_type IN ('internal','external','target_backlink')",
+            name="placed_links_link_type_check",
+        ),
+        CheckConstraint(
+            "target_kind IN ('owned_network','target_site')",
+            name="placed_links_target_kind_check",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
+    source_url = Column(Text, nullable=True)
+    target_url = Column(Text, nullable=False)
+    anchor_text = Column(Text, nullable=False)
+    link_type = Column(Text, nullable=False)
+    target_kind = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class PublishingSiteArticleCategory(Base):

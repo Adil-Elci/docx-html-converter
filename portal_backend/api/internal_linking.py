@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 from datetime import datetime, timezone
 import re
@@ -169,6 +170,17 @@ def upsert_publishing_site_article(
     article.slug = str(post_payload.get("slug") or "").strip() or None
     article.title = _extract_rendered_text(post_payload.get("title")) or None
     article.excerpt = _derive_inventory_excerpt(post_payload) or None
+    article.content_text = _strip_rendered_html(post_payload.get("content")) or None
+    article.content_hash = (
+        hashlib.sha256(article.content_text.encode("utf-8")).hexdigest()
+        if article.content_text
+        else None
+    )
+    article.language = None
+    article.topic = article.title
+    article.keywords = None
+    article.embedding_model = None
+    article.embedding_updated_at = None
     article.status = str(post_payload.get("status") or "unknown").strip().lower() or "unknown"
     article.published_at = _coerce_datetime(post_payload.get("date_gmt")) or _coerce_datetime(post_payload.get("date"))
     article.modified_at = _coerce_datetime(post_payload.get("modified_gmt")) or _coerce_datetime(post_payload.get("modified"))

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import logging
+import re
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set
@@ -36,11 +38,13 @@ from .portal_models import (
     CreatorOutput,
     Job,
     JobEvent,
+    PlacedLink,
     Site,
     SiteCategory,
     SiteCredential,
     SiteDefaultCategory,
     Submission,
+    TargetSitePage,
 )
 from .site_profiles import (
     ensure_publishing_site_profile,
@@ -278,6 +282,13 @@ class AutomationJobWorker:
             payload_copy.setdefault("ok", False)
             payload_copy["error"] = error_message
             _sync_site_selection_from_creator_output(session, job=job, submission=submission, creator_output=payload_copy)
+            pipeline_mode = str(payload_copy.get("pipeline_mode") or "").strip()
+            if pipeline_mode:
+                job.pipeline_mode = pipeline_mode
+            pipeline_state = payload_copy.get("pipeline_state")
+            if isinstance(pipeline_state, dict):
+                job.pipeline_state = pipeline_state
+            session.add(job)
             session.add(
                 CreatorOutput(
                     submission_id=submission.id,
@@ -802,6 +813,7 @@ class AutomationJobWorker:
             target_profile_content_hash = ""
             publishing_profile_payload: Optional[Dict[str, Any]] = None
             publishing_profile_content_hash = ""
+            creator_pipeline_mode = _creator_pipeline_mode()
             if creator_mode:
                 if target_site_url:
                     target_root_url = ""
@@ -963,7 +975,7 @@ class AutomationJobWorker:
                         message="Live internal-link inventory fetch failed; using the DB snapshot instead.",
                         details={"publishing_site_url": site.site_url},
                     )
-                if auto_selected_site and _read_bool_env("CREATOR_SUPERVISOR_PIPELINE_ENABLED", False):
+                if auto_selected_site and creator_pipeline_mode in {"supervisor", "4llm"}:
                     priority_weights = _parse_auto_site_priority_weights()
                     target_root_url = ""
                     if target_site_id:
@@ -1150,6 +1162,7 @@ class AutomationJobWorker:
                 "target_profile_content_hash": target_profile_content_hash,
                 "publishing_profile_payload": publishing_profile_payload,
                 "publishing_profile_content_hash": publishing_profile_content_hash,
+                "creator_pipeline_mode": creator_pipeline_mode,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:
@@ -1287,6 +1300,12 @@ class AutomationJobWorker:
                     submission=submission,
                     creator_output=sync_payload,
                 )
+            pipeline_mode = str(creator_output.get("pipeline_mode") or "").strip()
+            if pipeline_mode:
+                job.pipeline_mode = pipeline_mode
+            pipeline_state = creator_output.get("pipeline_state")
+            if isinstance(pipeline_state, dict):
+                job.pipeline_state = pipeline_state
 
             wp_post_id = post_payload.get("id")
             wp_post_url = post_payload.get("link")
@@ -1310,6 +1329,7 @@ class AutomationJobWorker:
 
             phase5 = creator_output.get("phase5") or {}
             phase6 = creator_output.get("phase6") or {}
+            linked_markdown = str(phase5.get("linked_markdown") or phase5.get("article_markdown") or "").strip()
             featured_prompt = ""
             if isinstance(phase6, dict):
                 featured_image = phase6.get("featured_image")
@@ -1446,6 +1466,67 @@ class AutomationJobWorker:
                         model_name=model_name,
                         publishing_site_id=submission.site_id,
                     )
+            if pipeline_mode == "4llm":
+                site_understanding = creator_output.get("phase1") if isinstance(creator_output.get("phase1"), dict) else {}
+                scraped_pages = site_understanding.get("scraped_pages") if isinstance(site_understanding, dict) else []
+                seen_pages: set[str] = set()
+                for page in scraped_pages or []:
+                    if not isinstance(page, dict):
+                        continue
+                    page_url = str(page.get("url") or "").strip()
+                    if not page_url or page_url in seen_pages:
+                        continue
+                    seen_pages.add(page_url)
+                    existing_page = (
+                        session.query(TargetSitePage)
+                        .filter(TargetSitePage.target_site_url == str(creator_output.get("target_site_url") or ""))
+                        .filter(TargetSitePage.page_url == page_url)
+                        .first()
+                    )
+                    content_text = str(page.get("text_excerpt") or "").strip()
+                    if existing_page is None:
+                        existing_page = TargetSitePage(
+                            client_target_site_id=target_site_id,
+                            target_site_url=str(creator_output.get("target_site_url") or ""),
+                            page_url=page_url,
+                        )
+                    existing_page.title = str(page.get("title") or page.get("h1") or "").strip() or None
+                    existing_page.excerpt = content_text[:600] or None
+                    existing_page.content_text = content_text or None
+                    existing_page.content_hash = (
+                        hashlib.sha256(content_text.encode("utf-8")).hexdigest() if content_text else None
+                    )
+                    existing_page.language = str(site_understanding.get("language") or "").strip() or None
+                    existing_page.last_scraped_at = datetime.datetime.now(datetime.timezone.utc)
+                    existing_page.updated_at = datetime.datetime.now(datetime.timezone.utc)
+                    session.add(existing_page)
+
+                source_url = str(post_payload.get("link") or "").strip() or None
+                session.query(PlacedLink).filter(PlacedLink.job_id == job_id).delete()
+                for placed in _extract_markdown_links(linked_markdown):
+                    link_type, target_kind = _classify_link_type(
+                        placed["url"],
+                        target_site_url=str(creator_output.get("target_site_url") or ""),
+                        host_site_url=str(creator_output.get("host_site_url") or ""),
+                    )
+                    session.add(
+                        PlacedLink(
+                            job_id=job_id,
+                            site_id=job.site_id,
+                            source_url=source_url,
+                            target_url=placed["url"],
+                            anchor_text=placed["anchor_text"],
+                            link_type=link_type,
+                            target_kind=target_kind,
+                        )
+                    )
+                session.add(JobEvent(job_id=job_id, event_type="site_understood", payload={"source": "4llm"}))
+                session.add(JobEvent(job_id=job_id, event_type="site_matched", payload={"source": "4llm", "host_site_url": creator_output.get("host_site_url")}))
+                session.add(JobEvent(job_id=job_id, event_type="keyword_research_complete", payload={"source": "4llm", "target_keyword": ((creator_output.get("phase3") or {}).get("target_keyword") or {}).get("keyword")}))
+                session.add(JobEvent(job_id=job_id, event_type="link_mapping_complete", payload={"source": "4llm"}))
+                session.add(JobEvent(job_id=job_id, event_type="content_brief_ready", payload={"source": "4llm"}))
+                session.add(JobEvent(job_id=job_id, event_type="quality_checked", payload={"source": "4llm", "report": ((creator_output.get("debug") or {}).get("quality_report") or {})}))
+                session.add(JobEvent(job_id=job_id, event_type="review_ready", payload={"source": "4llm", "pending_admin_approval": bool(job.requires_admin_approval)}))
             session.commit()
             try:
                 send_client_publish_notification(session, job_id=job_id, post_payload=post_payload)
@@ -1494,6 +1575,11 @@ def _read_int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _creator_pipeline_mode() -> str:
+    raw = os.getenv("CREATOR_PIPELINE_MODE", "legacy").strip().lower()
+    return raw if raw in {"legacy", "supervisor", "4llm"} else "legacy"
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -1571,3 +1657,24 @@ def _parse_notes(notes: Optional[str]) -> Dict[str, str]:
         if key_clean:
             out[key_clean] = value_clean
     return out
+
+
+def _normalize_site_url(value: str) -> str:
+    cleaned = (value or "").strip().rstrip("/")
+    return cleaned.lower()
+
+
+def _extract_markdown_links(markdown: str) -> List[Dict[str, str]]:
+    return [
+        {"anchor_text": anchor.strip(), "url": url.strip()}
+        for anchor, url in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", markdown or "")
+    ]
+
+
+def _classify_link_type(url: str, *, target_site_url: str, host_site_url: str) -> tuple[str, str]:
+    normalized = _normalize_site_url(url)
+    if normalized.startswith(_normalize_site_url(target_site_url)):
+        return "target_backlink", "target_site"
+    if normalized.startswith(_normalize_site_url(host_site_url)):
+        return "internal", "owned_network"
+    return "external", "owned_network"

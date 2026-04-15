@@ -204,7 +204,9 @@ const sanitizeRichTextHtml = (html) => {
   const doc = parser.parseFromString(`<div>${String(html || "")}</div>`, "text/html");
   const root = doc.body.firstElementChild;
   const sanitizeNode = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) return escapeHtml(node.textContent || "");
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeHtml((node.textContent || "").replace(/\r\n?/g, "\n")).replace(/\n/g, "<br>");
+    }
     if (node.nodeType !== Node.ELEMENT_NODE) return "";
     const tagName = node.tagName.toLowerCase();
     const children = Array.from(node.childNodes).map(sanitizeNode).join("");

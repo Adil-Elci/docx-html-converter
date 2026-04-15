@@ -771,7 +771,7 @@ export default function App() {
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
   const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
-  const isSuperAdmin = isAdminRole(currentUser?.role) && ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -6062,7 +6062,7 @@ function TaskBoardPanel({
     }));
   }, [currentUserId]);
 
-  const isSuperAdmin = isAdminRole(currentUser?.role) && ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
 
   const assignableUsers = useMemo(() => {
     const seen = new Map();

@@ -585,8 +585,8 @@ h3,
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 82%, transparent);
   backdrop-filter: blur(calc(var(--glass-blur) + 2px));
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
   height: var(--header-height);
@@ -595,7 +595,7 @@ h3,
 
 .app-shell.sidebar-hidden .header {
   left: 0;
-  padding-left: max(92px, calc(var(--portal-sidebar-peek) + 28px));
+  padding-left: max(118px, calc(var(--portal-sidebar-peek) + 52px));
 }
 
 .header > * {
@@ -1666,6 +1666,8 @@ input:disabled {
 
 .header-actions {
   justify-content: flex-end;
+  flex: 0 0 auto;
+  min-width: fit-content;
 }
 
 .mobile-menu-btn,
@@ -2476,7 +2478,7 @@ input:disabled {
   max-width: none;
   width: 100%;
   justify-self: stretch;
-  padding: 22px;
+  padding: 18px;
   border: 1px solid var(--border-subtle);
   border-radius: calc(var(--radius) + 4px);
   box-shadow: var(--shadow);
@@ -2896,7 +2898,7 @@ input:disabled {
 .workflow-board-columns {
   display: grid;
   grid-template-columns: repeat(var(--workflow-column-count, 1), minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: 10px;
   overflow-x: hidden;
   overflow-y: visible;
   padding: 2px 2px 8px;
@@ -5117,7 +5119,7 @@ input:disabled {
 
   .app-shell.sidebar-hidden .header {
     left: 0;
-    padding-left: max(76px, calc(var(--portal-sidebar-peek) + 20px));
+    padding-left: max(96px, calc(var(--portal-sidebar-peek) + 34px));
   }
 
   .title {

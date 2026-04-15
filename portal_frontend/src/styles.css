@@ -3428,6 +3428,7 @@ input:disabled {
   gap: 10px;
   font-size: 12px;
   line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .workflow-rich-text p,

@@ -571,6 +571,10 @@ h3,
   padding-top: var(--header-height);
 }
 
+.app-shell.sidebar-hidden .app-main {
+  margin-left: 0;
+}
+
 .header {
   position: fixed;
   top: 0;
@@ -587,6 +591,10 @@ h3,
   gap: var(--space-4);
   height: var(--header-height);
   max-width: 100vw;
+}
+
+.app-shell.sidebar-hidden .header {
+  left: 0;
 }
 
 .header > * {
@@ -3789,6 +3797,11 @@ input:disabled {
   justify-content: flex-end;
 }
 
+.workflow-card-detail-actions-inline {
+  align-self: start;
+  margin-left: auto;
+}
+
 .workflow-card-detail-editor {
   display: grid;
   gap: 8px;
@@ -5052,7 +5065,7 @@ input:disabled {
   }
 
   .app-shell.sidebar-hidden .app-main {
-    margin-left: var(--portal-sidebar-peek);
+    margin-left: 0;
   }
 
   .sidebar-collapse-btn {
@@ -5094,7 +5107,7 @@ input:disabled {
   }
 
   .app-shell.sidebar-hidden .header {
-    left: var(--portal-sidebar-peek);
+    left: 0;
   }
 
   .title {

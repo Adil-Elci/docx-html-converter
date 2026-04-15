@@ -96,11 +96,12 @@ const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
 const SUPER_ADMIN_EMAIL = "aat@elci.cloud";
+const normalizeRole = (role) => String(role || "").trim().toLowerCase().replace(/\s+/g, "_");
 const isAdminRole = (role) => {
-  const normalized = (role || "").trim().toLowerCase();
+  const normalized = normalizeRole(role);
   return normalized === "admin" || normalized === "super_admin";
 };
-const isClientRole = (role) => (role || "").trim().toLowerCase() === "client";
+const isClientRole = (role) => normalizeRole(role) === "client";
 const getRoleStorageBucket = (role) => (isAdminRole(role) ? "admin" : "client");
 const PUBLISHED_PAGE_SIZE = 25;
 const PUBLISHED_PAGE_SIZES = [25, 50, 100];
@@ -771,7 +772,10 @@ export default function App() {
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
   const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
-  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+  const isSuperAdmin = (
+    ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL)
+    || normalizeRole(currentUser?.role) === "super_admin"
+  );
 
   const serializeCreateArticleBlock = useCallback((block) => ({
     id: Number(block?.id || 0),
@@ -6062,7 +6066,11 @@ function TaskBoardPanel({
     }));
   }, [currentUserId]);
 
-  const isSuperAdmin = ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
+  const isSuperAdmin = (
+    ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL)
+    || normalizeRole(currentUser?.role) === "super_admin"
+  );
+  const canEditCardDetails = isSuperAdmin && typeof onUpdateCardDetails === "function";
 
   const assignableUsers = useMemo(() => {
     const seen = new Map();
@@ -7026,14 +7034,6 @@ function TaskBoardPanel({
                     {cardDetailSavingKey === `details:${String(activeCard.id || "")}` ? t("loading") : t("workflowSaveDetails")}
                   </button>
                 </>
-              ) : isSuperAdmin ? (
-                <button
-                  className="btn ghost small"
-                  type="button"
-                  onClick={() => setCardEditOpen(true)}
-                >
-                  {t("workflowEditDetails")}
-                </button>
               ) : null}
             </div>
           </div>
@@ -7096,6 +7096,17 @@ function TaskBoardPanel({
                   <h3 id="workflow-card-details-title">{activeCard.title}</h3>
                 )}
               </div>
+              {!cardEditOpen && canEditCardDetails ? (
+                <div className="workflow-card-detail-actions workflow-card-detail-actions-inline">
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    onClick={() => setCardEditOpen(true)}
+                  >
+                    {t("workflowEditDetails")}
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="workflow-card-details-meta">

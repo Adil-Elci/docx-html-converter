@@ -17,6 +17,8 @@ from ..auth import (
     cookie_samesite_value,
     cookie_secure_enabled,
     create_access_token,
+    effective_role_for_user,
+    ensure_super_admin_user,
     get_current_user,
     hash_password,
     is_admin_role,
@@ -146,11 +148,12 @@ def _send_password_reset_email(*, to_email: str, reset_link: str) -> None:
 
 
 def _user_to_out(user: User) -> UserOut:
+    effective_role = effective_role_for_user(user) or user.role
     return UserOut(
         id=user.id,
         email=user.email,
         full_name=user.full_name,
-        role=user.role,
+        role=effective_role,
         is_active=user.is_active,
         created_at=user.created_at,
         updated_at=user.updated_at,
@@ -178,12 +181,13 @@ def login(
         _record_login_failure(rate_key)
         logger.warning("auth.login_failed email=%s ip=%s reason=inactive", normalized_email, ip)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive.")
+    user = ensure_super_admin_user(db, user)
 
     token_ttl_minutes = access_token_ttl_minutes()
     access_token = create_access_token(
         user_id=user.id,
         email=user.email,
-        role=user.role,
+        role=effective_role_for_user(user) or user.role,
         ttl_minutes=token_ttl_minutes,
     )
     response.set_cookie(

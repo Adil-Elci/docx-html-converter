@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import SUPER_ADMIN_ROLE, hash_password, is_admin_role, is_super_admin_email, require_admin
+from ..auth import SUPER_ADMIN_ROLE, effective_role_for_user, hash_password, is_admin_role, is_super_admin_email, require_admin
 from ..db import get_db
 from ..portal_models import Client, ClientUser, User
 from ..portal_schemas import AdminUserCreate, AdminUserOut, AdminUserUpdate
@@ -60,11 +60,12 @@ def _replace_client_links(db: Session, user_id: UUID, client_ids: List[UUID]) ->
 def _user_to_out(db: Session, user: User) -> AdminUserOut:
     client_rows = db.query(ClientUser.client_id).filter(ClientUser.user_id == user.id).all()
     client_ids = [row[0] for row in client_rows]
+    effective_role = effective_role_for_user(user) or user.role
     return AdminUserOut(
         id=user.id,
         email=user.email,
         full_name=user.full_name,
-        role=user.role,
+        role=effective_role,
         is_active=user.is_active,
         created_at=user.created_at,
         updated_at=user.updated_at,
@@ -142,7 +143,7 @@ def update_admin_user(
             )
 
     if payload.role is not None:
-        user.role = payload.role
+        user.role = new_role
     if "full_name" in payload.__fields_set__:
         user.full_name = payload.full_name
     if payload.is_active is not None:

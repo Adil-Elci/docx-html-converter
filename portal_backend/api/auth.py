@@ -113,6 +113,7 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active.")
+    user = ensure_super_admin_user(db, user)
     return user
 
 
@@ -123,11 +124,33 @@ def is_admin_role(role: Optional[str]) -> bool:
 def is_admin(user: Optional[User]) -> bool:
     if user is None:
         return False
-    return is_admin_role(user.role)
+    return is_admin_role(effective_role_for_user(user))
 
 
 def is_super_admin_email(email: Optional[str]) -> bool:
     return (email or "").strip().lower() == SUPER_ADMIN_EMAIL
+
+
+def effective_role_for_user(user: Optional[User]) -> str:
+    if user is None:
+        return ""
+    if is_super_admin_email(getattr(user, "email", None)):
+        return SUPER_ADMIN_ROLE
+    return (getattr(user, "role", "") or "").strip().lower()
+
+
+def ensure_super_admin_user(db: Session, user: Optional[User]) -> Optional[User]:
+    if user is None:
+        return None
+    if not is_super_admin_email(user.email):
+        return user
+    if (user.role or "").strip().lower() == SUPER_ADMIN_ROLE:
+        return user
+    user.role = SUPER_ADMIN_ROLE
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -139,7 +162,7 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
 def is_super_admin(user: Optional[User]) -> bool:
     if user is None:
         return False
-    return (user.role or "").strip().lower() == SUPER_ADMIN_ROLE and is_super_admin_email(user.email)
+    return effective_role_for_user(user) == SUPER_ADMIN_ROLE and is_super_admin_email(user.email)
 
 
 def require_super_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -173,6 +196,7 @@ def get_optional_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account is not active.")
+    user = ensure_super_admin_user(db, user)
     return user
 
 

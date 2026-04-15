@@ -6558,9 +6558,8 @@ function TaskBoardPanel({
     setPage(1);
   };
 
-  const gridTemplateColumns = `repeat(${Math.max(columns.length, 1)}, minmax(320px, 1fr))`;
   const boardSurfaceStyle = {
-    gridTemplateColumns: gridTemplateColumns || "minmax(0, 1fr)",
+    "--workflow-column-count": String(Math.max(columns.length, 1)),
     "--task-board-page-slots": String(pageSize || STANDARD_PAGE_SIZE),
   };
 

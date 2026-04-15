@@ -595,6 +595,7 @@ h3,
 
 .app-shell.sidebar-hidden .header {
   left: 0;
+  padding-left: max(92px, calc(var(--portal-sidebar-peek) + 28px));
 }
 
 .header > * {
@@ -605,6 +606,8 @@ h3,
   font-size: clamp(28px, 3vw, 40px);
   line-height: 1;
   font-weight: 700;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .container {
@@ -620,6 +623,12 @@ h3,
 .container-wide {
   max-width: none;
   width: 100%;
+}
+
+.app-shell.sidebar-hidden .container,
+.app-shell.sidebar-hidden .container-wide,
+.app-shell.sidebar-hidden .request-container {
+  padding-left: clamp(28px, 4vw, 44px);
 }
 
 .request-container {
@@ -2888,7 +2897,7 @@ input:disabled {
   display: grid;
   grid-template-columns: repeat(var(--workflow-column-count, 1), minmax(0, 1fr));
   gap: var(--space-3);
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: visible;
   padding: 2px 2px 8px;
   min-width: 100%;
@@ -5108,6 +5117,7 @@ input:disabled {
 
   .app-shell.sidebar-hidden .header {
     left: 0;
+    padding-left: max(76px, calc(var(--portal-sidebar-peek) + 20px));
   }
 
   .title {

@@ -3771,7 +3771,7 @@ input:disabled {
 .workflow-card-detail-body {
   display: grid;
   gap: 18px;
-  width: min(100%, 1120px);
+  width: 100%;
 }
 
 .workflow-card-details-header,

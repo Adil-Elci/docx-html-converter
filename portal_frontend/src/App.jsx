@@ -120,7 +120,7 @@ const WORKFLOW_FLAG_COLORS = {
 const FONT_SIZE_TAG_PATTERN = /^\[size=(8|10|12|14|16|18)\]([\s\S]*?)\[\/size\]$/;
 const INLINE_FORMAT_PATTERN = /(\[size=(?:8|10|12|14|16|18)\][\s\S]*?\[\/size\]|__[^_\n]+?__|\*\*[^*\n]+?\*\*|\*[^*\n]+?\*)/g;
 const FONT_SIZE_OPTIONS = [10, 12, 14, 16, 18];
-const DEFAULT_FORMAT_FONT_SIZE = 12;
+const DEFAULT_FORMAT_FONT_SIZE = 14;
 const TASK_BOARD_SORT_DEFAULTS = {
   priority: "desc",
   created_at: "desc",

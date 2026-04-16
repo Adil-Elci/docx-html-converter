@@ -3426,7 +3426,7 @@ input:disabled {
 .workflow-rich-text {
   display: grid;
   gap: 10px;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
 }
@@ -3548,11 +3548,13 @@ input:disabled {
 .workflow-comment-composer {
   display: grid;
   gap: 8px;
+  width: 100%;
 }
 
 .workflow-rich-editor-wrap {
   display: grid;
   gap: 8px;
+  width: 100%;
 }
 
 .workflow-format-toolbar {
@@ -3827,7 +3829,7 @@ input:disabled {
 .workflow-card-detail-editor {
   display: grid;
   gap: 8px;
-  width: min(100%, 620px);
+  width: 100%;
 }
 
 .workflow-card-detail-view input,

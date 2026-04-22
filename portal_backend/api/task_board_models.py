@@ -28,7 +28,7 @@ class TaskBoardCard(Base):
     __table_args__ = (
         CheckConstraint("column_source IN ('auto','manual')", name="task_board_cards_column_source_check"),
         CheckConstraint("card_kind IN ('job','manual')", name="task_board_cards_kind_check"),
-        CheckConstraint("job_type IN ('articles','develop','fix','research')", name="task_board_cards_job_type_check"),
+        CheckConstraint("job_type IN ('articles','develop','fix','research','improvements')", name="task_board_cards_job_type_check"),
         CheckConstraint("priority IN ('urgent','high','medium','low')", name="task_board_cards_priority_check"),
         CheckConstraint(
             "flag_types <@ ARRAY['bug','needs_levent_attention','needs_adil_attention']::text[]",

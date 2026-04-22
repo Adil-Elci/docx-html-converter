@@ -5971,6 +5971,7 @@ function TaskBoardPanel({
     { value: "articles", label: t("workflowJobTypeArticles") },
     { value: "research", label: t("workflowJobTypeResearch") },
     { value: "develop", label: t("workflowJobTypeDevelop") },
+    { value: "improvements", label: t("workflowJobTypeImprovements") },
     { value: "fix", label: t("workflowJobTypeFix") },
   ];
   const priorityOptions = [
@@ -6237,6 +6238,7 @@ function TaskBoardPanel({
     if (normalized === "articles") return t("workflowJobTypeArticles");
     if (normalized === "research") return t("workflowJobTypeResearch");
     if (normalized === "develop" || normalized === "build") return t("workflowJobTypeDevelop");
+    if (normalized === "improvements") return t("workflowJobTypeImprovements");
     if (normalized === "fix") return t("workflowJobTypeFix");
     return normalized || t("notAvailable");
   };

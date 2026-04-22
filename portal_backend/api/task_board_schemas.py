@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, validator
 
 TASK_BOARD_REQUEST_KINDS = {"manual", "submit_article", "create_article"}
 TASK_BOARD_COMMENT_LANGUAGES = {"en", "de"}
-TASK_BOARD_JOB_TYPES = {"articles", "develop", "fix", "research"}
+TASK_BOARD_JOB_TYPES = {"articles", "develop", "fix", "research", "improvements"}
 TASK_BOARD_PRIORITY_LEVELS = {"urgent", "high", "medium", "low"}
 TASK_BOARD_FLAG_ORDER = ("bug", "needs_levent_attention", "needs_adil_attention")
 TASK_BOARD_FLAG_TYPES = set(TASK_BOARD_FLAG_ORDER)
@@ -124,7 +124,7 @@ class TaskBoardCardCreateIn(BaseModel):
     def validate_job_type(cls, value: str) -> str:
         normalized = (value or "").strip().lower()
         if normalized not in TASK_BOARD_JOB_TYPES:
-            raise ValueError("job_type must be one of articles, develop, fix, research.")
+            raise ValueError("job_type must be one of articles, develop, fix, research, improvements.")
         return normalized
 
     @validator("priority")
@@ -239,7 +239,7 @@ class TaskBoardCardUpdateIn(BaseModel):
             return None
         normalized = value.strip().lower()
         if normalized not in TASK_BOARD_JOB_TYPES:
-            raise ValueError("job_type must be one of articles, develop, fix, research.")
+            raise ValueError("job_type must be one of articles, develop, fix, research, improvements.")
         return normalized
 
     @validator("priority")

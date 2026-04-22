@@ -61,6 +61,17 @@ def test_task_board_card_create_in_accepts_research_and_priority() -> None:
     assert payload.priority == "high"
 
 
+def test_task_board_card_create_in_accepts_improvements() -> None:
+    payload = TaskBoardCardCreateIn(
+        title="Refine task board filters",
+        job_type="improvements",
+        priority="medium",
+        assignee_user_id="00000000-0000-0000-0000-000000000001",
+        description="Clean up the Task Board filter interaction and spacing.",
+    )
+    assert payload.job_type == "improvements"
+
+
 def test_task_board_card_create_in_rejects_invalid_priority() -> None:
     with pytest.raises(ValidationError):
         TaskBoardCardCreateIn(
@@ -97,6 +108,11 @@ def test_task_board_card_update_in_allows_full_super_admin_edit_fields() -> None
     )
     assert payload.job_type == "research"
     assert payload.priority == "urgent"
+
+
+def test_task_board_card_update_in_accepts_improvements_job_type() -> None:
+    payload = TaskBoardCardUpdateIn(job_type="improvements")
+    assert payload.job_type == "improvements"
 
 
 def test_card_has_unseen_updates_for_card_created_by_other_user() -> None:

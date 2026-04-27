@@ -61,6 +61,25 @@ def test_task_board_card_create_in_accepts_research_and_priority() -> None:
     assert payload.priority == "high"
 
 
+def test_task_board_card_create_in_accepts_description_up_to_10000_chars() -> None:
+    payload = TaskBoardCardCreateIn(
+        title="Long description",
+        job_type="research",
+        priority="medium",
+        assignee_user_id="00000000-0000-0000-0000-000000000001",
+        description="a" * 10000,
+    )
+    assert len(payload.description) == 10000
+
+
+
+def test_task_board_comment_create_in_accepts_body_up_to_5000_chars() -> None:
+    from portal_backend.api.task_board_schemas import TaskBoardCommentCreateIn
+
+    payload = TaskBoardCommentCreateIn(body="a" * 5000)
+    assert len(payload.body) == 5000
+
+
 def test_task_board_card_create_in_accepts_improvements() -> None:
     payload = TaskBoardCardCreateIn(
         title="Refine task board filters",

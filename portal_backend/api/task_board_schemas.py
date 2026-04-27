@@ -147,8 +147,8 @@ class TaskBoardCardCreateIn(BaseModel):
         normalized = value.strip()
         if not normalized:
             return None
-        if len(normalized) > 4000:
-            raise ValueError("description must be 4000 characters or fewer.")
+        if len(normalized) > 10000:
+            raise ValueError("description must be 10000 characters or fewer.")
         return normalized
 
 
@@ -160,8 +160,8 @@ class TaskBoardCommentCreateIn(BaseModel):
         normalized = (value or "").strip()
         if not normalized:
             raise ValueError("body is required.")
-        if len(normalized) > 4000:
-            raise ValueError("body must be 4000 characters or fewer.")
+        if len(normalized) > 5000:
+            raise ValueError("body must be 5000 characters or fewer.")
         return normalized
 
 
@@ -173,8 +173,8 @@ class TaskBoardCommentUpdateIn(BaseModel):
         normalized = (value or "").strip()
         if not normalized:
             raise ValueError("body is required.")
-        if len(normalized) > 4000:
-            raise ValueError("body must be 4000 characters or fewer.")
+        if len(normalized) > 5000:
+            raise ValueError("body must be 5000 characters or fewer.")
         return normalized
 
 
@@ -187,8 +187,8 @@ class TaskBoardCommentRewriteIn(BaseModel):
         normalized = (value or "").strip()
         if not normalized:
             raise ValueError("body is required.")
-        if len(normalized) > 4000:
-            raise ValueError("body must be 4000 characters or fewer.")
+        if len(normalized) > 5000:
+            raise ValueError("body must be 5000 characters or fewer.")
         return normalized
 
     @validator("language")
@@ -229,8 +229,8 @@ class TaskBoardCardUpdateIn(BaseModel):
         normalized = value.strip()
         if not normalized:
             return None
-        if len(normalized) > 4000:
-            raise ValueError("description must be 4000 characters or fewer.")
+        if len(normalized) > 10000:
+            raise ValueError("description must be 10000 characters or fewer.")
         return normalized
 
     @validator("job_type")

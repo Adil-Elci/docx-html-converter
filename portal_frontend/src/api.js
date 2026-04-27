@@ -16,7 +16,8 @@ async function request(path, options = {}) {
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = data?.detail || data?.error || "Request failed";
+    const validationMessage = Array.isArray(data?.details) ? String(data.details.find((item) => item?.msg)?.msg || "").replace(/^Value error,\s*/, "") : "";
+    const message = validationMessage || data?.detail || data?.error || "Request failed";
     throw new Error(message);
   }
   return data;
@@ -51,7 +52,8 @@ export const api = {
         resolve(data);
         return;
       }
-      const message = data?.detail || data?.error || text || "Request failed";
+      const validationMessage = Array.isArray(data?.details) ? String(data.details.find((item) => item?.msg)?.msg || "").replace(/^Value error,\s*/, "") : "";
+      const message = validationMessage || data?.detail || data?.error || text || "Request failed";
       reject(new Error(message));
     };
 

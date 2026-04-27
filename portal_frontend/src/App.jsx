@@ -198,24 +198,61 @@ const normalizeRichTextFontSize = (value) => {
   return FONT_SIZE_OPTIONS.includes(size) ? size : null;
 };
 
+const shouldInsertInlineSpace = (currentHtml, nextText = "") => {
+  if (!currentHtml || /(?:\s|<br>)$/i.test(currentHtml)) return false;
+  const normalizedNextText = String(nextText || "").trimStart();
+  if (!normalizedNextText) return false;
+  if (/^[,.;:!?)]/.test(normalizedNextText)) return false;
+  return true;
+};
+
 const sanitizeRichTextHtml = (html) => {
   if (typeof DOMParser === "undefined") return "";
   const parser = new DOMParser();
   const doc = parser.parseFromString(`<div>${String(html || "")}</div>`, "text/html");
   const root = doc.body.firstElementChild;
-  const sanitizeNode = (node) => {
+  const sanitizeInlineFlow = (node, parentTag) => {
+    let htmlOutput = "";
+    Array.from(node?.childNodes || []).forEach((child) => {
+      const isNestedBlock = child.nodeType === Node.ELEMENT_NODE && ["div", "p"].includes(child.tagName.toLowerCase());
+      const childHtml = isNestedBlock
+        ? sanitizeInlineFlow(child, parentTag)
+        : sanitizeNode(child, parentTag);
+      if (!childHtml) return;
+      if (isNestedBlock && shouldInsertInlineSpace(htmlOutput, child.textContent || "")) {
+        htmlOutput += " ";
+      }
+      htmlOutput += childHtml;
+      if (isNestedBlock && child.nextSibling && shouldInsertInlineSpace(htmlOutput, child.nextSibling.textContent || "")) {
+        htmlOutput += " ";
+      }
+    });
+    return htmlOutput;
+  };
+  const sanitizeNode = (node, parentTag = "") => {
     if (node.nodeType === Node.TEXT_NODE) {
       return escapeHtml((node.textContent || "").replace(/\r\n?/g, "\n")).replace(/\n/g, "<br>");
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return "";
     const tagName = node.tagName.toLowerCase();
-    const children = Array.from(node.childNodes).map(sanitizeNode).join("");
+    const children = Array.from(node.childNodes).map((child) => sanitizeNode(child, tagName)).join("");
     if (!RICH_TEXT_ALLOWED_TAGS.has(tagName)) return children;
     if (tagName === "br") return "<br>";
     if (tagName === "strong" || tagName === "b") return `<strong>${children}</strong>`;
     if (tagName === "em" || tagName === "i") return `<em>${children}</em>`;
     if (tagName === "u") return `<u>${children}</u>`;
-    if (tagName === "ul" || tagName === "ol" || tagName === "li" || tagName === "div" || tagName === "p") {
+    if (tagName === "li") {
+      return `<li>${sanitizeInlineFlow(node, tagName)}</li>`;
+    }
+    if (tagName === "p") {
+      return `<p>${sanitizeInlineFlow(node, tagName)}</p>`;
+    }
+    if (tagName === "div") {
+      const content = sanitizeInlineFlow(node, tagName);
+      if (parentTag === "li" || parentTag === "p") return content;
+      return `<div>${content}</div>`;
+    }
+    if (tagName === "ul" || tagName === "ol") {
       return `<${tagName}>${children}</${tagName}>`;
     }
     if (tagName === "span") {

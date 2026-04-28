@@ -122,6 +122,7 @@ const INLINE_FORMAT_PATTERN = /(\[size=(?:8|10|12|14|16|18)\][\s\S]*?\[\/size\]|
 const FONT_SIZE_OPTIONS = [10, 12, 14, 16, 18];
 const DEFAULT_FORMAT_FONT_SIZE = 14;
 const TASK_BOARD_SORT_DEFAULTS = {
+  updated_at: "desc",
   priority: "desc",
   created_at: "desc",
   latest_commented: "desc",
@@ -6049,8 +6050,8 @@ function TaskBoardPanel({
   const [filterPanel, setFilterPanel] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMenuSection, setFilterMenuSection] = useState("");
-  const [sortField, setSortField] = useState("priority");
-  const [sortDirection, setSortDirection] = useState(TASK_BOARD_SORT_DEFAULTS.priority);
+  const [sortField, setSortField] = useState("updated_at");
+  const [sortDirection, setSortDirection] = useState(TASK_BOARD_SORT_DEFAULTS.updated_at);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [page, setPage] = useState(1);
@@ -6173,10 +6174,15 @@ function TaskBoardPanel({
       cards: (column.cards || []).filter(cardMatchesFilters),
     }))
   ), [columns, filterUser, filterJobType, filterDateFrom, filterDateTo]);
+  const getCardLastUpdatedTimestamp = useCallback((card) => {
+    const updatedAt = card?.updated_at ? new Date(card.updated_at).getTime() : 0;
+    if (updatedAt) return updatedAt;
+    return card?.created_at ? new Date(card.created_at).getTime() : 0;
+  }, []);
   const compareByDefaultOrder = useCallback((cardA, cardB) => {
-    const priorityA = TASK_BOARD_PRIORITY_ORDER[String(cardA?.priority || "").trim().toLowerCase()] || 0;
-    const priorityB = TASK_BOARD_PRIORITY_ORDER[String(cardB?.priority || "").trim().toLowerCase()] || 0;
-    if (priorityA !== priorityB) return priorityB - priorityA;
+    const updatedA = getCardLastUpdatedTimestamp(cardA);
+    const updatedB = getCardLastUpdatedTimestamp(cardB);
+    if (updatedA !== updatedB) return updatedB - updatedA;
     const createdA = cardA?.created_at ? new Date(cardA.created_at).getTime() : 0;
     const createdB = cardB?.created_at ? new Date(cardB.created_at).getTime() : 0;
     if (createdA !== createdB) return createdB - createdA;
@@ -6184,7 +6190,7 @@ function TaskBoardPanel({
     const positionB = Number(cardB?.position || 0);
     if (positionA !== positionB) return positionA - positionB;
     return String(cardA?.id || "").localeCompare(String(cardB?.id || ""));
-  }, []);
+  }, [getCardLastUpdatedTimestamp]);
   const sortedFilteredColumns = useMemo(() => {
     const getLatestCommentTimestamp = (card) => {
       const comments = Array.isArray(card?.comments) ? card.comments : [];
@@ -6202,6 +6208,8 @@ function TaskBoardPanel({
         const priorityA = TASK_BOARD_PRIORITY_ORDER[String(cardA?.priority || "").trim().toLowerCase()] || 0;
         const priorityB = TASK_BOARD_PRIORITY_ORDER[String(cardB?.priority || "").trim().toLowerCase()] || 0;
         comparison = priorityA - priorityB;
+      } else if (sortField === "updated_at") {
+        comparison = getCardLastUpdatedTimestamp(cardA) - getCardLastUpdatedTimestamp(cardB);
       } else if (sortField === "created_at") {
         const createdA = cardA?.created_at ? new Date(cardA.created_at).getTime() : 0;
         const createdB = cardB?.created_at ? new Date(cardB.created_at).getTime() : 0;
@@ -6222,7 +6230,7 @@ function TaskBoardPanel({
       ...column,
       cards: [...(column.cards || [])].sort(compareCards),
     }));
-  }, [compareByDefaultOrder, filteredColumns, sortDirection, sortField]);
+  }, [compareByDefaultOrder, filteredColumns, getCardLastUpdatedTimestamp, sortDirection, sortField]);
   const maxColumnCardCount = useMemo(() => (
     sortedFilteredColumns.reduce((maxCards, column) => Math.max(maxCards, Array.isArray(column.cards) ? column.cards.length : 0), 0)
   ), [sortedFilteredColumns]);
@@ -6263,6 +6271,7 @@ function TaskBoardPanel({
   }, [maxColumnCardCount, pageSize]);
 
   const getSortFieldLabel = (field) => {
+    if (field === "updated_at") return t("workflowSortUpdatedAt");
     if (field === "priority") return t("workflowSortPriority");
     if (field === "created_at") return t("workflowSortCreatedAt");
     if (field === "latest_commented") return t("workflowSortLatestCommented");
@@ -6671,7 +6680,7 @@ function TaskBoardPanel({
               </button>
               {sortMenuOpen ? (
                 <div className="workflow-sort-menu" role="menu" aria-label={t("workflowSortBy")}>
-                  {["priority", "created_at", "latest_commented", "task_type"].map((field) => (
+                  {["updated_at", "priority", "created_at", "latest_commented", "task_type"].map((field) => (
                     <button
                       key={field}
                       type="button"

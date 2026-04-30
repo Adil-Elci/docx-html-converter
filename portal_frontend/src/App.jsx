@@ -1593,6 +1593,33 @@ export default function App() {
     }
   };
 
+  const loadAdminSectionData = async (forUser = currentUser, section = activeSection) => {
+    if (!isAdminRole(forUser?.role)) return;
+    switch (section) {
+      case "task-board":
+        await loadTaskBoard(forUser);
+        return;
+      case "pending-jobs":
+        await loadPendingJobs(forUser);
+        return;
+      case "published-articles":
+        await loadPublishedArticles(forUser);
+        return;
+      case "rejected-articles":
+        await loadRejectedArticles(forUser);
+        return;
+      case "admin":
+        await Promise.all([
+          loadAdminUsers(forUser),
+          loadKeywordTrendDashboard(forUser),
+          loadSiteFitDashboard(forUser),
+        ]);
+        return;
+      default:
+        return;
+    }
+  };
+
   const publishPendingJob = async (jobId) => {
     try {
       setPublishingJobId(jobId);
@@ -2000,10 +2027,12 @@ export default function App() {
         setLoading(true);
         await loadAll(user);
         if (isAdminRole(user.role)) {
-          await loadAdminUsers(user);
-          await loadKeywordTrendDashboard(user);
-          await loadSiteFitDashboard(user);
-          await loadPendingJobs(user);
+          await Promise.all([
+            loadAdminUsers(user),
+            loadKeywordTrendDashboard(user),
+            loadSiteFitDashboard(user),
+            loadPendingJobs(user),
+          ]);
         }
       } catch (err) {
         setCurrentUser(null);
@@ -2317,20 +2346,7 @@ export default function App() {
       try {
         await loadAll(currentUser);
         if (isAdminRole(currentUser.role)) {
-          await loadTaskBoard(currentUser);
-          if (activeSection === "task-board") {
-            return;
-          } else if (activeSection === "pending-jobs") {
-            await loadPendingJobs(currentUser);
-          } else if (activeSection === "published-articles") {
-            await loadPublishedArticles(currentUser);
-          } else if (activeSection === "rejected-articles") {
-            await loadRejectedArticles(currentUser);
-          } else if (activeSection === "admin") {
-            await loadAdminUsers(currentUser);
-            await loadKeywordTrendDashboard(currentUser);
-            await loadSiteFitDashboard(currentUser);
-          }
+          await loadAdminSectionData(currentUser, activeSection);
         }
       } finally {
         portalRefreshInFlightRef.current = false;
@@ -2443,10 +2459,12 @@ export default function App() {
       setLoading(true);
       await loadAll(user);
       if (isAdminRole(user.role)) {
-        await loadAdminUsers(user);
-        await loadKeywordTrendDashboard(user);
-        await loadSiteFitDashboard(user);
-        await loadPendingJobs(user);
+        await Promise.all([
+          loadAdminUsers(user),
+          loadKeywordTrendDashboard(user),
+          loadSiteFitDashboard(user),
+          loadPendingJobs(user),
+        ]);
       }
     } catch (err) {
       const message = err?.message || "";

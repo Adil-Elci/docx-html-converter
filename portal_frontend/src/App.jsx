@@ -3453,7 +3453,10 @@ export default function App() {
     return (
       <div className="auth-shell">
         <div className="auth-loading" role="status" aria-live="polite">
-          <span className="sr-only">{t("loading")}</span>
+          <span className="auth-loading-label">{t("loading")}</span>
+          <div className="auth-loading-track" aria-hidden="true">
+            <div className="auth-loading-bar" />
+          </div>
         </div>
       </div>
     );

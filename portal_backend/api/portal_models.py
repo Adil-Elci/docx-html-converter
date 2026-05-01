@@ -7,6 +7,7 @@ from sqlalchemy import ARRAY, BigInteger, Boolean, CheckConstraint, Column, Date
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base
 
+from .credential_crypto import EncryptedText
 from .vector_types import Vector
 
 Base = declarative_base()
@@ -175,7 +176,7 @@ class SiteCredential(Base):
     site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     auth_type = Column(Text, nullable=False, default="application_password")
     wp_username = Column(Text, nullable=False)
-    wp_app_password = Column(Text, nullable=False)
+    wp_app_password = Column(EncryptedText, nullable=False)
     author_name = Column(Text, nullable=True)
     author_id = Column(BigInteger, nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
@@ -192,8 +193,8 @@ class SiteAdminCredential(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id", ondelete="CASCADE"), nullable=False)
     wp_admin_login_url = Column(Text, nullable=True)
-    wp_admin_username = Column(Text, nullable=False)
-    wp_admin_password = Column(Text, nullable=False)
+    wp_admin_username = Column(EncryptedText, nullable=False)
+    wp_admin_password = Column(EncryptedText, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

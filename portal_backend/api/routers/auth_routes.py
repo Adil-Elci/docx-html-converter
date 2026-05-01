@@ -98,12 +98,22 @@ def _enforce_login_rate_limit(rate_key: str) -> None:
             )
 
 
+def _trusted_proxy_ips() -> frozenset[str]:
+    raw = (os.getenv("TRUSTED_PROXY_IPS") or "").strip()
+    return frozenset(ip.strip() for ip in raw.split(",") if ip.strip())
+
+
 def _request_ip(request: Request) -> str:
-    forwarded_for = (request.headers.get("x-forwarded-for") or "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
     client = getattr(request, "client", None)
-    return (getattr(client, "host", "") or "").strip()
+    direct_ip = (getattr(client, "host", "") or "").strip()
+
+    trusted = _trusted_proxy_ips()
+    if trusted and direct_ip in trusted:
+        forwarded_for = (request.headers.get("x-forwarded-for") or "").strip()
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+
+    return direct_ip
 
 
 def _password_reset_ttl_minutes() -> int:
@@ -220,12 +230,13 @@ def request_password_reset(
     payload: AuthPasswordResetRequestIn,
     db: Session = Depends(get_db),
 ) -> AuthPasswordResetRequestOut:
+    _NEUTRAL_RESPONSE = AuthPasswordResetRequestOut(message="If this email is registered, you will receive a reset link shortly.")
+
     normalized_email = str(payload.email).strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This email is not registered.")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive.")
+    if not user or not user.is_active:
+        logger.info("auth.password_reset_noop email=%s reason=%s", normalized_email, "inactive" if user else "not_found")
+        return _NEUTRAL_RESPONSE
 
     now = datetime.now(timezone.utc)
     db.query(PasswordResetToken).filter(
@@ -264,7 +275,7 @@ def request_password_reset(
 
     db.commit()
     logger.info("auth.password_reset_requested user_id=%s email=%s", user.id, normalized_email)
-    return AuthPasswordResetRequestOut(message="Password reset link sent.")
+    return _NEUTRAL_RESPONSE
 
 
 @router.post("/password-reset/confirm", response_model=AuthPasswordResetConfirmOut)

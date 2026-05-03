@@ -18,6 +18,8 @@ from html.parser import HTMLParser
 from typing import Dict, List, Optional
 
 from .contract import ContentContract
+from .entity_extract import ExtractedEntity
+from .research import ResearchPayload
 
 
 # ---- Deterministic thresholds -----------------------------------------------
@@ -37,9 +39,42 @@ ANCHOR_DIVERSITY_MIN = 0.6
 WIENER_GRADE_MIN = 8
 WIENER_GRADE_MAX = 12
 ENTITY_COVERAGE_MIN = 0.70
+PAA_QUESTION_TERM_MATCH_MIN = 0.6  # fraction of a question's content words that must appear in the article
 PAA_COVERAGE_MIN = 0.80
 BACKLINK_ANCHOR_NATURALNESS_MIN = 7
 EEAT_DENSITY_MIN = 6
+
+
+# Minimal German stopword set used for PAA-coverage scoring. Not exhaustive
+# linguistically — only common closed-class words that contribute no topical
+# signal when matching question terms against article body.
+_GERMAN_STOPWORDS = frozenset({
+    "aber", "alle", "als", "am", "an", "auch", "auf", "aus",
+    "bei", "bin", "bis", "bist",
+    "da", "dann", "das", "dass", "dein", "dem", "den", "der", "des", "die", "diese", "dieser", "doch", "dort",
+    "ein", "eine", "einem", "einen", "einer", "eines", "er", "es", "etwas",
+    "fuer", "für",
+    "ganz", "gar",
+    "hat", "hatte", "hatten", "haben",
+    "ich", "ihm", "ihr", "ihre", "im", "in", "ist",
+    "ja", "jetzt",
+    "kann", "kein", "keine", "können",
+    "macht",
+    "man", "mehr", "mein", "meine", "mit", "muss", "müssen",
+    "nicht", "noch", "nur",
+    "ob", "oder", "ohne",
+    "schon", "sehr", "sein", "seine", "sich", "sie", "sind", "soll", "sollen", "sondern",
+    "über",
+    "um", "und", "uns", "unser", "unsere", "unter",
+    "viel", "viele", "vom", "von", "vor",
+    "war", "waren", "warum", "was", "wenn", "wer", "werden", "wie", "wir", "wird", "wo", "wofür", "woher", "wohin",
+    "zu", "zum", "zur",
+})
+
+
+def _content_words(text: str) -> List[str]:
+    tokens = re.findall(r"\b[\wäöüÄÖÜß]+\b", (text or "").lower())
+    return [t for t in tokens if t not in _GERMAN_STOPWORDS and len(t) > 2]
 
 
 @dataclass
@@ -255,26 +290,63 @@ def check_german_readability(plain_text: str) -> CheckResult:
     )
 
 
-# ---- LLM-judged stubs (implemented in Phase 2 once research layer exists) ---
+# ---- Research-driven deterministic checks ----------------------------------
 
-def stub_topical_entity_coverage() -> CheckResult:
-    return CheckResult("topical_entity_coverage", True, detail="STUB: requires research layer")
+def check_topical_entity_coverage(
+    plain_text: str,
+    high_coverage_entities: List[ExtractedEntity],
+) -> CheckResult:
+    if not high_coverage_entities:
+        return CheckResult(
+            "topical_entity_coverage",
+            True,
+            value=1.0,
+            detail="no high-coverage entities to enforce",
+        )
+    lowered = plain_text.lower()
+    present = sum(1 for entity in high_coverage_entities if entity.name.lower() in lowered)
+    coverage = present / len(high_coverage_entities)
+    return CheckResult(
+        "topical_entity_coverage",
+        coverage >= ENTITY_COVERAGE_MIN,
+        value=coverage,
+        detail=f"{present}/{len(high_coverage_entities)} high-coverage entities present",
+    )
 
+
+def check_paa_coverage(plain_text: str, paa_questions: List[str]) -> CheckResult:
+    if not paa_questions:
+        return CheckResult("paa_coverage", True, value=1.0, detail="no PAA questions")
+    article_words = set(_content_words(plain_text))
+    covered = 0
+    for question in paa_questions:
+        question_words = _content_words(question)
+        if not question_words:
+            continue
+        matches = sum(1 for word in question_words if word in article_words)
+        if matches / len(question_words) >= PAA_QUESTION_TERM_MATCH_MIN:
+            covered += 1
+    coverage = covered / len(paa_questions)
+    return CheckResult(
+        "paa_coverage",
+        coverage >= PAA_COVERAGE_MIN,
+        value=coverage,
+        detail=f"{covered}/{len(paa_questions)} questions addressed",
+    )
+
+
+# ---- LLM-judged stubs (Phase 3 wires these alongside the contract generator)
 
 def stub_intent_match() -> CheckResult:
-    return CheckResult("intent_match", True, detail="STUB: requires research layer")
-
-
-def stub_paa_coverage() -> CheckResult:
-    return CheckResult("paa_coverage", True, detail="STUB: requires research layer")
+    return CheckResult("intent_match", True, detail="STUB: Phase 3 wires LLM judge")
 
 
 def stub_backlink_anchor_naturalness() -> CheckResult:
-    return CheckResult("backlink_anchor_naturalness", True, detail="STUB: requires LLM judge prompt")
+    return CheckResult("backlink_anchor_naturalness", True, detail="STUB: Phase 3 wires LLM judge")
 
 
 def stub_eeat_density() -> CheckResult:
-    return CheckResult("eeat_signal_density", True, detail="STUB: requires LLM judge prompt")
+    return CheckResult("eeat_signal_density", True, detail="STUB: Phase 3 wires LLM judge")
 
 
 # ---- Orchestrator -----------------------------------------------------------
@@ -286,12 +358,16 @@ def evaluate(
     host_domain: str,
     meta_title: str,
     meta_description: str,
-    competitor_word_count_median: Optional[int] = None,
+    research: Optional[ResearchPayload] = None,
 ) -> QualityReport:
     parser = _parse(article_html)
     plain = parser.plain_text
     primary = contract.target_keyword
     h1 = parser.h1[0] if parser.h1 else ""
+
+    competitor_word_count_median = research.competitor_word_count_median if research else None
+    high_coverage_entities = research.high_coverage_entities if research else []
+    paa_questions = research.paa_questions if research else []
 
     deterministic = [
         check_keyword_in_h1(h1, primary),
@@ -306,11 +382,11 @@ def evaluate(
         check_meta_lengths(meta_title, meta_description),
         check_ai_tell_blocklist(plain, contract.ai_tell_blocklist),
         check_german_readability(plain),
+        check_topical_entity_coverage(plain, high_coverage_entities),
+        check_paa_coverage(plain, paa_questions),
     ]
     llm_judged = [
-        stub_topical_entity_coverage(),
         stub_intent_match(),
-        stub_paa_coverage(),
         stub_backlink_anchor_naturalness(),
         stub_eeat_density(),
     ]

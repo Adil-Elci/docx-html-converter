@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-03 · **Last commit:** `Phase 3b`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-03 · **Last commit:** `Phase 3c (Phase 3 complete)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -52,13 +52,24 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - **2b** `6d68816`: `serp_scrape.py` (competitor body fetch + heading/schema/link extraction) + `entity_extract.py` (Haiku entity extraction with regex verification).
 - **2c** `3324091`: `research.py` orchestrator (`ResearchPayload`) + `topical_gap` helper. Wired 2 of 5 LLM-judged eval stubs (`topical_entity_coverage`, `paa_coverage`) deterministically against research.
 
-### Phase 3 — ContentContract generator · 🔄 IN PROGRESS
-- **3a** ✅ DONE: `creator/api/contract_generator.py` (Opus 4.7 + extended thinking, 4000-token thinking budget, temperature=1.0 as required). Prompt `creator/prompts/contract_generator/v1.md`. Inline `call_opus_with_thinking` because shared `_call_anthropic` doesn't pass the `thinking` parameter (promote to `llm.py` if reused). Schema embedded in system prompt for caching.
-- **3b** ✅ DONE: `creator/api/eval_judge.py` — single Haiku 4.5 call producing all three judge scores (intent_match, backlink_anchor_naturalness, eeat_signal_density) with one-sentence German rationales. Thresholds: 7/7/6 of 10. Wired into `eval_harness.evaluate()` via optional `judge_scores=` param; falls back to stubs when omitted. Prompt `creator/prompts/eval_judge/v1.md`. 90 tests passing (13 new).
-- **3c** 🔜 Integration: research → contract → enforcer end-to-end against eval harness.
+### Phase 3 — ContentContract generator · ✅ COMPLETE
+- **3a** ✅: `creator/api/contract_generator.py` (Opus 4.7 + extended thinking, 4000-token thinking budget, temperature=1.0 as required). Prompt `creator/prompts/contract_generator/v1.md`. Inline `call_opus_with_thinking` because shared `_call_anthropic` doesn't pass the `thinking` parameter (promote to `llm.py` if reused). Schema embedded in system prompt for caching.
+- **3b** ✅: `creator/api/eval_judge.py` — single Haiku 4.5 call producing all three judge scores (intent_match, backlink_anchor_naturalness, eeat_signal_density) with one-sentence German rationales. Thresholds: 7/7/6 of 10. Wired into `eval_harness.evaluate()` via optional `judge_scores=` param; falls back to stubs when omitted. Prompt `creator/prompts/eval_judge/v1.md`.
+- **3c** ✅: integration test (`creator/tests/test_pipeline_integration.py`) exercises research → contract → evaluate end-to-end against mocks. Smoke script `creator/scripts/smoke_pipeline.py` runs the chain LIVE on real APIs (~$0.35/run) with explicit confirmation before the Opus call. **94 tests passing.**
 
-### Phase 4 — Section writer · 🔜
-Parallel Sonnet 4.6 calls, one per H2 section, prompt-cached on the Contract. Output structured JSON; assembled into HTML.
+**Eval harness scorecard at end of Phase 3:**
+
+| Check axis | Source | Status |
+|---|---|---|
+| 12 deterministic SEO checks (keyword density, word count, links, anchors, schema, AI-tells, German readability, etc.) | code | ✅ |
+| `topical_entity_coverage` | research-driven | ✅ |
+| `paa_coverage` | research-driven | ✅ |
+| `intent_match` | Haiku judge | ✅ |
+| `backlink_anchor_naturalness` | Haiku judge | ✅ |
+| `eeat_signal_density` | Haiku judge | ✅ |
+
+### Phase 4 — Section writer · 🔜 NEXT
+Parallel Sonnet 4.6 calls, one per H2 section, prompt-cached on the Contract. Output structured JSON; assembled into HTML. This is the biggest remaining piece (likely 2–3 commits). Cost: ~$0.15/article total (5×Sonnet w/ caching).
 
 ### Phase 5 — Voice & coherence pass · 🔜
 Single Sonnet pass: assemble sections, smooth transitions, enforce voice consistency, strip German AI-tells from blocklist.
@@ -89,12 +100,15 @@ LEONARDO_API_KEY          # later, for Phase 6 image generation wiring
 ## Smoke validation
 
 ```bash
-# DataForSEO live integration (~$0.002 per run)
+# DataForSEO live integration (~$0.002/run)
 python -m creator.scripts.smoke_dataforseo "steuerberater hamburg"
+
+# Full pipeline LIVE: research + Opus 4.7 contract (~$0.35/run, asks for confirmation)
+python -m creator.scripts.smoke_pipeline "steuerberater hamburg" https://client.de/leistungen
 
 # Full creator unit test suite
 python -m pytest creator/tests/ -v
-# Expected: 62 passing as of 3324091
+# Expected: 94 passing as of Phase 3c
 ```
 
 ## Cross-session context pointers

@@ -1,9 +1,11 @@
 """End-to-end smoke test: research -> contract live, on real APIs.
 
-Spends ~$0.35-0.40 per run (DataForSEO ~$0.03, Haiku entity extraction ~$0.02,
-Opus 4.7 contract generation with extended thinking ~$0.30, Haiku judge ~$0.005).
+Spends ~$0.10-0.15 per run (DataForSEO ~$0.03, Haiku entity extraction ~$0.02,
+Sonnet 4.6 contract generation with extended thinking ~$0.06).
 
-Asks for explicit confirmation before the Opus call to avoid accidental spend.
+Asks for explicit confirmation before the contract call to avoid accidental
+spend. Override the model via CREATOR_CONTRACT_MODEL env var (e.g. point at
+Opus 4.7 for the toughest keywords).
 
 Usage:
     python -m creator.scripts.smoke_pipeline "steuerberater hamburg" https://client.de/leistungen
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import List
 
@@ -74,12 +77,13 @@ def main(argv: List[str]) -> int:
     print(_pretty_research_summary(research))
     print()
 
+    contract_model = os.environ.get("CREATOR_CONTRACT_MODEL", "").strip() or "claude-sonnet-4-6 (default)"
     if not args.yes:
-        if not _confirm("Proceed to Opus 4.7 contract generation (~$0.30)?"):
-            print("Aborted before Opus call.")
+        if not _confirm(f"Proceed to contract generation with {contract_model} (~$0.06)?"):
+            print("Aborted before contract call.")
             return 0
 
-    print("Step 2/2: generating ContentContract with Opus 4.7 + extended thinking...")
+    print(f"Step 2/2: generating ContentContract with {contract_model} + extended thinking...")
     try:
         contract = generate_contract(
             research,
@@ -114,7 +118,7 @@ def main(argv: List[str]) -> int:
     if not args.yes and _confirm("Print full contract JSON?"):
         print(json.dumps(contract.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
-    print(f"\nResearch spend: ${research.total_cost_usd:.4f} (Opus + Haiku spend tracked separately in API console)")
+    print(f"\nResearch spend: ${research.total_cost_usd:.4f} (contract + Haiku spend tracked separately in API console)")
     return 0
 
 

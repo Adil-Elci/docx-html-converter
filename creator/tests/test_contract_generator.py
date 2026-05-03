@@ -10,7 +10,7 @@ from creator.api.contract import ContentContract, GermanTone, SearchIntent
 from creator.api.contract_generator import (
     build_system_prompt,
     build_user_prompt,
-    call_opus_with_thinking,
+    call_with_thinking,
     generate_contract,
 )
 from creator.api.dataforseo import KeywordMetric, OrganicResult, RelatedKeyword
@@ -222,10 +222,10 @@ def test_generate_contract_passes_research_to_caller(monkeypatch):
     assert "JSON-Schema" in captured["system_prompt"]
 
 
-# ---- call_opus_with_thinking ----------------------------------------------
+# ---- call_with_thinking ----------------------------------------------
 
 
-def _opus_response(text: str) -> MagicMock:
+def _thinking_response(text: str) -> MagicMock:
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
@@ -238,16 +238,16 @@ def _opus_response(text: str) -> MagicMock:
     return response
 
 
-def test_call_opus_with_thinking_sends_thinking_param():
+def test_call_with_thinking_sends_thinking_param():
     captured = {}
 
     def fake_post(url, headers, json, timeout):
         captured["url"] = url
         captured["json"] = json
-        return _opus_response('{"foo":"bar"}')
+        return _thinking_response('{"foo":"bar"}')
 
     with patch("creator.api.contract_generator.requests.post", side_effect=fake_post):
-        text = call_opus_with_thinking(
+        text = call_with_thinking(
             system_prompt="sys",
             user_prompt="usr",
             api_key="test",
@@ -259,7 +259,7 @@ def test_call_opus_with_thinking_sends_thinking_param():
     assert captured["url"].endswith("/messages")
 
 
-def test_call_opus_with_thinking_skips_thinking_blocks():
+def test_call_with_thinking_skips_thinking_blocks():
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
@@ -271,20 +271,20 @@ def test_call_opus_with_thinking_skips_thinking_blocks():
         "usage": {},
     }
     with patch("creator.api.contract_generator.requests.post", return_value=response):
-        text = call_opus_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+        text = call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
     assert text == "first\nsecond"
 
 
-def test_call_opus_with_thinking_raises_on_http_error():
+def test_call_with_thinking_raises_on_http_error():
     response = MagicMock()
     response.status_code = 400
     response.text = "bad request"
     with patch("creator.api.contract_generator.requests.post", return_value=response):
         with pytest.raises(LLMError, match="HTTP 400"):
-            call_opus_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+            call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
 
 
-def test_call_opus_with_thinking_raises_when_no_text_blocks():
+def test_call_with_thinking_raises_when_no_text_blocks():
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
@@ -293,4 +293,4 @@ def test_call_opus_with_thinking_raises_when_no_text_blocks():
     }
     with patch("creator.api.contract_generator.requests.post", return_value=response):
         with pytest.raises(LLMError, match="missing text"):
-            call_opus_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+            call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")

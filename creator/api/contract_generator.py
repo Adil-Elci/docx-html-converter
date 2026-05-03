@@ -1,10 +1,12 @@
-"""Generate a ContentContract from a research payload via Opus 4.7 + extended thinking.
+"""Generate a ContentContract from a research payload via Sonnet 4.6 + extended thinking.
 
 This is the highest-leverage call in the pipeline. The Contract is the
 immutable per-article spec consumed by the section writer, voice pass, and
 enforcer. Quality of the Contract directly determines quality of the article.
 
-Cost target per call: ~$0.30 (Opus + thinking budget).
+Default model: Sonnet 4.6 with extended thinking (~$0.06/contract). Override
+to Opus 4.7 (~$0.30/contract) by setting CREATOR_CONTRACT_MODEL or passing
+``model=`` if quality on a tough keyword falls short.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from .research import ResearchPayload
 
 logger = logging.getLogger("creator.contract_generator")
 
-DEFAULT_OPUS_MODEL = "claude-opus-4-7"
+DEFAULT_CONTRACT_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_TOKENS = 8000
@@ -137,22 +139,24 @@ def build_system_prompt(prompt: Prompt) -> str:
 # ---- Opus call with extended thinking --------------------------------------
 
 
-def call_opus_with_thinking(
+def call_with_thinking(
     *,
     system_prompt: str,
     user_prompt: str,
     api_key: str,
-    model: str = DEFAULT_OPUS_MODEL,
+    model: str = DEFAULT_CONTRACT_MODEL,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     thinking_budget_tokens: int = DEFAULT_THINKING_BUDGET_TOKENS,
     request_label: str = "contract_generator",
 ) -> str:
-    """Issue a single Opus request with extended thinking enabled.
+    """Issue a single request to a Claude model with extended thinking enabled.
 
     Returns the concatenated text-block content (skips ``thinking`` blocks).
-    Anthropic requires temperature=1.0 when thinking is enabled.
+    Anthropic requires temperature=1.0 when thinking is enabled. Works with
+    any Claude 4.x model that supports extended thinking (Sonnet 4.6 by
+    default; Opus 4.7 is a drop-in upgrade).
     """
 
     url = base_url.rstrip("/") + "/messages"
@@ -209,7 +213,7 @@ def generate_contract(
     target_backlink_url: str,
     anchor_hint: Optional[str] = None,
     api_key: Optional[str] = None,
-    model: str = DEFAULT_OPUS_MODEL,
+    model: Optional[str] = None,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -219,8 +223,9 @@ def generate_contract(
 ) -> ContentContract:
     """Generate the ContentContract for a single article.
 
-    ``llm_caller`` is injected for tests; in production it defaults to the
-    extended-thinking Opus call above.
+    Default model is Sonnet 4.6 (DEFAULT_CONTRACT_MODEL). Override via the
+    ``model`` argument or the ``CREATOR_CONTRACT_MODEL`` env var. ``llm_caller``
+    is injected for tests; in production it defaults to ``call_with_thinking``.
     """
 
     resolved_api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -229,6 +234,7 @@ def generate_contract(
     if not target_backlink_url.strip():
         raise ValueError("target_backlink_url is required.")
 
+    resolved_model = model or os.getenv("CREATOR_CONTRACT_MODEL", "").strip() or DEFAULT_CONTRACT_MODEL
     prompt = load_prompt(PROMPT_NAME, prompt_version)
     system_prompt = build_system_prompt(prompt)
     user_prompt = build_user_prompt(
@@ -237,12 +243,12 @@ def generate_contract(
         anchor_hint=anchor_hint,
     )
 
-    caller = llm_caller or call_opus_with_thinking
+    caller = llm_caller or call_with_thinking
     raw_text = caller(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         api_key=resolved_api_key,
-        model=model,
+        model=resolved_model,
         base_url=base_url,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,

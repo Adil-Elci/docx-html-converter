@@ -30,10 +30,10 @@ RESEARCH (deterministic + Haiku) → ContentContract (Opus 4.7 + extended thinki
 - **German tone**: `Sie` everywhere. Hardcoded in Contract (`GermanTone.SIE`).
 - **Schema markup**: `Article` + `FAQPage` only. Skip `BreadcrumbList` and `Person`.
 - **AI-tell handling**: option (c) — auto-repair on enforcer trigger + telemetry, log every trigger so prompt regression is visible.
-- **Models**: Opus 4.7 (Contract w/ extended thinking) · Sonnet 4.6 (sections + voice) · Haiku 4.5 (research helpers + LLM judge).
+- **Models**: Sonnet 4.6 with extended thinking (Contract; was Opus 4.7 — switched 2026-05-03 for cost; override via `CREATOR_CONTRACT_MODEL=claude-opus-4-7` if quality regresses) · Sonnet 4.6 (sections + voice) · Haiku 4.5 (research helpers + LLM judge).
 - **Locale**: Germany (`location_code=2276`, `language_code="de"`) pinned in DataForSEO.
 - **Eval = objective rubric**, not user-curated gold articles. Rubric grounded in published SEO guidelines + measurable axes.
-- **Cost target**: ~$0.50/article (Opus + 5×Sonnet w/ caching + Haiku helpers + DataForSEO + image).
+- **Cost target**: ~$0.25/article with Sonnet contract default (~$0.50 if reverting to Opus) — Sonnet contract + 5×Sonnet sections w/ caching + Haiku helpers + DataForSEO + image.
 - **Branch strategy**: rebuild lives on `creator-rebuild`. Always push after commit. Open PR when ready to merge.
 
 ## State of the rebuild

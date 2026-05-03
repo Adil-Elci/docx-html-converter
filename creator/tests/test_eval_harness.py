@@ -9,6 +9,7 @@ from creator.api.eval_harness import (
     check_topical_entity_coverage,
     evaluate,
 )
+from creator.api.eval_judge import JudgeAxisResult, JudgeScores
 from creator.api.research import ResearchPayload
 
 
@@ -157,3 +158,63 @@ def test_evaluate_research_driven_checks_passthrough_when_payload_missing():
     by_name = {r.name: r for r in report.deterministic}
     assert by_name["topical_entity_coverage"].passed is True
     assert by_name["paa_coverage"].passed is True
+
+
+# ---- judge_scores wiring ---------------------------------------------------
+
+
+def _judge_scores(intent: int = 9, backlink: int = 8, eeat: int = 7) -> JudgeScores:
+    return JudgeScores(
+        intent_match=JudgeAxisResult(score=intent, rationale="ok", threshold=7),
+        backlink_anchor_naturalness=JudgeAxisResult(score=backlink, rationale="ok", threshold=7),
+        eeat_signal_density=JudgeAxisResult(score=eeat, rationale="ok", threshold=6),
+    )
+
+
+def test_evaluate_uses_judge_scores_when_provided():
+    article = "<h1>Steuerberater Hamburg</h1><p>Steuerberater Hamburg.</p>"
+    report = evaluate(
+        article_html=article,
+        contract=_contract(),
+        host_domain="example.de",
+        meta_title=_contract().meta_title,
+        meta_description=_contract().meta_description,
+        judge_scores=_judge_scores(intent=9, backlink=8, eeat=7),
+    )
+    by_name = {r.name: r for r in report.llm_judged}
+    assert by_name["intent_match"].passed is True
+    assert by_name["intent_match"].value == 9.0
+    assert by_name["backlink_anchor_naturalness"].passed is True
+    assert by_name["eeat_signal_density"].passed is True
+    assert "STUB" not in (by_name["intent_match"].detail or "")
+
+
+def test_evaluate_judge_scores_below_threshold_fail():
+    article = "<h1>Steuerberater Hamburg</h1><p>X.</p>"
+    report = evaluate(
+        article_html=article,
+        contract=_contract(),
+        host_domain="example.de",
+        meta_title=_contract().meta_title,
+        meta_description=_contract().meta_description,
+        judge_scores=_judge_scores(intent=4, backlink=3, eeat=2),
+    )
+    by_name = {r.name: r for r in report.llm_judged}
+    assert by_name["intent_match"].passed is False
+    assert by_name["backlink_anchor_naturalness"].passed is False
+    assert by_name["eeat_signal_density"].passed is False
+
+
+def test_evaluate_falls_back_to_stubs_without_judge_scores():
+    article = "<h1>Steuerberater Hamburg</h1><p>X.</p>"
+    report = evaluate(
+        article_html=article,
+        contract=_contract(),
+        host_domain="example.de",
+        meta_title=_contract().meta_title,
+        meta_description=_contract().meta_description,
+    )
+    by_name = {r.name: r for r in report.llm_judged}
+    # Stubs default to passed=True (no judgment without data)
+    assert by_name["intent_match"].passed is True
+    assert "STUB" in by_name["intent_match"].detail

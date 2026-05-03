@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 
 from .contract import ContentContract
 from .entity_extract import ExtractedEntity
+from .eval_judge import JudgeScores
 from .research import ResearchPayload
 
 
@@ -335,18 +336,35 @@ def check_paa_coverage(plain_text: str, paa_questions: List[str]) -> CheckResult
     )
 
 
-# ---- LLM-judged stubs (Phase 3 wires these alongside the contract generator)
+# ---- LLM-judged checks driven by JudgeScores (Phase 3b) --------------------
+
+def _judge_axis_to_check(name: str, axis) -> CheckResult:
+    return CheckResult(
+        name,
+        axis.passed,
+        value=float(axis.score),
+        detail=axis.rationale or f"score {axis.score}/{axis.threshold} threshold",
+    )
+
+
+def llm_judged_checks_from_scores(scores: JudgeScores) -> List[CheckResult]:
+    return [
+        _judge_axis_to_check("intent_match", scores.intent_match),
+        _judge_axis_to_check("backlink_anchor_naturalness", scores.backlink_anchor_naturalness),
+        _judge_axis_to_check("eeat_signal_density", scores.eeat_signal_density),
+    ]
+
 
 def stub_intent_match() -> CheckResult:
-    return CheckResult("intent_match", True, detail="STUB: Phase 3 wires LLM judge")
+    return CheckResult("intent_match", True, detail="STUB: pass JudgeScores to evaluate() to enable")
 
 
 def stub_backlink_anchor_naturalness() -> CheckResult:
-    return CheckResult("backlink_anchor_naturalness", True, detail="STUB: Phase 3 wires LLM judge")
+    return CheckResult("backlink_anchor_naturalness", True, detail="STUB: pass JudgeScores to evaluate() to enable")
 
 
 def stub_eeat_density() -> CheckResult:
-    return CheckResult("eeat_signal_density", True, detail="STUB: Phase 3 wires LLM judge")
+    return CheckResult("eeat_signal_density", True, detail="STUB: pass JudgeScores to evaluate() to enable")
 
 
 # ---- Orchestrator -----------------------------------------------------------
@@ -359,6 +377,7 @@ def evaluate(
     meta_title: str,
     meta_description: str,
     research: Optional[ResearchPayload] = None,
+    judge_scores: Optional[JudgeScores] = None,
 ) -> QualityReport:
     parser = _parse(article_html)
     plain = parser.plain_text
@@ -385,11 +404,14 @@ def evaluate(
         check_topical_entity_coverage(plain, high_coverage_entities),
         check_paa_coverage(plain, paa_questions),
     ]
-    llm_judged = [
-        stub_intent_match(),
-        stub_backlink_anchor_naturalness(),
-        stub_eeat_density(),
-    ]
+    if judge_scores is not None:
+        llm_judged = llm_judged_checks_from_scores(judge_scores)
+    else:
+        llm_judged = [
+            stub_intent_match(),
+            stub_backlink_anchor_naturalness(),
+            stub_eeat_density(),
+        ]
     return QualityReport(
         contract_target_keyword=primary,
         deterministic=deterministic,

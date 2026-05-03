@@ -282,9 +282,6 @@ class AutomationJobWorker:
             payload_copy.setdefault("ok", False)
             payload_copy["error"] = error_message
             _sync_site_selection_from_creator_output(session, job=job, submission=submission, creator_output=payload_copy)
-            pipeline_mode = str(payload_copy.get("pipeline_mode") or "").strip()
-            if pipeline_mode:
-                job.pipeline_mode = pipeline_mode
             pipeline_state = payload_copy.get("pipeline_state")
             if isinstance(pipeline_state, dict):
                 job.pipeline_state = pipeline_state
@@ -813,7 +810,6 @@ class AutomationJobWorker:
             target_profile_content_hash = ""
             publishing_profile_payload: Optional[Dict[str, Any]] = None
             publishing_profile_content_hash = ""
-            creator_pipeline_mode = _creator_pipeline_mode()
             if creator_mode:
                 if target_site_url:
                     target_root_url = ""
@@ -975,7 +971,7 @@ class AutomationJobWorker:
                         message="Live internal-link inventory fetch failed; using the DB snapshot instead.",
                         details={"publishing_site_url": site.site_url},
                     )
-                if auto_selected_site and creator_pipeline_mode in {"supervisor", "4llm"}:
+                if auto_selected_site:
                     priority_weights = _parse_auto_site_priority_weights()
                     target_root_url = ""
                     if target_site_id:
@@ -1162,7 +1158,6 @@ class AutomationJobWorker:
                 "target_profile_content_hash": target_profile_content_hash,
                 "publishing_profile_payload": publishing_profile_payload,
                 "publishing_profile_content_hash": publishing_profile_content_hash,
-                "creator_pipeline_mode": creator_pipeline_mode,
             }
 
     def _append_event(self, job_id: UUID, event_type: str, payload: Dict[str, Any]) -> None:
@@ -1300,9 +1295,6 @@ class AutomationJobWorker:
                     submission=submission,
                     creator_output=sync_payload,
                 )
-            pipeline_mode = str(creator_output.get("pipeline_mode") or "").strip()
-            if pipeline_mode:
-                job.pipeline_mode = pipeline_mode
             pipeline_state = creator_output.get("pipeline_state")
             if isinstance(pipeline_state, dict):
                 job.pipeline_state = pipeline_state
@@ -1466,8 +1458,9 @@ class AutomationJobWorker:
                         model_name=model_name,
                         publishing_site_id=submission.site_id,
                     )
-            if pipeline_mode == "4llm":
-                site_understanding = creator_output.get("phase1") if isinstance(creator_output.get("phase1"), dict) else {}
+            site_understanding = creator_output.get("phase1") if isinstance(creator_output.get("phase1"), dict) else {}
+            if site_understanding:
+                # 4llm post-processing: persist scraped pages, placed links, phase events.
                 scraped_pages = site_understanding.get("scraped_pages") if isinstance(site_understanding, dict) else []
                 seen_pages: set[str] = set()
                 for page in scraped_pages or []:
@@ -1575,11 +1568,6 @@ def _read_int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
-
-
-def _creator_pipeline_mode() -> str:
-    raw = os.getenv("CREATOR_PIPELINE_MODE", "legacy").strip().lower()
-    return raw if raw in {"legacy", "supervisor", "4llm"} else "legacy"
 
 
 def _read_bool_env(name: str, default: bool) -> bool:

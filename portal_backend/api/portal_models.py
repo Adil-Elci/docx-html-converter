@@ -292,7 +292,6 @@ class Job(Base):
     last_error = Column(Text, nullable=True)
     wp_post_id = Column(BigInteger, nullable=True)
     wp_post_url = Column(Text, nullable=True)
-    pipeline_mode = Column(Text, nullable=False, default="legacy")
     pipeline_state = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

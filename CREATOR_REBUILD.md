@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-03 · **Last commit:** `3324091`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-03 · **Last commit:** `Phase 3a`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -52,10 +52,10 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - **2b** `6d68816`: `serp_scrape.py` (competitor body fetch + heading/schema/link extraction) + `entity_extract.py` (Haiku entity extraction with regex verification).
 - **2c** `3324091`: `research.py` orchestrator (`ResearchPayload`) + `topical_gap` helper. Wired 2 of 5 LLM-judged eval stubs (`topical_entity_coverage`, `paa_coverage`) deterministically against research.
 
-### Phase 3 — ContentContract generator · 🔜 NEXT
-- **3a** Contract generator module (`creator/api/contract_generator.py`) + prompt v1 + tests. Opus 4.7 with extended thinking, prompt caching primed for downstream section writers.
-- **3b** LLM judge for the remaining 3 eval stubs (`intent_match`, `backlink_anchor_naturalness`, `eeat_signal_density`). Haiku, shares context with contract.
-- **3c** Integration: research → contract → enforcer end-to-end against eval harness.
+### Phase 3 — ContentContract generator · 🔄 IN PROGRESS
+- **3a** ✅ DONE: `creator/api/contract_generator.py` (Opus 4.7 + extended thinking, 4000-token thinking budget, temperature=1.0 as required). Prompt `creator/prompts/contract_generator/v1.md`. Inline `call_opus_with_thinking` because shared `_call_anthropic` doesn't pass the `thinking` parameter (promote to `llm.py` if reused). Schema embedded in system prompt for caching. 14 new tests; full suite 76 passing.
+- **3b** 🔜 LLM judge for the remaining 3 eval stubs (`intent_match`, `backlink_anchor_naturalness`, `eeat_signal_density`). Haiku, shares context with contract.
+- **3c** 🔜 Integration: research → contract → enforcer end-to-end against eval harness.
 
 ### Phase 4 — Section writer · 🔜
 Parallel Sonnet 4.6 calls, one per H2 section, prompt-cached on the Contract. Output structured JSON; assembled into HTML.

@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 4c (Phase 4 complete)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 5 (voice pass)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -73,11 +73,11 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - **4b** ✅: `creator/api/article_assembler.py` — pure deterministic stitcher. Sorts `SectionDraft`s by index (out-of-range indices silently dropped), prepends `<h1>`, appends an FAQ block (heading customizable), emits Article + FAQPage JSON-LD `<script>` blocks gated on `contract.schema_spec`. FAQ answer text in JSON-LD is HTML-stripped to plain text (Google requires this); article HTML uses raw `answer_outline`. HTML-escapes user-controlled headings (defense-in-depth).
 - **4c** ✅: prompt caching on the section system prompt. `call_llm_json` and `call_llm_text` now accept `cache_system: bool = False` which routes through `_call_anthropic` to convert the `system` field from a plain string into a list-form content block with `cache_control: {type: "ephemeral"}`. `section_writer.write_section` always passes `cache_system=True`, so within the 5-min cache TTL the second through Nth sections of an article (and any retries) get a 90% input-token discount on the system prompt. **138 tests passing.**
 
-### Phase 5 — Voice & coherence pass · 🔜 NEXT
-Single Sonnet pass: smooth transitions between sections, enforce voice consistency, strip German AI-tells from blocklist. Operates on the assembled article HTML (output of Phase 4b) and produces a refined version. Likely 1–2 commits.
+### Phase 5 — Voice & coherence pass · ✅ COMPLETE
+`creator/api/voice_pass.py` — single Sonnet 4.6 call that takes the assembled article HTML + contract and returns a refined version. Strict preservation rules in the prompt: H1/H2/H3 text, all `<a href>` URLs and anchor texts, all numbers/statistics/dates, all named entities, all `<table>`/`<ul>`/`<ol>` structures, all `<script>` blocks must remain unchanged. Only `<p>` prose is editable. Cached system prompt (cache_system=True). Output post-processed to strip stray `\`\`\`html` codeblock wrapping. Hard validation: every `href=` URL from input must appear in output, otherwise raises `VoicePassValidationError` — voice-pass losing the backlink is the kind of silent regression we want loud. Override model via `CREATOR_VOICE_MODEL`. Prompt `creator/prompts/voice_pass/v1.md` includes a German AI-tell substitution table (Darüber hinaus → Außerdem, etc.). 20 new tests; full creator suite at 156 passing.
 
-### Phase 6 — Deterministic enforcer + review surface · 🔜
-Strict code-based enforcement. Failures → human queue or auto-repair (Sonnet 1-shot). One-page review card for the approver.
+### Phase 6 — Deterministic enforcer + review surface · 🔜 NEXT
+Wire the existing `eval_harness.evaluate()` rubric (12 deterministic + 2 research-driven + 3 LLM-judged) into the actual production decision: pass = ship to human review, fail = auto-repair via Sonnet 1-shot or queue for human fix. Plus build a one-page review card (server-side HTML) showing scores + flagged risks + diff vs contract. Likely 2 commits.
 
 ### Phase 7 — Wire into portal_backend · 🔜
 Update `automation_service.py` and `automation_worker.py` to call new pipeline. Run 5 real orders end-to-end. Measure against eval harness.

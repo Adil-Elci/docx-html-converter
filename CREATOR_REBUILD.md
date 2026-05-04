@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 4a`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 4b`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -69,8 +69,8 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 | `eeat_signal_density` | Haiku judge | ✅ |
 
 ### Phase 4 — Section writer · 🔄 IN PROGRESS
-- **4a** ✅ DONE: `creator/api/section_writer.py` — one Sonnet 4.6 call per H2 section, parallel execution via `ThreadPoolExecutor` (default 4 workers; serial fallback for single-section contracts). Output validated against `SectionDraft` Pydantic model with `body_html`, `links_inserted`, `word_count`. Backlink injection routed to the section whose `section_index` matches the contract's `link_plan` entry. Required entities filtered by `placement_hint` text matching ("section N"). Prompt v1 hardcodes German Sie tone, AI-tell blocklist, structural-tag whitelist, and explicit anchor-strategy rules. 21 new tests; full creator suite at 116 passing.
-- **4b** 🔜 `article_assembler.py` — render FAQ Q&A HTML, emit Article + FAQPage JSON-LD schema blocks, stitch sections + meta + FAQ into final article HTML.
+- **4a** ✅: `creator/api/section_writer.py` — one Sonnet 4.6 call per H2 section, parallel execution via `ThreadPoolExecutor` (default 4 workers; serial fallback for single-section contracts). Output validated against `SectionDraft` Pydantic model with `body_html`, `links_inserted`, `word_count`. Backlink injection routed to the section whose `section_index` matches the contract's `link_plan` entry. Required entities filtered by `placement_hint` text matching ("section N"). Prompt v1 hardcodes German Sie tone, AI-tell blocklist, structural-tag whitelist, and explicit anchor-strategy rules.
+- **4b** ✅: `creator/api/article_assembler.py` — pure deterministic stitcher. Sorts `SectionDraft`s by index (out-of-range indices silently dropped), prepends `<h1>`, appends an FAQ block (heading customizable), emits Article + FAQPage JSON-LD `<script>` blocks gated on `contract.schema_spec`. FAQ answer text in JSON-LD is HTML-stripped to plain text (Google requires this); article HTML uses raw `answer_outline`. HTML-escapes user-controlled headings (defense-in-depth). 17 new tests; full creator suite at 133 passing.
 - **4c** 🔜 prompt caching on the section system prompt (cost optimization — first section pays full input tokens, subsequent ~10%).
 
 ### Phase 5 — Voice & coherence pass · 🔜

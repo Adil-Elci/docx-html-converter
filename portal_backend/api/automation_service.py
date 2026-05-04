@@ -2324,6 +2324,307 @@ def _run_create_article_pipeline_4llm(
     }
 
 
+def _derive_keyword_from_target_profile(target_profile_payload: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(target_profile_payload, dict):
+        return ""
+    for key in ("domain_level_topic", "primary_context", "page_title"):
+        candidate = str(target_profile_payload.get(key) or "").strip()
+        if candidate:
+            return candidate
+    topics = target_profile_payload.get("topics")
+    if isinstance(topics, list) and topics:
+        first = topics[0]
+        if isinstance(first, dict):
+            label = str(first.get("label") or first.get("topic") or "").strip()
+            if label:
+                return label
+        elif isinstance(first, str) and first.strip():
+            return first.strip()
+    return ""
+
+
+def _build_creator_output_for_v2(
+    *,
+    v2_response: Dict[str, Any],
+    target_site_url: str,
+    selected_site_url: str,
+    selected_site_id: Optional[str],
+    target_keyword: str,
+    article_html: str,
+) -> Dict[str, Any]:
+    """Adapt the v2 PipelineRun response to the legacy creator_output dict shape.
+
+    Downstream worker code (``_mark_creator_success``,
+    ``_persist_failed_creator_output``) reads phase1..phase6 keys, so we
+    populate the keys it actually consumes and leave the rest as empty
+    placeholders. Source-of-truth fields live under ``pipeline_state.v2``
+    and ``debug`` for observability.
+    """
+
+    contract = v2_response.get("contract") if isinstance(v2_response.get("contract"), dict) else {}
+    quality_report = v2_response.get("quality_report") if isinstance(v2_response.get("quality_report"), dict) else {}
+    sections = v2_response.get("sections") if isinstance(v2_response.get("sections"), list) else []
+    research = v2_response.get("research") if isinstance(v2_response.get("research"), dict) else {}
+    judge_scores = v2_response.get("judge_scores")
+    title = str(contract.get("h1") or "").strip()
+    meta_title = str(contract.get("meta_title") or title).strip()
+    meta_description = str(contract.get("meta_description") or "").strip()
+    slug_source = str(contract.get("slug") or meta_title or title).strip()
+    excerpt = meta_description[:220] if meta_description else ""
+    competitor_top_urls = contract.get("competitor_top_urls") if isinstance(contract.get("competitor_top_urls"), list) else []
+
+    return {
+        "ok": True,
+        "target_site_url": target_site_url,
+        "host_site_url": selected_site_url,
+        "host_site_id": selected_site_id,
+        "phase1": {},
+        "phase2": {
+            "selected_publishing_site_url": selected_site_url,
+            "selected_publishing_site_id": selected_site_id,
+        },
+        "phase3": {
+            "target_keyword": {"keyword": target_keyword},
+            "competitor_references": [{"url": str(url)} for url in competitor_top_urls if str(url).strip()],
+            "internal_link_candidates": [],
+            "external_link_candidates": [],
+        },
+        "phase4": {
+            "content_brief": {
+                "target_keyword": target_keyword,
+                "suggested_title": title,
+            },
+        },
+        "phase5": {
+            "title": title,
+            "meta_title": meta_title,
+            "meta_description": meta_description,
+            "slug": _slugify(slug_source) if slug_source else "",
+            "excerpt": excerpt,
+            "article_markdown": "",
+            "linked_markdown": "",
+            "article_html": article_html,
+            "quality_report": quality_report,
+            "sections": sections,
+        },
+        "debug": {
+            "quality_report": quality_report,
+            "judge_scores": judge_scores,
+            "v2_notes": list(v2_response.get("notes") or []),
+            "v2_skipped_voice_pass": bool(v2_response.get("skipped_voice_pass")),
+            "v2_skipped_judge": bool(v2_response.get("skipped_judge")),
+        },
+        "pipeline_state": {
+            "v2": True,
+            "research": research,
+            "contract": contract,
+            "quality_report": quality_report,
+            "judge_scores": judge_scores,
+            "selected_publishing_site": {
+                "site_url": selected_site_url,
+                "site_id": selected_site_id,
+            },
+        },
+    }
+
+
+def _run_create_article_pipeline_v2(
+    *,
+    creator_endpoint: str,
+    target_site_url: str,
+    publishing_site_url: str,
+    publishing_site_id: Optional[str],
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+    internal_link_inventory: Optional[List[Dict[str, Any]]],
+    target_profile_payload: Optional[Dict[str, Any]],
+    anchor: Optional[str],
+    topic: Optional[str],
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    existing_wp_post_id: Optional[int],
+    post_status: str,
+    author_id: int,
+    category_ids: Optional[List[int]],
+    category_candidates: Optional[List[Dict[str, Any]]],
+    timeout_seconds: int,
+    creator_timeout_seconds: int,
+    category_llm_enabled: bool,
+    category_llm_api_key: str,
+    category_llm_base_url: str,
+    category_llm_model: str,
+    category_llm_max_categories: int,
+    category_llm_confidence_threshold: float,
+    trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
+) -> Dict[str, Any]:
+    def _trace(level: str, phase: str, event: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
+        if trace_event is not None:
+            trace_event(level, phase, event, message, details)
+
+    target_keyword = (topic or "").strip() or _derive_keyword_from_target_profile(target_profile_payload)
+    if not target_keyword:
+        raise AutomationError(
+            "Creator v2 pipeline requires a target keyword: pass `topic` in the webhook or "
+            "ensure the target site profile has a domain_level_topic / primary_context."
+        )
+    if not (target_site_url or "").strip():
+        raise AutomationError("Creator v2 pipeline requires target_site_url for the backlink.")
+
+    synthetic_site_understanding = {
+        "main_topic": target_keyword,
+        "primary_niche": str((target_profile_payload or {}).get("primary_context") or "").strip(),
+        "language": "de",
+        "seed_keywords": [target_keyword],
+    }
+    selected_target = _select_publish_target_for_4llm(
+        site_understanding=synthetic_site_understanding,
+        fallback_target={
+            "site_url": site_url,
+            "site_id": publishing_site_id,
+            "wp_rest_base": wp_rest_base,
+            "wp_username": wp_username,
+            "wp_app_password": wp_app_password,
+            "category_ids": list(category_ids or []),
+            "category_candidates": list(category_candidates or []),
+            "internal_link_inventory": list(internal_link_inventory or []),
+        },
+        publishing_candidates=publishing_candidates,
+    )
+    selected_publish_site_url = str(selected_target.get("site_url") or site_url).strip() or site_url
+    selected_publish_site_id = str(selected_target.get("site_id") or publishing_site_id or "").strip() or None
+    selected_wp_rest_base = str(selected_target.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
+    selected_wp_username = str(selected_target.get("wp_username") or wp_username).strip() or wp_username
+    selected_wp_app_password = str(selected_target.get("wp_app_password") or wp_app_password).strip() or wp_app_password
+    selected_category_ids = list(selected_target.get("category_ids") or category_ids or [])
+    selected_category_candidates = list(selected_target.get("category_candidates") or category_candidates or [])
+
+    _trace(
+        "info",
+        "site_match",
+        "selected",
+        "Deterministic publishing-site match selected (v2).",
+        {"selected_site_url": selected_publish_site_url, "selected_site_id": selected_publish_site_id},
+    )
+
+    _trace(
+        "info",
+        "creator_v2",
+        "start",
+        "Calling creator /v2/run-pipeline.",
+        {"target_keyword": target_keyword, "publishing_site_url": selected_publish_site_url},
+    )
+    v2_response = call_creator_v2_pipeline(
+        creator_endpoint=creator_endpoint,
+        target_keyword=target_keyword,
+        target_backlink_url=target_site_url,
+        publishing_site_url=selected_publish_site_url,
+        anchor_hint=anchor,
+        timeout_seconds=creator_timeout_seconds,
+    )
+    _trace(
+        "info",
+        "creator_v2",
+        "complete",
+        "Creator v2 pipeline returned.",
+        {
+            "skipped_voice_pass": bool(v2_response.get("skipped_voice_pass")),
+            "skipped_judge": bool(v2_response.get("skipped_judge")),
+        },
+    )
+
+    article_html_v2 = ""
+    article_html_block = v2_response.get("article_html")
+    if isinstance(article_html_block, dict):
+        article_html_v2 = str(article_html_block.get("final") or article_html_block.get("refined_body") or article_html_block.get("assembled") or "").strip()
+    if not article_html_v2:
+        raise AutomationError("Creator v2 pipeline returned no article HTML.")
+
+    contract = v2_response.get("contract") if isinstance(v2_response.get("contract"), dict) else {}
+    title = str(contract.get("h1") or "").strip() or target_keyword
+    meta_title = str(contract.get("meta_title") or title).strip()
+    meta_description = str(contract.get("meta_description") or "").strip()
+    excerpt = meta_description[:220] if meta_description else ""
+    slug = _slugify(str(contract.get("slug") or meta_title or title))
+
+    if category_llm_enabled and selected_category_candidates and category_llm_api_key:
+        try:
+            llm_selected_ids = _select_categories_with_llm(
+                title=title,
+                excerpt=excerpt,
+                clean_html=article_html_v2,
+                category_candidates=selected_category_candidates,
+                api_key=category_llm_api_key,
+                base_url=category_llm_base_url,
+                model=category_llm_model,
+                max_categories=max(1, category_llm_max_categories),
+                confidence_threshold=max(0.0, min(1.0, category_llm_confidence_threshold)),
+                timeout_seconds=timeout_seconds,
+            )
+            selected_category_ids = llm_selected_ids
+        except AutomationError as exc:
+            _trace("warning", "categories", "llm_fallback", "Category LLM selection failed; using defaults.", {"error": str(exc)})
+
+    featured_media_id = 0 if existing_wp_post_id else None
+    clean_html = _strip_leading_h1_from_article_html(article_html_v2)
+    if existing_wp_post_id:
+        post_payload = wp_update_post(
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
+            post_id=existing_wp_post_id,
+            title=title,
+            clean_html=clean_html,
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_updated"
+    else:
+        post_payload = wp_create_post(
+            site_url=selected_publish_site_url,
+            wp_rest_base=selected_wp_rest_base,
+            wp_username=selected_wp_username,
+            wp_app_password=selected_wp_app_password,
+            title=title,
+            clean_html=clean_html,
+            excerpt=excerpt,
+            slug=slug,
+            featured_media_id=featured_media_id,
+            post_status=post_status,
+            author_id=author_id,
+            category_ids=selected_category_ids,
+            timeout_seconds=timeout_seconds,
+        )
+        post_event_type = "wp_post_created"
+
+    creator_output = _build_creator_output_for_v2(
+        v2_response=v2_response,
+        target_site_url=target_site_url,
+        selected_site_url=selected_publish_site_url,
+        selected_site_id=selected_publish_site_id,
+        target_keyword=target_keyword,
+        article_html=article_html_v2,
+    )
+
+    return {
+        "creator_output": creator_output,
+        "image_url": "",
+        "media_payload": {},
+        "media_url": None,
+        "post_payload": post_payload,
+        "post_event_type": post_event_type,
+        "selected_category_ids": selected_category_ids,
+        "selected_site_id": selected_publish_site_id,
+        "selected_site_url": selected_publish_site_url,
+    }
+
+
 def run_create_article_pipeline(
     *,
     creator_endpoint: str,
@@ -2373,13 +2674,16 @@ def run_create_article_pipeline(
     trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-    return _run_create_article_pipeline_4llm(
+    return _run_create_article_pipeline_v2(
         creator_endpoint=creator_endpoint,
         target_site_url=target_site_url,
         publishing_site_url=publishing_site_url,
         publishing_site_id=publishing_site_id,
         publishing_candidates=publishing_candidates,
         internal_link_inventory=internal_link_inventory,
+        target_profile_payload=target_profile_payload,
+        anchor=anchor,
+        topic=topic,
         site_url=site_url,
         wp_rest_base=wp_rest_base,
         wp_username=wp_username,

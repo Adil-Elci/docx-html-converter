@@ -902,3 +902,268 @@ def test_call_creator_v2_pipeline_raises_when_payload_missing_ok(monkeypatch):
             target_backlink_url="https://client.de/y",
             publishing_site_url="https://example.de",
         )
+
+
+# ---- _build_creator_output_for_v2 ---------------------------------------
+
+
+def _v2_response_with_sections() -> dict:
+    return {
+        "ok": True,
+        "target_keyword": "steuerberater hamburg",
+        "target_backlink_url": "https://mandant.de/leistungen",
+        "publishing_site_host": "host.de",
+        "research": {"top_serp_urls": ["https://a.de", "https://b.de"]},
+        "contract": {
+            "target_keyword": "steuerberater hamburg",
+            "h1": "Steuerberater Hamburg: Ihr Leitfaden",
+            "meta_title": "Steuerberater Hamburg",
+            "meta_description": "Alles ueber Steuerberatung in Hamburg",
+            "slug": "steuerberater-hamburg",
+            "competitor_top_urls": ["https://a.de", "https://b.de"],
+        },
+        "sections": [
+            {
+                "section_index": 0,
+                "h2": "Worauf achten",
+                "body_html": "<p>...</p>",
+                "links_inserted": [
+                    {"anchor_text": "Steuerberater in Hamburg", "target_url": "https://mandant.de/leistungen", "link_type": "backlink"},
+                ],
+                "word_count": 320,
+            },
+        ],
+        "article_html": {
+            "assembled": "<h1>x</h1>",
+            "refined_body": "<p>refined</p>",
+            "final": "<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+        },
+        "judge_scores": {"intent_match": 8},
+        "quality_report": {"passed": True, "checks": []},
+        "skipped_voice_pass": False,
+        "skipped_judge": False,
+        "notes": ["voice pass succeeded"],
+    }
+
+
+def test_build_creator_output_for_v2_maps_phase5_and_pipeline_state():
+    output = automation_service._build_creator_output_for_v2(
+        v2_response=_v2_response_with_sections(),
+        target_site_url="https://mandant.de",
+        selected_site_url="https://host.de",
+        selected_site_id="11111111-1111-1111-1111-111111111111",
+        target_keyword="steuerberater hamburg",
+        article_html="<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+    )
+    assert output["ok"] is True
+    assert output["target_site_url"] == "https://mandant.de"
+    assert output["host_site_url"] == "https://host.de"
+    assert output["host_site_id"] == "11111111-1111-1111-1111-111111111111"
+
+    phase5 = output["phase5"]
+    assert phase5["title"] == "Steuerberater Hamburg: Ihr Leitfaden"
+    assert phase5["meta_title"] == "Steuerberater Hamburg"
+    assert phase5["meta_description"].startswith("Alles ueber Steuerberatung")
+    assert phase5["slug"] == "steuerberater-hamburg"
+    assert phase5["article_markdown"] == ""
+    assert phase5["linked_markdown"] == ""
+    assert phase5["article_html"].startswith("<h1>Steuerberater Hamburg")
+    assert phase5["sections"][0]["links_inserted"][0]["target_url"] == "https://mandant.de/leistungen"
+
+    assert output["phase3"]["target_keyword"]["keyword"] == "steuerberater hamburg"
+    assert {ref["url"] for ref in output["phase3"]["competitor_references"]} == {"https://a.de", "https://b.de"}
+
+    pipeline_state = output["pipeline_state"]
+    assert pipeline_state["v2"] is True
+    assert pipeline_state["contract"]["target_keyword"] == "steuerberater hamburg"
+    assert pipeline_state["judge_scores"] == {"intent_match": 8}
+    assert pipeline_state["selected_publishing_site"] == {
+        "site_url": "https://host.de",
+        "site_id": "11111111-1111-1111-1111-111111111111",
+    }
+
+
+def test_build_creator_output_for_v2_handles_missing_meta_description():
+    response = _v2_response_with_sections()
+    response["contract"]["meta_description"] = ""
+    output = automation_service._build_creator_output_for_v2(
+        v2_response=response,
+        target_site_url="https://mandant.de",
+        selected_site_url="https://host.de",
+        selected_site_id=None,
+        target_keyword="steuerberater hamburg",
+        article_html="<p>x</p>",
+    )
+    assert output["phase5"]["excerpt"] == ""
+    assert output["host_site_id"] is None
+
+
+# ---- _derive_keyword_from_target_profile --------------------------------
+
+
+def test_derive_keyword_prefers_domain_topic():
+    profile = {"domain_level_topic": "kinder sonnenbrillen", "primary_context": "shopping"}
+    assert automation_service._derive_keyword_from_target_profile(profile) == "kinder sonnenbrillen"
+
+
+def test_derive_keyword_falls_back_to_topics_list():
+    profile = {"topics": [{"label": "uv schutz"}, {"label": "passform"}]}
+    assert automation_service._derive_keyword_from_target_profile(profile) == "uv schutz"
+
+
+def test_derive_keyword_returns_empty_when_nothing_usable():
+    assert automation_service._derive_keyword_from_target_profile(None) == ""
+    assert automation_service._derive_keyword_from_target_profile({}) == ""
+
+
+# ---- _run_create_article_pipeline_v2 -----------------------------------
+
+
+def _common_v2_pipeline_kwargs(**overrides):
+    base = dict(
+        creator_endpoint="https://creator.example",
+        target_site_url="https://mandant.de/leistungen",
+        publishing_site_url="https://host.de",
+        publishing_site_id="22222222-2222-2222-2222-222222222222",
+        publishing_candidates=[],
+        internal_link_inventory=[],
+        target_profile_payload={"domain_level_topic": "steuerberater"},
+        anchor="partial_match",
+        topic="steuerberater hamburg",
+        site_url="https://host.de",
+        wp_rest_base="/wp-json",
+        wp_username="admin",
+        wp_app_password="pw",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=4,
+        category_ids=[1, 2],
+        category_candidates=[{"id": 1, "name": "SEO"}, {"id": 2, "name": "Recht"}],
+        timeout_seconds=60,
+        creator_timeout_seconds=300,
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="https://api.openai.com/v1",
+        category_llm_model="gpt-4.1-mini",
+        category_llm_max_categories=2,
+        category_llm_confidence_threshold=0.55,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_run_create_article_pipeline_v2_publishes_and_adapts(monkeypatch):
+    captured_v2 = {}
+    captured_post = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    def fake_create(**kwargs):
+        captured_post.update(kwargs)
+        return {"id": 9911, "link": "https://host.de/?p=9911"}
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+
+    result = automation_service._run_create_article_pipeline_v2(**_common_v2_pipeline_kwargs())
+
+    assert captured_v2["target_keyword"] == "steuerberater hamburg"
+    assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
+    assert captured_v2["publishing_site_url"] == "https://host.de"
+    assert captured_v2["anchor_hint"] == "partial_match"
+
+    assert result["post_event_type"] == "wp_post_created"
+    assert result["selected_site_url"] == "https://host.de"
+    assert result["image_url"] == ""
+    assert result["media_url"] is None
+
+    creator_output = result["creator_output"]
+    assert creator_output["pipeline_state"]["v2"] is True
+    assert creator_output["phase5"]["sections"][0]["links_inserted"][0]["target_url"] == "https://mandant.de/leistungen"
+
+    # Verify H1 stripped before publish.
+    assert "<h1>" not in captured_post["clean_html"]
+    assert captured_post["title"] == "Steuerberater Hamburg: Ihr Leitfaden"
+    assert captured_post["slug"] == "steuerberater-hamburg"
+
+
+def test_run_create_article_pipeline_v2_falls_back_to_target_profile_topic(monkeypatch):
+    captured_v2 = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **kwargs: {"id": 1, "link": "https://host.de/?p=1"},
+    )
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={"domain_level_topic": "kanzlei berlin"}),
+    )
+    assert captured_v2["target_keyword"] == "kanzlei berlin"
+
+
+def test_run_create_article_pipeline_v2_raises_when_no_keyword(monkeypatch):
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_pipeline",
+        lambda **kwargs: pytest.fail("v2 should not be called without a keyword"),
+    )
+    with pytest.raises(automation_service.AutomationError, match="target keyword"):
+        automation_service._run_create_article_pipeline_v2(
+            **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={}),
+        )
+
+
+def test_run_create_article_pipeline_v2_uses_update_when_post_exists(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+
+    def fake_update(**kwargs):
+        captured.update(kwargs)
+        return {"id": 7, "link": "https://host.de/?p=7"}
+
+    monkeypatch.setattr(automation_service, "wp_update_post", fake_update)
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(existing_wp_post_id=7),
+    )
+    assert result["post_event_type"] == "wp_post_updated"
+    assert captured["post_id"] == 7
+    assert captured["featured_media_id"] == 0  # legacy parity: clear featured image on update
+
+
+def test_run_create_article_pipeline_v2_raises_when_html_empty(monkeypatch):
+    response = _v2_response_with_sections()
+    response["article_html"] = {"assembled": "", "refined_body": "", "final": ""}
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: response)
+
+    with pytest.raises(automation_service.AutomationError, match="no article HTML"):
+        automation_service._run_create_article_pipeline_v2(**_common_v2_pipeline_kwargs())
+
+
+def test_run_create_article_pipeline_v2_emits_trace_events(monkeypatch):
+    events: list[tuple[str, str, str]] = []
+
+    def trace(level, phase, event, message="", details=None):
+        events.append((level, phase, event))
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **kwargs: {"id": 1, "link": "https://host.de/?p=1"},
+    )
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(trace_event=trace),
+    )
+    phases = [event for _, phase, event in events if phase == "creator_v2"]
+    assert phases == ["start", "complete"]

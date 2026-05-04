@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7b-2 (downstream field map)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7b-3 (v2 orchestration wired)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -119,15 +119,14 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
     - PlacedLink rows: build from `sections[*].links_inserted` instead of regex over markdown.
     - `selected_site_id` / `selected_site_url` / `post_payload` / `post_event_type` / `selected_category_ids` returned in pipeline_result for `_mark_creator_success`.
 
-  - **7b-3** 🔜 implement `_run_create_article_pipeline_v2(target_site_url, publishing_site_url, ...)` that:
-    1. Picks the publishing site via existing `_select_publish_target_for_4llm` (keep deterministic site match for now — v2 doesn't replace it).
-    2. Picks the target keyword + anchor URL — legacy uses `_select_target_keyword(site_understanding)` against site_understanding. For v2 we need keyword + target_backlink_url from the request payload (`payload.get("topic")` for keyword, `payload.get("anchor")` for URL hint?). Investigate what fields the order webhook actually carries before wiring.
-    3. Calls `call_creator_v2_pipeline(target_keyword, target_backlink_url, publishing_site_url, …)`.
-    4. Builds `creator_output` via the adapter mapping above.
-    5. Runs category LLM selection (existing helper).
-    6. Posts to WordPress (`wp_create_post` / `wp_update_post`) with `final_html` + meta from contract.
-    7. Returns the same shape `_run_create_article_pipeline_4llm` returns.
-    Switch `run_create_article_pipeline` to call the v2 path; keep the 4llm function around until 7d. Update the worker's PlacedLink writer to read from `creator_output["sections"]` (or contract.link_plan) when present, falling back to markdown extraction for legacy CreatorOutput rows.
+  - **7b-3** ✅: `_run_create_article_pipeline_v2()` and `_build_creator_output_for_v2()` in `automation_service.py`. `run_create_article_pipeline()` now dispatches to v2 (legacy `_run_create_article_pipeline_4llm` preserved until 7d). Implementation choices:
+    - **Keyword source**: prefer `payload.get("topic")`; fall back to `_derive_keyword_from_target_profile()` which reads `target_profile_payload["domain_level_topic"]` → `primary_context` → `page_title` → `topics[0]`. Raises `AutomationError` if nothing usable.
+    - **Backlink URL**: `target_site_url` from the webhook (the URL the link points to).
+    - **Anchor hint**: `payload.get("anchor")` passed straight through to `call_creator_v2_pipeline(anchor_hint=…)`.
+    - **Site selection**: still uses `_select_publish_target_for_4llm()` against a synthetic site_understanding (`{main_topic: target_keyword, primary_niche: target_profile.primary_context, language: "de"}`). Keeps the deterministic candidate match working without needing the legacy /site-understanding call.
+    - **Image generation**: skipped, matching legacy 4llm behavior. Posts with `featured_media_id=0` on update / `None` on create.
+    - **Worker PlacedLinks** (`automation_worker.py:1461`): branches on `pipeline_state.v2`. v2 path reads `creator_output.phase5.sections[*].links_inserted` (each entry: `{anchor_text, target_url, link_type}`) and writes `PlacedLink` rows directly — no markdown parsing. Legacy 4llm branch unchanged. JobEvents (`site_matched`, `keyword_research_complete`, `link_mapping_complete`, `content_brief_ready`, `quality_checked` with judge_scores, `review_ready`) emit with `source="v2"`.
+    - **Tests**: 11 new tests in `test_automation_service.py` covering the adapter, keyword fallback chain, full v2 pipeline flow (create + update post paths), the `no-keyword` and `empty-html` failure modes, and trace event emission. **Suite green: creator 179 passing, portal 104 passing + 7 pre-existing skipped.**
 - **7c** 🔜 End-to-end test through `/automation/submit-article-webhook` with a real order; verify article publishes to WordPress.
 - **7d** 🔜 Delete the legacy 4llm endpoints from creator (`/site-understanding`, `/draft-article`, `/integrate-links`, `/generate-meta`) and the legacy orchestration in portal_backend (`call_creator_4llm_endpoint`, `_run_create_article_pipeline_4llm`, the 7 skipped legacy tests).
 

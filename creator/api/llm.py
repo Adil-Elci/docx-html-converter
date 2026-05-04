@@ -82,7 +82,7 @@ def _repair_json_like_text(text: str) -> str:
 def _extract_json(text: str) -> Dict[str, Any]:
     cleaned = _normalize_json_text(text)
     try:
-        parsed = json.loads(cleaned)
+        parsed = json.loads(cleaned, strict=False)
         if isinstance(parsed, dict):
             return parsed
     except ValueError:
@@ -95,7 +95,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
     snippet = _extract_balanced_object(cleaned)
     if snippet:
         try:
-            parsed = json.loads(snippet)
+            parsed = json.loads(snippet, strict=False)
             if isinstance(parsed, dict):
                 return parsed
         except ValueError:
@@ -107,7 +107,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
     repaired = _repair_json_like_text(cleaned)
     if repaired and repaired != cleaned:
         try:
-            parsed = json.loads(repaired)
+            parsed = json.loads(repaired, strict=False)
             if isinstance(parsed, dict):
                 return parsed
         except ValueError:

@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 6a (pipeline runner)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 6b (full-pipeline smoke)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -78,7 +78,7 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 
 ### Phase 6 — Enforcer + pipeline orchestrator + review surface · 🔄 IN PROGRESS
 - **6a** ✅: `creator/api/pipeline_runner.py` — `run_pipeline()` chains all seven phases (research → contract → sections → assemble → voice → judge → eval) and returns a `PipelineRun` dataclass with every intermediate artifact. Each step wrapped in try/except that re-raises as `PipelineError` with phase label, so a single failure surfaces with context. Optional `skip_voice_pass` and `skip_judge` flags for faster cheaper runs during dev. Schema blocks come from the deterministic assembler and are re-attached AFTER voice pass (voice pass operates on body HTML only, so schema is never at risk of LLM mangling). 17 new tests; full suite at 173 passing.
-- **6b** 🔜 full-pipeline smoke script (live, ~$0.30/run, saves outputs to disk).
+- **6b** ✅: `creator/scripts/smoke_full_pipeline.py` — runs the pipeline live for one keyword + target URL and saves every artifact to a timestamped directory under `creator/smoke_outputs/` (research.json, contract.json, sections.json, three article HTML variants — assembled / refined / final, judge_scores.json, quality_report.json, summary.json). Asks for confirmation before any spend; supports `--skip-voice-pass`, `--skip-judge`, `--skip-related-keywords`, `--skip-entity-extraction` for cheaper dev runs. Output dir gitignored.
 - **6c** 🔜 review-card HTML renderer that takes a `PipelineRun` and produces a one-page review surface.
 
 ### Phase 7 — Wire into portal_backend · 🔜
@@ -107,8 +107,11 @@ LEONARDO_API_KEY          # later, for Phase 6 image generation wiring
 # DataForSEO live integration (~$0.002/run)
 python -m creator.scripts.smoke_dataforseo "steuerberater hamburg"
 
-# Full pipeline LIVE: research + Opus 4.7 contract (~$0.35/run, asks for confirmation)
+# Research + contract only LIVE (~$0.10/run, asks for confirmation)
 python -m creator.scripts.smoke_pipeline "steuerberater hamburg" https://client.de/leistungen
+
+# FULL pipeline LIVE end-to-end (~$0.30/run, asks for confirmation, saves all artifacts)
+python -m creator.scripts.smoke_full_pipeline "steuerberater hamburg" https://client.de/leistungen
 
 # Full creator unit test suite
 python -m pytest creator/tests/ -v

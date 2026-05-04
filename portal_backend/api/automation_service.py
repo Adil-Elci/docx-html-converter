@@ -1143,7 +1143,7 @@ def _flatten_candidate_text(candidate: Dict[str, Any]) -> str:
     return " ".join([notes, profile_text, inventory_titles]).strip()
 
 
-def _select_publish_target_for_4llm(
+def _select_publish_target_for_v2(
     *,
     site_understanding: Dict[str, Any],
     fallback_target: Dict[str, Any],
@@ -1331,7 +1331,7 @@ def _run_create_article_pipeline_v2(
         "language": "de",
         "seed_keywords": [target_keyword],
     }
-    selected_target = _select_publish_target_for_4llm(
+    selected_target = _select_publish_target_for_v2(
         site_understanding=synthetic_site_understanding,
         fallback_target={
             "site_url": site_url,

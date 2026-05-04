@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7b-1 (v2 HTTP client)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7b-2 (downstream field map)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -85,8 +85,49 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - **7a** ✅: `POST /v2/run-pipeline` endpoint on creator service. Single HTTP call wraps `pipeline_runner.run_pipeline()`; request schema is `V2RunPipelineRequest` (target_keyword, target_backlink_url, publishing_site_url, optional anchor_hint / canonical_url / four skip flags). Response is the full PipelineRun serialized as JSON (research, contract, sections, three article HTML variants — assembled / refined_body / final, judge_scores, quality_report). On failure returns HTTP 422 with `{ok: false, error: "pipeline_failed", phase, message}`. Long-running (~30s end-to-end), so callers must use timeout ≥ 120s. Legacy `/site-understanding` / `/draft-article` / `/integrate-links` / `/generate-meta` endpoints kept functional for now — portal_backend still calls those until 7b lands. 6 new tests; full suite at 179 passing. Added `httpx>=0.27.0` to creator/requirements.txt for FastAPI TestClient.
 - **7b** 🔄 IN PROGRESS — replace 4llm orchestration with /v2/run-pipeline calls, in three sub-steps:
   - **7b-1** ✅: `automation_service.call_creator_v2_pipeline()` HTTP client. POSTs to `/v2/run-pipeline`, returns parsed dict, raises `AutomationError` with phase label on failure (`Creator v2 pipeline failed at phase [contract]: ...`). 8 new tests + 7 pre-existing legacy tests skipped (they were broken since Phase 0; will be deleted in 7d).
-  - **7b-2** 🔜 read `_run_create_article_pipeline_4llm` (300 lines, automation_service.py:1961+) and `automation_worker.py` to map every field of the legacy `creator_output` dict used downstream. Image generation lives inside the legacy function — needs to be split out and run AFTER the v2 pipeline returns, since v2 produces no image prompts.
-  - **7b-3** 🔜 implement `_run_create_article_pipeline_v2` that calls `call_creator_v2_pipeline`, adapts the response to the legacy `creator_output` shape, then runs image generation + WP publish using the existing helpers. Switch `run_create_article_pipeline` to call the new path.
+  - **7b-2** ✅: audited `_run_create_article_pipeline_4llm` (`automation_service.py:1976-2324`) and the worker's `_mark_creator_success` / `_persist_failed_creator_output` (`automation_worker.py:1258-1527`). Two clarifications vs the original plan:
+    - **No image generation in 4llm.** Legacy returns `image_url=""`, `media_payload={}`, posts with `featured_media_id=0` (or `None`). Image generation is only in `run_submit_article_pipeline` (the converter flow). 7b-3 doesn't need to "split out" image gen — just match the no-image behavior. Image integration is deferred (could become Phase 8).
+    - **Markdown link extraction breaks on v2.** Worker at line 1499 calls `_extract_markdown_links(linked_markdown)` to populate `PlacedLink` rows. v2 produces HTML, no markdown. 7b-3 must either populate `linked_markdown=""` and route link records from `SectionDraft.links_inserted`, or parse `<a href>` out of `final_html`. Cleaner: use `links_inserted` directly.
+
+    **Legacy creator_output → adapter mapping** (top-level keys consumed downstream):
+    | key | downstream consumer | v2 source |
+    | --- | --- | --- |
+    | `ok` | `_persist_failed_creator_output` setdefault | hardcode `True` |
+    | `target_site_url` | CreatorOutput row, TargetSitePage filter, link classification | request param |
+    | `host_site_url` | site sync, JobEvents, CreatorOutput row, link classification | selected publishing site URL |
+    | `host_site_id` | persisted | selected publishing site UUID |
+    | `phase1` (= site_understanding) | event "site_understood", `scraped_pages` → TargetSitePage rows, `language` | empty `{}` (v2 has no target-site analysis) |
+    | `phase1_cache_meta` | conditional cache write | omit (skips cache write) |
+    | `phase2` | event payload | `{selected_publishing_site_url, selected_publishing_site_id}` |
+    | `phase2_cache_meta` | conditional cache write | omit |
+    | `phase3.target_keyword.keyword` | event "keyword_research_complete" | `contract.target_keyword` |
+    | `phase3.competitor_references` | persisted in payload | `contract.competitor_top_urls` |
+    | `phase4.content_brief` | persisted in payload | minimal stub from contract |
+    | `phase5.title` / `meta_title` / `meta_description` / `slug` | event "converter_ok", WP post | from `contract` |
+    | `phase5.excerpt` | WP post | first 220 chars of meta_description (or refined HTML intro) |
+    | `phase5.article_markdown` / `linked_markdown` | `_extract_markdown_links` for PlacedLinks; CreatorOutput payload | `""` (v2 has no markdown) |
+    | `phase5.article_html` | `extract_draft_article_html` → CreatorOutput.draft_article_html | `article_html.final` |
+    | `phase5.quality_report` | persisted | `quality_report` (PipelineRun) |
+    | `phase6.featured_image.prompt` | event "image_prompt_ok" | omit (no image) |
+    | `debug.quality_report` | event "quality_checked" | `quality_report` |
+    | `debug.prompt_trace` / `creator_trace` / `backend_trace` | trace normalization | omit; backend_trace still appended by worker |
+    | `pipeline_state` | persisted to `job.pipeline_state` | `{v2: True, research, contract, quality_report, judge_scores}` |
+
+    **Side effects 7b-3 must drive directly (not via creator_output):**
+    - `wp_create_post` / `wp_update_post` with `clean_html=_strip_leading_h1_from_article_html(final_html)` — the contract's H1 is already inside the assembled article, so we still strip it before posting (legacy parity).
+    - Optional category LLM selection (unchanged from legacy).
+    - PlacedLink rows: build from `sections[*].links_inserted` instead of regex over markdown.
+    - `selected_site_id` / `selected_site_url` / `post_payload` / `post_event_type` / `selected_category_ids` returned in pipeline_result for `_mark_creator_success`.
+
+  - **7b-3** 🔜 implement `_run_create_article_pipeline_v2(target_site_url, publishing_site_url, ...)` that:
+    1. Picks the publishing site via existing `_select_publish_target_for_4llm` (keep deterministic site match for now — v2 doesn't replace it).
+    2. Picks the target keyword + anchor URL — legacy uses `_select_target_keyword(site_understanding)` against site_understanding. For v2 we need keyword + target_backlink_url from the request payload (`payload.get("topic")` for keyword, `payload.get("anchor")` for URL hint?). Investigate what fields the order webhook actually carries before wiring.
+    3. Calls `call_creator_v2_pipeline(target_keyword, target_backlink_url, publishing_site_url, …)`.
+    4. Builds `creator_output` via the adapter mapping above.
+    5. Runs category LLM selection (existing helper).
+    6. Posts to WordPress (`wp_create_post` / `wp_update_post`) with `final_html` + meta from contract.
+    7. Returns the same shape `_run_create_article_pipeline_4llm` returns.
+    Switch `run_create_article_pipeline` to call the v2 path; keep the 4llm function around until 7d. Update the worker's PlacedLink writer to read from `creator_output["sections"]` (or contract.link_plan) when present, falling back to markdown extraction for legacy CreatorOutput rows.
 - **7c** 🔜 End-to-end test through `/automation/submit-article-webhook` with a real order; verify article publishes to WordPress.
 - **7d** 🔜 Delete the legacy 4llm endpoints from creator (`/site-understanding`, `/draft-article`, `/integrate-links`, `/generate-meta`) and the legacy orchestration in portal_backend (`call_creator_4llm_endpoint`, `_run_create_article_pipeline_4llm`, the 7 skipped legacy tests).
 

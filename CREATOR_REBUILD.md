@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 6b (full-pipeline smoke)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7a (/v2/run-pipeline endpoint)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -81,8 +81,11 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - **6b** ✅: `creator/scripts/smoke_full_pipeline.py` — runs the pipeline live for one keyword + target URL and saves every artifact to a timestamped directory under `creator/smoke_outputs/` (research.json, contract.json, sections.json, three article HTML variants — assembled / refined / final, judge_scores.json, quality_report.json, summary.json). Asks for confirmation before any spend; supports `--skip-voice-pass`, `--skip-judge`, `--skip-related-keywords`, `--skip-entity-extraction` for cheaper dev runs. Output dir gitignored.
 - **6c** 🔜 review-card HTML renderer that takes a `PipelineRun` and produces a one-page review surface.
 
-### Phase 7 — Wire into portal_backend · 🔜
-Update `automation_service.py` and `automation_worker.py` to call new pipeline. Run 5 real orders end-to-end. Measure against eval harness.
+### Phase 7 — Wire into portal_backend · 🔄 IN PROGRESS
+- **7a** ✅: `POST /v2/run-pipeline` endpoint on creator service. Single HTTP call wraps `pipeline_runner.run_pipeline()`; request schema is `V2RunPipelineRequest` (target_keyword, target_backlink_url, publishing_site_url, optional anchor_hint / canonical_url / four skip flags). Response is the full PipelineRun serialized as JSON (research, contract, sections, three article HTML variants — assembled / refined_body / final, judge_scores, quality_report). On failure returns HTTP 422 with `{ok: false, error: "pipeline_failed", phase, message}`. Long-running (~30s end-to-end), so callers must use timeout ≥ 120s. Legacy `/site-understanding` / `/draft-article` / `/integrate-links` / `/generate-meta` endpoints kept functional for now — portal_backend still calls those until 7b lands. 6 new tests; full suite at 179 passing. Added `httpx>=0.27.0` to creator/requirements.txt for FastAPI TestClient.
+- **7b** 🔜 Update `portal_backend/api/automation_worker.py` to call `/v2/run-pipeline` instead of orchestrating the four legacy endpoints. Map response into existing DB writes (creator_outputs, jobs, JobEvents).
+- **7c** 🔜 End-to-end test through `/automation/submit-article-webhook` with a real order; verify article publishes to WordPress.
+- **7d** 🔜 Delete the legacy 4llm endpoints from creator and the legacy orchestration in portal_backend.
 
 ## Deferred items (intentionally)
 

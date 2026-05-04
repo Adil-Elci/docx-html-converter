@@ -976,6 +976,26 @@ def _strip_leading_h1_from_article_html(html: str) -> str:
     return re.sub(r"^\s*<h1[^>]*>.*?</h1>\s*", "", cleaned, count=1, flags=re.IGNORECASE | re.DOTALL)
 
 
+def _strip_jsonld_script_blocks(html: str) -> str:
+    """Remove `<script type="application/ld+json">…</script>` blocks.
+
+    WordPress firewalls (NinjaFirewall, Wordfence, etc.) block any POST to
+    /wp-json/wp/v2/posts whose content contains a `<script>` tag — that's a
+    classic XSS heuristic. Our v2 article assembler emits Article + FAQPage
+    JSON-LD as inline `<script>` blocks; we strip them before publish so the
+    body sails through the firewall. The schema-included HTML is still
+    preserved upstream (in `article_html.final` and the creator_output) for
+    review and for any future schema-injection plugin path.
+    """
+
+    return re.sub(
+        r"<script\b[^>]*>.*?</script>\s*",
+        "",
+        str(html or ""),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def call_creator_service(
     *,
     creator_endpoint: str,
@@ -2534,11 +2554,21 @@ def _run_create_article_pipeline_v2(
     )
 
     article_html_v2 = ""
+    article_html_for_publish = ""
     article_html_block = v2_response.get("article_html")
     if isinstance(article_html_block, dict):
         article_html_v2 = str(article_html_block.get("final") or article_html_block.get("refined_body") or article_html_block.get("assembled") or "").strip()
+        # Schema-free body for WP publish: NinjaFirewall (and similar WP
+        # firewalls) blocks any POST whose content contains <script> tags,
+        # so we strip the JSON-LD blocks. The schema-included `final` HTML
+        # is still preserved in creator_output for the review surface and
+        # for downstream re-injection if a sitewide schema plugin wants it.
+        article_html_for_publish = str(article_html_block.get("refined_body") or article_html_block.get("assembled") or article_html_v2 or "").strip()
+        article_html_for_publish = _strip_jsonld_script_blocks(article_html_for_publish)
     if not article_html_v2:
         raise AutomationError("Creator v2 pipeline returned no article HTML.")
+    if not article_html_for_publish:
+        article_html_for_publish = _strip_jsonld_script_blocks(article_html_v2)
 
     contract = v2_response.get("contract") if isinstance(v2_response.get("contract"), dict) else {}
     title = str(contract.get("h1") or "").strip() or target_keyword
@@ -2566,7 +2596,7 @@ def _run_create_article_pipeline_v2(
             _trace("warning", "categories", "llm_fallback", "Category LLM selection failed; using defaults.", {"error": str(exc)})
 
     featured_media_id = 0 if existing_wp_post_id else None
-    clean_html = _strip_leading_h1_from_article_html(article_html_v2)
+    clean_html = _strip_leading_h1_from_article_html(article_html_for_publish)
     if existing_wp_post_id:
         post_payload = wp_update_post(
             site_url=selected_publish_site_url,

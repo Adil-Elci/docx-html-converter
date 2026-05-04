@@ -935,8 +935,12 @@ def _v2_response_with_sections() -> dict:
         ],
         "article_html": {
             "assembled": "<h1>x</h1>",
-            "refined_body": "<p>refined</p>",
-            "final": "<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+            "refined_body": "<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+            "final": (
+                '<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>'
+                '<script type="application/ld+json">{"@type":"Article"}</script>'
+                '<script type="application/ld+json">{"@type":"FAQPage"}</script>'
+            ),
         },
         "judge_scores": {"intent_match": 8},
         "quality_report": {"passed": True, "checks": []},
@@ -1085,8 +1089,41 @@ def test_run_create_article_pipeline_v2_publishes_and_adapts(monkeypatch):
 
     # Verify H1 stripped before publish.
     assert "<h1>" not in captured_post["clean_html"]
+    # Verify JSON-LD <script> blocks stripped before publish (firewall block).
+    assert "<script" not in captured_post["clean_html"]
+    assert "FAQPage" not in captured_post["clean_html"]
+    # The full schema-included HTML is still preserved upstream for review.
+    assert '<script type="application/ld+json">' in creator_output["phase5"]["article_html"]
     assert captured_post["title"] == "Steuerberater Hamburg: Ihr Leitfaden"
     assert captured_post["slug"] == "steuerberater-hamburg"
+
+
+def test_strip_jsonld_script_blocks_removes_only_script_tags():
+    html = (
+        '<h1>Title</h1><p>Body</p>'
+        '<script type="application/ld+json">{"@type":"Article"}</script>'
+        '<p>More body</p>'
+        '<script type="application/ld+json">{"@type":"FAQPage"}</script>'
+    )
+    cleaned = automation_service._strip_jsonld_script_blocks(html)
+    assert "<script" not in cleaned
+    assert "@type" not in cleaned
+    assert "<h1>Title</h1>" in cleaned
+    assert "<p>Body</p>" in cleaned
+    assert "<p>More body</p>" in cleaned
+
+
+def test_strip_jsonld_script_blocks_handles_multiline_payloads():
+    html = (
+        '<p>x</p><script type="application/ld+json">\n'
+        '{\n  "@type": "Article",\n  "headline": "h"\n}\n'
+        '</script><p>y</p>'
+    )
+    cleaned = automation_service._strip_jsonld_script_blocks(html)
+    assert "<script" not in cleaned
+    assert "@type" not in cleaned
+    assert "<p>x</p>" in cleaned
+    assert "<p>y</p>" in cleaned
 
 
 def test_run_create_article_pipeline_v2_falls_back_to_target_profile_topic(monkeypatch):

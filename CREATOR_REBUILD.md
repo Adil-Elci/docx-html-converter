@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-03 · **Last commit:** `Phase 3c (Phase 3 complete)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 4a`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -68,8 +68,10 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 | `backlink_anchor_naturalness` | Haiku judge | ✅ |
 | `eeat_signal_density` | Haiku judge | ✅ |
 
-### Phase 4 — Section writer · 🔜 NEXT
-Parallel Sonnet 4.6 calls, one per H2 section, prompt-cached on the Contract. Output structured JSON; assembled into HTML. This is the biggest remaining piece (likely 2–3 commits). Cost: ~$0.15/article total (5×Sonnet w/ caching).
+### Phase 4 — Section writer · 🔄 IN PROGRESS
+- **4a** ✅ DONE: `creator/api/section_writer.py` — one Sonnet 4.6 call per H2 section, parallel execution via `ThreadPoolExecutor` (default 4 workers; serial fallback for single-section contracts). Output validated against `SectionDraft` Pydantic model with `body_html`, `links_inserted`, `word_count`. Backlink injection routed to the section whose `section_index` matches the contract's `link_plan` entry. Required entities filtered by `placement_hint` text matching ("section N"). Prompt v1 hardcodes German Sie tone, AI-tell blocklist, structural-tag whitelist, and explicit anchor-strategy rules. 21 new tests; full creator suite at 116 passing.
+- **4b** 🔜 `article_assembler.py` — render FAQ Q&A HTML, emit Article + FAQPage JSON-LD schema blocks, stitch sections + meta + FAQ into final article HTML.
+- **4c** 🔜 prompt caching on the section system prompt (cost optimization — first section pays full input tokens, subsequent ~10%).
 
 ### Phase 5 — Voice & coherence pass · 🔜
 Single Sonnet pass: assemble sections, smooth transitions, enforce voice consistency, strip German AI-tells from blocklist.

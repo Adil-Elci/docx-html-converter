@@ -7,8 +7,10 @@ converter/.env
 portal_backend/.env
 portal_backend/.env.live
 portal_frontend/.env
+creator/.env
 .venv/
 node_modules/
 portal_frontend/dist/
 Notes.docx
 portal_frontend/src/styles.css.bak
+creator/smoke_outputs/

@@ -8,7 +8,6 @@ from typing import Callable, Dict, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
-from .decision_schemas import SchemaBackedModel
 from .llm import LLMError, call_llm_json, call_llm_text
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -21,7 +20,7 @@ DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_MAX_TOKENS = 3200
 DEFAULT_TEMPERATURE = 0.2
 
-SchemaModelT = TypeVar("SchemaModelT", bound=SchemaBackedModel)
+SchemaModelT = TypeVar("SchemaModelT", bound=BaseModel)
 
 
 class LLMRole(str, Enum):

@@ -76,11 +76,6 @@ def _read_bool_env(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _creator_pipeline_mode() -> str:
-    raw = os.getenv("CREATOR_PIPELINE_MODE", "legacy").strip().lower()
-    return raw if raw in {"legacy", "supervisor", "4llm"} else "legacy"
-
-
 def _request_origin_base_url(request: Request) -> str:
     forced = (os.getenv("AUTOMATION_PUBLIC_BASE_URL") or "").strip()
     if forced:
@@ -312,7 +307,6 @@ def _resolve_or_auto_select_publishing_site(
     client_target_site: Optional[ClientTargetSite],
     creator_endpoint: str,
 ) -> Site:
-    pipeline_mode = _creator_pipeline_mode()
     explicit_site = (payload.publishing_site or "").strip()
     target_url = (
         (client_target_site.target_site_url or "").strip()
@@ -340,50 +334,7 @@ def _resolve_or_auto_select_publishing_site(
     )
     exclude_topics = list(creator_history.get("exclude_topics") or [])
     if explicit_site:
-        site = _resolve_publishing_site(db, explicit_site)
-        if pipeline_mode == "4llm":
-            return site
-        target_profile, target_profile_content_hash, candidate_rankings = top_ranked_publishing_sites_for_target(
-            db,
-            target_site_url=target_url,
-            target_site_root_url=target_root_url or None,
-            candidate_sites=[site],
-            client_target_site_id=client_target_site.id if client_target_site is not None else None,
-            timeout_seconds=10,
-            max_pages=3,
-            min_score=0,
-            limit=1,
-            business_priority_weights=priority_weights,
-        )
-        target_profile_payload = dict(target_profile or {})
-        selected_pair, evaluated = _select_best_accepted_pair(
-            creator_endpoint=creator_endpoint,
-            target_site_url=target_url,
-            target_profile_payload=target_profile_payload,
-            target_profile_content_hash=target_profile_content_hash,
-            client_target_site_id=client_target_site.id if client_target_site is not None else None,
-            candidate_rankings=candidate_rankings,
-            requested_topic=payload.topic,
-            exclude_topics=exclude_topics,
-            timeout_seconds=90,
-        )
-        if selected_pair is None:
-            logger.warning(
-                "automation.creator_pair_rejected explicit_site=%s target_site_url=%s candidates=%s",
-                site.site_url,
-                target_url,
-                evaluated[:3],
-            )
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "error": "no_natural_publishing_site_fit",
-                    "target_site_url": target_url,
-                    "target_primary_context": str(target_profile.get("primary_context") or ""),
-                    "candidates": evaluated[:3],
-                },
-            )
-        return site
+        return _resolve_publishing_site(db, explicit_site)
     candidate_sites = _candidate_publishing_sites(db)
     if not candidate_sites:
         raise HTTPException(
@@ -419,65 +370,22 @@ def _resolve_or_auto_select_publishing_site(
                 "details": top_reason,
             },
         )
-    if pipeline_mode in {"supervisor", "4llm"}:
-        provisional = ranked[0]
-        provisional_site = next((site for site in candidate_sites if str(site.id) == str(provisional.get("site_id"))), None)
-        if provisional_site is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Provisional publishing site could not be resolved.",
-            )
-        logger.info(
-            "automation.webhook.provisional_supervisor_site client_id=%s site_id=%s score=%s target=%s candidate_count=%s",
-            client.id,
-            provisional_site.id,
-            provisional.get("score") or 0,
-            target_url,
-            len(ranked),
-        )
-        return provisional_site
-    target_profile_payload = dict(target_profile or {})
-    selected_pair, evaluated = _select_best_accepted_pair(
-        creator_endpoint=creator_endpoint,
-        target_site_url=target_url,
-        target_profile_payload=target_profile_payload,
-        target_profile_content_hash=target_profile_content_hash,
-        client_target_site_id=client_target_site.id if client_target_site is not None else None,
-        candidate_rankings=ranked,
-        requested_topic=payload.topic,
-        exclude_topics=exclude_topics,
-        timeout_seconds=90,
-    )
-    if selected_pair is None:
-        top_reason = evaluated[0].get("details") if evaluated else {}
-        logger.warning(
-            "automation.auto_site_no_accepted_pair target_site_url=%s evaluated=%s",
-            target_url,
-            evaluated[:3],
-        )
+    provisional = ranked[0]
+    provisional_site = next((site for site in candidate_sites if str(site.id) == str(provisional.get("site_id"))), None)
+    if provisional_site is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "no_accepted_publishing_site_pair",
-                "target_site_url": target_url,
-                "target_primary_context": str(target_profile.get("primary_context") or ""),
-                "candidates": evaluated[:5],
-                "details": top_reason,
-            },
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Provisional publishing site could not be resolved.",
         )
-    best_site = next((site for site in candidate_sites if str(site.id) == str(selected_pair.get("site_id"))), None)
-    if best_site is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Auto-selected site could not be resolved.")
     logger.info(
-        "automation.webhook.auto_selected_site client_id=%s site_id=%s score=%s pair_fit_score=%s target=%s combined_score=%s",
+        "automation.webhook.provisional_supervisor_site client_id=%s site_id=%s score=%s target=%s candidate_count=%s",
         client.id,
-        best_site.id,
-        selected_pair.get("score") or 0,
-        selected_pair.get("pair_fit_score") or 0,
+        provisional_site.id,
+        provisional.get("score") or 0,
         target_url,
-        selected_pair.get("combined_score") or 0,
+        len(ranked),
     )
-    return best_site
+    return provisional_site
 
 
 def _resolve_enabled_credential(db: Session, site_id: UUID) -> SiteCredential:

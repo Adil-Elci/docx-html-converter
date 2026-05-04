@@ -148,6 +148,7 @@ def test_wp_check_site_access_cleans_up_post_when_media_upload_fails(monkeypatch
     assert ("DELETE", "https://publisher.example.com/wp-json/wp/v2/posts/321?force=true") in request_calls
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_does_not_generate_portal_fallback_image_for_new_post(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -223,6 +224,7 @@ def test_run_create_article_pipeline_does_not_generate_portal_fallback_image_for
     assert calls["create_post"]["featured_media_id"] is None
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload_is_older(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -294,6 +296,7 @@ def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_emits_structured_trace_events(monkeypatch) -> None:
     trace_events: list[dict[str, object]] = []
 
@@ -371,6 +374,7 @@ def test_run_create_article_pipeline_emits_structured_trace_events(monkeypatch) 
     assert trace_events[-1]["event"] == "wp_post_created"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -439,6 +443,7 @@ def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(mon
     assert captured["recent_article_titles"] == ["Sonnenbrillen fuer Kinder: Welche Kriterien wirklich zaehlen"]
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_clears_existing_featured_media_when_creator_returns_no_image(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -540,6 +545,7 @@ def test_call_creator_stream_preserves_error_details(monkeypatch) -> None:
     assert exc_info.value.details["creator_output"]["phase3"]["final_article_topic"] == "Immobilie verkaufen"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -616,6 +622,7 @@ def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatc
     assert calls["create_post"]["clean_html"] == "<p>Einleitung.</p><h2>Abschnitt</h2><p>Text.</p>"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_publishes_to_creator_selected_candidate(monkeypatch) -> None:
     captured: dict[str, object] = {}
     creator_calls: dict[str, object] = {}
@@ -727,3 +734,436 @@ def test_run_create_article_pipeline_publishes_to_creator_selected_candidate(mon
     assert captured["category_ids"] == [22]
     assert result["selected_site_id"] == "site-2"
     assert result["selected_site_url"] == "https://publisher-two.example.com"
+
+
+# ---- call_creator_v2_pipeline -------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload, text_override: str | None = None) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text_override if text_override is not None else json.dumps(payload, ensure_ascii=False)
+
+    def json(self):
+        if isinstance(self._payload, ValueError):
+            raise self._payload
+        return self._payload
+
+
+def _v2_happy_payload() -> dict:
+    return {
+        "ok": True,
+        "target_keyword": "steuerberater hamburg",
+        "publishing_site_host": "example.de",
+        "contract": {"target_keyword": "steuerberater hamburg", "h1": "x"},
+        "sections": [],
+        "article_html": {"final": "<h1>x</h1>"},
+        "judge_scores": None,
+        "quality_report": {"passed": True},
+    }
+
+
+def test_call_creator_v2_pipeline_returns_payload(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["url"] = url
+        captured["body"] = json
+        captured["timeout"] = timeout
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    result = automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="steuerberater hamburg",
+        target_backlink_url="https://client.de/x",
+        publishing_site_url="https://example.de",
+        anchor_hint="partial_match",
+        timeout_seconds=120,
+    )
+    assert result["ok"] is True
+    assert captured["url"] == "https://creator.example/v2/run-pipeline"
+    assert captured["body"]["target_keyword"] == "steuerberater hamburg"
+    assert captured["body"]["anchor_hint"] == "partial_match"
+    assert captured["body"]["skip_voice_pass"] is False
+    assert captured["timeout"] == 120
+
+
+def test_call_creator_v2_pipeline_forwards_skip_flags(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["body"] = json
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="x x",
+        target_backlink_url="https://client.de/y",
+        publishing_site_url="https://example.de",
+        skip_voice_pass=True,
+        skip_judge=True,
+        skip_related_keywords=True,
+        skip_entity_extraction=True,
+    )
+    body = captured["body"]
+    assert body["skip_voice_pass"] is True
+    assert body["skip_judge"] is True
+    assert body["skip_related_keywords"] is True
+    assert body["skip_entity_extraction"] is True
+
+
+def test_call_creator_v2_pipeline_raises_on_pipeline_failed(monkeypatch):
+    failure = {
+        "ok": False,
+        "error": "pipeline_failed",
+        "phase": "contract",
+        "message": "Schema validation failed",
+    }
+
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(422, failure)
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match=r"\[contract\]"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_5xx(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(503, {"error": "service unavailable"})
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="HTTP 503"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_network_error(monkeypatch):
+    import requests as requests_module
+
+    def fake_post(url, json, timeout, allow_redirects):
+        raise requests_module.ConnectionError("dns")
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="request failed"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_non_json(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(200, ValueError("bad json"), text_override="not json")
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="non-JSON"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_when_endpoint_missing():
+    with pytest.raises(automation_service.AutomationError, match="not configured"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_when_payload_missing_ok(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(200, {"contract": {}})
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="malformed payload"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+# ---- _build_creator_output_for_v2 ---------------------------------------
+
+
+def _v2_response_with_sections() -> dict:
+    return {
+        "ok": True,
+        "target_keyword": "steuerberater hamburg",
+        "target_backlink_url": "https://mandant.de/leistungen",
+        "publishing_site_host": "host.de",
+        "research": {"top_serp_urls": ["https://a.de", "https://b.de"]},
+        "contract": {
+            "target_keyword": "steuerberater hamburg",
+            "h1": "Steuerberater Hamburg: Ihr Leitfaden",
+            "meta_title": "Steuerberater Hamburg",
+            "meta_description": "Alles ueber Steuerberatung in Hamburg",
+            "slug": "steuerberater-hamburg",
+            "competitor_top_urls": ["https://a.de", "https://b.de"],
+        },
+        "sections": [
+            {
+                "section_index": 0,
+                "h2": "Worauf achten",
+                "body_html": "<p>...</p>",
+                "links_inserted": [
+                    {"anchor_text": "Steuerberater in Hamburg", "target_url": "https://mandant.de/leistungen", "link_type": "backlink"},
+                ],
+                "word_count": 320,
+            },
+        ],
+        "article_html": {
+            "assembled": "<h1>x</h1>",
+            "refined_body": "<p>refined</p>",
+            "final": "<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+        },
+        "judge_scores": {"intent_match": 8},
+        "quality_report": {"passed": True, "checks": []},
+        "skipped_voice_pass": False,
+        "skipped_judge": False,
+        "notes": ["voice pass succeeded"],
+    }
+
+
+def test_build_creator_output_for_v2_maps_phase5_and_pipeline_state():
+    output = automation_service._build_creator_output_for_v2(
+        v2_response=_v2_response_with_sections(),
+        target_site_url="https://mandant.de",
+        selected_site_url="https://host.de",
+        selected_site_id="11111111-1111-1111-1111-111111111111",
+        target_keyword="steuerberater hamburg",
+        article_html="<h1>Steuerberater Hamburg: Ihr Leitfaden</h1><p>...</p>",
+    )
+    assert output["ok"] is True
+    assert output["target_site_url"] == "https://mandant.de"
+    assert output["host_site_url"] == "https://host.de"
+    assert output["host_site_id"] == "11111111-1111-1111-1111-111111111111"
+
+    phase5 = output["phase5"]
+    assert phase5["title"] == "Steuerberater Hamburg: Ihr Leitfaden"
+    assert phase5["meta_title"] == "Steuerberater Hamburg"
+    assert phase5["meta_description"].startswith("Alles ueber Steuerberatung")
+    assert phase5["slug"] == "steuerberater-hamburg"
+    assert phase5["article_markdown"] == ""
+    assert phase5["linked_markdown"] == ""
+    assert phase5["article_html"].startswith("<h1>Steuerberater Hamburg")
+    assert phase5["sections"][0]["links_inserted"][0]["target_url"] == "https://mandant.de/leistungen"
+
+    assert output["phase3"]["target_keyword"]["keyword"] == "steuerberater hamburg"
+    assert {ref["url"] for ref in output["phase3"]["competitor_references"]} == {"https://a.de", "https://b.de"}
+
+    pipeline_state = output["pipeline_state"]
+    assert pipeline_state["v2"] is True
+    assert pipeline_state["contract"]["target_keyword"] == "steuerberater hamburg"
+    assert pipeline_state["judge_scores"] == {"intent_match": 8}
+    assert pipeline_state["selected_publishing_site"] == {
+        "site_url": "https://host.de",
+        "site_id": "11111111-1111-1111-1111-111111111111",
+    }
+
+
+def test_build_creator_output_for_v2_handles_missing_meta_description():
+    response = _v2_response_with_sections()
+    response["contract"]["meta_description"] = ""
+    output = automation_service._build_creator_output_for_v2(
+        v2_response=response,
+        target_site_url="https://mandant.de",
+        selected_site_url="https://host.de",
+        selected_site_id=None,
+        target_keyword="steuerberater hamburg",
+        article_html="<p>x</p>",
+    )
+    assert output["phase5"]["excerpt"] == ""
+    assert output["host_site_id"] is None
+
+
+# ---- _derive_keyword_from_target_profile --------------------------------
+
+
+def test_derive_keyword_prefers_domain_topic():
+    profile = {"domain_level_topic": "kinder sonnenbrillen", "primary_context": "shopping"}
+    assert automation_service._derive_keyword_from_target_profile(profile) == "kinder sonnenbrillen"
+
+
+def test_derive_keyword_falls_back_to_topics_list():
+    profile = {"topics": [{"label": "uv schutz"}, {"label": "passform"}]}
+    assert automation_service._derive_keyword_from_target_profile(profile) == "uv schutz"
+
+
+def test_derive_keyword_returns_empty_when_nothing_usable():
+    assert automation_service._derive_keyword_from_target_profile(None) == ""
+    assert automation_service._derive_keyword_from_target_profile({}) == ""
+
+
+# ---- _run_create_article_pipeline_v2 -----------------------------------
+
+
+def _common_v2_pipeline_kwargs(**overrides):
+    base = dict(
+        creator_endpoint="https://creator.example",
+        target_site_url="https://mandant.de/leistungen",
+        publishing_site_url="https://host.de",
+        publishing_site_id="22222222-2222-2222-2222-222222222222",
+        publishing_candidates=[],
+        internal_link_inventory=[],
+        target_profile_payload={"domain_level_topic": "steuerberater"},
+        anchor="partial_match",
+        topic="steuerberater hamburg",
+        site_url="https://host.de",
+        wp_rest_base="/wp-json",
+        wp_username="admin",
+        wp_app_password="pw",
+        existing_wp_post_id=None,
+        post_status="draft",
+        author_id=4,
+        category_ids=[1, 2],
+        category_candidates=[{"id": 1, "name": "SEO"}, {"id": 2, "name": "Recht"}],
+        timeout_seconds=60,
+        creator_timeout_seconds=300,
+        category_llm_enabled=False,
+        category_llm_api_key="",
+        category_llm_base_url="https://api.openai.com/v1",
+        category_llm_model="gpt-4.1-mini",
+        category_llm_max_categories=2,
+        category_llm_confidence_threshold=0.55,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_run_create_article_pipeline_v2_publishes_and_adapts(monkeypatch):
+    captured_v2 = {}
+    captured_post = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    def fake_create(**kwargs):
+        captured_post.update(kwargs)
+        return {"id": 9911, "link": "https://host.de/?p=9911"}
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+
+    result = automation_service._run_create_article_pipeline_v2(**_common_v2_pipeline_kwargs())
+
+    assert captured_v2["target_keyword"] == "steuerberater hamburg"
+    assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
+    assert captured_v2["publishing_site_url"] == "https://host.de"
+    assert captured_v2["anchor_hint"] == "partial_match"
+
+    assert result["post_event_type"] == "wp_post_created"
+    assert result["selected_site_url"] == "https://host.de"
+    assert result["image_url"] == ""
+    assert result["media_url"] is None
+
+    creator_output = result["creator_output"]
+    assert creator_output["pipeline_state"]["v2"] is True
+    assert creator_output["phase5"]["sections"][0]["links_inserted"][0]["target_url"] == "https://mandant.de/leistungen"
+
+    # Verify H1 stripped before publish.
+    assert "<h1>" not in captured_post["clean_html"]
+    assert captured_post["title"] == "Steuerberater Hamburg: Ihr Leitfaden"
+    assert captured_post["slug"] == "steuerberater-hamburg"
+
+
+def test_run_create_article_pipeline_v2_falls_back_to_target_profile_topic(monkeypatch):
+    captured_v2 = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **kwargs: {"id": 1, "link": "https://host.de/?p=1"},
+    )
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={"domain_level_topic": "kanzlei berlin"}),
+    )
+    assert captured_v2["target_keyword"] == "kanzlei berlin"
+
+
+def test_run_create_article_pipeline_v2_raises_when_no_keyword(monkeypatch):
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_pipeline",
+        lambda **kwargs: pytest.fail("v2 should not be called without a keyword"),
+    )
+    with pytest.raises(automation_service.AutomationError, match="target keyword"):
+        automation_service._run_create_article_pipeline_v2(
+            **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={}),
+        )
+
+
+def test_run_create_article_pipeline_v2_uses_update_when_post_exists(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+
+    def fake_update(**kwargs):
+        captured.update(kwargs)
+        return {"id": 7, "link": "https://host.de/?p=7"}
+
+    monkeypatch.setattr(automation_service, "wp_update_post", fake_update)
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(existing_wp_post_id=7),
+    )
+    assert result["post_event_type"] == "wp_post_updated"
+    assert captured["post_id"] == 7
+    assert captured["featured_media_id"] == 0  # legacy parity: clear featured image on update
+
+
+def test_run_create_article_pipeline_v2_raises_when_html_empty(monkeypatch):
+    response = _v2_response_with_sections()
+    response["article_html"] = {"assembled": "", "refined_body": "", "final": ""}
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: response)
+
+    with pytest.raises(automation_service.AutomationError, match="no article HTML"):
+        automation_service._run_create_article_pipeline_v2(**_common_v2_pipeline_kwargs())
+
+
+def test_run_create_article_pipeline_v2_emits_trace_events(monkeypatch):
+    events: list[tuple[str, str, str]] = []
+
+    def trace(level, phase, event, message="", details=None):
+        events.append((level, phase, event))
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **kwargs: {"id": 1, "link": "https://host.de/?p=1"},
+    )
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(trace_event=trace),
+    )
+    phases = [event for _, phase, event in events if phase == "creator_v2"]
+    assert phases == ["start", "complete"]

@@ -75,10 +75,14 @@ class ContentContract(BaseModel):
     target_audience: str = Field(..., min_length=10)
     word_count_target: int = Field(..., ge=600, le=3000)
 
-    h1: str = Field(..., min_length=12, max_length=96)
-    meta_title: str = Field(..., min_length=45, max_length=68)
-    meta_description: str = Field(..., min_length=120, max_length=160)
-    slug: str = Field(..., min_length=3, max_length=80)
+    # Contract bounds are intentionally lenient — they catch only output that
+    # would break downstream code. SEO-quality bands (50-60 title, 140-160
+    # description) live in eval_harness, where they get flagged for human
+    # review rather than rejecting the whole contract on a 44-char title.
+    h1: str = Field(..., min_length=12, max_length=120)
+    meta_title: str = Field(..., min_length=25, max_length=75)
+    meta_description: str = Field(..., min_length=70, max_length=170)
+    slug: str = Field(..., min_length=3, max_length=90)
 
     sections: List[SectionPlan] = Field(..., min_length=3, max_length=10)
     faq_items: List[FAQItem] = Field(default_factory=list, max_length=8)

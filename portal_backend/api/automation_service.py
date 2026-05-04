@@ -1289,6 +1289,72 @@ def call_creator_generate_meta(
     )
 
 
+def call_creator_v2_pipeline(
+    *,
+    creator_endpoint: str,
+    target_keyword: str,
+    target_backlink_url: str,
+    publishing_site_url: str,
+    anchor_hint: Optional[str] = None,
+    canonical_url: Optional[str] = None,
+    skip_voice_pass: bool = False,
+    skip_judge: bool = False,
+    skip_related_keywords: bool = False,
+    skip_entity_extraction: bool = False,
+    timeout_seconds: int = 300,
+) -> Dict[str, Any]:
+    """POST to the creator service's /v2/run-pipeline endpoint.
+
+    Returns the full PipelineRun payload as a dict (research, contract,
+    sections, article_html, judge_scores, quality_report, etc.). Raises
+    AutomationError on network failure, non-2xx response, or pipeline
+    failure (HTTP 422 with ``error="pipeline_failed"``). The pipeline
+    failure path includes the failing phase name in the error message,
+    so callers can log "[contract]" / "[voice_pass]" / etc. without
+    parsing free-form messages.
+    """
+
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    body = {
+        "target_keyword": target_keyword,
+        "target_backlink_url": target_backlink_url,
+        "publishing_site_url": publishing_site_url,
+        "anchor_hint": anchor_hint,
+        "canonical_url": canonical_url,
+        "skip_voice_pass": skip_voice_pass,
+        "skip_judge": skip_judge,
+        "skip_related_keywords": skip_related_keywords,
+        "skip_entity_extraction": skip_entity_extraction,
+    }
+    url = creator_endpoint.rstrip("/") + "/v2/run-pipeline"
+    try:
+        response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
+    except requests.RequestException as exc:
+        raise AutomationError(f"Creator v2 pipeline request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError(
+            f"Creator v2 pipeline returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
+        ) from exc
+
+    if response.status_code == 422 and isinstance(payload, dict) and payload.get("error") == "pipeline_failed":
+        phase = payload.get("phase") or "unknown"
+        message = payload.get("message") or "no message"
+        raise AutomationError(f"Creator v2 pipeline failed at phase [{phase}]: {message}")
+
+    if response.status_code >= 400:
+        raise AutomationError(
+            f"Creator v2 pipeline HTTP {response.status_code}: {str(payload)[:300]}"
+        )
+
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        raise AutomationError(f"Creator v2 pipeline returned malformed payload: {str(payload)[:300]}")
+    return payload
+
+
 def _normalize_text_tokens(value: str) -> str:
     cleaned = re.sub(r"<[^>]+>", " ", str(value or "").lower())
     cleaned = cleaned.translate(str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"}))

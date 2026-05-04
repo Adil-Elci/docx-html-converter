@@ -148,6 +148,7 @@ def test_wp_check_site_access_cleans_up_post_when_media_upload_fails(monkeypatch
     assert ("DELETE", "https://publisher.example.com/wp-json/wp/v2/posts/321?force=true") in request_calls
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_does_not_generate_portal_fallback_image_for_new_post(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -223,6 +224,7 @@ def test_run_create_article_pipeline_does_not_generate_portal_fallback_image_for
     assert calls["create_post"]["featured_media_id"] is None
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload_is_older(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -294,6 +296,7 @@ def test_run_create_article_pipeline_backfills_prompt_trace_when_creator_payload
     assert "Do not write advertorial copy" in prompt_trace["writer_attempts"][0]["user_prompt"]
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_emits_structured_trace_events(monkeypatch) -> None:
     trace_events: list[dict[str, object]] = []
 
@@ -371,6 +374,7 @@ def test_run_create_article_pipeline_emits_structured_trace_events(monkeypatch) 
     assert trace_events[-1]["event"] == "wp_post_created"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -439,6 +443,7 @@ def test_run_create_article_pipeline_passes_recent_article_titles_to_creator(mon
     assert captured["recent_article_titles"] == ["Sonnenbrillen fuer Kinder: Welche Kriterien wirklich zaehlen"]
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_clears_existing_featured_media_when_creator_returns_no_image(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -540,6 +545,7 @@ def test_call_creator_stream_preserves_error_details(monkeypatch) -> None:
     assert exc_info.value.details["creator_output"]["phase3"]["final_article_topic"] == "Immobilie verkaufen"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -616,6 +622,7 @@ def test_run_create_article_pipeline_strips_leading_h1_before_publish(monkeypatc
     assert calls["create_post"]["clean_html"] == "<p>Einleitung.</p><h2>Abschnitt</h2><p>Text.</p>"
 
 
+@pytest.mark.skip(reason="Legacy 4llm path; tests + production code deleted in Phase 7d")
 def test_run_create_article_pipeline_publishes_to_creator_selected_candidate(monkeypatch) -> None:
     captured: dict[str, object] = {}
     creator_calls: dict[str, object] = {}
@@ -727,3 +734,171 @@ def test_run_create_article_pipeline_publishes_to_creator_selected_candidate(mon
     assert captured["category_ids"] == [22]
     assert result["selected_site_id"] == "site-2"
     assert result["selected_site_url"] == "https://publisher-two.example.com"
+
+
+# ---- call_creator_v2_pipeline -------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload, text_override: str | None = None) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text_override if text_override is not None else json.dumps(payload, ensure_ascii=False)
+
+    def json(self):
+        if isinstance(self._payload, ValueError):
+            raise self._payload
+        return self._payload
+
+
+def _v2_happy_payload() -> dict:
+    return {
+        "ok": True,
+        "target_keyword": "steuerberater hamburg",
+        "publishing_site_host": "example.de",
+        "contract": {"target_keyword": "steuerberater hamburg", "h1": "x"},
+        "sections": [],
+        "article_html": {"final": "<h1>x</h1>"},
+        "judge_scores": None,
+        "quality_report": {"passed": True},
+    }
+
+
+def test_call_creator_v2_pipeline_returns_payload(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["url"] = url
+        captured["body"] = json
+        captured["timeout"] = timeout
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    result = automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="steuerberater hamburg",
+        target_backlink_url="https://client.de/x",
+        publishing_site_url="https://example.de",
+        anchor_hint="partial_match",
+        timeout_seconds=120,
+    )
+    assert result["ok"] is True
+    assert captured["url"] == "https://creator.example/v2/run-pipeline"
+    assert captured["body"]["target_keyword"] == "steuerberater hamburg"
+    assert captured["body"]["anchor_hint"] == "partial_match"
+    assert captured["body"]["skip_voice_pass"] is False
+    assert captured["timeout"] == 120
+
+
+def test_call_creator_v2_pipeline_forwards_skip_flags(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["body"] = json
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="x x",
+        target_backlink_url="https://client.de/y",
+        publishing_site_url="https://example.de",
+        skip_voice_pass=True,
+        skip_judge=True,
+        skip_related_keywords=True,
+        skip_entity_extraction=True,
+    )
+    body = captured["body"]
+    assert body["skip_voice_pass"] is True
+    assert body["skip_judge"] is True
+    assert body["skip_related_keywords"] is True
+    assert body["skip_entity_extraction"] is True
+
+
+def test_call_creator_v2_pipeline_raises_on_pipeline_failed(monkeypatch):
+    failure = {
+        "ok": False,
+        "error": "pipeline_failed",
+        "phase": "contract",
+        "message": "Schema validation failed",
+    }
+
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(422, failure)
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match=r"\[contract\]"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_5xx(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(503, {"error": "service unavailable"})
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="HTTP 503"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_network_error(monkeypatch):
+    import requests as requests_module
+
+    def fake_post(url, json, timeout, allow_redirects):
+        raise requests_module.ConnectionError("dns")
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="request failed"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_on_non_json(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(200, ValueError("bad json"), text_override="not json")
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="non-JSON"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_when_endpoint_missing():
+    with pytest.raises(automation_service.AutomationError, match="not configured"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )
+
+
+def test_call_creator_v2_pipeline_raises_when_payload_missing_ok(monkeypatch):
+    def fake_post(url, json, timeout, allow_redirects):
+        return _FakeResponse(200, {"contract": {}})
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    with pytest.raises(automation_service.AutomationError, match="malformed payload"):
+        automation_service.call_creator_v2_pipeline(
+            creator_endpoint="https://creator.example",
+            target_keyword="x x",
+            target_backlink_url="https://client.de/y",
+            publishing_site_url="https://example.de",
+        )

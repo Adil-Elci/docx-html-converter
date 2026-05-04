@@ -41,9 +41,12 @@ class EntityRequirement(BaseModel):
 
 
 class SectionPlan(BaseModel):
-    h2: str = Field(..., min_length=8, description="The H2 heading text.")
-    mandate: str = Field(..., min_length=20, description="What the section must cover and why.")
-    target_word_count: int = Field(..., ge=80, le=400)
+    # Lenient bounds — tight quality constraints belong in eval_harness, not
+    # here. Schema-level rejection of a 19-char mandate would just burn the
+    # contract call without producing a usable artifact.
+    h2: str = Field(..., min_length=4, description="The H2 heading text.")
+    mandate: str = Field(..., min_length=10, description="What the section must cover and why.")
+    target_word_count: int = Field(..., ge=50, le=600)
     required_subheadings: List[str] = Field(default_factory=list, description="Optional H3s.")
     required_elements: List[str] = Field(
         default_factory=list,
@@ -68,24 +71,25 @@ class ContentContract(BaseModel):
     (section writer, voice pass, enforcer) treats this as ground truth.
     """
 
-    target_keyword: str = Field(..., min_length=3)
-    secondary_keywords: List[str] = Field(default_factory=list, max_length=8)
+    target_keyword: str = Field(..., min_length=2)
+    secondary_keywords: List[str] = Field(default_factory=list, max_length=12)
     intent: SearchIntent
     tone: GermanTone = GermanTone.SIE
-    target_audience: str = Field(..., min_length=10)
-    word_count_target: int = Field(..., ge=600, le=3000)
+    target_audience: str = Field(..., min_length=5)
+    word_count_target: int = Field(..., ge=200, le=5000)
 
-    # Contract bounds are intentionally lenient — they catch only output that
-    # would break downstream code. SEO-quality bands (50-60 title, 140-160
-    # description) live in eval_harness, where they get flagged for human
-    # review rather than rejecting the whole contract on a 44-char title.
-    h1: str = Field(..., min_length=12, max_length=120)
-    meta_title: str = Field(..., min_length=25, max_length=75)
-    meta_description: str = Field(..., min_length=70, max_length=170)
-    slug: str = Field(..., min_length=3, max_length=90)
+    # Contract bounds catch only output that would break downstream code.
+    # SEO-quality bands (50-60 title, 140-160 description, 800-1500 words,
+    # etc.) live in eval_harness, where they surface as flagged checks for
+    # human review rather than rejecting the whole contract on a 44-char
+    # title or a 510-word target.
+    h1: str = Field(..., min_length=5, max_length=200)
+    meta_title: str = Field(..., min_length=10, max_length=100)
+    meta_description: str = Field(..., min_length=30, max_length=250)
+    slug: str = Field(..., min_length=3, max_length=120)
 
-    sections: List[SectionPlan] = Field(..., min_length=3, max_length=10)
-    faq_items: List[FAQItem] = Field(default_factory=list, max_length=8)
+    sections: List[SectionPlan] = Field(..., min_length=2, max_length=12)
+    faq_items: List[FAQItem] = Field(default_factory=list, max_length=10)
 
     required_entities: List[EntityRequirement] = Field(default_factory=list)
     link_plan: List[LinkTarget] = Field(default_factory=list)

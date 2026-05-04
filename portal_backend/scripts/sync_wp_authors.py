@@ -18,6 +18,7 @@ if str(PORTAL_BACKEND_DIR) not in sys.path:
 
 from api.db import get_sessionmaker  # noqa: E402
 from api.portal_models import Site, SiteCredential  # noqa: E402
+from scripts.ssh_tunnel_helper import setup_ssh_tunnel  # noqa: E402
 
 
 def _normalized_host(value: str) -> Optional[str]:
@@ -128,6 +129,8 @@ def _iter_rows(rows: Iterable[Tuple[SiteCredential, Site]]) -> Iterable[Tuple[Si
 
 
 def main() -> int:
+    setup_ssh_tunnel()
+
     parser = argparse.ArgumentParser(
         description="Sync WordPress users/me author_id and author_name into site_credentials."
     )

@@ -19,9 +19,10 @@ def _get_database_url() -> str:
     parsed_url = make_url(database_url)
     db_host = (parsed_url.host or "").strip().lower()
     if db_host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
-        raise RuntimeError(
-            "DATABASE_URL must point to the production database; localhost/loopback hosts are not allowed."
-        )
+        if not os.getenv("ALLOW_LOCALHOST_DB"):
+            raise RuntimeError(
+                "DATABASE_URL must point to the production database; localhost/loopback hosts are not allowed."
+            )
     return database_url
 
 

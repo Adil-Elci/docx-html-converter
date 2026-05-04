@@ -5,6 +5,60 @@ This folder contains:
 - `run_master_site_sync.py` (recommended): sync one master site file into multiple DB tables
 - `import_tabular_to_db.py`: generic config-driven tabular importer/updater (CSV/XLSX/Google Sheets)
 
+## How to Update the Live Database
+
+### Step 1 — Set the DATABASE_URL in portal_backend/.env
+
+The live database runs on a Dokploy-managed VPS (Hostinger). The DB port is exposed externally.
+
+Set `DATABASE_URL` in `portal_backend/.env` to:
+
+```
+DATABASE_URL=postgresql://Adil:4OIiID4x00y9XQ4J8OKL@76.13.143.101:9876/article-automation-database
+```
+
+- `76.13.143.101` — the VPS public IP
+- `9876` — the host port that Dokploy maps to the DB container's internal port 5432
+- `article-automation-database` — the database name
+
+> The internal Docker hostname (`article-automation-article-automation-database-ilvbzx`) only resolves inside the Docker network on the server. Always use the public IP + exposed port when connecting from a local machine.
+
+### Step 2 — Prepare the master file
+
+Close the file in Excel if it is open (Excel creates a lockfile `~$master_site_file.xlsx` that will cause the script to skip the real file).
+
+Make sure exactly one `.xlsx` or `.csv` file is in:
+
+```
+portal_backend/scripts/db_updater/master_site_info/
+```
+
+### Step 3 — Load the env and do a dry run
+
+From the repo root:
+
+```bash
+cd portal_backend
+set -a; source .env; set +a
+python scripts/db_updater/run_master_site_sync.py --dry-run
+```
+
+Review the output — it shows how many rows would be written to each table and lists any issues.
+
+### Step 4 — Apply for real
+
+```bash
+python scripts/db_updater/run_master_site_sync.py
+```
+
+A JSON report is written to `portal_backend/scripts/db_updater/reports/`.
+
+### Step 5 — Revert .env after you're done
+
+The `.env` file is used by the local dev server too. After syncing, restore `DATABASE_URL` to the local dev DB (or leave it pointing at live if intentional).
+
+---
+
 ## Recommended Workflow (Master Site File)
 
 Put exactly one CSV/XLSX file into:
@@ -36,7 +90,7 @@ python3 portal_backend/scripts/db_updater/run_master_site_sync.py
 
 Required:
 
-- `publishing_site_url`
+- `publishing_site_url` or `site_url`
 
 Optional:
 
@@ -46,6 +100,9 @@ Optional:
 - `auth_type`
 - `wp_username`
 - `wp_app_password`
+- `wp_admin_login_url` or `admin_login_url`
+- `wp_admin_username` or `admin_username`
+- `wp_admin_password` or `admin_password`
 - `enabled`
 
 If credentials are provided, both `wp_username` and `wp_app_password` must be present.

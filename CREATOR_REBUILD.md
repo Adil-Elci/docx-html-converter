@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7d (legacy 4llm code removed; Phase 7 complete)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Post-Phase-7 cleanup: research cache, rename, image step, b88f018 backport`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -140,19 +140,18 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
   - **Tests**: deleted the 7 skipped legacy tests + `test_call_creator_stream_preserves_error_details` (tested a deleted helper) + the two legacy fixtures (`_creator_output_without_images`, `_creator_output_without_prompt_trace`) from `test_automation_service.py`. **Suite is now 293 passing, 0 skipped** (was 296 passing + 7 skipped at end of 7c). Net: deleted ~1,800 lines of code + ~2,000 lines of dead-test scaffolding while **gaining** 8 v2-path tests vs 7 skipped legacy tests.
   - **Kept (intentionally)**: `_select_publish_target_for_4llm` (used by v2 with a synthetic site_understanding — name is now misleading, will rename in cleanup); `call_creator_pair_fit` and the `_select_best_accepted_pair` route logic (unreachable in production today since the creator `/pair-fit` endpoint is gone, but the pair-fit selection logic is still useful and the deferred-items list said keep). `_select_publish_target` (line 164 in automation_service.py — a separate, still-used helper).
 
+## Post-Phase-7 cleanup (delivered)
+
+- ✅ **Cache `ResearchPayload` to `seo_research_cache`** — Alembic 0049 widens the `seo_research_cache_kind_check` CHECK to allow `cache_kind='research_payload'`. `creator/api/research_cache.py` mirrors the `trend_cache.py` pattern: typed `Table`, get/upsert helpers reading `CREATOR_DATABASE_URL`/`DATABASE_URL`. `creator/api/research.py` reads cache before any DataForSEO call and writes on miss. 7-day TTL. Cache hit returns `total_cost_usd=0.0` so spend telemetry stays honest. Soft-fails on any DB error (caching is a perf optimisation, never a correctness gate). 6 new tests.
+- ✅ **Rename `_select_publish_target_for_4llm` → `_select_publish_target_for_v2`** — mechanical rename; one definition + one call site in `automation_service.py`.
+- ✅ **Phase 8 — featured image for v2** — `_run_create_article_pipeline_v2` now generates a Leonardo image, uploads it via `wp_create_media_item`, and attaches it as `featured_media_id`. Prompt is templated from `contract.h1` + `meta_description` (no extra LLM call). Soft-fail semantics: image errors don't block publish (parity with legacy 4llm, which had no image at all). New helpers: `_build_image_prompt_from_contract`, `_generate_featured_image_for_v2`. New `skip_image` flag. `creator_output["phase6"]["featured_image"]` carries the prompt + image_url + media_id so the worker emits the same `image_prompt_ok` / `image_generated` JobEvents and Asset rows the converter flow does. 7 new tests.
+- ✅ **`b88f018` full backport** — every file in that commit that wasn't already on `main` is now applied. Security: rate limiter only trusts `X-Forwarded-For` from `TRUSTED_PROXY_IPS` (no IP-spoof bypass); `/password-reset/request` returns a neutral response regardless of email existence (no enumeration leak); `db.py` allows `localhost` DATABASE_URL when `ALLOW_LOCALHOST_DB=1` (dev convenience). Ops: `ssh_tunnel_helper.py`, `encrypt_wp_credentials.py` (re-runnable migration), `show_credentials.py` (audit). Master-site sync now auto-fetches WP `author_id` / `author_name` for new sites. README + db_updater README updated with operational runbooks.
+
 ## Deferred items / follow-ups
 
-- **Cache `ResearchPayload` to `seo_research_cache`** — needs CHECK-constraint migration for `cache_kind='research_payload'`. Costs $0.05/uncached run. Will land as its own commit.
 - **`_select_best_accepted_pair` + `call_creator_pair_fit`** — currently unreachable from production (creator `/pair-fit` endpoint was deleted with 7d). The selection logic and its 9 tests are kept as a building block for v2-aware pair-fit ranking. Revisit when redesigning auto-site-selection.
-- **Rename `_select_publish_target_for_4llm` → `_select_publish_target_for_v2`** — name is now misleading after 7d; it's the only deterministic site matcher in production. One-line rename + import update.
-- **Backport remaining security hardening from `b88f018`** — that commit (on `codex/task-board-sort-updated-at`) brought in more than the Fernet TypeDecorator we restored. Still missing on `main`:
-  - Login rate limiter only trusts `X-Forwarded-For` from `TRUSTED_PROXY_IPS`. Without this, an attacker can spoof the source IP to defeat per-IP rate limiting.
-  - Password-reset endpoint returns a neutral response regardless of whether the email exists. Without this, the endpoint leaks account-existence info via timing/response.
-  - Other items in that commit message: master-site-sync hardening, ssh_tunnel_helper.py, db_updater report gitignore.
-  Audit `b88f018`'s diff against current `main`, cherry-pick only the security pieces that aren't already present.
-- **Live env file cleanup** — Dokploy env vars on the live `portal_backend` and `creator` services likely still hold legacy variables that no longer have any code reading them (e.g. `CREATOR_PIPELINE_MODE` was removed in Phase 0; legacy 4llm-only flags from before the rebuild). Walk the live env, cross-check against the codebase, and prune anything that's no longer referenced. Confirm `WP_CREDENTIAL_ENCRYPTION_KEY` (portal) and `ANTHROPIC_API_KEY` / `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` (creator) are present, since those are now load-bearing.
-- **Phase 6c — review-card HTML renderer** — was the last open item from Phase 6. Skipped during 7c because the live admin portal already exposes `quality_report` + `judge_scores` via the existing job-detail page. Revisit only if a richer review surface is needed.
-- **Phase 8 — featured image for v2** — v2 publishes with no featured image (legacy 4llm parity). If we want images on creator-mode articles, wire a Leonardo image generation step around the v2 pipeline.
+- **Live env file cleanup** — Dokploy env vars on the live `portal_backend` and `creator` services likely still hold legacy variables that no longer have any code reading them (e.g. `CREATOR_PIPELINE_MODE` was removed in Phase 0; legacy 4llm-only flags from before the rebuild). Walk the live env, cross-check against the codebase, and prune anything that's no longer referenced. **Now load-bearing**: `WP_CREDENTIAL_ENCRYPTION_KEY` (portal), `ANTHROPIC_API_KEY` / `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` (creator), `LEONARDO_API_KEY` (portal — required for v2 featured-image step), `TRUSTED_PROXY_IPS` (portal — required for rate-limit IP-trust to work behind Dokploy).
+- **Phase 6c — review-card HTML renderer** — skipped because the live admin portal already exposes `quality_report` + `judge_scores` via the existing job-detail page. Revisit only if a focused "send to client for sign-off" surface is wanted.
 
 ## External services & env vars
 

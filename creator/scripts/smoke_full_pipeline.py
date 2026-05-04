@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import html as html_lib
 import json
 import sys
 from datetime import datetime
@@ -69,6 +70,49 @@ def _write_text(path: Path, payload: str) -> None:
     path.write_text(payload, encoding="utf-8")
 
 
+_VIEWER_CSS = (
+    "body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",system-ui,sans-serif;"
+    "max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.65;color:#1a1a1a}"
+    "h1{font-size:2rem;line-height:1.25}"
+    "h2{margin-top:2.5rem;padding-top:1.2rem;border-top:1px solid #eee;font-size:1.5rem}"
+    "h3{color:#444;font-size:1.15rem;margin-top:1.5rem}"
+    "p{margin:1rem 0}"
+    "a{color:#0a62cf;text-decoration:none;border-bottom:1px solid #b6d2f5}"
+    "a:hover{color:#054b9c;border-bottom-color:#054b9c}"
+    "table{border-collapse:collapse;margin:1.25rem 0;font-size:0.95rem}"
+    "th,td{border:1px solid #e0e0e0;padding:0.5rem 0.85rem;text-align:left}"
+    "th{background:#f7f7f9}"
+    "ul,ol{padding-left:1.5rem;margin:1rem 0}"
+    "li{margin:0.4rem 0}"
+)
+
+
+def _viewable_html(body: str, *, title: str) -> str:
+    """Wrap an article body fragment in a minimal viewable HTML document.
+
+    The article HTML produced by article_assembler is a fragment meant to be
+    inserted into WordPress (where the surrounding page provides charset and
+    layout). For local browser inspection of smoke outputs, we wrap it in a
+    full document with explicit charset=utf-8 so German umlauts render
+    correctly in browsers that would otherwise default to Latin-1.
+    """
+
+    safe_title = html_lib.escape(title or "Smoke article")
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang=\"de\">\n"
+        "<head>\n"
+        "<meta charset=\"utf-8\">\n"
+        f"<title>{safe_title}</title>\n"
+        f"<style>{_VIEWER_CSS}</style>\n"
+        "</head>\n"
+        "<body>\n"
+        f"{body}\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
 def _print_quality_summary(run: PipelineRun) -> None:
     report = run.quality_report
     det_failed = [r for r in report.deterministic if not r.passed]
@@ -102,16 +146,17 @@ def _save_run(run: PipelineRun, out_dir: Path) -> List[Path]:
     _write_json(p, [s for s in run.sections])
     paths.append(p)
 
+    title = run.contract.h1
     p = out_dir / "article_assembled.html"
-    _write_text(p, run.assembled.full_html)
+    _write_text(p, _viewable_html(run.assembled.full_html, title=title))
     paths.append(p)
 
     p = out_dir / "article_refined.html"
-    _write_text(p, run.refined_article_html)
+    _write_text(p, _viewable_html(run.refined_article_html, title=title))
     paths.append(p)
 
     p = out_dir / "article_final.html"
-    _write_text(p, run.final_html)
+    _write_text(p, _viewable_html(run.final_html, title=title))
     paths.append(p)
 
     if run.judge_scores is not None:

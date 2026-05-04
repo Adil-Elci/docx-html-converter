@@ -26,6 +26,22 @@ def test_extract_json_repairs_trailing_commas_and_bare_keys():
     assert payload["outline"][-1]["h2"] == "FAQ"
 
 
+def test_extract_json_accepts_raw_newlines_inside_string_value():
+    # Real-world failure mode: section_writer's body_html field contains
+    # multi-line HTML with literal newlines between <li> items. Standard
+    # json.loads rejects raw control chars in strings; strict=False accepts.
+    payload = _extract_json(
+        '{\n'
+        '  "body_html": "<ul>\n<li>Erstens</li>\n<li>Zweitens</li>\n</ul>",\n'
+        '  "links_inserted": [],\n'
+        '  "word_count": 4\n'
+        '}'
+    )
+    assert payload["word_count"] == 4
+    assert "<li>Erstens</li>" in payload["body_html"]
+    assert "<li>Zweitens</li>" in payload["body_html"]
+
+
 def test_extract_json_handles_surrounding_text_and_smart_quotes():
     payload = _extract_json(
         """

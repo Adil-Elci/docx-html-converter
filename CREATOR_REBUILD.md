@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 5 (voice pass)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 6a (pipeline runner)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -76,8 +76,10 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 ### Phase 5 — Voice & coherence pass · ✅ COMPLETE
 `creator/api/voice_pass.py` — single Sonnet 4.6 call that takes the assembled article HTML + contract and returns a refined version. Strict preservation rules in the prompt: H1/H2/H3 text, all `<a href>` URLs and anchor texts, all numbers/statistics/dates, all named entities, all `<table>`/`<ul>`/`<ol>` structures, all `<script>` blocks must remain unchanged. Only `<p>` prose is editable. Cached system prompt (cache_system=True). Output post-processed to strip stray `\`\`\`html` codeblock wrapping. Hard validation: every `href=` URL from input must appear in output, otherwise raises `VoicePassValidationError` — voice-pass losing the backlink is the kind of silent regression we want loud. Override model via `CREATOR_VOICE_MODEL`. Prompt `creator/prompts/voice_pass/v1.md` includes a German AI-tell substitution table (Darüber hinaus → Außerdem, etc.). 20 new tests; full creator suite at 156 passing.
 
-### Phase 6 — Deterministic enforcer + review surface · 🔜 NEXT
-Wire the existing `eval_harness.evaluate()` rubric (12 deterministic + 2 research-driven + 3 LLM-judged) into the actual production decision: pass = ship to human review, fail = auto-repair via Sonnet 1-shot or queue for human fix. Plus build a one-page review card (server-side HTML) showing scores + flagged risks + diff vs contract. Likely 2 commits.
+### Phase 6 — Enforcer + pipeline orchestrator + review surface · 🔄 IN PROGRESS
+- **6a** ✅: `creator/api/pipeline_runner.py` — `run_pipeline()` chains all seven phases (research → contract → sections → assemble → voice → judge → eval) and returns a `PipelineRun` dataclass with every intermediate artifact. Each step wrapped in try/except that re-raises as `PipelineError` with phase label, so a single failure surfaces with context. Optional `skip_voice_pass` and `skip_judge` flags for faster cheaper runs during dev. Schema blocks come from the deterministic assembler and are re-attached AFTER voice pass (voice pass operates on body HTML only, so schema is never at risk of LLM mangling). 17 new tests; full suite at 173 passing.
+- **6b** 🔜 full-pipeline smoke script (live, ~$0.30/run, saves outputs to disk).
+- **6c** 🔜 review-card HTML renderer that takes a `PipelineRun` and produces a one-page review surface.
 
 ### Phase 7 — Wire into portal_backend · 🔜
 Update `automation_service.py` and `automation_worker.py` to call new pipeline. Run 5 real orders end-to-end. Measure against eval harness.

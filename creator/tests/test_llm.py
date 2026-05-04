@@ -26,6 +26,35 @@ def test_extract_json_repairs_trailing_commas_and_bare_keys():
     assert payload["outline"][-1]["h2"] == "FAQ"
 
 
+def test_extract_json_preserves_german_smart_quotes_inside_string_value():
+    # Real-world failure mode: section_writer body_html contains German
+    # typographic quotes („Foo“) which are valid inside a JSON string
+    # value but were destroyed by an unconditional smart-quote -> ASCII
+    # translation, which produced unescaped quotes inside the string and
+    # broke parsing.
+    payload = _extract_json(
+        '{\n'
+        '  "body_html": "<p>Der Titel „Steuerberater“ ist gesetzlich geschützt.</p>",\n'
+        '  "links_inserted": [],\n'
+        '  "word_count": 8\n'
+        '}'
+    )
+    assert payload["word_count"] == 8
+    assert "„Steuerberater“" in payload["body_html"]
+
+
+def test_extract_json_still_handles_smart_quotes_at_structural_positions():
+    # The complementary case: model used “ ” as the JSON quote
+    # delimiters themselves (around keys / values). Original parse fails;
+    # smart-quote translation fallback should rescue it.
+    payload = _extract_json(
+        '{\n'
+        '  “outline”: [{“h2”: “Fazit”}]\n'
+        '}'
+    )
+    assert payload["outline"][0]["h2"] == "Fazit"
+
+
 def test_extract_json_accepts_raw_newlines_inside_string_value():
     # Real-world failure mode: section_writer's body_html field contains
     # multi-line HTML with literal newlines between <li> items. Standard

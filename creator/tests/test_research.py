@@ -217,3 +217,143 @@ def test_topical_gap_handles_empty_article():
     )
     missing = topical_gap(payload, article_text="", coverage_threshold=0.6)
     assert [e.name for e in missing] == ["DATEV"]
+
+
+# ---- research cache --------------------------------------------------------
+
+
+def _hydratable_payload_dict() -> dict:
+    return {
+        "target_keyword": "steuerberater hamburg",
+        "location_code": 2276,
+        "language_code": "de",
+        "organic": [{"rank": 1, "url": "https://a.de", "title": "T", "description": "", "domain": "a.de"}],
+        "paa_questions": ["q?"],
+        "related_searches": ["x"],
+        "primary_volume": {"keyword": "steuerberater hamburg", "search_volume": 9900, "competition": 0.45, "cpc": 4.32, "cost": 0.0},
+        "related_keywords": [{"keyword": "steuerberater hamburg altona", "search_volume": 480, "cpc": None, "competition": None}],
+        "competitors": [{
+            "url": "https://a.de", "final_url": "https://a.de", "fetch_status": "ok",
+            "http_status": 200, "title": "T", "h1": "H", "h2s": ["A"], "h3s": [], "body_text": "b",
+            "word_count": 800, "internal_link_count": 0, "external_link_count": 0,
+            "schema_types": [], "has_faq_schema": False, "has_article_schema": False,
+        }],
+        "competitor_word_count_median": 800,
+        "common_h2_themes": ["A"],
+        "entities": [{"name": "DATEV", "type": "ORG", "n_competitors": 2, "coverage": 1.0}],
+        "high_coverage_entities": [{"name": "DATEV", "type": "ORG", "n_competitors": 2, "coverage": 1.0}],
+        "research_version": "v1",
+        "total_cost_usd": 0.05,
+    }
+
+
+def test_payload_serialisation_round_trip():
+    cached = _hydratable_payload_dict()
+    payload = research._payload_from_dict(cached)
+    assert payload.target_keyword == "steuerberater hamburg"
+    assert payload.organic[0].rank == 1
+    assert payload.related_keywords[0].keyword == "steuerberater hamburg altona"
+    assert payload.competitors[0].word_count == 800
+    assert payload.entities[0].name == "DATEV"
+    # Cached hydration always reports zero spend — the original cost was paid before.
+    assert payload.total_cost_usd == 0.0
+
+    redumped = research._payload_to_dict(payload)
+    # All fields except total_cost_usd should round-trip identically.
+    cached_for_compare = dict(cached)
+    cached_for_compare["total_cost_usd"] = 0.0
+    assert redumped == cached_for_compare
+
+
+def test_run_research_returns_cached_payload_without_calling_dataforseo(monkeypatch):
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.get_cached_research_payload",
+        lambda **kwargs: _hydratable_payload_dict(),
+    )
+    upsert_calls = []
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.upsert_research_payload",
+        lambda **kwargs: upsert_calls.append(kwargs),
+    )
+    client = MagicMock()  # If touched, we'd see calls — assertions below catch that.
+    payload = run_research(target_keyword="steuerberater hamburg", dataforseo=client)
+    assert payload.target_keyword == "steuerberater hamburg"
+    assert payload.entities[0].name == "DATEV"
+    assert payload.total_cost_usd == 0.0
+    client.serp_organic.assert_not_called()
+    client.keyword_volume.assert_not_called()
+    client.related_keywords.assert_not_called()
+    assert upsert_calls == []  # Cache hit must not re-write.
+
+
+def test_run_research_writes_fresh_payload_to_cache_on_miss(monkeypatch):
+    upsert_calls = []
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.get_cached_research_payload",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.upsert_research_payload",
+        lambda **kwargs: upsert_calls.append(kwargs),
+    )
+    client = _make_client()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    with patch("creator.api.research.scrape_top_results", return_value=[]), \
+         patch("creator.api.research.extract_entities_from_competitors") as mock_entities:
+        mock_entities.return_value = EntityExtractionResult(entities=[], competitor_count=0)
+        run_research(target_keyword="x", dataforseo=client)
+    assert len(upsert_calls) == 1
+    assert "x" in upsert_calls[0]["lookup_key"]
+    assert upsert_calls[0]["locale"] == "de-2276"
+    # The serialised payload must round-trip back through _payload_from_dict.
+    rebuilt = research._payload_from_dict(upsert_calls[0]["payload"])
+    assert rebuilt.target_keyword == "x"
+
+
+def test_run_research_skips_cache_when_use_cache_false(monkeypatch):
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.get_cached_research_payload",
+        lambda **kwargs: pytest.fail("get_cached_research_payload should not be called when use_cache=False"),
+    )
+    monkeypatch.setattr(
+        "creator.api.research.research_cache.upsert_research_payload",
+        lambda **kwargs: pytest.fail("upsert_research_payload should not be called when use_cache=False"),
+    )
+    client = _make_client()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    with patch("creator.api.research.scrape_top_results", return_value=[]), \
+         patch("creator.api.research.extract_entities_from_competitors") as mock_entities:
+        mock_entities.return_value = EntityExtractionResult(entities=[], competitor_count=0)
+        run_research(target_keyword="y", dataforseo=client, use_cache=False)
+
+
+def test_build_lookup_key_distinguishes_skip_flags():
+    from creator.api import research_cache
+
+    base = research_cache.build_lookup_key(
+        target_keyword="Steuerberater Hamburg",
+        skip_related_keywords=False,
+        skip_entity_extraction=False,
+        research_version="v1",
+    )
+    other = research_cache.build_lookup_key(
+        target_keyword="steuerberater hamburg",  # different case — should normalise to same key
+        skip_related_keywords=False,
+        skip_entity_extraction=False,
+        research_version="v1",
+    )
+    assert base == other
+    skip_changed = research_cache.build_lookup_key(
+        target_keyword="steuerberater hamburg",
+        skip_related_keywords=True,
+        skip_entity_extraction=False,
+        research_version="v1",
+    )
+    assert skip_changed != base
+
+
+def test_build_locale_combines_language_and_location():
+    from creator.api import research_cache
+
+    assert research_cache.build_locale("de", 2276) == "de-2276"
+    assert research_cache.build_locale("EN", 2840) == "en-2840"

@@ -540,7 +540,7 @@ class SEOResearchCache(Base):
     __table_args__ = (
         CheckConstraint("provider IN ('dataforseo','copyscape')", name="seo_research_cache_provider_check"),
         CheckConstraint(
-            "cache_kind IN ('keyword_metrics','serp_results','duplicate_check')",
+            "cache_kind IN ('keyword_metrics','serp_results','duplicate_check','research_payload')",
             name="seo_research_cache_kind_check",
         ),
         UniqueConstraint("provider", "cache_kind", "lookup_key", "locale", name="seo_research_cache_lookup_unique"),

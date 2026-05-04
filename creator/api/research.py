@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Iterable, List, Optional
 
+from dataclasses import asdict
+from typing import Any, Dict
+
 from .dataforseo import (
     DEFAULT_LANGUAGE_CODE,
     DEFAULT_LOCATION_CODE,
@@ -31,6 +34,7 @@ from .dataforseo import (
     RelatedKeyword,
 )
 from .entity_extract import ExtractedEntity, extract_entities_from_competitors
+from . import research_cache
 from .serp_scrape import (
     DEFAULT_MAX_BODY_CHARS,
     DEFAULT_TIMEOUT_SECONDS as SCRAPE_DEFAULT_TIMEOUT,
@@ -145,6 +149,40 @@ def topical_gap(
     return missing
 
 
+# ---- cache serialisation ----------------------------------------------------
+
+
+def _payload_to_dict(payload: ResearchPayload) -> Dict[str, Any]:
+    """Round-trippable jsonable dict for ``seo_research_cache.payload`` storage."""
+
+    return asdict(payload)
+
+
+def _payload_from_dict(data: Dict[str, Any]) -> ResearchPayload:
+    """Inverse of ``_payload_to_dict``: rebuild dataclasses from a cached dict."""
+
+    primary_volume_raw = data.get("primary_volume")
+    primary_volume = KeywordMetric(**primary_volume_raw) if isinstance(primary_volume_raw, dict) else None
+    return ResearchPayload(
+        target_keyword=data["target_keyword"],
+        location_code=int(data["location_code"]),
+        language_code=str(data["language_code"]),
+        organic=[OrganicResult(**item) for item in (data.get("organic") or [])],
+        paa_questions=list(data.get("paa_questions") or []),
+        related_searches=list(data.get("related_searches") or []),
+        primary_volume=primary_volume,
+        related_keywords=[RelatedKeyword(**item) for item in (data.get("related_keywords") or [])],
+        competitors=[ScrapedCompetitor(**item) for item in (data.get("competitors") or [])],
+        competitor_word_count_median=data.get("competitor_word_count_median"),
+        common_h2_themes=list(data.get("common_h2_themes") or []),
+        entities=[ExtractedEntity(**item) for item in (data.get("entities") or [])],
+        high_coverage_entities=[ExtractedEntity(**item) for item in (data.get("high_coverage_entities") or [])],
+        research_version=str(data.get("research_version") or RESEARCH_VERSION),
+        # Cached payloads were already paid for in a prior run.
+        total_cost_usd=0.0,
+    )
+
+
 # ---- orchestrator -----------------------------------------------------------
 
 
@@ -163,6 +201,7 @@ def run_research(
     scrape_timeout_seconds: int = SCRAPE_DEFAULT_TIMEOUT,
     scrape_max_body_chars: int = DEFAULT_MAX_BODY_CHARS,
     scrape_user_agent: str = DEFAULT_USER_AGENT,
+    use_cache: bool = True,
 ) -> ResearchPayload:
     """Run the full research pipeline for a target keyword.
 
@@ -172,7 +211,32 @@ def run_research(
     - Related keywords (when not skipped): ~$0.01
     - Haiku entity extraction (when not skipped): ~$0.01–0.03
     Total: ~$0.03–0.05.
+
+    Cached payloads (within the seo_research_cache TTL) skip every spend
+    item above and return ``total_cost_usd=0.0``.
     """
+
+    cache_key = research_cache.build_lookup_key(
+        target_keyword=target_keyword,
+        skip_related_keywords=skip_related_keywords,
+        skip_entity_extraction=skip_entity_extraction,
+        research_version=RESEARCH_VERSION,
+    )
+    cache_locale = research_cache.build_locale(language_code, location_code)
+    if use_cache:
+        cached = research_cache.get_cached_research_payload(
+            lookup_key=cache_key,
+            locale=cache_locale,
+        )
+        if cached is not None:
+            try:
+                return _payload_from_dict(cached)
+            except Exception:
+                logger.warning(
+                    "research.cache_hydrate_failed keyword=%s — falling through to live run",
+                    target_keyword,
+                    exc_info=True,
+                )
 
     client = dataforseo or DataForSEOClient()
     cost_running = 0.0
@@ -239,7 +303,7 @@ def run_research(
 
     high_coverage = [e for e in entities if e.coverage >= high_coverage_threshold]
 
-    return ResearchPayload(
+    payload = ResearchPayload(
         target_keyword=target_keyword,
         location_code=location_code,
         language_code=language_code,
@@ -255,3 +319,17 @@ def run_research(
         high_coverage_entities=high_coverage,
         total_cost_usd=cost_running,
     )
+    if use_cache:
+        try:
+            research_cache.upsert_research_payload(
+                lookup_key=cache_key,
+                locale=cache_locale,
+                payload=_payload_to_dict(payload),
+            )
+        except Exception:
+            logger.warning(
+                "research.cache_upsert_failed keyword=%s — payload is fresh but won't cache",
+                target_keyword,
+                exc_info=True,
+            )
+    return payload

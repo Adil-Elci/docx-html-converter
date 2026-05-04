@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7a (/v2/run-pipeline endpoint)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Phase 7b-1 (v2 HTTP client)`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -83,9 +83,12 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 
 ### Phase 7 — Wire into portal_backend · 🔄 IN PROGRESS
 - **7a** ✅: `POST /v2/run-pipeline` endpoint on creator service. Single HTTP call wraps `pipeline_runner.run_pipeline()`; request schema is `V2RunPipelineRequest` (target_keyword, target_backlink_url, publishing_site_url, optional anchor_hint / canonical_url / four skip flags). Response is the full PipelineRun serialized as JSON (research, contract, sections, three article HTML variants — assembled / refined_body / final, judge_scores, quality_report). On failure returns HTTP 422 with `{ok: false, error: "pipeline_failed", phase, message}`. Long-running (~30s end-to-end), so callers must use timeout ≥ 120s. Legacy `/site-understanding` / `/draft-article` / `/integrate-links` / `/generate-meta` endpoints kept functional for now — portal_backend still calls those until 7b lands. 6 new tests; full suite at 179 passing. Added `httpx>=0.27.0` to creator/requirements.txt for FastAPI TestClient.
-- **7b** 🔜 Update `portal_backend/api/automation_worker.py` to call `/v2/run-pipeline` instead of orchestrating the four legacy endpoints. Map response into existing DB writes (creator_outputs, jobs, JobEvents).
+- **7b** 🔄 IN PROGRESS — replace 4llm orchestration with /v2/run-pipeline calls, in three sub-steps:
+  - **7b-1** ✅: `automation_service.call_creator_v2_pipeline()` HTTP client. POSTs to `/v2/run-pipeline`, returns parsed dict, raises `AutomationError` with phase label on failure (`Creator v2 pipeline failed at phase [contract]: ...`). 8 new tests + 7 pre-existing legacy tests skipped (they were broken since Phase 0; will be deleted in 7d).
+  - **7b-2** 🔜 read `_run_create_article_pipeline_4llm` (300 lines, automation_service.py:1961+) and `automation_worker.py` to map every field of the legacy `creator_output` dict used downstream. Image generation lives inside the legacy function — needs to be split out and run AFTER the v2 pipeline returns, since v2 produces no image prompts.
+  - **7b-3** 🔜 implement `_run_create_article_pipeline_v2` that calls `call_creator_v2_pipeline`, adapts the response to the legacy `creator_output` shape, then runs image generation + WP publish using the existing helpers. Switch `run_create_article_pipeline` to call the new path.
 - **7c** 🔜 End-to-end test through `/automation/submit-article-webhook` with a real order; verify article publishes to WordPress.
-- **7d** 🔜 Delete the legacy 4llm endpoints from creator and the legacy orchestration in portal_backend.
+- **7d** 🔜 Delete the legacy 4llm endpoints from creator (`/site-understanding`, `/draft-article`, `/integrate-links`, `/generate-meta`) and the legacy orchestration in portal_backend (`call_creator_4llm_endpoint`, `_run_create_article_pipeline_4llm`, the 7 skipped legacy tests).
 
 ## Deferred items (intentionally)
 

@@ -116,12 +116,22 @@ def _extract_json(text: str) -> Dict[str, Any]:
         if parsed is not None:
             return parsed
 
+    logger.warning(
+        "creator.llm_invalid_json head=%r tail=%r length=%d",
+        cleaned[:600],
+        cleaned[-300:] if len(cleaned) > 600 else "",
+        len(cleaned),
+    )
     raise LLMError("LLM returned invalid JSON.")
 
 
 def _is_retryable_error(error: LLMError) -> bool:
     message = str(error).lower()
     if "llm request failed" in message:
+        return True
+    if "llm returned invalid json" in message:
+        return True
+    if "llm response missing content" in message:
         return True
     match = re.search(r"llm http (\d+)", message)
     if match:
@@ -389,12 +399,12 @@ def call_llm_json(
     request_label: str = "",
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
     cache_system: bool = False,
+    retries: int = 1,
+    backoff_seconds: float = 1.5,
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = 0
-    backoff_seconds = 0.0
 
     last_error: Optional[LLMError] = None
     for attempt in range(retries + 1):

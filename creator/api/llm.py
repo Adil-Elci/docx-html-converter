@@ -31,13 +31,26 @@ _SMART_QUOTES = str.maketrans(
 )
 
 
-def _normalize_json_text(text: str) -> str:
-    cleaned = (text or "").strip().translate(_SMART_QUOTES)
-    cleaned = cleaned.lstrip("\ufeff")
+def _strip_json_envelope(text: str) -> str:
+    """Strip BOM and ```json fences without touching content characters."""
+
+    cleaned = (text or "").strip().lstrip("\ufeff")
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     return cleaned.strip()
+
+
+def _normalize_json_text(text: str) -> str:
+    """Strip envelope AND translate smart quotes \u2014 only for fallback paths.
+
+    Translating smart quotes is destructive when typographic quotes legitimately
+    appear inside JSON string values (German ``\u201eSteuerberater"`` style). The
+    primary parse path uses ``_strip_json_envelope`` so the original quotes are
+    preserved; only when raw parsing fails do we try this normalised form.
+    """
+
+    return _strip_json_envelope(text).translate(_SMART_QUOTES)
 
 
 def _extract_balanced_object(text: str) -> str:
@@ -80,13 +93,35 @@ def _repair_json_like_text(text: str) -> str:
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
-    cleaned = _normalize_json_text(text)
+    # Try the raw envelope-stripped text first — preserves smart quotes that
+    # may legitimately live inside string values (e.g. German „..." style).
+    raw = _strip_json_envelope(text)
     try:
-        parsed = json.loads(cleaned, strict=False)
+        parsed = json.loads(raw, strict=False)
         if isinstance(parsed, dict):
             return parsed
     except ValueError:
         pass
+
+    raw_snippet = _extract_balanced_object(raw)
+    if raw_snippet:
+        try:
+            parsed = json.loads(raw_snippet, strict=False)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+
+    # Fallback path: translate smart quotes (in case the model used them at
+    # structural positions like around keys) and retry every parser.
+    cleaned = raw.translate(_SMART_QUOTES)
+    if cleaned != raw:
+        try:
+            parsed = json.loads(cleaned, strict=False)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
 
     parsed = _try_literal_eval(cleaned)
     if parsed is not None:
@@ -118,9 +153,9 @@ def _extract_json(text: str) -> Dict[str, Any]:
 
     logger.warning(
         "creator.llm_invalid_json head=%r tail=%r length=%d",
-        cleaned[:600],
-        cleaned[-300:] if len(cleaned) > 600 else "",
-        len(cleaned),
+        raw[:600],
+        raw[-300:] if len(raw) > 600 else "",
+        len(raw),
     )
     raise LLMError("LLM returned invalid JSON.")
 

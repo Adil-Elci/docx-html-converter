@@ -323,6 +323,7 @@ def _call_anthropic(
     temperature: float,
     request_label: str,
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cache_system: bool = False,
 ) -> str:
     url = base_url.rstrip("/") + "/messages"
     headers = {
@@ -330,11 +331,21 @@ def _call_anthropic(
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
+    if cache_system:
+        system_field: Any = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    else:
+        system_field = system_prompt
     payload = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "system": system_prompt,
+        "system": system_field,
         "messages": [{"role": "user", "content": user_prompt}],
     }
     try:
@@ -377,6 +388,7 @@ def call_llm_json(
     allow_html_fallback: bool = False,
     request_label: str = "",
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cache_system: bool = False,
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -399,6 +411,7 @@ def call_llm_json(
                     temperature=temperature,
                     request_label=request_label,
                     usage_collector=usage_collector,
+                    cache_system=cache_system,
                 )
             else:
                 raw = _call_openai(
@@ -452,6 +465,7 @@ def call_llm_text(
     temperature: float = 0.3,
     request_label: str = "",
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cache_system: bool = False,
 ) -> str:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -474,6 +488,7 @@ def call_llm_text(
                     temperature=temperature,
                     request_label=request_label,
                     usage_collector=usage_collector,
+                    cache_system=cache_system,
                 )
             else:
                 raw = _call_openai(

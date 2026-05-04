@@ -186,6 +186,9 @@ def write_section(
             max_tokens=max_tokens,
             temperature=temperature,
             request_label=f"section_writer/{prompt.version}/section_{section_index}",
+            # Sections share a long stable system prompt; ephemeral cache means
+            # only the first section in a batch pays full input-token price.
+            cache_system=True,
         )
     except LLMError:
         raise

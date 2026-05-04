@@ -278,3 +278,19 @@ def test_write_all_sections_serial_for_single_section_contract(monkeypatch):
 def test_default_parallel_workers_is_reasonable():
     # Sanity check on the constant used in production defaults.
     assert 1 <= DEFAULT_PARALLEL_WORKERS <= 8
+
+
+def test_write_section_passes_cache_system_true_to_caller(monkeypatch):
+    """The section system prompt is identical across sections of an article;
+    cache_system=True must reach the llm caller so the first call writes the
+    cache and the rest read from it."""
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    captured = {}
+
+    def fake_caller(**kwargs):
+        captured.update(kwargs)
+        return _good_section_payload()
+
+    write_section(contract=_contract(), section_index=0, llm_caller=fake_caller)
+    assert captured.get("cache_system") is True

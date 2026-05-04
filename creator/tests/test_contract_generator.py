@@ -125,6 +125,21 @@ def test_build_user_prompt_handles_empty_research():
     assert "(keine Volumen-Daten)" in prompt
 
 
+def test_build_user_prompt_tolerates_string_competition_label():
+    # DataForSEO sometimes returns competition as "LOW" / "MEDIUM" / "HIGH"
+    # instead of a 0-1 float. Formatting must not crash.
+    research = _research()
+    research.primary_volume = KeywordMetric(
+        keyword="steuerberater hamburg",
+        search_volume=9900,
+        competition="HIGH",  # type: ignore[arg-type]  -- intentional API quirk
+        cpc=4.32,
+    )
+    prompt = build_user_prompt(research, target_backlink_url="https://x.de")
+    assert "HIGH" in prompt
+    assert "4.32€" in prompt
+
+
 def test_build_system_prompt_embeds_full_schema():
     fake_prompt = Prompt(name="contract_generator", version="v1", body="ROLE", metadata={})
     system = build_system_prompt(fake_prompt)

@@ -84,13 +84,31 @@ def _format_entities(payload: ResearchPayload) -> str:
     return "\n".join(lines)
 
 
+def _format_numeric(value: object, *, fmt: str = ".2f", suffix: str = "") -> str:
+    """Format numeric values with the given spec, but pass through strings as-is.
+
+    DataForSEO sometimes returns ``competition`` as a string label
+    ("LOW" / "MEDIUM" / "HIGH") instead of a 0-1 float, and an upstream
+    ``f"{x:.2f}"`` blows up with ``ValueError: Unknown format code 'f'``.
+    This helper preserves whatever shape the API returned without crashing.
+    """
+
+    if value is None:
+        return "?"
+    if isinstance(value, bool):
+        return f"{value}{suffix}"
+    if isinstance(value, (int, float)):
+        return f"{value:{fmt}}{suffix}"
+    return f"{value}{suffix}"
+
+
 def _format_volume(payload: ResearchPayload) -> str:
     metric = payload.primary_volume
     if metric is None:
         return "(keine Volumen-Daten)"
     volume = metric.search_volume if metric.search_volume is not None else "?"
-    competition = f"{metric.competition:.2f}" if metric.competition is not None else "?"
-    cpc = f"{metric.cpc:.2f}€" if metric.cpc is not None else "?"
+    competition = _format_numeric(metric.competition)
+    cpc = _format_numeric(metric.cpc, suffix="€")
     return f"Volumen: {volume} / Wettbewerb: {competition} / CPC: {cpc}"
 
 

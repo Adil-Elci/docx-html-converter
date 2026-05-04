@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
-from creator.api.llm import _call_anthropic, _extract_json
+import pytest
+
+from creator.api.llm import LLMError, _call_anthropic, _extract_json, _is_retryable_error, call_llm_json
 
 
 def test_extract_json_repairs_trailing_commas_and_bare_keys():
@@ -103,3 +105,58 @@ def test_call_anthropic_sends_list_with_cache_control_when_cache_enabled():
     assert system_field[0]["type"] == "text"
     assert system_field[0]["text"] == "long stable prompt"
     assert system_field[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_is_retryable_error_includes_invalid_json_and_missing_content():
+    assert _is_retryable_error(LLMError("LLM returned invalid JSON.")) is True
+    assert _is_retryable_error(LLMError("LLM response missing content.")) is True
+    assert _is_retryable_error(LLMError("LLM HTTP 503: x")) is True
+    assert _is_retryable_error(LLMError("LLM HTTP 400: bad request")) is False
+
+
+def test_call_llm_json_retries_once_on_invalid_json(monkeypatch):
+    responses = [
+        _anthropic_response("not even close to json"),
+        _anthropic_response('{"ok": true}'),
+    ]
+    call_count = {"n": 0}
+
+    def fake_post(url, headers, json, timeout):
+        idx = call_count["n"]
+        call_count["n"] += 1
+        return responses[idx]
+
+    monkeypatch.setattr("creator.api.llm.requests.post", fake_post)
+    monkeypatch.setattr("creator.api.llm.time.sleep", lambda _s: None)
+    result = call_llm_json(
+        system_prompt="s",
+        user_prompt="u",
+        api_key="k",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-sonnet-4-6",
+        timeout_seconds=30,
+        max_tokens=400,
+        backoff_seconds=0.0,
+    )
+    assert result == {"ok": True}
+    assert call_count["n"] == 2
+
+
+def test_call_llm_json_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(
+        "creator.api.llm.requests.post",
+        lambda url, headers, json, timeout: _anthropic_response("garbage that wont parse"),
+    )
+    monkeypatch.setattr("creator.api.llm.time.sleep", lambda _s: None)
+    with pytest.raises(LLMError, match="invalid JSON"):
+        call_llm_json(
+            system_prompt="s",
+            user_prompt="u",
+            api_key="k",
+            base_url="https://api.anthropic.com/v1",
+            model="claude-sonnet-4-6",
+            timeout_seconds=30,
+            max_tokens=400,
+            retries=2,
+            backoff_seconds=0.0,
+        )

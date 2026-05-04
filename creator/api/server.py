@@ -12,14 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .four_llm import draft_article, generate_meta, integrate_links, understand_target_site
-from .four_llm_schemas import (
-    DraftArticleRequest,
-    IntegrateLinksRequest,
-    MetaTagsRequest,
-    SiteUnderstandingRequest,
-)
-from .llm import LLMError
 from .models import ErrorResponse
 from .pipeline_runner import PipelineError, PipelineRun, run_pipeline
 
@@ -74,50 +66,6 @@ async def health() -> JSONResponse:
     )
     payload = {"ok": llm_ready, "llm_ready": llm_ready}
     return JSONResponse(status_code=200 if llm_ready else 503, content=payload)
-
-
-@app.post("/site-understanding")
-async def site_understanding(payload: SiteUnderstandingRequest) -> JSONResponse:
-    try:
-        result = understand_target_site(payload)
-    except LLMError as exc:
-        logger.warning("creator.site_understanding_failed error=%s", str(exc))
-        response = ErrorResponse(error="site_understanding_failed", details={"message": str(exc)})
-        return JSONResponse(status_code=422, content=response.dict())
-    return JSONResponse(status_code=200, content=result.model_dump())
-
-
-@app.post("/draft-article")
-async def draft_article_endpoint(payload: DraftArticleRequest) -> JSONResponse:
-    try:
-        result = draft_article(payload)
-    except LLMError as exc:
-        logger.warning("creator.draft_article_failed error=%s", str(exc))
-        response = ErrorResponse(error="draft_article_failed", details={"message": str(exc)})
-        return JSONResponse(status_code=422, content=response.dict())
-    return JSONResponse(status_code=200, content=result.model_dump())
-
-
-@app.post("/integrate-links")
-async def integrate_links_endpoint(payload: IntegrateLinksRequest) -> JSONResponse:
-    try:
-        result = integrate_links(payload)
-    except LLMError as exc:
-        logger.warning("creator.integrate_links_failed error=%s", str(exc))
-        response = ErrorResponse(error="integrate_links_failed", details={"message": str(exc)})
-        return JSONResponse(status_code=422, content=response.dict())
-    return JSONResponse(status_code=200, content=result.model_dump())
-
-
-@app.post("/generate-meta")
-async def generate_meta_endpoint(payload: MetaTagsRequest) -> JSONResponse:
-    try:
-        result = generate_meta(payload)
-    except LLMError as exc:
-        logger.warning("creator.generate_meta_failed error=%s", str(exc))
-        response = ErrorResponse(error="generate_meta_failed", details={"message": str(exc)})
-        return JSONResponse(status_code=422, content=response.dict())
-    return JSONResponse(status_code=200, content=result.model_dump())
 
 
 # ---- v2: end-to-end pipeline ----------------------------------------------

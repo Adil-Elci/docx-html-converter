@@ -1282,6 +1282,98 @@ def _build_creator_output_for_v2(
     }
 
 
+def _build_image_prompt_from_contract(contract: Dict[str, Any]) -> str:
+    """Templated featured-image prompt for v2 articles.
+
+    No LLM call: the contract already has h1 + meta_description, both crafted
+    by Sonnet 4.6 and English-friendly enough for Leonardo. Adding an LLM
+    prompt-rewrite step would burn tokens for marginal gain.
+    """
+
+    h1 = str(contract.get("h1") or contract.get("meta_title") or contract.get("target_keyword") or "").strip()
+    meta_description = str(contract.get("meta_description") or "").strip()
+    if h1 and meta_description:
+        return f"Editorial photo illustrating: {h1}. Context: {meta_description}"
+    if h1:
+        return f"Editorial photo illustrating: {h1}"
+    return f"Editorial photo illustrating: {contract.get('target_keyword') or 'business article'}"
+
+
+def _generate_featured_image_for_v2(
+    *,
+    prompt: str,
+    site_url: str,
+    wp_rest_base: str,
+    wp_username: str,
+    wp_app_password: str,
+    title: str,
+    leonardo_api_key: str,
+    leonardo_base_url: str,
+    leonardo_model_id: str,
+    image_width: int,
+    image_height: int,
+    timeout_seconds: int,
+    poll_timeout_seconds: int,
+    poll_interval_seconds: int,
+) -> Tuple[str, Dict[str, Any]]:
+    """Generate a Leonardo image and upload it to WordPress.
+
+    Returns ``(image_url, media_payload)`` on success. Caller decides what
+    to do on AutomationError (the v2 path treats it as a soft failure and
+    publishes without a featured image).
+    """
+
+    sizes_to_try = [
+        (max(256, image_width), max(256, image_height)),
+        (768, 432),
+        (640, 360),
+        (512, 288),
+    ]
+    unique_sizes: list[tuple[int, int]] = []
+    for size in sizes_to_try:
+        if size not in unique_sizes:
+            unique_sizes.append(size)
+
+    last_upload_error: Optional[AutomationError] = None
+    for idx, (width, height) in enumerate(unique_sizes):
+        image_url = generate_image_via_leonardo(
+            prompt=prompt,
+            api_key=leonardo_api_key,
+            timeout_seconds=timeout_seconds,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            model_id=leonardo_model_id,
+            width=width,
+            height=height,
+            base_url=leonardo_base_url,
+        )
+        image_bytes, file_name, content_type = download_binary_file(
+            image_url,
+            timeout_seconds=timeout_seconds,
+        )
+        try:
+            media_payload = wp_create_media_item(
+                site_url=site_url,
+                wp_rest_base=wp_rest_base,
+                wp_username=wp_username,
+                wp_app_password=wp_app_password,
+                data=image_bytes,
+                file_name=file_name,
+                content_type=content_type,
+                title=title,
+                timeout_seconds=timeout_seconds,
+            )
+            return image_url, media_payload
+        except AutomationError as exc:
+            if "HTTP 413" in str(exc) and idx < len(unique_sizes) - 1:
+                last_upload_error = exc
+                continue
+            raise
+    if last_upload_error:
+        raise last_upload_error
+    raise AutomationError("WordPress media upload failed for all image size attempts.")
+
+
 def _run_create_article_pipeline_v2(
     *,
     creator_endpoint: str,
@@ -1310,6 +1402,14 @@ def _run_create_article_pipeline_v2(
     category_llm_model: str,
     category_llm_max_categories: int,
     category_llm_confidence_threshold: float,
+    leonardo_api_key: str = "",
+    leonardo_base_url: str = DEFAULT_LEONARDO_BASE_URL,
+    leonardo_model_id: str = DEFAULT_LEONARDO_MODEL_ID,
+    image_width: int = DEFAULT_IMAGE_WIDTH,
+    image_height: int = DEFAULT_IMAGE_HEIGHT,
+    poll_timeout_seconds: int = DEFAULT_IMAGE_POLL_TIMEOUT_SECONDS,
+    poll_interval_seconds: int = DEFAULT_IMAGE_POLL_INTERVAL_SECONDS,
+    skip_image: bool = False,
     trace_event: Optional[Callable[[str, str, str, str, Optional[Dict[str, Any]]], None]] = None,
 ) -> Dict[str, Any]:
     def _trace(level: str, phase: str, event: str, message: str, details: Optional[Dict[str, Any]] = None) -> None:
@@ -1429,7 +1529,66 @@ def _run_create_article_pipeline_v2(
         except AutomationError as exc:
             _trace("warning", "categories", "llm_fallback", "Category LLM selection failed; using defaults.", {"error": str(exc)})
 
-    featured_media_id = 0 if existing_wp_post_id else None
+    image_prompt = _build_image_prompt_from_contract(contract)
+    image_url: str = ""
+    media_payload: Dict[str, Any] = {}
+    if skip_image:
+        _trace("info", "image", "skipped", "Featured image skipped (skip_image=True).")
+    elif not leonardo_api_key:
+        _trace(
+            "warning",
+            "image",
+            "no_api_key",
+            "LEONARDO_API_KEY not configured; publishing without a featured image.",
+        )
+    else:
+        _trace("info", "image", "start", "Generating featured image via Leonardo.", {"prompt_chars": len(image_prompt)})
+        try:
+            image_url, media_payload = _generate_featured_image_for_v2(
+                prompt=image_prompt,
+                site_url=selected_publish_site_url,
+                wp_rest_base=selected_wp_rest_base,
+                wp_username=selected_wp_username,
+                wp_app_password=selected_wp_app_password,
+                title=title,
+                leonardo_api_key=leonardo_api_key,
+                leonardo_base_url=leonardo_base_url,
+                leonardo_model_id=leonardo_model_id,
+                image_width=image_width,
+                image_height=image_height,
+                timeout_seconds=timeout_seconds,
+                poll_timeout_seconds=poll_timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+            _trace(
+                "info",
+                "image",
+                "ready",
+                "Featured image generated and uploaded to WordPress.",
+                {"media_id": media_payload.get("id")},
+            )
+        except AutomationError as exc:
+            # Image generation is treated as a soft failure: the article still
+            # publishes (matching legacy 4llm behaviour, where there was never
+            # an image at all). The error is logged so we can spot Leonardo /
+            # WP-media regressions without breaking the publish path.
+            _trace(
+                "warning",
+                "image",
+                "failed",
+                "Featured image generation failed; publishing without an image.",
+                {"error": str(exc)[:300]},
+            )
+            image_url = ""
+            media_payload = {}
+
+    featured_media_id: Optional[int] = 0 if existing_wp_post_id else None
+    if media_payload.get("id") is not None:
+        try:
+            featured_media_id = int(media_payload["id"])
+        except (TypeError, ValueError):
+            featured_media_id = 0 if existing_wp_post_id else None
+
     clean_html = _strip_leading_h1_from_article_html(article_html_for_publish)
     if existing_wp_post_id:
         post_payload = wp_update_post(
@@ -1475,12 +1634,31 @@ def _run_create_article_pipeline_v2(
         target_keyword=target_keyword,
         article_html=article_html_v2,
     )
+    # Expose the image prompt + result on creator_output so the worker fires
+    # the same image_prompt_ok / image_generated JobEvents the converter flow
+    # does. The worker reads phase6.featured_image.prompt for image_prompt_ok
+    # and the top-level image_url for image_generated + Asset row.
+    creator_output["phase6"] = {
+        "featured_image": {
+            "prompt": image_prompt,
+            "alt_text": title,
+            "image_url": image_url,
+            "media_id": media_payload.get("id"),
+        }
+    }
+
+    media_url: Optional[str] = None
+    if media_payload:
+        guid_value = media_payload.get("guid")
+        media_url = media_payload.get("source_url")
+        if not media_url and isinstance(guid_value, dict):
+            media_url = guid_value.get("rendered")
 
     return {
         "creator_output": creator_output,
-        "image_url": "",
-        "media_payload": {},
-        "media_url": None,
+        "image_url": image_url,
+        "media_payload": media_payload,
+        "media_url": media_url,
         "post_payload": post_payload,
         "post_event_type": post_event_type,
         "selected_category_ids": selected_category_ids,
@@ -1565,6 +1743,13 @@ def run_create_article_pipeline(
         category_llm_model=category_llm_model,
         category_llm_max_categories=category_llm_max_categories,
         category_llm_confidence_threshold=category_llm_confidence_threshold,
+        leonardo_api_key=leonardo_api_key,
+        leonardo_base_url=leonardo_base_url,
+        leonardo_model_id=leonardo_model_id,
+        image_width=image_width,
+        image_height=image_height,
+        poll_timeout_seconds=poll_timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
         trace_event=trace_event,
     )
 

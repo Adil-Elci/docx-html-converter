@@ -545,3 +545,125 @@ def test_run_create_article_pipeline_v2_emits_trace_events(monkeypatch):
     )
     phases = [event for _, phase, event in events if phase == "creator_v2"]
     assert phases == ["start", "complete"]
+
+
+# ---- featured image generation in v2 -----------------------------------
+
+
+def test_build_image_prompt_uses_h1_and_meta_description():
+    contract = {
+        "h1": "Steuerberater Hamburg: Ihr Leitfaden",
+        "meta_description": "Alles ueber Steuerberatung in Hamburg",
+        "target_keyword": "steuerberater hamburg",
+    }
+    prompt = automation_service._build_image_prompt_from_contract(contract)
+    assert "Editorial photo illustrating: Steuerberater Hamburg: Ihr Leitfaden" in prompt
+    assert "Alles ueber Steuerberatung in Hamburg" in prompt
+
+
+def test_build_image_prompt_falls_back_to_h1_only():
+    contract = {"h1": "X Y", "meta_description": "", "target_keyword": "kw"}
+    prompt = automation_service._build_image_prompt_from_contract(contract)
+    assert prompt == "Editorial photo illustrating: X Y"
+
+
+def test_build_image_prompt_falls_back_to_target_keyword():
+    contract = {"h1": "", "meta_description": "", "target_keyword": "kanzlei berlin"}
+    prompt = automation_service._build_image_prompt_from_contract(contract)
+    assert prompt == "Editorial photo illustrating: kanzlei berlin"
+
+
+def test_run_create_article_pipeline_v2_skips_image_when_no_api_key(monkeypatch):
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"id": 1, "link": "https://host.de/?p=1"}
+
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+    monkeypatch.setattr(
+        automation_service,
+        "_generate_featured_image_for_v2",
+        lambda **kwargs: pytest.fail("image step must not run when leonardo_api_key is empty"),
+    )
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(),  # leonardo_api_key default is ""
+    )
+    assert result["image_url"] == ""
+    assert result["media_payload"] == {}
+    assert result["media_url"] is None
+    assert captured["featured_media_id"] is None  # new post, no image
+
+
+def test_run_create_article_pipeline_v2_attaches_image_when_api_key_set(monkeypatch):
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"id": 1, "link": "https://host.de/?p=1"}
+
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+    monkeypatch.setattr(
+        automation_service,
+        "_generate_featured_image_for_v2",
+        lambda **kwargs: ("https://leonardo.test/img.jpg", {"id": 4242, "source_url": "https://host.de/wp-content/uploads/img.jpg"}),
+    )
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(leonardo_api_key="leo-key"),
+    )
+    assert result["image_url"] == "https://leonardo.test/img.jpg"
+    assert result["media_payload"]["id"] == 4242
+    assert result["media_url"] == "https://host.de/wp-content/uploads/img.jpg"
+    assert captured["featured_media_id"] == 4242
+    # phase6 must carry the prompt for the worker's image_prompt_ok JobEvent.
+    phase6 = result["creator_output"]["phase6"]
+    assert phase6["featured_image"]["media_id"] == 4242
+    assert phase6["featured_image"]["image_url"] == "https://leonardo.test/img.jpg"
+    assert phase6["featured_image"]["prompt"].startswith("Editorial photo illustrating: Steuerberater Hamburg")
+
+
+def test_run_create_article_pipeline_v2_publishes_without_image_on_failure(monkeypatch):
+    """Image errors must NOT block publish (parity with legacy 4llm: no image at all)."""
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"id": 1, "link": "https://host.de/?p=1"}
+
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+
+    def boom(**kwargs):
+        raise automation_service.AutomationError("Leonardo HTTP 503: rate limited")
+
+    monkeypatch.setattr(automation_service, "_generate_featured_image_for_v2", boom)
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(leonardo_api_key="leo-key"),
+    )
+    assert result["image_url"] == ""
+    assert result["media_payload"] == {}
+    assert captured["featured_media_id"] is None
+    assert captured["title"]  # publish still happened
+
+
+def test_run_create_article_pipeline_v2_skip_image_flag(monkeypatch):
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
+    monkeypatch.setattr(
+        automation_service,
+        "wp_create_post",
+        lambda **kwargs: {"id": 1, "link": "https://host.de/?p=1"},
+    )
+    monkeypatch.setattr(
+        automation_service,
+        "_generate_featured_image_for_v2",
+        lambda **kwargs: pytest.fail("image step must not run when skip_image=True"),
+    )
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(leonardo_api_key="leo-key", skip_image=True),
+    )

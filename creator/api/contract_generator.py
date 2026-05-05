@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 import requests
@@ -118,6 +119,7 @@ _LANGUAGE_USER_PROMPT_TEMPLATES: Dict[str, Dict[str, str]] = {
         "backlink_label": "ZIEL-URL für Backlink",
         "anchor_label": "GEWÜNSCHTER ANKER-HINWEIS",
         "anchor_default": "(frei wählbar)",
+        "current_year_label": "AKTUELLES JAHR",
         "research_header": "WETTBEWERBER-FORSCHUNG",
         "organic_header_template": "Top-{n} organische Ergebnisse (Standort/Sprache aus Locale: {locale_label}):",
         "paa_header": "People-Also-Ask Fragen:",
@@ -137,6 +139,7 @@ _LANGUAGE_USER_PROMPT_TEMPLATES: Dict[str, Dict[str, str]] = {
         "backlink_label": "URL CIBLE du backlink",
         "anchor_label": "SUGGESTION D'ANCRE",
         "anchor_default": "(libre)",
+        "current_year_label": "ANNÉE EN COURS",
         "research_header": "RECHERCHE CONCURRENTIELLE",
         "organic_header_template": "Top-{n} résultats organiques (localisation/langue d'après le locale : {locale_label}) :",
         "paa_header": "Questions People-Also-Ask :",
@@ -164,14 +167,17 @@ def build_user_prompt(
     target_backlink_url: str,
     anchor_hint: Optional[str] = None,
     language: str = "de",
+    current_year: Optional[int] = None,
 ) -> str:
     t = _user_prompt_template(language)
     median = payload.competitor_word_count_median or t["median_unknown"]
     locale_label = f"location_code={payload.location_code}, language_code={payload.language_code}"
+    year = int(current_year) if current_year is not None else datetime.now(timezone.utc).year
     return (
         f"{t['target_keyword_label']}: {payload.target_keyword}\n"
         f"{t['backlink_label']}: {target_backlink_url}\n"
-        f"{t['anchor_label']}: {anchor_hint or t['anchor_default']}\n\n"
+        f"{t['anchor_label']}: {anchor_hint or t['anchor_default']}\n"
+        f"{t['current_year_label']}: {year}\n\n"
         f"{t['language_directive']}\n\n"
         f"{t['research_header']}\n"
         f"{'=' * len(t['research_header'])}\n\n"

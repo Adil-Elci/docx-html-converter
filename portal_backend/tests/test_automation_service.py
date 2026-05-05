@@ -622,18 +622,26 @@ def test_build_image_prompt_uses_h1_and_meta_description():
     prompt = automation_service._build_image_prompt_from_contract(contract)
     assert "Editorial photo illustrating: Steuerberater Hamburg: Ihr Leitfaden" in prompt
     assert "Alles ueber Steuerberatung in Hamburg" in prompt
+    # Style + negative directives must be present so Flux Schnell knows to
+    # produce hyperrealistic photography without text artifacts.
+    assert "Hyperrealistic" in prompt
+    assert "No text" in prompt
 
 
 def test_build_image_prompt_falls_back_to_h1_only():
     contract = {"h1": "X Y", "meta_description": "", "target_keyword": "kw"}
     prompt = automation_service._build_image_prompt_from_contract(contract)
-    assert prompt == "Editorial photo illustrating: X Y"
+    assert prompt.startswith("Editorial photo illustrating: X Y")
+    assert "Hyperrealistic" in prompt
+    assert "No text" in prompt
 
 
 def test_build_image_prompt_falls_back_to_target_keyword():
     contract = {"h1": "", "meta_description": "", "target_keyword": "kanzlei berlin"}
     prompt = automation_service._build_image_prompt_from_contract(contract)
-    assert prompt == "Editorial photo illustrating: kanzlei berlin"
+    assert prompt.startswith("Editorial photo illustrating: kanzlei berlin")
+    assert "Hyperrealistic" in prompt
+    assert "No text" in prompt
 
 
 def test_run_create_article_pipeline_v2_skips_image_when_no_api_key(monkeypatch):

@@ -83,8 +83,11 @@ python3 portal_backend/scripts/db_updater/run_master_site_sync.py
 - syncs `master_site_info` (new source snapshot table)
 - syncs `publishing_sites`
 - syncs `publishing_site_credentials` (one credential row per site)
+- **automatically fetches `author_id` and `author_name`** from each site's `/wp-json/wp/v2/users/me` endpoint using the stored credentials, and writes them to `publishing_site_credentials`. No separate step is needed for new sites.
 - writes reports to `portal_backend/scripts/db_updater/reports/`
 - leaves the master file in place (you keep updating the same file)
+
+> Note: `portal_backend/scripts/sync_wp_authors.py` exists as a standalone tool for re-syncing author info (e.g. after a WP user rename), but is **not required** when adding new sites — `run_master_site_sync.py` already handles it.
 
 ### Expected Master File Columns
 

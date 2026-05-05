@@ -528,9 +528,9 @@ def test_run_create_article_pipeline_v2_passes_none_keyword_for_creator_derivati
     assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
 
 
-def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates(monkeypatch):
-    """Phase C pre-flight: zero publishing candidates fails before the
-    contract spend (~$0.25)."""
+def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates_and_no_explicit_site(monkeypatch):
+    """Phase C pre-flight: only fails when neither auto-discovered candidates
+    NOR an explicit publishing_site_url are available."""
 
     monkeypatch.setattr(
         automation_service,
@@ -539,8 +539,48 @@ def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates(mon
     )
     with pytest.raises(automation_service.AutomationError, match="publishing candidate"):
         automation_service._run_create_article_pipeline_v2(
-            **_common_v2_pipeline_kwargs(publishing_candidates=[]),
+            **_common_v2_pipeline_kwargs(
+                publishing_candidates=[],
+                publishing_site_url="",
+                publishing_site_id=None,
+                site_url="",
+            ),
         )
+
+
+def test_run_create_article_pipeline_v2_synthesises_explicit_publishing_site(monkeypatch):
+    """When auto-discovery is empty but the user explicitly picked a publishing
+    site, we synthesise a single candidate from the explicit selection so the
+    pipeline can run."""
+
+    captured_v2 = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    captured_post = {}
+
+    def fake_create(**kwargs):
+        captured_post.update(kwargs)
+        return {"id": 9911, "link": "https://kidsblatt.de/?p=9911"}
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            publishing_candidates=[],  # no auto-discovery
+            publishing_site_url="https://kidsblatt.de",
+            publishing_site_id="33333333-3333-3333-3333-333333333333",
+            site_url="https://kidsblatt.de",
+        ),
+    )
+
+    # Pipeline must run end-to-end and publish to the explicitly-chosen site.
+    assert captured_v2["target_keyword"] == "steuerberater hamburg"
+    assert result["selected_site_url"] == "https://kidsblatt.de"
+    assert result["post_event_type"] == "wp_post_created"
 
 
 def test_run_create_article_pipeline_v2_raises_when_no_language_match(monkeypatch):

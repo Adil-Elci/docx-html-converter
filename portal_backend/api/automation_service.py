@@ -1646,14 +1646,43 @@ def _run_create_article_pipeline_v2(
     profile_topic = (topic or "").strip() or _derive_keyword_from_target_profile(target_profile_payload)
     upfront_target_keyword: Optional[str] = profile_topic or None
 
-    # Pre-flight: if there are no publishing candidates at all, fail before
-    # spending the contract budget. We don't yet know the article's language
-    # so we can't filter by it here -- the post-pipeline selector enforces the
-    # language match after the contract returns.
-    if not (publishing_candidates or []):
+    # The user can either let the worker auto-discover candidates from
+    # publishing sites associated with the client target, OR pick a specific
+    # publishing site explicitly (passed via publishing_site_url +
+    # publishing_site_id + WP credentials). When the explicit path is used,
+    # publishing_candidates is empty -- so we synthesise a single candidate
+    # from the explicit selection. The synthesised candidate has no language
+    # field, which the late-binding selector treats as "passes the language
+    # filter" -- explicit user choice wins, period.
+    effective_candidates: List[Dict[str, Any]] = list(publishing_candidates or [])
+    if not effective_candidates and (publishing_site_url or "").strip():
+        effective_candidates = [
+            {
+                "site_url": publishing_site_url,
+                "site_id": publishing_site_id,
+                "fit_score": 50,  # neutral; explicit selection bypasses topical fit anyway
+                "notes": ["explicit_user_selection"],
+                "internal_link_inventory": list(internal_link_inventory or []),
+                "publishing_profile_payload": {},
+                "wp_rest_base": wp_rest_base,
+                "wp_username": wp_username,
+                "wp_app_password": wp_app_password,
+                "category_ids": list(category_ids or []),
+                "category_candidates": list(category_candidates or []),
+                "is_general": False,
+            }
+        ]
+
+    # Pre-flight: if neither auto-discovered candidates nor an explicit
+    # publishing-site selection are available, fail before spending the
+    # contract budget. We don't yet know the article's language so we can't
+    # filter by it here -- the post-pipeline selector enforces the language
+    # match after the contract returns.
+    if not effective_candidates:
         raise AutomationError(
-            "Creator v2 pipeline requires at least one publishing candidate; the "
-            "client target site has no eligible publishing sites associated."
+            "Creator v2 pipeline requires at least one publishing candidate. "
+            "Either pick a publishing site explicitly or associate the client "
+            "target site with at least one publishing site."
         )
 
     _trace(
@@ -1704,7 +1733,7 @@ def _run_create_article_pipeline_v2(
             "category_candidates": list(category_candidates or []),
             "internal_link_inventory": list(internal_link_inventory or []),
         },
-        publishing_candidates=publishing_candidates,
+        publishing_candidates=effective_candidates,
     )
     if selection_reason.get("mode") == "no_candidates":
         raise AutomationError(

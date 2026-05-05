@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-04 · **Last commit:** `Post-Phase-7 cleanup: research cache, rename, image step, b88f018 backport`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-05 · **Last commit:** `Phase A: derive target keyword + locale from target URL`
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -146,6 +146,31 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 - ✅ **Rename `_select_publish_target_for_4llm` → `_select_publish_target_for_v2`** — mechanical rename; one definition + one call site in `automation_service.py`.
 - ✅ **Phase 8 — featured image for v2** — `_run_create_article_pipeline_v2` now generates a Leonardo image, uploads it via `wp_create_media_item`, and attaches it as `featured_media_id`. Prompt is templated from `contract.h1` + `meta_description` (no extra LLM call). Soft-fail semantics: image errors don't block publish (parity with legacy 4llm, which had no image at all). New helpers: `_build_image_prompt_from_contract`, `_generate_featured_image_for_v2`. New `skip_image` flag. `creator_output["phase6"]["featured_image"]` carries the prompt + image_url + media_id so the worker emits the same `image_prompt_ok` / `image_generated` JobEvents and Asset rows the converter flow does. 7 new tests.
 - ✅ **`b88f018` full backport** — every file in that commit that wasn't already on `main` is now applied. Security: rate limiter only trusts `X-Forwarded-For` from `TRUSTED_PROXY_IPS` (no IP-spoof bypass); `/password-reset/request` returns a neutral response regardless of email existence (no enumeration leak); `db.py` allows `localhost` DATABASE_URL when `ALLOW_LOCALHOST_DB=1` (dev convenience). Ops: `ssh_tunnel_helper.py`, `encrypt_wp_credentials.py` (re-runnable migration), `show_credentials.py` (audit). Master-site sync now auto-fetches WP `author_id` / `author_name` for new sites. README + db_updater README updated with operational runbooks.
+
+## Optional-input rebuild (Phase A — topic derivation)
+
+Goal: make `topic` and `publishing_site_url` optional on the v2 webhook so the only required input is `target_site_url` (the URL that gets the backlink). Phase A makes `topic` optional. Phases B (language parameterization) + C (late-binding publishing-site selection with `allgemein` fallback) follow.
+
+### Phase A — Derive topic from target URL · ✅ DONE
+- **`creator/api/topic_derivation.py`** — `derive_topic(target_url, *, allowed_languages=("de","fr"))` returns `DerivedTopic(target_keyword, language_code, location_code, alternates, candidates, confidence, notes, cost_usd, cache_hit)`. Pipeline: fetch HTML → detect language (`<html lang>` → TLD) → extract deterministic candidates from `<title>`/`<h1>`/`<h2>`/OG meta/URL slug → augment with one Haiku 4.5 call when deterministic candidates are thin → rank by DataForSEO volume + 3-month trend ratio (rising terms get a soft boost up to +25%, declining ones a -15% penalty; volume always dominates).
+- **Trend signal** is intentionally soft — evergreen B2B keywords like `steuerberater hamburg` legitimately have flat `monthly_searches` history. Hard-rejecting them would over-prefer seasonal spikes. Implementation: `KeywordMetric.monthly_searches: List[MonthlySearchVolume]` now exposes the per-month history that DataForSEO already returns; we never paid extra for it.
+- **Country pinning** via `LANGUAGE_TO_LOCATION = {"de": (2276, "de"), "fr": (2250, "fr")}`. German clients route to Germany Google, French to France Google. English/other languages **hard-reject** with `code='language_not_allowed'` — the rest of the pipeline (contract prompt, voice pass, AI-tell list) is still German-only until Phase B parameterizes prompts per language.
+- **`POST /v2/derive-topic`** endpoint in `server.py` — request `{target_url, allowed_languages?, language_override?, use_cache?}`, success returns the full `DerivedTopic` JSON, failure returns HTTP 422 with `{ok: false, error: "topic_derivation_failed", code, message}`. Stable `code`s: `url_missing`, `fetch_failed`, `non_html_response`, `empty_response`, `language_not_allowed`, `language_unmapped`, `no_candidates`. Portal backend renders `message` verbatim in the admin error UI per user direction.
+- **Cache** — `creator/api/topic_derivation_cache.py` mirrors `research_cache.py`: typed `Table`, get/upsert helpers reading `CREATOR_DATABASE_URL`/`DATABASE_URL`. Cache hits return `cost_usd=0.0` and `cache_hit=True`. 30-day TTL (target pages rarely change main topic). Soft-fails on any DB error. Alembic 0050 widens `seo_research_cache_kind_check` to allow `cache_kind='derived_topic'`.
+- **Cost** — worst case ~$0.001 per fresh derivation (Haiku fallback only when `<title>`/`<h1>`/OG/slug all fail to produce 2+ candidates ≥4 chars; in normal use, deterministic extraction wins and Haiku never fires). DataForSEO volume call is shared with the existing research budget.
+- **Tests** — 40 new tests covering normalization (German umlauts, French diacritics, brand-suffix stripping), language detection (HTML lang attr, TLD fallback, region-suffix stripping), candidate extraction (dedup, source labels, slug parsing), trend ratio (flat/rising/declining/zero-prior), score function (volume vs trend tradeoff), end-to-end happy paths for German and French URLs, all hard-fail codes (English target rejected, unreachable URL, non-HTML response, HTTP error, no candidates), Haiku fallback invocation + skip-without-API-key behaviour, language override, cache hit short-circuit, cache miss writeback, and the FastAPI endpoint (success + 422 mapping). **Full creator suite at 229 passing.**
+- **Not yet wired into the pipeline.** `run_pipeline()` and `_run_create_article_pipeline_v2` still require an explicit `target_keyword`. Phase B/C will plumb the derived topic in and remove the `topic` requirement from the portal_backend webhook handler.
+
+### Phase B — Article language = target site language · 🔜 TODO
+Parameterize the contract / section / voice prompts and DataForSEO calls by the language returned from Phase A. Expected sub-steps:
+- Add `language: str` (ISO 639-1) field to `ContentContract`.
+- Split `contract_generator/v1.md`, `section_writer/v1.md`, `voice_pass/v1.md` into `*.de.md` and `*.fr.md` files; the registry picks based on `contract.language`.
+- Pass `(location_code, language_code)` from the derived topic into `dataforseo.serp_organic` / `keyword_volume` / `related_keywords` instead of the pinned German defaults.
+- Gate `eval_harness.check_german_readability` on `contract.language == "de"`; add a sister `check_french_readability` for `fr`.
+- Add a `language_consistency` eval check: scan article for the wrong language's stop-words to catch silent prompt-mismatch regressions.
+
+### Phase C — Late-binding publishing-site selection + `allgemein` fallback · 🔜 TODO
+Run the pipeline first (with `publishing_site_url=None`), then auction the article onto the best-fit publishing candidate. Hard language pre-filter; topical-fit score using `contract.target_keyword` + `required_entities`; if no fit-match, fall back to candidates flagged as general-topic. Pre-flight check (deterministic, ~50ms) that at least one candidate is feasible before spending the contract budget.
 
 ## Deferred items / follow-ups
 

@@ -1044,11 +1044,12 @@ def call_creator_pair_fit(
 def call_creator_v2_pipeline(
     *,
     creator_endpoint: str,
-    target_keyword: str,
+    target_keyword: Optional[str],
     target_backlink_url: str,
-    publishing_site_url: str,
+    publishing_site_url: Optional[str],
     anchor_hint: Optional[str] = None,
     canonical_url: Optional[str] = None,
+    language: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -1064,14 +1065,17 @@ def call_creator_v2_pipeline(
     failure path includes the failing phase name in the error message,
     so callers can log "[contract]" / "[voice_pass]" / etc. without
     parsing free-form messages.
+
+    Pass ``target_keyword=None`` to let the creator service derive the
+    keyword (and language) from ``target_backlink_url``. Pass
+    ``publishing_site_url=None`` for late-binding (host-based eval check
+    is skipped on the creator side).
     """
 
     if not creator_endpoint:
         raise AutomationError("Creator endpoint is not configured.")
-    body = {
-        "target_keyword": target_keyword,
+    body: Dict[str, Any] = {
         "target_backlink_url": target_backlink_url,
-        "publishing_site_url": publishing_site_url,
         "anchor_hint": anchor_hint,
         "canonical_url": canonical_url,
         "skip_voice_pass": skip_voice_pass,
@@ -1079,6 +1083,12 @@ def call_creator_v2_pipeline(
         "skip_related_keywords": skip_related_keywords,
         "skip_entity_extraction": skip_entity_extraction,
     }
+    if target_keyword:
+        body["target_keyword"] = target_keyword
+    if publishing_site_url:
+        body["publishing_site_url"] = publishing_site_url
+    if language:
+        body["language"] = language
     url = creator_endpoint.rstrip("/") + "/v2/run-pipeline"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
@@ -1143,12 +1153,57 @@ def _flatten_candidate_text(candidate: Dict[str, Any]) -> str:
     return " ".join([notes, profile_text, inventory_titles]).strip()
 
 
+def _candidate_language(candidate: Dict[str, Any]) -> str:
+    """Returns the candidate's site language (ISO 639-1 lowercase, ``""`` if unknown)."""
+    return str(
+        (candidate.get("publishing_profile_payload") or {}).get("language") or ""
+    ).strip().lower()
+
+
+def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
+    """True when the site is flagged as ``allgemein`` / general-topic.
+
+    Two signals: the explicit ``is_general`` boolean column on
+    ``publishing_sites`` (preferred, set in the admin portal), or a heuristic
+    on the profile's ``primary_context`` that contains ``allgemein`` /
+    ``general``. The heuristic catches sites we haven't manually flagged yet.
+    """
+
+    if candidate.get("is_general"):
+        return True
+    primary_context = str(
+        (candidate.get("publishing_profile_payload") or {}).get("primary_context") or ""
+    ).strip().lower()
+    return any(token in primary_context for token in ("allgemein", "general", "magazin"))
+
+
+# Floor below which the topical-fit score is considered "no real match"; we
+# fall back to allgemein candidates instead. Tuned conservatively: a fit_score
+# of 30/100 + zero similarity is still ~0.3, but a real topical match usually
+# clears 0.6+.
+_LATE_BIND_FIT_FLOOR = 0.6
+
+
+def _topical_fit_score(candidate: Dict[str, Any], topic_text: str) -> float:
+    candidate_text = _flatten_candidate_text(candidate)
+    score = float(candidate.get("fit_score") or 0) / 100.0
+    score += _similarity_score(candidate_text, topic_text) * 3.0
+    return score
+
+
 def _select_publish_target_for_v2(
     *,
     site_understanding: Dict[str, Any],
     fallback_target: Dict[str, Any],
     publishing_candidates: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, Any]:
+    """Pre-Phase-C selector (kept for backwards compat with callers that still
+    pass a synthetic ``site_understanding`` and don't yet have a contract).
+
+    For the late-binding path that runs *after* contract generation, see
+    :func:`select_publish_target_after_contract`.
+    """
+
     topic_text = " ".join(
         [
             str(site_understanding.get("primary_niche") or ""),
@@ -1159,17 +1214,146 @@ def _select_publish_target_for_v2(
     best = dict(fallback_target)
     best_score = -1.0
     for candidate in publishing_candidates or []:
-        candidate_text = _flatten_candidate_text(candidate)
-        score = float(candidate.get("fit_score") or 0) / 100.0
-        score += _similarity_score(candidate_text, topic_text) * 3.0
-        language = str((candidate.get("publishing_profile_payload") or {}).get("language") or "").strip().lower()
+        score = _topical_fit_score(candidate, topic_text)
         target_language = str(site_understanding.get("language") or "").strip().lower()
-        if language and target_language and language == target_language:
+        candidate_language = _candidate_language(candidate)
+        if candidate_language and target_language and candidate_language == target_language:
             score += 1.0
         if score > best_score:
             best_score = score
             best = dict(candidate)
     return best
+
+
+def select_publish_target_after_contract(
+    *,
+    contract: Dict[str, Any],
+    target_language: str,
+    fallback_target: Dict[str, Any],
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Late-binding publishing-site selector.
+
+    Returns ``(selected, reason)`` where ``reason`` carries telemetry about
+    why this site was picked (``mode``, ``score``, ``rejected_languages``,
+    ``rejected_below_floor``).
+
+    Algorithm:
+    1. Hard-filter by ``target_language``. Sites whose
+       ``publishing_profile_payload.language`` doesn't match the article's
+       language are dropped — we never publish a French article on a German
+       site or vice versa. Sites with an unknown language pass through (we
+       don't have enough signal to reject them).
+    2. Score remaining candidates using the contract's ``target_keyword`` +
+       ``required_entities`` (richer signal than the synthetic
+       site_understanding the legacy selector used).
+    3. If the best score >= ``_LATE_BIND_FIT_FLOOR``, take it.
+    4. Otherwise, prefer an ``is_general`` candidate (allgemein fallback).
+    5. Otherwise, take the best topical match anyway (better than the
+       fallback target, which may be inactive or stale).
+    6. If there are zero candidates at all, return ``fallback_target`` with a
+       ``no_candidates`` reason.
+    """
+
+    topic_text_parts: List[str] = [
+        str(contract.get("target_keyword") or ""),
+        " ".join(
+            str(entity.get("name") or "")
+            for entity in (contract.get("required_entities") or [])
+            if isinstance(entity, dict)
+        ),
+        " ".join(str(item) for item in (contract.get("secondary_keywords") or [])),
+    ]
+    topic_text = " ".join(part for part in topic_text_parts if part.strip()).strip()
+    target_language_lc = (target_language or "").strip().lower()
+
+    candidates = list(publishing_candidates or [])
+    rejected_for_language: List[str] = []
+    eligible: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        cand_lang = _candidate_language(candidate)
+        if target_language_lc and cand_lang and cand_lang != target_language_lc:
+            rejected_for_language.append(str(candidate.get("site_url") or ""))
+            continue
+        eligible.append(candidate)
+
+    if not eligible:
+        return dict(fallback_target), {
+            "mode": "no_candidates",
+            "rejected_for_language": rejected_for_language,
+            "score": 0.0,
+        }
+
+    scored = sorted(
+        ((_topical_fit_score(c, topic_text), c) for c in eligible),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    best_score, best_candidate = scored[0]
+
+    if best_score >= _LATE_BIND_FIT_FLOOR:
+        return dict(best_candidate), {
+            "mode": "topical_fit",
+            "score": best_score,
+            "rejected_for_language": rejected_for_language,
+            "rejected_below_floor": [],
+        }
+
+    general = [c for c in eligible if _candidate_is_general(c)]
+    if general:
+        # Pick the highest-scored general site (still using topical fit so a
+        # weakly-related general site beats a totally unrelated one).
+        general_scored = sorted(
+            ((_topical_fit_score(c, topic_text), c) for c in general),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        chosen_score, chosen = general_scored[0]
+        return dict(chosen), {
+            "mode": "allgemein_fallback",
+            "score": chosen_score,
+            "below_floor_score": best_score,
+            "rejected_for_language": rejected_for_language,
+        }
+
+    return dict(best_candidate), {
+        "mode": "best_below_floor",
+        "score": best_score,
+        "rejected_for_language": rejected_for_language,
+        "rejected_below_floor": [],
+    }
+
+
+def pre_flight_publishing_feasibility(
+    *,
+    target_language: str,
+    publishing_candidates: Optional[List[Dict[str, Any]]],
+) -> Tuple[bool, str]:
+    """Returns ``(feasible, reason)``.
+
+    Cheap deterministic check before spending the contract budget: is there
+    at least one publishing candidate whose language matches the target
+    article language, OR a general-topic site (which we treat as
+    language-flexible only if its language is unknown or matches)?
+    """
+
+    candidates = list(publishing_candidates or [])
+    if not candidates:
+        return False, "no_publishing_candidates_available"
+
+    target_language_lc = (target_language or "").strip().lower()
+    for candidate in candidates:
+        cand_lang = _candidate_language(candidate)
+        if not target_language_lc:
+            return True, "no_language_constraint"
+        if not cand_lang:
+            # Unknown-language candidates count as feasible — we don't want a
+            # missing publishing_profile_payload.language to block real work.
+            return True, "candidate_with_unknown_language_present"
+        if cand_lang == target_language_lc:
+            return True, f"matching_language_candidate:{candidate.get('site_url')}"
+
+    return False, f"no_candidates_match_language:{target_language_lc}"
 
 
 def _slugify(value: str) -> str:
@@ -1416,23 +1600,63 @@ def _run_create_article_pipeline_v2(
         if trace_event is not None:
             trace_event(level, phase, event, message, details)
 
-    target_keyword = (topic or "").strip() or _derive_keyword_from_target_profile(target_profile_payload)
-    if not target_keyword:
-        raise AutomationError(
-            "Creator v2 pipeline requires a target keyword: pass `topic` in the webhook or "
-            "ensure the target site profile has a domain_level_topic / primary_context."
-        )
     if not (target_site_url or "").strip():
         raise AutomationError("Creator v2 pipeline requires target_site_url for the backlink.")
 
-    synthetic_site_understanding = {
-        "main_topic": target_keyword,
-        "primary_niche": str((target_profile_payload or {}).get("primary_context") or "").strip(),
-        "language": "de",
-        "seed_keywords": [target_keyword],
-    }
-    selected_target = _select_publish_target_for_v2(
-        site_understanding=synthetic_site_understanding,
+    # Topic is optional in Phase C: if the webhook didn't provide it and the
+    # target profile doesn't carry it, the creator service will derive it from
+    # the target_site_url itself.
+    profile_topic = (topic or "").strip() or _derive_keyword_from_target_profile(target_profile_payload)
+    upfront_target_keyword: Optional[str] = profile_topic or None
+
+    # Pre-flight: if there are no publishing candidates at all, fail before
+    # spending the contract budget. We don't yet know the article's language
+    # so we can't filter by it here -- the post-pipeline selector enforces the
+    # language match after the contract returns.
+    if not (publishing_candidates or []):
+        raise AutomationError(
+            "Creator v2 pipeline requires at least one publishing candidate; the "
+            "client target site has no eligible publishing sites associated."
+        )
+
+    _trace(
+        "info",
+        "creator_v2",
+        "start",
+        "Calling creator /v2/run-pipeline (late-bind publishing site).",
+        {
+            "target_keyword": upfront_target_keyword,
+            "topic_will_be_derived": upfront_target_keyword is None,
+        },
+    )
+    v2_response = call_creator_v2_pipeline(
+        creator_endpoint=creator_endpoint,
+        target_keyword=upfront_target_keyword,
+        target_backlink_url=target_site_url,
+        publishing_site_url=None,  # late-bind below
+        anchor_hint=anchor,
+        timeout_seconds=creator_timeout_seconds,
+    )
+
+    # Resolve the keyword and language from whatever the creator decided. If
+    # we sent a keyword, it comes back unchanged; if we sent None, the creator
+    # derived one and put it in derived_topic.target_keyword.
+    contract_for_select = (
+        v2_response.get("contract") if isinstance(v2_response.get("contract"), dict) else {}
+    )
+    target_keyword = str(
+        contract_for_select.get("target_keyword") or upfront_target_keyword or ""
+    ).strip()
+    article_language = str(
+        contract_for_select.get("language") or v2_response.get("language") or "de"
+    ).strip().lower()
+
+    # Late-bind the publishing site using the contract entities + the
+    # detected language as a hard filter. Allgemein fallback kicks in when no
+    # candidate clears the topical-fit floor.
+    selected_target, selection_reason = select_publish_target_after_contract(
+        contract=contract_for_select,
+        target_language=article_language,
         fallback_target={
             "site_url": site_url,
             "site_id": publishing_site_id,
@@ -1445,6 +1669,13 @@ def _run_create_article_pipeline_v2(
         },
         publishing_candidates=publishing_candidates,
     )
+    if selection_reason.get("mode") == "no_candidates":
+        raise AutomationError(
+            f"Creator v2 pipeline could not place the article: no publishing candidate "
+            f"matches language {article_language!r}. "
+            f"Rejected for language: {selection_reason.get('rejected_for_language')}"
+        )
+
     selected_publish_site_url = str(selected_target.get("site_url") or site_url).strip() or site_url
     selected_publish_site_id = str(selected_target.get("site_id") or publishing_site_id or "").strip() or None
     selected_wp_rest_base = str(selected_target.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
@@ -1457,24 +1688,15 @@ def _run_create_article_pipeline_v2(
         "info",
         "site_match",
         "selected",
-        "Deterministic publishing-site match selected (v2).",
-        {"selected_site_url": selected_publish_site_url, "selected_site_id": selected_publish_site_id},
-    )
-
-    _trace(
-        "info",
-        "creator_v2",
-        "start",
-        "Calling creator /v2/run-pipeline.",
-        {"target_keyword": target_keyword, "publishing_site_url": selected_publish_site_url},
-    )
-    v2_response = call_creator_v2_pipeline(
-        creator_endpoint=creator_endpoint,
-        target_keyword=target_keyword,
-        target_backlink_url=target_site_url,
-        publishing_site_url=selected_publish_site_url,
-        anchor_hint=anchor,
-        timeout_seconds=creator_timeout_seconds,
+        f"Late-bind publishing-site selection ({selection_reason.get('mode')}).",
+        {
+            "selected_site_url": selected_publish_site_url,
+            "selected_site_id": selected_publish_site_id,
+            "selection_mode": selection_reason.get("mode"),
+            "selection_score": selection_reason.get("score"),
+            "article_language": article_language,
+            "rejected_for_language": selection_reason.get("rejected_for_language"),
+        },
     )
     _trace(
         "info",

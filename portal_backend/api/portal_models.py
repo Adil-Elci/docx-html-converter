@@ -114,6 +114,7 @@ class Site(Base):
     hosted_by = Column(Text, nullable=True)
     host_panel = Column(Text, nullable=True)
     status = Column(Text, nullable=False, default="active")
+    is_general = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 

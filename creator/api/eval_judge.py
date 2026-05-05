@@ -144,7 +144,7 @@ def judge_article(
     if not resolved_api_key and llm_caller is None:
         raise LLMError("Missing ANTHROPIC_API_KEY for eval judge.")
 
-    prompt = load_prompt(PROMPT_NAME, prompt_version)
+    prompt = load_prompt(PROMPT_NAME, prompt_version, language=contract.language.value)
     system_prompt = prompt.body
     user_prompt = build_user_prompt(
         article_html=article_html,

@@ -166,7 +166,7 @@ def write_section(
         raise LLMError("Missing ANTHROPIC_API_KEY for section writer.")
 
     resolved_model = model or os.getenv("CREATOR_SECTION_MODEL", "").strip() or DEFAULT_SECTION_MODEL
-    prompt = load_prompt(PROMPT_NAME, prompt_version)
+    prompt = load_prompt(PROMPT_NAME, prompt_version, language=contract.language.value)
     system_prompt = prompt.body
     user_prompt = build_user_prompt(contract=contract, section_index=section_index)
 

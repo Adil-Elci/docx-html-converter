@@ -113,7 +113,7 @@ def refine_voice(
         raise LLMError("Missing ANTHROPIC_API_KEY for voice pass.")
     resolved_model = model or os.getenv("CREATOR_VOICE_MODEL", "").strip() or DEFAULT_VOICE_MODEL
 
-    prompt = load_prompt(PROMPT_NAME, prompt_version)
+    prompt = load_prompt(PROMPT_NAME, prompt_version, language=contract.language.value)
     system_prompt = prompt.body
     user_prompt = build_user_prompt(article_html=article_html, contract=contract)
 

@@ -1,6 +1,11 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-05 · **Last commit:** `Phase A: derive target keyword + locale from target URL`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-05 · **Last commit:** `Phase B+C: language parameterization + late-binding publishing-site selection`
+
+## Deployment
+
+- **Live services listen to `main` only.** Dokploy is wired to the `main` branch, so feature branches (incl. `creator-rebuild`) do not auto-deploy. To ship the rebuild, merge `creator-rebuild` → `main` once the phase batch is ready.
+- **The platform is not in production yet.** No paying clients are pointed at the live services, so we can merge mid-flight without coordinating downtime — but we still don't ship known-broken code to `main` because it's the deploy target.
 
 > Living document. Update as part of every commit on this branch. When fresh sessions start, read this first.
 
@@ -161,16 +166,36 @@ Goal: make `topic` and `publishing_site_url` optional on the v2 webhook so the o
 - **Tests** — 40 new tests covering normalization (German umlauts, French diacritics, brand-suffix stripping), language detection (HTML lang attr, TLD fallback, region-suffix stripping), candidate extraction (dedup, source labels, slug parsing), trend ratio (flat/rising/declining/zero-prior), score function (volume vs trend tradeoff), end-to-end happy paths for German and French URLs, all hard-fail codes (English target rejected, unreachable URL, non-HTML response, HTTP error, no candidates), Haiku fallback invocation + skip-without-API-key behaviour, language override, cache hit short-circuit, cache miss writeback, and the FastAPI endpoint (success + 422 mapping). **Full creator suite at 229 passing.**
 - **Not yet wired into the pipeline.** `run_pipeline()` and `_run_create_article_pipeline_v2` still require an explicit `target_keyword`. Phase B/C will plumb the derived topic in and remove the `topic` requirement from the portal_backend webhook handler.
 
-### Phase B — Article language = target site language · 🔜 TODO
-Parameterize the contract / section / voice prompts and DataForSEO calls by the language returned from Phase A. Expected sub-steps:
-- Add `language: str` (ISO 639-1) field to `ContentContract`.
-- Split `contract_generator/v1.md`, `section_writer/v1.md`, `voice_pass/v1.md` into `*.de.md` and `*.fr.md` files; the registry picks based on `contract.language`.
-- Pass `(location_code, language_code)` from the derived topic into `dataforseo.serp_organic` / `keyword_volume` / `related_keywords` instead of the pinned German defaults.
-- Gate `eval_harness.check_german_readability` on `contract.language == "de"`; add a sister `check_french_readability` for `fr`.
-- Add a `language_consistency` eval check: scan article for the wrong language's stop-words to catch silent prompt-mismatch regressions.
+### Phase B — Article language = target site language · ✅ DONE
+- **`ContentContract.language: ArticleLanguage`** (ISO 639-1, default `de`) — drives every downstream choice. The contract generator forces this to match the requested language even if the LLM omitted it (no silent drift).
+- **Per-language prompts** — `creator/prompts/{contract_generator,section_writer,voice_pass,eval_judge}/v1.de.md` + `v1.fr.md`. `prompt_registry.load(name, version, language=...)` resolves `<version>.<lang>.md` → falls back to `<version>.md` (language-neutral) → falls back to German (historical default). Old single-file prompts were renamed to `v1.de.md`, French variants added.
+- **Per-language user-prompt template** in `contract_generator.py` — full label translation (ZIEL-KEYWORD ↔ MOT-CLÉ CIBLE, etc.) plus an explicit `language_directive` block that hard-pins `contract.language` and `contract.tone`. The synthetic `Sie` enum value also represents French vouvoiement (no schema change needed; the prompt just maps it to the correct register per language).
+- **DataForSEO locale unpinned** — `pipeline_runner._LANGUAGE_TO_LOCATION = {"de": (2276, "de"), "fr": (2250, "fr")}` translates the contract language into the right `(location_code, language_code)` and threads it through `run_research`. The `dataforseo.py` German defaults remain as defaults, but every callable site now passes the locale explicitly.
+- **Eval gating + new checks** — `evaluate(language=...)` picks `check_german_readability` (Wiener Sachtextformel) for `de` and `check_french_readability` (Kandel-Moles formula, French Flesch adaptation) for `fr`. New `check_language_consistency` counts foreign-language stop-words against a high-signal closed-class set (German vs French detection tokens) and fails if the wrong-language density exceeds 0.5% of content tokens — catches silent prompt-mismatch regressions loudly. `_FRENCH_STOPWORDS` set added; `_content_words(text, language)` now picks the right stopword bank.
+- **Tests** — 28 new in `creator/tests/test_phase_b_language.py` covering: prompt resolution per language with fallback, `ContentContract.language` defaults + French acceptance, contract-generator user-prompt routing (FR labels visible only on FR runs), language override of LLM-returned `language` field, French vs German readability formula selection in `evaluate`, language_consistency check (clean German/French pass; cross-contaminated text fails; empty/unsupported language don't crash), and pipeline_runner DataForSEO locale routing for both languages plus an unsupported-language `PipelineError`. **Full creator suite at 257 passing.**
 
-### Phase C — Late-binding publishing-site selection + `allgemein` fallback · 🔜 TODO
-Run the pipeline first (with `publishing_site_url=None`), then auction the article onto the best-fit publishing candidate. Hard language pre-filter; topical-fit score using `contract.target_keyword` + `required_entities`; if no fit-match, fall back to candidates flagged as general-topic. Pre-flight check (deterministic, ~50ms) that at least one candidate is feasible before spending the contract budget.
+### Phase C — Optional topic + late-binding publishing-site + `allgemein` fallback · ✅ DONE
+- **Creator service: optional `target_keyword` and `publishing_site_url`** in `run_pipeline` and `/v2/run-pipeline`. When `target_keyword` is missing, `derive_topic(target_backlink_url)` runs first (Phase A wiring) and supplies both the keyword and the language. When `publishing_site_url` is missing, `eval_harness.check_link_counts` runs in late-bind mode (no internal/external split, just verifies link presence) — the host is unknown until the portal backend picks one. The `PipelineRun` dataclass now carries `language` + `derived_topic`; the v2 endpoint serializes both for the caller.
+- **Portal_backend: late-binding selector + allgemein fallback** — `select_publish_target_after_contract` (in `automation_service.py`) replaces the old pre-pipeline selector for the v2 path. Algorithm:
+  1. **Hard language filter** — drop any candidate whose `publishing_profile_payload.language` doesn't match the article's language. Unknown-language candidates pass through (don't block real work over a missing field). Rejection list is captured in the `selection_reason` telemetry.
+  2. **Score remaining candidates** — uses the *contract*'s `target_keyword` + `required_entities[*].name` + `secondary_keywords` as the topic-fit signal (much richer than the synthetic `site_understanding` the legacy selector used).
+  3. **Topical match** wins if score ≥ `_LATE_BIND_FIT_FLOOR = 0.6`.
+  4. **Allgemein fallback** — when no candidate clears the floor, pick the highest-scored general-topic site. A site is "allgemein" if `is_general=True` (explicit DB column, see below) OR if `publishing_profile_payload.primary_context` contains `allgemein` / `general` / `magazin` (heuristic for sites we haven't manually flagged yet).
+  5. **Best-below-floor** as last resort.
+  6. **Hard fail** with `mode='no_candidates'` when language filter eliminates everything — surfaces as an `AutomationError` with the rejection list.
+- **`publishing_sites.is_general` boolean column** — Alembic 0051 adds the flag (default false). Worker (`automation_worker.py:1102`) surfaces it on each candidate dict via `getattr(candidate_site, "is_general", False)`. Admin marks general-topic sites by setting the column in the portal UI (or SQL); the late-binding selector uses it as the primary fallback signal.
+- **Pre-flight feasibility check** — `pre_flight_publishing_feasibility(target_language, publishing_candidates)` returns `(feasible, reason)`. Used in `_run_create_article_pipeline_v2`: if there are zero publishing candidates at all, fail before the ~$0.25 contract spend. We deliberately *don't* gate by language here because the article language isn't known yet (the creator service derives it). Language enforcement happens post-pipeline in the late-binding selector instead.
+- **`_run_create_article_pipeline_v2` restructured** for late-binding: order is now `pre-flight check → call creator (with `target_keyword=None, publishing_site_url=None` if topic unknown) → derive language from response → late-bind site → publish to WP`. Fixes a coupled-knowledge problem: the legacy flow had to pick the publishing site before knowing the article's actual language.
+- **Webhook still works unchanged** — `portal_schemas.AutomationRequest` already permits `topic=None` when `creator_mode=True`. The pipeline falls back to `_derive_keyword_from_target_profile`; if that's empty too, the creator service derives from the target URL. The hard-fail message ("publishing candidate required" / "no candidate matches language X") propagates as an AutomationError → admin portal renders it verbatim.
+- **Tests** — 11 new in `portal_backend/tests/test_phase_c_late_binding.py` (pre-flight no-candidates / matching-language / unknown-language / no-target-language / French-only-for-German cases; selector topical-match-above-floor / French-rejects-German / allgemein-fallback-by-flag / allgemein-fallback-by-heuristic / unknown-language-passes / best-below-floor); plus updated v2 pipeline tests covering the new `target_keyword=None` path, the no-publishing-candidates pre-flight failure, and the language-mismatch hard fail. **Full suite green: portal 119 passing, creator 257 passing.**
+
+#### Cost/quality summary at end of Phase C
+
+| Optional input | Behavior | Cost delta | Quality delta |
+|---|---|---|---|
+| `target_keyword` | Creator derives via Phase A pipeline (Haiku fallback only when deterministic candidates thin; cached 30 days) | +$0–0.001 | ↑ (DataForSEO volume sanity rejects bad keywords; trend ratio prefers currently-relevant terms) |
+| `publishing_site_url` | Late-bound by `select_publish_target_after_contract` using the actual contract entities + language | $0 (deterministic) | ↑ (richer topical-fit signal than synthetic site_understanding; allgemein fallback prevents zero-fit dead-ends) |
+| `language` | Auto-detected from target URL (`<html lang>` → TLD); enforced by language_consistency eval check | $0 | ↑ (no more silent German-tone-on-French-target regressions) |
 
 ## Deferred items / follow-ups
 

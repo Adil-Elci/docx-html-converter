@@ -254,9 +254,11 @@ def _v2_response_with_sections() -> dict:
         "target_keyword": "steuerberater hamburg",
         "target_backlink_url": "https://mandant.de/leistungen",
         "publishing_site_host": "host.de",
+        "language": "de",
         "research": {"top_serp_urls": ["https://a.de", "https://b.de"]},
         "contract": {
             "target_keyword": "steuerberater hamburg",
+            "language": "de",
             "h1": "Steuerberater Hamburg: Ihr Leitfaden",
             "meta_title": "Steuerberater Hamburg",
             "meta_description": "Alles ueber Steuerberatung in Hamburg",
@@ -370,7 +372,24 @@ def _common_v2_pipeline_kwargs(**overrides):
         target_site_url="https://mandant.de/leistungen",
         publishing_site_url="https://host.de",
         publishing_site_id="22222222-2222-2222-2222-222222222222",
-        publishing_candidates=[],
+        publishing_candidates=[
+            {
+                "site_url": "https://host.de",
+                "site_id": "22222222-2222-2222-2222-222222222222",
+                "fit_score": 80,
+                "publishing_profile_payload": {
+                    "language": "de",
+                    "primary_context": "steuerberatung",
+                },
+                "wp_rest_base": "/wp-json",
+                "wp_username": "admin",
+                "wp_app_password": "pw",
+                "category_ids": [1, 2],
+                "category_candidates": [{"id": 1, "name": "SEO"}, {"id": 2, "name": "Recht"}],
+                "internal_link_inventory": [],
+                "is_general": False,
+            },
+        ],
         internal_link_inventory=[],
         target_profile_payload={"domain_level_topic": "steuerberater"},
         anchor="partial_match",
@@ -416,7 +435,8 @@ def test_run_create_article_pipeline_v2_publishes_and_adapts(monkeypatch):
 
     assert captured_v2["target_keyword"] == "steuerberater hamburg"
     assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
-    assert captured_v2["publishing_site_url"] == "https://host.de"
+    # Late-bind: site is selected AFTER the creator pipeline returns.
+    assert captured_v2["publishing_site_url"] is None
     assert captured_v2["anchor_hint"] == "partial_match"
 
     assert result["post_event_type"] == "wp_post_created"
@@ -487,15 +507,58 @@ def test_run_create_article_pipeline_v2_falls_back_to_target_profile_topic(monke
     assert captured_v2["target_keyword"] == "kanzlei berlin"
 
 
-def test_run_create_article_pipeline_v2_raises_when_no_keyword(monkeypatch):
+def test_run_create_article_pipeline_v2_passes_none_keyword_for_creator_derivation(monkeypatch):
+    """Phase C: when no topic and no profile fallback, the creator service is
+    called with target_keyword=None and is expected to derive it from the
+    target_site_url itself."""
+
+    captured_v2 = {}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={}),
+    )
+    assert captured_v2["target_keyword"] is None
+    assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
+
+
+def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates(monkeypatch):
+    """Phase C pre-flight: zero publishing candidates fails before the
+    contract spend (~$0.25)."""
+
     monkeypatch.setattr(
         automation_service,
         "call_creator_v2_pipeline",
-        lambda **kwargs: pytest.fail("v2 should not be called without a keyword"),
+        lambda **kwargs: pytest.fail("v2 should not be called without candidates"),
     )
-    with pytest.raises(automation_service.AutomationError, match="target keyword"):
+    with pytest.raises(automation_service.AutomationError, match="publishing candidate"):
         automation_service._run_create_article_pipeline_v2(
-            **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={}),
+            **_common_v2_pipeline_kwargs(publishing_candidates=[]),
+        )
+
+
+def test_run_create_article_pipeline_v2_raises_when_no_language_match(monkeypatch):
+    """Phase C: candidates exist but none match the article's language."""
+
+    french_response = _v2_response_with_sections()
+    french_response["language"] = "fr"
+    french_response["contract"]["language"] = "fr"
+
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_pipeline",
+        lambda **kwargs: french_response,
+    )
+    with pytest.raises(automation_service.AutomationError, match="language"):
+        automation_service._run_create_article_pipeline_v2(
+            # All candidates are German -- but the article came back as French.
+            **_common_v2_pipeline_kwargs(),
         )
 
 

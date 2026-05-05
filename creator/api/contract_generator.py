@@ -112,35 +112,85 @@ def _format_volume(payload: ResearchPayload) -> str:
     return f"Volumen: {volume} / Wettbewerb: {competition} / CPC: {cpc}"
 
 
+_LANGUAGE_USER_PROMPT_TEMPLATES: Dict[str, Dict[str, str]] = {
+    "de": {
+        "target_keyword_label": "ZIEL-KEYWORD",
+        "backlink_label": "ZIEL-URL für Backlink",
+        "anchor_label": "GEWÜNSCHTER ANKER-HINWEIS",
+        "anchor_default": "(frei wählbar)",
+        "research_header": "WETTBEWERBER-FORSCHUNG",
+        "organic_header_template": "Top-{n} organische Ergebnisse (Standort/Sprache aus Locale: {locale_label}):",
+        "paa_header": "People-Also-Ask Fragen:",
+        "related_searches_header": "Verwandte Suchen:",
+        "metrics_header": "Keyword-Metriken (primär):",
+        "related_keywords_header": "Verwandte Keywords (mit Volumen):",
+        "median_label": "Wettbewerber-Wortzahl Median",
+        "median_words": "Wörter",
+        "median_unknown": "(unbekannt)",
+        "common_h2_header": "Häufige H2-Themen (in 2+ Wettbewerbern):",
+        "entities_header": "Pflicht-Entitäten (in mind. 60% der Top-5 Wettbewerber):",
+        "language_directive": "PFLICHT: Verfasse den gesamten Vertrag in deutscher Sprache. Setze `language` auf `\"de\"` und `tone` auf `\"sie\"`.",
+        "tail": "Erstelle jetzt den ContentContract als JSON gemäß dem Schema im System-Prompt.",
+    },
+    "fr": {
+        "target_keyword_label": "MOT-CLÉ CIBLE",
+        "backlink_label": "URL CIBLE du backlink",
+        "anchor_label": "SUGGESTION D'ANCRE",
+        "anchor_default": "(libre)",
+        "research_header": "RECHERCHE CONCURRENTIELLE",
+        "organic_header_template": "Top-{n} résultats organiques (localisation/langue d'après le locale : {locale_label}) :",
+        "paa_header": "Questions People-Also-Ask :",
+        "related_searches_header": "Recherches associées :",
+        "metrics_header": "Métriques mot-clé (principal) :",
+        "related_keywords_header": "Mots-clés associés (avec volume) :",
+        "median_label": "Médiane du nombre de mots des concurrents",
+        "median_words": "mots",
+        "median_unknown": "(inconnu)",
+        "common_h2_header": "Thèmes H2 fréquents (chez 2+ concurrents) :",
+        "entities_header": "Entités obligatoires (présentes chez ≥60 % du Top-5 concurrents) :",
+        "language_directive": "OBLIGATOIRE : rédigez l'intégralité du contrat en français. Mettez `language` à `\"fr\"` et `tone` à `\"sie\"` (vouvoiement).",
+        "tail": "Produisez maintenant le ContentContract au format JSON conforme au schéma du prompt système.",
+    },
+}
+
+
+def _user_prompt_template(language: str) -> Dict[str, str]:
+    return _LANGUAGE_USER_PROMPT_TEMPLATES.get(language.lower(), _LANGUAGE_USER_PROMPT_TEMPLATES["de"])
+
+
 def build_user_prompt(
     payload: ResearchPayload,
     *,
     target_backlink_url: str,
     anchor_hint: Optional[str] = None,
+    language: str = "de",
 ) -> str:
-    median = payload.competitor_word_count_median or "(unbekannt)"
+    t = _user_prompt_template(language)
+    median = payload.competitor_word_count_median or t["median_unknown"]
+    locale_label = f"location_code={payload.location_code}, language_code={payload.language_code}"
     return (
-        f"ZIEL-KEYWORD: {payload.target_keyword}\n"
-        f"ZIEL-URL für Backlink: {target_backlink_url}\n"
-        f"GEWÜNSCHTER ANKER-HINWEIS: {anchor_hint or '(frei wählbar)'}\n\n"
-        f"WETTBEWERBER-FORSCHUNG\n"
-        f"======================\n\n"
-        f"Top-{MAX_ORGANIC_RESULTS} organische Ergebnisse (Standort: Deutschland, Sprache: Deutsch):\n"
+        f"{t['target_keyword_label']}: {payload.target_keyword}\n"
+        f"{t['backlink_label']}: {target_backlink_url}\n"
+        f"{t['anchor_label']}: {anchor_hint or t['anchor_default']}\n\n"
+        f"{t['language_directive']}\n\n"
+        f"{t['research_header']}\n"
+        f"{'=' * len(t['research_header'])}\n\n"
+        f"{t['organic_header_template'].format(n=MAX_ORGANIC_RESULTS, locale_label=locale_label)}\n"
         f"{_format_organics(payload)}\n\n"
-        f"People-Also-Ask Fragen:\n"
+        f"{t['paa_header']}\n"
         f"{_format_simple_list(payload.paa_questions, MAX_PAA_QUESTIONS)}\n\n"
-        f"Verwandte Suchen:\n"
+        f"{t['related_searches_header']}\n"
         f"{_format_simple_list(payload.related_searches, MAX_RELATED_SEARCHES)}\n\n"
-        f"Keyword-Metriken (primär):\n"
+        f"{t['metrics_header']}\n"
         f"  {_format_volume(payload)}\n\n"
-        f"Verwandte Keywords (mit Volumen):\n"
+        f"{t['related_keywords_header']}\n"
         f"{_format_related_keywords(payload)}\n\n"
-        f"Wettbewerber-Wortzahl Median: {median} Wörter\n\n"
-        f"Häufige H2-Themen (in 2+ Wettbewerbern):\n"
+        f"{t['median_label']}: {median} {t['median_words']}\n\n"
+        f"{t['common_h2_header']}\n"
         f"{_format_simple_list(payload.common_h2_themes, MAX_COMMON_H2)}\n\n"
-        f"Pflicht-Entitäten (in mind. 60% der Top-5 Wettbewerber):\n"
+        f"{t['entities_header']}\n"
         f"{_format_entities(payload)}\n\n"
-        f"Erstelle jetzt den ContentContract als JSON gemäß dem Schema im System-Prompt."
+        f"{t['tail']}"
     )
 
 
@@ -230,6 +280,7 @@ def generate_contract(
     *,
     target_backlink_url: str,
     anchor_hint: Optional[str] = None,
+    language: str = "de",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
@@ -244,6 +295,10 @@ def generate_contract(
     Default model is Sonnet 4.6 (DEFAULT_CONTRACT_MODEL). Override via the
     ``model`` argument or the ``CREATOR_CONTRACT_MODEL`` env var. ``llm_caller``
     is injected for tests; in production it defaults to ``call_with_thinking``.
+
+    ``language`` (ISO 639-1) selects the prompt translation (``v1.de.md`` or
+    ``v1.fr.md``) and the user-prompt template. The contract returned has
+    ``language`` set to match.
     """
 
     resolved_api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -253,12 +308,13 @@ def generate_contract(
         raise ValueError("target_backlink_url is required.")
 
     resolved_model = model or os.getenv("CREATOR_CONTRACT_MODEL", "").strip() or DEFAULT_CONTRACT_MODEL
-    prompt = load_prompt(PROMPT_NAME, prompt_version)
+    prompt = load_prompt(PROMPT_NAME, prompt_version, language=language)
     system_prompt = build_system_prompt(prompt)
     user_prompt = build_user_prompt(
         research,
         target_backlink_url=target_backlink_url,
         anchor_hint=anchor_hint,
+        language=language,
     )
 
     caller = llm_caller or call_with_thinking
@@ -278,6 +334,13 @@ def generate_contract(
         payload: Dict[str, object] = _extract_json(raw_text)
     except LLMError as exc:
         raise LLMError(f"Contract generator returned non-JSON: {exc}") from exc
+
+    # Force the contract's language field to match the requested language. The
+    # LLM is instructed to set it correctly via the language_directive in the
+    # user prompt, but we don't want a stray drift here to silently route
+    # downstream prompts to the wrong locale.
+    if isinstance(payload, dict):
+        payload["language"] = language
 
     try:
         return ContentContract.model_validate(payload)

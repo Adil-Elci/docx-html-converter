@@ -39,6 +39,9 @@ EXTERNAL_LINKS_MAX = 3
 ANCHOR_DIVERSITY_MIN = 0.6
 WIENER_GRADE_MIN = 8
 WIENER_GRADE_MAX = 12
+FRENCH_GRADE_MIN = 6   # Kandel-Moles equivalent: easy-but-not-childish
+FRENCH_GRADE_MAX = 14  # ceiling: anything above this is too dense for SEO body
+LANGUAGE_CONSISTENCY_FOREIGN_TOKEN_MAX_RATIO = 0.005  # 0.5% of content tokens
 ENTITY_COVERAGE_MIN = 0.70
 PAA_QUESTION_TERM_MATCH_MIN = 0.6  # fraction of a question's content words that must appear in the article
 PAA_COVERAGE_MIN = 0.80
@@ -46,9 +49,9 @@ BACKLINK_ANCHOR_NATURALNESS_MIN = 7
 EEAT_DENSITY_MIN = 6
 
 
-# Minimal German stopword set used for PAA-coverage scoring. Not exhaustive
-# linguistically — only common closed-class words that contribute no topical
-# signal when matching question terms against article body.
+# Minimal stopword sets used for PAA-coverage scoring and language consistency.
+# Not exhaustive linguistically — only common closed-class words that
+# contribute no topical signal when matching question terms against article body.
 _GERMAN_STOPWORDS = frozenset({
     "aber", "alle", "als", "am", "an", "auch", "auf", "aus",
     "bei", "bin", "bis", "bist",
@@ -72,10 +75,52 @@ _GERMAN_STOPWORDS = frozenset({
     "zu", "zum", "zur",
 })
 
+_FRENCH_STOPWORDS = frozenset({
+    "à", "afin", "ainsi", "alors", "après", "au", "aucun", "aussi", "autre", "aux", "avant", "avec", "avoir",
+    "bien",
+    "ça", "car", "ce", "ceci", "cela", "celle", "celui", "ces", "cet", "cette", "ceux", "chez", "comme", "contre",
+    "dans", "de", "des", "du", "donc", "dont",
+    "elle", "elles", "en", "encore", "entre", "est", "et", "été", "être", "eux",
+    "faire", "fait",
+    "il", "ils",
+    "je", "juste",
+    "la", "le", "les", "leur", "leurs", "lui",
+    "ma", "mais", "même", "mes", "moi", "mon",
+    "ne", "ni", "non", "nos", "notre", "nous",
+    "on", "ont", "ou", "où",
+    "par", "parce", "pas", "peu", "plus", "pour", "puis",
+    "quand", "que", "quel", "quelle", "qui", "quoi",
+    "sa", "sans", "se", "ses", "si", "sien", "son", "sont", "sous", "sur",
+    "ta", "tandis", "tant", "te", "tes", "toi", "ton", "tous", "tout", "très", "tu",
+    "un", "une",
+    "voici", "voilà", "vos", "votre", "vous",
+    "y",
+})
 
-def _content_words(text: str) -> List[str]:
-    tokens = re.findall(r"\b[\wäöüÄÖÜß]+\b", (text or "").lower())
-    return [t for t in tokens if t not in _GERMAN_STOPWORDS and len(t) > 2]
+# High-signal stopwords used for cross-language consistency detection. We pick
+# closed-class words that ONE language has and the other DOES NOT — this gives
+# a low false-positive rate against names of laws / brands / numbers that
+# might legitimately appear cross-lingually.
+_GERMAN_DETECTION_TOKENS = frozenset({
+    "der", "die", "das", "und", "ist", "nicht", "ein", "eine", "auch",
+    "sich", "auf", "mit", "für", "von", "bei", "wir", "sie", "den", "dem",
+})
+
+_FRENCH_DETECTION_TOKENS = frozenset({
+    "le", "la", "les", "des", "qui", "que", "pour", "avec", "dans",
+    "vous", "nous", "est", "sont", "cette", "leur", "plus", "ainsi",
+})
+
+_LANGUAGE_STOPWORDS = {
+    "de": _GERMAN_STOPWORDS,
+    "fr": _FRENCH_STOPWORDS,
+}
+
+
+def _content_words(text: str, language: str = "de") -> List[str]:
+    stopwords = _LANGUAGE_STOPWORDS.get(language, _GERMAN_STOPWORDS)
+    tokens = re.findall(r"\b[\wäöüÄÖÜßàâçéèêëîïôûùüÿœæ]+\b", (text or "").lower())
+    return [t for t in tokens if t not in stopwords and len(t) > 2]
 
 
 @dataclass
@@ -182,6 +227,30 @@ def _wiener_grade(text: str) -> float:
     return 0.1935 * ms + 0.1672 * sl + 0.1297 * iw - 0.0327 * es - 0.875
 
 
+def _kandel_moles_grade(text: str) -> float:
+    """Kandel-Moles formula (French readability, adapted Flesch). Lower = easier.
+
+    Returns a grade-level estimate analogous to Wiener for German: ~6 = très
+    facile, ~10 = standard, ~14+ = technique. Bands picked to match the
+    German FRENCH_GRADE_MIN/MAX defaults below.
+    """
+
+    sentences = max(1, len(re.findall(r"[.!?]+", text)))
+    words = re.findall(r"\b[\wàâçéèêëîïôûùüÿœæ]+\b", text, flags=re.IGNORECASE)
+    word_count = max(1, len(words))
+    syllables_total = 0
+    for word in words:
+        groups = re.findall(r"[aeiouyàâéèêëîïôûùüÿœæ]+", word.lower())
+        syllables_total += max(1, len(groups))
+    asl = word_count / sentences          # average sentence length
+    asw = syllables_total / word_count    # average syllables per word
+    # Kandel-Moles (1958): 209 - (1.015 * ASL) - (73.6 * ASW). Higher = easier.
+    flesch_like = 209 - (1.015 * asl) - (73.6 * asw)
+    # Translate to a grade band where lower = easier, comparable to Wiener.
+    # 90+ flesch ~ grade 6, 60 ~ grade 9, 30 ~ grade 13.
+    return max(0.0, (100 - flesch_like) / 10)
+
+
 # ---- Deterministic checks ---------------------------------------------------
 
 def check_keyword_in_h1(text_h1: str, keyword: str) -> CheckResult:
@@ -232,6 +301,16 @@ def check_heading_hierarchy(parser: _ArticleParser) -> CheckResult:
 
 
 def check_link_counts(parser: _ArticleParser, host_domain: str) -> CheckResult:
+    if not host_domain:
+        # Late-binding mode: publishing site not chosen yet, so we can't tell
+        # internal from external. Just verify the link is non-zero so a
+        # totally link-less article still fails the check.
+        total = len(parser.links)
+        return CheckResult(
+            "link_counts",
+            total > 0,
+            detail=f"late-bind: total={total} (host unknown)",
+        )
     internal = sum(1 for link in parser.links if host_domain.lower() in (link["href"] or "").lower())
     external = len(parser.links) - internal
     internal_ok = INTERNAL_LINKS_MIN <= internal <= INTERNAL_LINKS_MAX
@@ -291,6 +370,50 @@ def check_german_readability(plain_text: str) -> CheckResult:
     )
 
 
+def check_french_readability(plain_text: str) -> CheckResult:
+    grade = _kandel_moles_grade(plain_text)
+    return CheckResult(
+        "french_readability_kandel_moles",
+        FRENCH_GRADE_MIN <= grade <= FRENCH_GRADE_MAX,
+        value=grade,
+    )
+
+
+def check_language_consistency(plain_text: str, *, language: str) -> CheckResult:
+    """Catch silent prompt-mismatch regressions.
+
+    Counts how many times the *other* supported language's high-signal stop
+    words appear in the article. A real article should have effectively zero
+    foreign stop-word density (even brand names and laws don't usually
+    overlap with closed-class function words). If the density exceeds
+    ``LANGUAGE_CONSISTENCY_FOREIGN_TOKEN_MAX_RATIO``, we likely loaded the
+    wrong prompt translation.
+    """
+
+    tokens = re.findall(r"\b[\wäöüÄÖÜßàâçéèêëîïôûùüÿœæ]+\b", (plain_text or "").lower())
+    if not tokens:
+        return CheckResult("language_consistency", True, value=0.0, detail="empty article")
+    if language == "de":
+        foreign = _FRENCH_DETECTION_TOKENS
+    elif language == "fr":
+        foreign = _GERMAN_DETECTION_TOKENS
+    else:
+        return CheckResult(
+            "language_consistency",
+            True,
+            value=0.0,
+            detail=f"unsupported language {language!r}; check skipped",
+        )
+    foreign_hits = sum(1 for t in tokens if t in foreign)
+    ratio = foreign_hits / len(tokens)
+    return CheckResult(
+        "language_consistency",
+        ratio <= LANGUAGE_CONSISTENCY_FOREIGN_TOKEN_MAX_RATIO,
+        value=ratio,
+        detail=f"{foreign_hits}/{len(tokens)} tokens are stopwords of the wrong language",
+    )
+
+
 # ---- Research-driven deterministic checks ----------------------------------
 
 def check_topical_entity_coverage(
@@ -315,13 +438,18 @@ def check_topical_entity_coverage(
     )
 
 
-def check_paa_coverage(plain_text: str, paa_questions: List[str]) -> CheckResult:
+def check_paa_coverage(
+    plain_text: str,
+    paa_questions: List[str],
+    *,
+    language: str = "de",
+) -> CheckResult:
     if not paa_questions:
         return CheckResult("paa_coverage", True, value=1.0, detail="no PAA questions")
-    article_words = set(_content_words(plain_text))
+    article_words = set(_content_words(plain_text, language))
     covered = 0
     for question in paa_questions:
-        question_words = _content_words(question)
+        question_words = _content_words(question, language)
         if not question_words:
             continue
         matches = sum(1 for word in question_words if word in article_words)
@@ -378,15 +506,23 @@ def evaluate(
     meta_description: str,
     research: Optional[ResearchPayload] = None,
     judge_scores: Optional[JudgeScores] = None,
+    language: Optional[str] = None,
 ) -> QualityReport:
     parser = _parse(article_html)
     plain = parser.plain_text
     primary = contract.target_keyword
     h1 = parser.h1[0] if parser.h1 else ""
 
+    resolved_language = (language or contract.language.value).lower()
+
     competitor_word_count_median = research.competitor_word_count_median if research else None
     high_coverage_entities = research.high_coverage_entities if research else []
     paa_questions = research.paa_questions if research else []
+
+    if resolved_language == "fr":
+        readability_check = check_french_readability(plain)
+    else:
+        readability_check = check_german_readability(plain)
 
     deterministic = [
         check_keyword_in_h1(h1, primary),
@@ -400,9 +536,10 @@ def evaluate(
         check_image_alt_text(parser),
         check_meta_lengths(meta_title, meta_description),
         check_ai_tell_blocklist(plain, contract.ai_tell_blocklist),
-        check_german_readability(plain),
+        readability_check,
+        check_language_consistency(plain, language=resolved_language),
         check_topical_entity_coverage(plain, high_coverage_entities),
-        check_paa_coverage(plain, paa_questions),
+        check_paa_coverage(plain, paa_questions, language=resolved_language),
     ]
     if judge_scores is not None:
         llm_judged = llm_judged_checks_from_scores(judge_scores)

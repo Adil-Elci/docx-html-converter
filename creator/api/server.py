@@ -78,9 +78,10 @@ async def health() -> JSONResponse:
 
 
 class V2RunPipelineRequest(BaseModel):
-    target_keyword: str = Field(..., min_length=2)
     target_backlink_url: str = Field(..., min_length=8)
-    publishing_site_url: str = Field(..., min_length=4)
+    target_keyword: Optional[str] = Field(default=None, min_length=2)
+    publishing_site_url: Optional[str] = Field(default=None, min_length=4)
+    language: Optional[str] = None  # ISO 639-1; auto-detected when absent
     anchor_hint: Optional[str] = None
     canonical_url: Optional[str] = None
     skip_voice_pass: bool = False
@@ -99,12 +100,39 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _serialize_derived_topic(derived) -> Optional[dict]:
+    if derived is None:
+        return None
+    return {
+        "target_url": derived.target_url,
+        "target_keyword": derived.target_keyword,
+        "language_code": derived.language_code,
+        "location_code": derived.location_code,
+        "alternates": list(derived.alternates),
+        "candidates": [
+            {
+                "keyword": c.keyword,
+                "source": c.source,
+                "search_volume": c.search_volume,
+                "trend_ratio": c.trend_ratio,
+                "score": c.score,
+            }
+            for c in derived.candidates
+        ],
+        "confidence": derived.confidence,
+        "notes": list(derived.notes),
+        "cost_usd": derived.cost_usd,
+        "cache_hit": derived.cache_hit,
+    }
+
+
 def _serialize_run(run: PipelineRun) -> dict:
     return {
         "ok": True,
         "target_keyword": run.target_keyword,
         "target_backlink_url": run.target_backlink_url,
         "publishing_site_host": run.publishing_site_host,
+        "language": run.language,
         "research": _to_jsonable(run.research),
         "contract": run.contract.model_dump(mode="json"),
         "sections": [s.model_dump(mode="json") for s in run.sections],
@@ -115,6 +143,7 @@ def _serialize_run(run: PipelineRun) -> dict:
         },
         "judge_scores": _to_jsonable(run.judge_scores),
         "quality_report": run.quality_report.to_dict(),
+        "derived_topic": _serialize_derived_topic(run.derived_topic),
         "skipped_voice_pass": run.skipped_voice_pass,
         "skipped_judge": run.skipped_judge,
         "notes": run.notes,
@@ -204,9 +233,10 @@ async def v2_run_pipeline(payload: V2RunPipelineRequest) -> JSONResponse:
 
     try:
         run = run_pipeline(
-            target_keyword=payload.target_keyword,
             target_backlink_url=payload.target_backlink_url,
+            target_keyword=payload.target_keyword,
             publishing_site_url=payload.publishing_site_url,
+            language=payload.language,
             anchor_hint=payload.anchor_hint,
             canonical_url=payload.canonical_url,
             skip_voice_pass=payload.skip_voice_pass,

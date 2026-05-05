@@ -29,6 +29,7 @@ from .eval_harness import QualityReport, evaluate
 from .eval_judge import JudgeScores, judge_article
 from .research import ResearchPayload, run_research
 from .section_writer import SectionDraft, write_all_sections
+from .topic_derivation import DerivedTopic, TopicDerivationError, derive_topic
 from .voice_pass import refine_voice
 
 logger = logging.getLogger("creator.pipeline_runner")
@@ -46,7 +47,8 @@ class PipelineError(RuntimeError):
 class PipelineRun:
     target_keyword: str
     target_backlink_url: str
-    publishing_site_host: str
+    publishing_site_host: str  # empty string when site is to be late-bound
+    language: str
 
     research: ResearchPayload
     contract: ContentContract
@@ -57,6 +59,7 @@ class PipelineRun:
     judge_scores: Optional[JudgeScores]
     quality_report: QualityReport
 
+    derived_topic: Optional[DerivedTopic] = None
     skipped_voice_pass: bool = False
     skipped_judge: bool = False
     notes: List[str] = field(default_factory=list)
@@ -70,27 +73,82 @@ def _host_from_url(url: str) -> str:
     return host
 
 
+_LANGUAGE_TO_LOCATION: dict = {
+    "de": (2276, "de"),
+    "fr": (2250, "fr"),
+}
+
+
 def run_pipeline(
     *,
-    target_keyword: str,
     target_backlink_url: str,
-    publishing_site_url: str,
+    target_keyword: Optional[str] = None,
+    publishing_site_url: Optional[str] = None,
     anchor_hint: Optional[str] = None,
     canonical_url: Optional[str] = None,
+    language: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
     skip_entity_extraction: bool = False,
 ) -> PipelineRun:
-    """Run every phase end-to-end. Raises ``PipelineError`` on any step failure."""
+    """Run every phase end-to-end. Raises ``PipelineError`` on any step failure.
 
-    publishing_site_host = _host_from_url(publishing_site_url)
+    ``target_keyword`` is optional: when omitted, ``derive_topic`` is called
+    against ``target_backlink_url`` to derive both the keyword and the
+    language/locale. The derived topic is preserved on the returned run.
+
+    ``publishing_site_url`` is optional: when omitted, the eval harness's
+    internal/external link split runs in "all-external" mode (the host
+    isn't known yet because the publishing site will be late-bound by the
+    portal backend after this pipeline returns).
+
+    ``language`` (ISO 639-1) overrides the derived language. When neither
+    is provided, derivation supplies it. Currently supported: ``de``, ``fr``.
+    """
+
     notes: List[str] = []
+
+    derived_topic: Optional[DerivedTopic] = None
+    resolved_keyword = (target_keyword or "").strip()
+    resolved_language = (language or "").strip().lower() or None
+
+    if not resolved_keyword:
+        try:
+            derived_topic = derive_topic(target_backlink_url)
+        except TopicDerivationError as exc:
+            raise PipelineError(
+                "topic_derivation",
+                f"[{exc.code}] {exc}",
+            ) from exc
+        except Exception as exc:
+            raise PipelineError("topic_derivation", str(exc)) from exc
+        resolved_keyword = derived_topic.target_keyword
+        if not resolved_language:
+            resolved_language = derived_topic.language_code
+        notes.append(f"derived_keyword={resolved_keyword}")
+
+    if not resolved_keyword:
+        raise PipelineError("topic_derivation", "Could not determine target keyword.")
+
+    normalized_language = (resolved_language or "de").lower()
+    if normalized_language not in _LANGUAGE_TO_LOCATION:
+        raise PipelineError(
+            "language",
+            f"Unsupported language {normalized_language!r}; supported: {sorted(_LANGUAGE_TO_LOCATION.keys())}.",
+        )
+    location_code, language_code = _LANGUAGE_TO_LOCATION[normalized_language]
+
+    publishing_site_host = _host_from_url(publishing_site_url) if publishing_site_url else ""
+    if not publishing_site_host:
+        notes.append("publishing_site late-bind: host-based eval check skipped")
 
     # -- 1. Research ---------------------------------------------------------
     try:
         research = run_research(
-            target_keyword=target_keyword,
+            target_keyword=resolved_keyword,
+            location_code=location_code,
+            language_code=language_code,
             skip_related_keywords=skip_related_keywords,
             skip_entity_extraction=skip_entity_extraction,
         )
@@ -98,7 +156,7 @@ def run_pipeline(
         raise PipelineError("research", str(exc)) from exc
     logger.info(
         "pipeline.research_done keyword=%s competitors_ok=%s entities=%s cost=$%.4f",
-        target_keyword,
+        resolved_keyword,
         research.successful_competitor_count,
         len(research.entities),
         research.total_cost_usd,
@@ -110,6 +168,7 @@ def run_pipeline(
             research,
             target_backlink_url=target_backlink_url,
             anchor_hint=anchor_hint,
+            language=normalized_language,
         )
     except Exception as exc:
         raise PipelineError("contract", str(exc)) from exc
@@ -170,6 +229,7 @@ def run_pipeline(
             meta_description=contract.meta_description,
             research=research,
             judge_scores=judge_scores,
+            language=normalized_language,
         )
     except Exception as exc:
         raise PipelineError("eval", str(exc)) from exc
@@ -181,9 +241,10 @@ def run_pipeline(
     )
 
     return PipelineRun(
-        target_keyword=target_keyword,
+        target_keyword=resolved_keyword,
         target_backlink_url=target_backlink_url,
         publishing_site_host=publishing_site_host,
+        language=normalized_language,
         research=research,
         contract=contract,
         sections=sections,
@@ -192,6 +253,7 @@ def run_pipeline(
         final_html=final_html,
         judge_scores=judge_scores,
         quality_report=quality_report,
+        derived_topic=derived_topic,
         skipped_voice_pass=skip_voice_pass,
         skipped_judge=skip_judge,
         notes=notes,

@@ -18,6 +18,11 @@ class GermanTone(str, Enum):
     DU = "du"
 
 
+class ArticleLanguage(str, Enum):
+    DE = "de"
+    FR = "fr"
+
+
 class LinkTarget(BaseModel):
     target_url: str = Field(..., description="Absolute URL the anchor must point to.")
     anchor_strategy: str = Field(
@@ -74,6 +79,7 @@ class ContentContract(BaseModel):
     target_keyword: str = Field(..., min_length=2)
     secondary_keywords: List[str] = Field(default_factory=list, max_length=12)
     intent: SearchIntent
+    language: ArticleLanguage = ArticleLanguage.DE
     tone: GermanTone = GermanTone.SIE
     target_audience: str = Field(..., min_length=5)
     word_count_target: int = Field(..., ge=200, le=5000)

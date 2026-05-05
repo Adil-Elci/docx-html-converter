@@ -28,6 +28,7 @@ def _pipeline_run() -> PipelineRun:
         target_keyword="steuerberater hamburg",
         target_backlink_url="https://client.de/leistungen",
         publishing_site_host="example.de",
+        language="de",
         research=ResearchPayload(
             target_keyword="steuerberater hamburg",
             location_code=2276,

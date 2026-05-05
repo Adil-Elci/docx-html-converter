@@ -230,7 +230,7 @@ def _hydratable_payload_dict() -> dict:
         "organic": [{"rank": 1, "url": "https://a.de", "title": "T", "description": "", "domain": "a.de"}],
         "paa_questions": ["q?"],
         "related_searches": ["x"],
-        "primary_volume": {"keyword": "steuerberater hamburg", "search_volume": 9900, "competition": 0.45, "cpc": 4.32, "cost": 0.0},
+        "primary_volume": {"keyword": "steuerberater hamburg", "search_volume": 9900, "competition": 0.45, "cpc": 4.32, "cost": 0.0, "monthly_searches": []},
         "related_keywords": [{"keyword": "steuerberater hamburg altona", "search_volume": 480, "cpc": None, "competition": None}],
         "competitors": [{
             "url": "https://a.de", "final_url": "https://a.de", "fetch_status": "ok",

@@ -101,12 +101,22 @@ class SerpResult:
 
 
 @dataclass
+class MonthlySearchVolume:
+    """One bucket of Google Ads ``monthly_searches`` history."""
+
+    year: int
+    month: int
+    search_volume: int
+
+
+@dataclass
 class KeywordMetric:
     keyword: str
     search_volume: Optional[int] = None
     competition: Optional[float] = None
     cpc: Optional[float] = None
     cost: float = 0.0
+    monthly_searches: List[MonthlySearchVolume] = field(default_factory=list)
 
 
 @dataclass
@@ -279,12 +289,26 @@ class DataForSEOClient:
         cost = float(payload.get("cost") or 0.0)
         metrics: List[KeywordMetric] = []
         for item in items:
+            history: List[MonthlySearchVolume] = []
+            for raw_bucket in item.get("monthly_searches") or []:
+                if not isinstance(raw_bucket, dict):
+                    continue
+                try:
+                    history.append(MonthlySearchVolume(
+                        year=int(raw_bucket.get("year") or 0),
+                        month=int(raw_bucket.get("month") or 0),
+                        search_volume=int(raw_bucket.get("search_volume") or 0),
+                    ))
+                except (TypeError, ValueError):
+                    continue
+            history.sort(key=lambda b: (b.year, b.month))
             metrics.append(KeywordMetric(
                 keyword=str(item.get("keyword") or "").strip(),
                 search_volume=item.get("search_volume"),
                 competition=item.get("competition"),
                 cpc=item.get("cpc"),
                 cost=cost,
+                monthly_searches=history,
             ))
         return metrics
 

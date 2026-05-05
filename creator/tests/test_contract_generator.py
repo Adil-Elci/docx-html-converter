@@ -141,7 +141,7 @@ def test_build_user_prompt_tolerates_string_competition_label():
 
 
 def test_build_system_prompt_embeds_full_schema():
-    fake_prompt = Prompt(name="contract_generator", version="v1", body="ROLE", metadata={})
+    fake_prompt = Prompt(name="contract_generator", version="v1", language="de", body="ROLE", metadata={})
     system = build_system_prompt(fake_prompt)
     assert "ROLE" in system
     assert "ContentContract" in system or "target_keyword" in system  # schema field present

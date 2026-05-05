@@ -1099,6 +1099,7 @@ class AutomationJobWorker:
                                 "wp_app_password": candidate_credential.wp_app_password,
                                 "category_ids": ordered_candidate_category_ids,
                                 "category_candidates": candidate_category_candidates,
+                                "is_general": bool(getattr(candidate_site, "is_general", False)),
                             }
                         )
                     append_execution_trace_event(

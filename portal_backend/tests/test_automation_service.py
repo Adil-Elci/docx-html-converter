@@ -644,6 +644,37 @@ def test_build_image_prompt_falls_back_to_target_keyword():
     assert "No text" in prompt
 
 
+# ---- apply_image_style_directives (used by the regenerate-image flow) -----
+
+
+def test_apply_image_style_directives_appends_to_legacy_prompt():
+    """Old jobs that stored a minimal prompt get upgraded to Flux directives."""
+
+    legacy = "Featured image for article titled: Steuerberater Hamburg"
+    out = automation_service.apply_image_style_directives(legacy)
+    assert out.startswith(legacy)
+    assert "Hyperrealistic editorial photograph" in out
+    assert "No text" in out
+
+
+def test_apply_image_style_directives_is_idempotent_on_v2_prompts():
+    """v2 prompts already include the directives -- don't double-append."""
+
+    contract = {"h1": "Steuerberater Hamburg", "meta_description": "Beratung"}
+    v2_prompt = automation_service._build_image_prompt_from_contract(contract)
+    out = automation_service.apply_image_style_directives(v2_prompt)
+    assert out == v2_prompt
+    # Sanity: only one style directive block in the final string.
+    assert out.count("Hyperrealistic editorial photograph") == 1
+
+
+def test_apply_image_style_directives_handles_empty_input():
+    out = automation_service.apply_image_style_directives("")
+    assert "Editorial photo" in out
+    assert "Hyperrealistic" in out
+    assert "No text" in out
+
+
 def test_run_create_article_pipeline_v2_skips_image_when_no_api_key(monkeypatch):
     monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **kwargs: _v2_response_with_sections())
     captured = {}

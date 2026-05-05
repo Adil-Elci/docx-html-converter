@@ -43,6 +43,55 @@ def test_extract_json_preserves_german_smart_quotes_inside_string_value():
     assert "„Steuerberater“" in payload["body_html"]
 
 
+def test_extract_json_heals_mixed_german_quotes_open_unicode_close_ascii():
+    """Real failure: section_writer opens with „ but closes with bare ASCII "
+    inside body_html, which terminates the JSON string prematurely.
+    The heal rewrites the unmatched ASCII close as Unicode " before
+    parsing so the section survives."""
+
+    # Note: opening is „ (U+201E), closing is " (U+0022 — ASCII).
+    raw = (
+        '{\n'
+        '  "body_html": "<p>Eltern sagen: „Brillen sind kostenlos." Doch das stimmt nicht.</p>",\n'
+        '  "links_inserted": [],\n'
+        '  "word_count": 12\n'
+        '}'
+    )
+    payload = _extract_json(raw)
+    assert payload["word_count"] == 12
+    # Heal converted the bare ASCII close into a proper German typographic close.
+    assert "„Brillen sind kostenlos.“" in payload["body_html"]
+    # Surrounding prose is preserved (we didn't accidentally truncate).
+    assert "Doch das stimmt nicht" in payload["body_html"]
+
+
+def test_extract_json_heals_mixed_french_quotes_open_unicode_close_ascii():
+    raw = (
+        '{\n'
+        '  "body_html": "<p>Les parents disent : «Les lunettes sont chères." Or c\'est faux.</p>",\n'
+        '  "links_inserted": [],\n'
+        '  "word_count": 13\n'
+        '}'
+    )
+    payload = _extract_json(raw)
+    assert payload["word_count"] == 13
+    assert "«Les lunettes sont chères.»" in payload["body_html"]
+
+
+def test_extract_json_leaves_correctly_paired_german_quotes_alone():
+    """Heal must be idempotent: properly „..." paired strings shouldn't be touched."""
+
+    raw = (
+        '{\n'
+        '  "body_html": "<p>Der Titel „Steuerberater“ ist geschützt.</p>",\n'
+        '  "word_count": 5\n'
+        '}'
+    )
+    payload = _extract_json(raw)
+    assert "„Steuerberater“" in payload["body_html"]
+    assert payload["body_html"].count("“") == 1  # no duplicate close added
+
+
 def test_extract_json_still_handles_smart_quotes_at_structural_positions():
     # The complementary case: model used “ ” as the JSON quote
     # delimiters themselves (around keys / values). Original parse fails;

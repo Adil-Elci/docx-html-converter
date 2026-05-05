@@ -26,8 +26,11 @@ logger = logging.getLogger("creator.voice_pass")
 
 DEFAULT_VOICE_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
-DEFAULT_TIMEOUT_SECONDS = 90
-DEFAULT_MAX_TOKENS = 4000
+DEFAULT_TIMEOUT_SECONDS = 120
+# 8000 tokens (~6000 German words) covers articles well above the largest
+# competitor median we've seen. The previous 4000-token cap was clipping
+# articles ~1500 words mid-sentence (regression: "Gläser ohne UV-400-").
+DEFAULT_MAX_TOKENS = 8000
 DEFAULT_TEMPERATURE = 0.3
 PROMPT_NAME = "voice_pass"
 
@@ -56,6 +59,27 @@ def _strip_codeblock_wrapper(text: str) -> str:
         cleaned = _CODEBLOCK_OPEN.sub("", cleaned)
         cleaned = _CODEBLOCK_CLOSE.sub("", cleaned)
     return cleaned.strip()
+
+
+def _looks_truncated(html: str) -> bool:
+    """Detect output that was clipped by the model's max_tokens cap.
+
+    A complete article ends with a closing structural tag (``</p>``,
+    ``</ul>``, ``</ol>``, ``</table>``, ``</section>``, ``</article>``,
+    ``</body>`` -- or a JSON-LD ``</script>``). If the trailing content is
+    bare prose without a closing tag, we likely got cut mid-sentence.
+    Mid-word cuts (e.g. ``Gläser ohne UV-400-``) also fail because they
+    end on punctuation/letter rather than ``>``.
+    """
+
+    if not html or not html.strip():
+        return True
+    tail = html.rstrip()[-200:]
+    closing_tags = ("</p>", "</ul>", "</ol>", "</li>", "</table>", "</tr>",
+                    "</td>", "</section>", "</article>", "</body>", "</html>",
+                    "</h1>", "</h2>", "</h3>", "</h4>", "</script>",
+                    "</strong>", "</em>", "</a>")
+    return not any(tail.rstrip().endswith(tag) for tag in closing_tags)
 
 
 def _format_blocklist(blocklist: List[str]) -> str:
@@ -139,6 +163,19 @@ def refine_voice(
         raise LLMError("Voice pass returned empty content.")
 
     refined = _strip_codeblock_wrapper(refined_raw)
+
+    # Detect output that was clipped by the model's max_tokens cap. When
+    # truncated, fall back to the assembled article so the user gets a
+    # complete (un-refined) post instead of one that ends mid-sentence.
+    # max_tokens was bumped to 8000 to make this rare, but the safety net
+    # stays in case a really long article still pushes the cap.
+    if _looks_truncated(refined):
+        logger.warning(
+            "voice_pass.truncated_output bytes=%s tail=%r — falling back to assembled article",
+            len(refined),
+            refined[-160:],
+        )
+        return article_html
 
     if validate_links:
         original_urls = _extract_urls(article_html)

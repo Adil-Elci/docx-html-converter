@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -161,6 +161,52 @@ def _user_prompt_template(language: str) -> Dict[str, str]:
     return _LANGUAGE_USER_PROMPT_TEMPLATES.get(language.lower(), _LANGUAGE_USER_PROMPT_TEMPLATES["de"])
 
 
+def _format_editorial_angle(angle: Optional[Dict[str, Any]], language: str) -> str:
+    """Format an editorial angle block for the user prompt, if provided.
+
+    The angle is a brainstormed slant (title + hook + rationale) the contract
+    LLM should build the article around. When absent, returns "" so the
+    block is skipped entirely.
+    """
+
+    if not isinstance(angle, dict):
+        return ""
+    title = str(angle.get("title") or "").strip()
+    if not title:
+        return ""
+    hook = str(angle.get("hook") or "").strip()
+    rationale = str(angle.get("rationale") or "").strip()
+    if (language or "de").lower() == "fr":
+        lines = [
+            "ANGLE ÉDITORIAL (à utiliser comme cadre de l'article)",
+            "=====================================================",
+            f"- Titre proposé : {title}",
+        ]
+        if hook:
+            lines.append(f"- Accroche : {hook}")
+        if rationale:
+            lines.append(f"- Pourquoi cet angle : {rationale}")
+        lines.append(
+            "Le H1 doit être ce titre (ou une variante très proche). Les sections doivent suivre cet "
+            "angle journalistique, pas un cadre comparatif/tarifaire générique."
+        )
+        return "\n".join(lines) + "\n\n"
+    lines = [
+        "EDITORIAL ANGLE (als Rahmen für den Artikel verwenden)",
+        "======================================================",
+        f"- Vorgeschlagener Titel: {title}",
+    ]
+    if hook:
+        lines.append(f"- Hook: {hook}")
+    if rationale:
+        lines.append(f"- Warum dieser Angle: {rationale}")
+    lines.append(
+        "Der H1 MUSS dieser Titel sein (oder eine sehr nahe Variante). Die Sektionen müssen dem "
+        "redaktionellen Angle folgen, nicht einem generischen Vergleichs-/Preisrahmen."
+    )
+    return "\n".join(lines) + "\n\n"
+
+
 def build_user_prompt(
     payload: ResearchPayload,
     *,
@@ -168,16 +214,19 @@ def build_user_prompt(
     anchor_hint: Optional[str] = None,
     language: str = "de",
     current_year: Optional[int] = None,
+    editorial_angle: Optional[Dict[str, Any]] = None,
 ) -> str:
     t = _user_prompt_template(language)
     median = payload.competitor_word_count_median or t["median_unknown"]
     locale_label = f"location_code={payload.location_code}, language_code={payload.language_code}"
     year = int(current_year) if current_year is not None else datetime.now(timezone.utc).year
+    angle_block = _format_editorial_angle(editorial_angle, language)
     return (
         f"{t['target_keyword_label']}: {payload.target_keyword}\n"
         f"{t['backlink_label']}: {target_backlink_url}\n"
         f"{t['anchor_label']}: {anchor_hint or t['anchor_default']}\n"
         f"{t['current_year_label']}: {year}\n\n"
+        f"{angle_block}"
         f"{t['language_directive']}\n\n"
         f"{t['research_header']}\n"
         f"{'=' * len(t['research_header'])}\n\n"
@@ -287,6 +336,7 @@ def generate_contract(
     target_backlink_url: str,
     anchor_hint: Optional[str] = None,
     language: str = "de",
+    editorial_angle: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
@@ -321,6 +371,7 @@ def generate_contract(
         target_backlink_url=target_backlink_url,
         anchor_hint=anchor_hint,
         language=language,
+        editorial_angle=editorial_angle,
     )
 
     caller = llm_caller or call_with_thinking

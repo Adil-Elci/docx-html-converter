@@ -34,11 +34,11 @@ DEFAULT_NUM_ANGLES = 5
 # Number of angles to brainstorm and cache on a fresh call. Sequential
 # consumption: portal_backend asks for num_angles=1 each time and gets the
 # next-unused (highest-ranked still-unpublished) angle from the cached batch.
-# Cache holds for 90 days OR until all 35 are excluded by the published-list
+# Cache holds for 90 days OR until all 45 are excluded by the published-list
 # filter, whichever comes first. Per-article cost amortises to ~$0.002 once
 # the batch is reused across multiple orders.
-BRAINSTORM_BATCH_SIZE = 35
-DEFAULT_MAX_TOKENS = 6500  # ~35 angles x ~150 tokens each + JSON envelope
+BRAINSTORM_BATCH_SIZE = 45
+DEFAULT_MAX_TOKENS = 8000  # ~45 angles x ~150 tokens each + JSON envelope
 
 
 class TopicBrainstormError(RuntimeError):
@@ -95,12 +95,12 @@ _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
         "fülle den Rest mit realistischen Long-Tail-Variationen auf — keine "
         "Lücken, keine Wiederholungen, keine Filler-Phrasen.\n\n"
         "Sortier-Regel (KRITISCH — Index 0 = am stärksten):\n"
-        "- **Top ~10 (Head)**: Keywords mit hohem geschätztem Suchvolumen in Deutschland, "
+        "- **Top ~12 (Head)**: Keywords mit hohem geschätztem Suchvolumen in Deutschland, "
         "  klarer kommerzieller oder informationeller Intent, niedrige bis mittlere "
         "  Wettbewerbsdichte für Gastbeiträge.\n"
-        "- **Mitte ~10-25 (Mid-Tail)**: Long-Tail-Varianten mit 3-5 Wörtern, mittlerem "
+        "- **Mitte ~13-28 (Mid-Tail)**: Long-Tail-Varianten mit 3-5 Wörtern, mittlerem "
         "  Volumen, geringerer Wettbewerb, oft saisonale oder regionale Schwerpunkte.\n"
-        "- **Tail ~26-{n} (Long-Tail / Nische)**: spezifische Frage- oder Anwendungs-"
+        "- **Tail ~29-{n} (Long-Tail / Nische)**: spezifische Frage- oder Anwendungs-"
         "  Keywords (\"Wie ...\", \"Worauf achten ...\", \"... für Anfänger\"), niedriges "
         "  Volumen, sehr geringer Wettbewerb. Schnell rankbare Quick-Wins.\n\n"
         "Inhaltliche Regeln:\n"
@@ -140,12 +140,12 @@ _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
         "complétez avec des variantes long-tail réalistes — pas de trous, "
         "pas de répétitions, pas de phrases creuses.\n\n"
         "Règle de tri (CRITIQUE — index 0 = le plus fort) :\n"
-        "- **Top ~10 (Head)** : mots-clés au volume de recherche élevé en France, "
+        "- **Top ~12 (Head)** : mots-clés au volume de recherche élevé en France, "
         "  intention commerciale ou informationnelle claire, concurrence faible "
         "  à moyenne pour des articles invités.\n"
-        "- **Milieu ~10-25 (Mid-Tail)** : variantes longue traîne de 3-5 mots, "
+        "- **Milieu ~13-28 (Mid-Tail)** : variantes longue traîne de 3-5 mots, "
         "  volume moyen, concurrence plus faible, souvent saisonnières ou régionales.\n"
-        "- **Queue ~26-{n} (Long-Tail / niche)** : mots-clés spécifiques de "
+        "- **Queue ~29-{n} (Long-Tail / niche)** : mots-clés spécifiques de "
         "  question ou usage (\"Comment ...\", \"Quels critères pour ...\", \"... pour débutants\"), "
         "  volume faible, concurrence très faible. Quick-wins rapides à classer.\n\n"
         "Règles de contenu :\n"

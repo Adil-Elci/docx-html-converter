@@ -41,6 +41,29 @@ def _strip_json_envelope(text: str) -> str:
     return cleaned.strip()
 
 
+# When the LLM emits German (\u201e...") or French (\u00ab...\u00bb) typographic quotes
+# inside a JSON string value but accidentally uses a bare ASCII " as the
+# closing character, the JSON parser sees that " as the END of the string
+# and the whole document fails to parse. The heals below fix that without
+# touching content that already uses proper Unicode pairs.
+_HEAL_GERMAN_QUOTES = re.compile(r"(\u201e)([^\"\u201e\u201c]*?)\"")
+_HEAL_FRENCH_QUOTES = re.compile(r"(\u00ab)([^\"\u00ab\u00bb]*?)\"")
+
+
+def _heal_mixed_typographic_quotes(text: str) -> str:
+    """Repair `\u201econtent"` (Unicode open, ASCII close) -> `\u201econtent"` and the
+    French `\u00abcontent"` -> `\u00abcontent\u00bb`. Idempotent: properly-paired Unicode
+    quotes never match the regex (the negated character class excludes the
+    Unicode close), so this is safe to run on every payload.
+    """
+
+    if not text:
+        return text
+    healed = _HEAL_GERMAN_QUOTES.sub("\\1\\2\u201c", text)
+    healed = _HEAL_FRENCH_QUOTES.sub("\\1\\2\u00bb", healed)
+    return healed
+
+
 def _normalize_json_text(text: str) -> str:
     """Strip envelope AND translate smart quotes \u2014 only for fallback paths.
 
@@ -95,7 +118,9 @@ def _repair_json_like_text(text: str) -> str:
 def _extract_json(text: str) -> Dict[str, Any]:
     # Try the raw envelope-stripped text first — preserves smart quotes that
     # may legitimately live inside string values (e.g. German „..." style).
-    raw = _strip_json_envelope(text)
+    # Heal mixed-quote regressions („content" with ASCII close) BEFORE
+    # parsing so the bare " doesn't terminate the JSON string prematurely.
+    raw = _heal_mixed_typographic_quotes(_strip_json_envelope(text))
     try:
         parsed = json.loads(raw, strict=False)
         if isinstance(parsed, dict):

@@ -89,7 +89,10 @@ class TestBrainstorm:
         assert len(result.angles) == 2
         assert result.angles[0].title.startswith("Kurzsichtigkeit")
         assert result.angles[0].target_keyword == "kurzsichtigkeit kinder"
-        assert result.cost_usd == 0.02
+        # Fresh brainstorm now generates BRAINSTORM_BATCH_SIZE (35) angles
+        # in a single Sonnet 4.6 call -- ~$0.06 not $0.02. The batch is
+        # cached and amortised over subsequent orders for the same site pair.
+        assert result.cost_usd == 0.06
 
     def test_caps_at_num_angles(self):
         big_payload = {
@@ -255,6 +258,84 @@ class TestBrainstormCache:
         mock_llm.assert_called_once()
         # And we wrote the FRESH angles back to cache.
         assert mock_upsert.call_count == 1
+
+    def test_fresh_call_always_asks_llm_for_full_batch_size(self):
+        """The caller's num_angles only caps the RETURN; the LLM is always
+        prompted for BRAINSTORM_BATCH_SIZE so the cache holds the full ranked
+        list for sequential consumption across future orders."""
+
+        captured: dict = {}
+
+        def fake_llm(**kwargs):
+            captured.update(kwargs)
+            return _angles_payload()
+
+        with patch("creator.api.topic_brainstorm_cache.get_cached_brainstorm", return_value=None), \
+             patch("creator.api.topic_brainstorm_cache.upsert_brainstorm"), \
+             patch.object(tb, "call_llm_json", side_effect=fake_llm):
+            brainstorm_editorial_angles(
+                target_url="https://x.de",
+                target_keyword="kw",
+                publisher_url="https://kidsblatt.de",
+                api_key="test",
+                num_angles=1,  # caller wants 1 back
+            )
+        # System prompt was rendered for the full batch size (35), not 1.
+        assert str(tb.BRAINSTORM_BATCH_SIZE) in captured["system_prompt"]
+
+    def test_cache_stores_full_batch_unfiltered(self):
+        """Cache writeback persists every angle the LLM returned (up to
+        BRAINSTORM_BATCH_SIZE), regardless of how many the caller asked for
+        on this specific call. That way the next order can pull #2, #3, ..."""
+
+        big_payload = {
+            "angles": [
+                {"title": f"Angle {i}", "target_keyword": f"kw_{i}", "hook": "h", "rationale": "r"}
+                for i in range(20)
+            ]
+        }
+        with patch("creator.api.topic_brainstorm_cache.get_cached_brainstorm", return_value=None), \
+             patch("creator.api.topic_brainstorm_cache.upsert_brainstorm") as mock_upsert, \
+             patch.object(tb, "call_llm_json", return_value=big_payload):
+            result = brainstorm_editorial_angles(
+                target_url="https://x.de",
+                target_keyword="kw",
+                publisher_url="https://kidsblatt.de",
+                api_key="test",
+                num_angles=1,  # caller wants 1
+            )
+        # Caller gets only 1
+        assert len(result.angles) == 1
+        # But the cache got the FULL batch (all 20 the LLM returned)
+        cached_payload = mock_upsert.call_args.kwargs["payload"]
+        assert len(cached_payload["angles"]) == 20
+
+    def test_sequential_consumption_uses_next_ranked_when_top_is_excluded(self):
+        """Topic #1 was published last week; the next order's brainstorm call
+        should pull #2 from the cached ranked list (not re-brainstorm)."""
+
+        cached = {
+            "angles": [
+                {"title": "Top Angle", "target_keyword": "top kw", "hook": "h", "rationale": "r"},
+                {"title": "Second Angle", "target_keyword": "second kw", "hook": "h", "rationale": "r"},
+                {"title": "Third Angle", "target_keyword": "third kw", "hook": "h", "rationale": "r"},
+            ]
+        }
+        with patch("creator.api.topic_brainstorm_cache.get_cached_brainstorm", return_value=cached), \
+             patch.object(tb, "call_llm_json") as mock_llm:
+            result = brainstorm_editorial_angles(
+                target_url="https://x.de",
+                target_keyword="kw",
+                publisher_url="https://kidsblatt.de",
+                api_key="test",
+                num_angles=1,
+                exclude_topics=["top kw"],  # #1 was already published
+            )
+        assert result.cache_hit is True
+        assert len(result.angles) == 1
+        assert result.angles[0].target_keyword == "second kw"  # #2 wins
+        assert result.excluded_count == 1
+        mock_llm.assert_not_called()  # cache served it, no spend
 
     def test_no_publisher_url_skips_cache_entirely(self):
         with patch("creator.api.topic_brainstorm_cache.get_cached_brainstorm") as mock_get, \

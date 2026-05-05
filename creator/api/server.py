@@ -154,7 +154,7 @@ class V2BrainstormTopicsRequest(BaseModel):
     publishing_profile_payload: Optional[dict] = None
     language: str = "de"
     current_year: Optional[int] = None
-    num_angles: int = Field(default=5, ge=1, le=8)
+    num_angles: int = Field(default=5, ge=1, le=40)
     exclude_topics: Optional[list[str]] = None
     use_cache: bool = True
 

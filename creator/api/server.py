@@ -150,10 +150,13 @@ async def v2_refine_topic_for_publisher(payload: V2RefineTopicForPublisherReques
 class V2BrainstormTopicsRequest(BaseModel):
     target_url: str = Field(..., min_length=4)
     target_keyword: str = Field(..., min_length=2)
+    publisher_url: Optional[str] = None
     publishing_profile_payload: Optional[dict] = None
     language: str = "de"
     current_year: Optional[int] = None
     num_angles: int = Field(default=5, ge=1, le=8)
+    exclude_topics: Optional[list[str]] = None
+    use_cache: bool = True
 
 
 def _serialize_brainstorm(result: BrainstormResult) -> dict:
@@ -169,6 +172,8 @@ def _serialize_brainstorm(result: BrainstormResult) -> dict:
             for a in result.angles
         ],
         "cost_usd": result.cost_usd,
+        "cache_hit": result.cache_hit,
+        "excluded_count": result.excluded_count,
     }
 
 
@@ -186,10 +191,13 @@ async def v2_brainstorm_topics(payload: V2BrainstormTopicsRequest) -> JSONRespon
         result = brainstorm_editorial_angles(
             target_url=payload.target_url,
             target_keyword=payload.target_keyword,
+            publisher_url=payload.publisher_url,
             publishing_profile_payload=payload.publishing_profile_payload,
             language=payload.language,
             current_year=payload.current_year,
             num_angles=payload.num_angles,
+            exclude_topics=payload.exclude_topics,
+            use_cache=payload.use_cache,
         )
     except TopicBrainstormError as exc:
         logger.warning("creator.brainstorm_failed code=%s message=%s", exc.code, str(exc))

@@ -1082,6 +1082,58 @@ def call_creator_v2_derive_topic(
     return payload
 
 
+def call_creator_v2_brainstorm_topics(
+    *,
+    creator_endpoint: str,
+    target_url: str,
+    target_keyword: str,
+    publishing_profile_payload: Optional[Dict[str, Any]],
+    language: str = "de",
+    num_angles: int = 5,
+    timeout_seconds: int = 90,
+) -> Dict[str, Any]:
+    """POST to the creator service's /v2/brainstorm-topics endpoint.
+
+    Returns the parsed response with up to ``num_angles`` editorial angles.
+    On error or no API key, the creator service returns ``angles=[]``; we
+    propagate that as an empty list so callers can fall back to the
+    keyword-only flow gracefully.
+    """
+
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    body: Dict[str, Any] = {
+        "target_url": target_url,
+        "target_keyword": target_keyword,
+        "language": language,
+        "num_angles": num_angles,
+    }
+    if publishing_profile_payload:
+        body["publishing_profile_payload"] = publishing_profile_payload
+    url = creator_endpoint.rstrip("/") + "/v2/brainstorm-topics"
+    try:
+        response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
+    except requests.RequestException as exc:
+        raise AutomationError(f"Creator brainstorm-topics request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError(
+            f"Creator brainstorm-topics returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
+        ) from exc
+
+    if response.status_code == 422 and isinstance(payload, dict) and payload.get("error") == "topic_brainstorm_failed":
+        code = str(payload.get("code") or "brainstorm_failed")
+        message = str(payload.get("message") or "Brainstorm failed.")
+        raise AutomationError(f"Creator brainstorm failed [{code}]: {message}")
+    if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+        raise AutomationError(
+            f"Creator brainstorm-topics unexpected response (HTTP {response.status_code}): {str(payload)[:300]}"
+        )
+    return payload
+
+
 def call_creator_v2_refine_topic_for_publisher(
     *,
     creator_endpoint: str,
@@ -1141,6 +1193,7 @@ def call_creator_v2_pipeline(
     anchor_hint: Optional[str] = None,
     canonical_url: Optional[str] = None,
     language: Optional[str] = None,
+    editorial_angle: Optional[Dict[str, Any]] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -1180,6 +1233,8 @@ def call_creator_v2_pipeline(
         body["publishing_site_url"] = publishing_site_url
     if language:
         body["language"] = language
+    if editorial_angle:
+        body["editorial_angle"] = editorial_angle
     url = creator_endpoint.rstrip("/") + "/v2/run-pipeline"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
@@ -1869,6 +1924,61 @@ def _run_create_article_pipeline_v2(
             # of a wasted contract spend producing a misfit article.
             raise
 
+    # Brainstorm an editorial angle for the article. Only runs when the
+    # webhook didn't pin an explicit topic -- if the admin chose a topic
+    # we respect it. Sonnet 4.6 single shot (~$0.02). The auto-pick is the
+    # first angle in the LLM's ranked output; full slate is recorded in
+    # trace events for transparency / future admin-side override UI.
+    editorial_angle: Optional[Dict[str, Any]] = None
+    explicit_topic_present = bool((topic or "").strip() or profile_topic)
+    if upfront_target_keyword and not explicit_topic_present:
+        try:
+            brainstorm_payload = call_creator_v2_brainstorm_topics(
+                creator_endpoint=creator_endpoint,
+                target_url=target_site_url,
+                target_keyword=upfront_target_keyword,
+                publishing_profile_payload=fit_profile_payload or None,
+                language=fit_language,
+                num_angles=5,
+                timeout_seconds=min(120, creator_timeout_seconds),
+            )
+        except AutomationError as exc:
+            _trace(
+                "warning",
+                "brainstorm",
+                "failed",
+                "Topic brainstorm failed; falling back to keyword-only contract.",
+                {"error": str(exc)[:300]},
+            )
+            brainstorm_payload = None
+        if brainstorm_payload:
+            angles = brainstorm_payload.get("angles") if isinstance(brainstorm_payload, dict) else None
+            if isinstance(angles, list) and angles and isinstance(angles[0], dict):
+                top = angles[0]
+                editorial_angle = {
+                    "title": str(top.get("title") or "").strip(),
+                    "hook": str(top.get("hook") or "").strip(),
+                    "rationale": str(top.get("rationale") or "").strip(),
+                }
+                top_keyword = str(top.get("target_keyword") or "").strip()
+                if top_keyword and top_keyword != upfront_target_keyword:
+                    upfront_target_keyword = top_keyword
+                _trace(
+                    "info",
+                    "brainstorm",
+                    "selected",
+                    "Editorial angle selected for the article.",
+                    {
+                        "title": editorial_angle["title"],
+                        "target_keyword": upfront_target_keyword,
+                        "alternates": [
+                            {"title": str(a.get("title") or ""), "target_keyword": str(a.get("target_keyword") or "")}
+                            for a in angles[1:]
+                            if isinstance(a, dict)
+                        ],
+                    },
+                )
+
     _trace(
         "info",
         "creator_v2",
@@ -1885,6 +1995,7 @@ def _run_create_article_pipeline_v2(
         target_backlink_url=target_site_url,
         publishing_site_url=None,  # late-bind below
         language=upfront_language,
+        editorial_angle=editorial_angle,
         anchor_hint=anchor,
         timeout_seconds=creator_timeout_seconds,
     )

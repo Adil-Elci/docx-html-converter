@@ -87,6 +87,7 @@ def run_pipeline(
     anchor_hint: Optional[str] = None,
     canonical_url: Optional[str] = None,
     language: Optional[str] = None,
+    editorial_angle: Optional[dict] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -169,6 +170,7 @@ def run_pipeline(
             target_backlink_url=target_backlink_url,
             anchor_hint=anchor_hint,
             language=normalized_language,
+            editorial_angle=editorial_angle,
         )
     except Exception as exc:
         raise PipelineError("contract", str(exc)) from exc

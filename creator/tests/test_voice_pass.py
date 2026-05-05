@@ -12,6 +12,7 @@ from creator.api.llm import LLMError
 from creator.api.voice_pass import (
     VoicePassValidationError,
     _extract_urls,
+    _looks_truncated,
     _strip_codeblock_wrapper,
     build_user_prompt,
     refine_voice,
@@ -83,6 +84,53 @@ def test_strip_codeblock_wrapper_removes_bare_fence():
 def test_strip_codeblock_wrapper_passes_through_when_absent():
     text = "<h1>Test</h1>"
     assert _strip_codeblock_wrapper(text) == "<h1>Test</h1>"
+
+
+# ---- truncation detector --------------------------------------------------
+
+
+def test_looks_truncated_flags_mid_word_cut():
+    # Reproduces the regression: voice pass output ends mid-word.
+    truncated = "<h1>X</h1>\n<h2>Y</h2>\n<p>Kinder verbringen mehr Zeit im Freien. Gläser ohne UV-400-"
+    assert _looks_truncated(truncated) is True
+
+
+def test_looks_truncated_flags_mid_sentence_cut():
+    truncated = "<h1>X</h1>\n<h2>Y</h2>\n<p>Some content that ends without a closing tag mid-sentence,"
+    assert _looks_truncated(truncated) is True
+
+
+def test_looks_truncated_passes_complete_article():
+    complete = "<h1>X</h1>\n<h2>Y</h2>\n<p>Vollständiger Absatz mit Punkt am Ende.</p>"
+    assert _looks_truncated(complete) is False
+
+
+def test_looks_truncated_accepts_jsonld_tail():
+    with_schema = '<h1>X</h1>\n<p>Body.</p>\n<script type="application/ld+json">{"@type":"Article"}</script>'
+    assert _looks_truncated(with_schema) is False
+
+
+def test_looks_truncated_flags_empty_input():
+    assert _looks_truncated("") is True
+    assert _looks_truncated("   ") is True
+
+
+def test_refine_voice_falls_back_when_truncated(monkeypatch):
+    """When the LLM returns truncated HTML, voice_pass falls back to the
+    assembled article instead of returning a clipped post."""
+
+    truncated = "<h1>X</h1><h2>Y</h2><p>Hier endet der Text mitten im Satz, ohne"
+
+    def fake_caller(**kwargs):
+        return truncated
+
+    article_html = "<h1>X</h1><h2>Y</h2><p>Komplette Version.</p>"
+    refined = refine_voice(
+        article_html=article_html,
+        contract=_contract(),
+        llm_caller=fake_caller,
+    )
+    assert refined == article_html  # fallback used
 
 
 # ---- prompt assembly -------------------------------------------------------

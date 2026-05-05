@@ -43,6 +43,16 @@ def _stub_creator_pre_pipeline_calls(monkeypatch):
         _fake_refine,
     )
 
+    # Brainstorm runs only when no explicit topic is provided. Stub it as
+    # empty by default so existing tests (which all set topic explicitly)
+    # don't make HTTP calls. Tests that need to assert brainstorm wiring
+    # can override this stub.
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_brainstorm_topics",
+        lambda **kwargs: {"ok": True, "angles": [], "cost_usd": 0.0},
+    )
+
 
 def test_wp_check_site_access_creates_and_cleans_up_probe_assets(monkeypatch) -> None:
     request_calls: list[tuple[str, str, dict[str, object] | None]] = []
@@ -597,6 +607,116 @@ def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates_and
                 site_url="",
             ),
         )
+
+
+def test_run_create_article_pipeline_v2_brainstorms_when_no_explicit_topic(monkeypatch):
+    """Phase E: when no explicit topic, the brainstorm runs after fit-refine
+    and the auto-picked editorial angle (top of the ranked list) flows into
+    /v2/run-pipeline. The angle's keyword overrides the derived/refined one."""
+
+    captured_v2 = {}
+    captured_brainstorm: dict = {}
+
+    def fake_derive(**kwargs):
+        return {
+            "ok": True,
+            "target_keyword": "günstige brillen online kaufen",
+            "language_code": "de",
+            "cache_hit": False,
+        }
+
+    def fake_brainstorm(**kwargs):
+        captured_brainstorm.update(kwargs)
+        return {
+            "ok": True,
+            "angles": [
+                {
+                    "title": "Kurzsichtigkeit bei Kindern: Warum immer mehr Grundschüler eine Brille brauchen",
+                    "target_keyword": "kurzsichtigkeit kinder",
+                    "hook": "Studien zeigen einen alarmierenden Trend.",
+                    "rationale": "Trend-Story passt zur Eltern-Audience.",
+                },
+                {
+                    "title": "Bildschirmzeit und Augengesundheit",
+                    "target_keyword": "bildschirmzeit kinder augen",
+                    "hook": "Was tun, wenn die Augen müde werden?",
+                    "rationale": "Aktuelles Thema.",
+                },
+            ],
+            "cost_usd": 0.02,
+        }
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_derive_topic", fake_derive)
+    monkeypatch.setattr(automation_service, "call_creator_v2_brainstorm_topics", fake_brainstorm)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            topic=None,
+            target_profile_payload={},
+            publishing_candidates=[
+                {
+                    "site_url": "https://kidsblatt.de",
+                    "site_id": "k-id",
+                    "fit_score": 30,
+                    "publishing_profile_payload": {
+                        "language": "de",
+                        "primary_context": "kids and family",
+                    },
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "admin",
+                    "wp_app_password": "pw",
+                    "category_ids": [],
+                    "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
+            ],
+        ),
+    )
+
+    # Brainstorm got the publisher profile so the LLM could pick a
+    # publisher-relevant angle.
+    assert captured_brainstorm["target_url"] == "https://mandant.de/leistungen"
+    assert captured_brainstorm["publishing_profile_payload"]["primary_context"] == "kids and family"
+    # The auto-picked top angle's keyword overrides the derived one and
+    # the angle metadata flows into the pipeline call.
+    assert captured_v2["target_keyword"] == "kurzsichtigkeit kinder"
+    angle = captured_v2["editorial_angle"]
+    assert angle["title"].startswith("Kurzsichtigkeit")
+    assert "Studien" in angle["hook"]
+
+
+def test_run_create_article_pipeline_v2_skips_brainstorm_when_explicit_topic(monkeypatch):
+    """When the admin pinned an explicit topic in the webhook, the brainstorm
+    is skipped — we respect the explicit choice and don't override it."""
+
+    captured_v2 = {}
+    brainstorm_calls = {"count": 0}
+
+    def fake_brainstorm(**kwargs):
+        brainstorm_calls["count"] += 1
+        return {"ok": True, "angles": [{"title": "X", "target_keyword": "x", "hook": "h", "rationale": "r"}], "cost_usd": 0.02}
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_brainstorm_topics", fake_brainstorm)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(topic="explicit admin topic"),
+    )
+    assert brainstorm_calls["count"] == 0
+    assert captured_v2["target_keyword"] == "explicit admin topic"
+    assert captured_v2.get("editorial_angle") is None
 
 
 def test_run_create_article_pipeline_v2_refines_topic_for_publisher(monkeypatch):

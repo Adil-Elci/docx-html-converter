@@ -19,6 +19,12 @@ from .publisher_fit import (
     PublisherFitError,
     validate_or_refine_topic_for_publisher,
 )
+from .topic_brainstorm import (
+    BrainstormResult,
+    EditorialAngle,
+    TopicBrainstormError,
+    brainstorm_editorial_angles,
+)
 from .topic_derivation import (
     DEFAULT_ALLOWED_LANGUAGES,
     DerivedTopic,
@@ -138,6 +144,68 @@ async def v2_refine_topic_for_publisher(payload: V2RefineTopicForPublisherReques
     return JSONResponse(status_code=200, content=_serialize_fit_verdict(verdict))
 
 
+# ---- v2: brainstorm editorial angles --------------------------------------
+
+
+class V2BrainstormTopicsRequest(BaseModel):
+    target_url: str = Field(..., min_length=4)
+    target_keyword: str = Field(..., min_length=2)
+    publishing_profile_payload: Optional[dict] = None
+    language: str = "de"
+    current_year: Optional[int] = None
+    num_angles: int = Field(default=5, ge=1, le=8)
+
+
+def _serialize_brainstorm(result: BrainstormResult) -> dict:
+    return {
+        "ok": True,
+        "angles": [
+            {
+                "title": a.title,
+                "target_keyword": a.target_keyword,
+                "hook": a.hook,
+                "rationale": a.rationale,
+            }
+            for a in result.angles
+        ],
+        "cost_usd": result.cost_usd,
+    }
+
+
+@app.post("/v2/brainstorm-topics")
+async def v2_brainstorm_topics(payload: V2BrainstormTopicsRequest) -> JSONResponse:
+    """Generate editorial topic angles for a (target site, publisher) pair.
+
+    Used by portal_backend after the topic has been derived/refined so the
+    contract step can build an article around an EDITORIAL ANGLE rather
+    than a SEO-formula buying-guide. Returns up to ``num_angles`` angles
+    ordered by the LLM's preference (caller takes the first as auto-pick).
+    """
+
+    try:
+        result = brainstorm_editorial_angles(
+            target_url=payload.target_url,
+            target_keyword=payload.target_keyword,
+            publishing_profile_payload=payload.publishing_profile_payload,
+            language=payload.language,
+            current_year=payload.current_year,
+            num_angles=payload.num_angles,
+        )
+    except TopicBrainstormError as exc:
+        logger.warning("creator.brainstorm_failed code=%s message=%s", exc.code, str(exc))
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "error": "topic_brainstorm_failed",
+                "code": exc.code,
+                "message": str(exc),
+            },
+        )
+
+    return JSONResponse(status_code=200, content=_serialize_brainstorm(result))
+
+
 # ---- v2: end-to-end pipeline ----------------------------------------------
 
 
@@ -146,6 +214,7 @@ class V2RunPipelineRequest(BaseModel):
     target_keyword: Optional[str] = Field(default=None, min_length=2)
     publishing_site_url: Optional[str] = Field(default=None, min_length=4)
     language: Optional[str] = None  # ISO 639-1; auto-detected when absent
+    editorial_angle: Optional[dict] = None  # brainstormed slant: {title, hook, rationale}
     anchor_hint: Optional[str] = None
     canonical_url: Optional[str] = None
     skip_voice_pass: bool = False
@@ -301,6 +370,7 @@ async def v2_run_pipeline(payload: V2RunPipelineRequest) -> JSONResponse:
             target_keyword=payload.target_keyword,
             publishing_site_url=payload.publishing_site_url,
             language=payload.language,
+            editorial_angle=payload.editorial_angle,
             anchor_hint=payload.anchor_hint,
             canonical_url=payload.canonical_url,
             skip_voice_pass=payload.skip_voice_pass,

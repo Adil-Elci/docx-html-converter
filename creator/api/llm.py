@@ -166,6 +166,11 @@ def _is_retryable_error(error: LLMError) -> bool:
         return True
     if "llm returned invalid json" in message:
         return True
+    if "max_tokens cap" in message:
+        # Could be a one-off (model briefly went verbose); a retry with the
+        # same cap sometimes succeeds. If the cap is consistently too low,
+        # the second attempt also fails and the pipeline surfaces the error.
+        return True
     if "llm response missing content" in message:
         return True
     match = re.search(r"llm http (\d+)", message)
@@ -406,6 +411,24 @@ def _call_anthropic(
     except ValueError as exc:
         raise LLMError("LLM returned non-JSON response.") from exc
     _log_usage("anthropic", request_label, model, body.get("usage"), usage_collector)
+
+    # Anthropic sets stop_reason="max_tokens" when output was clipped at the
+    # max_tokens cap. Surface this as a distinct retryable error so callers
+    # see a clean diagnostic instead of a downstream "invalid JSON" parse
+    # failure on a truncated response.
+    stop_reason = str(body.get("stop_reason") or "").strip().lower()
+    if stop_reason == "max_tokens":
+        usage = body.get("usage") or {}
+        logger.warning(
+            "creator.llm_max_tokens_hit label=%s model=%s output_tokens=%s max_tokens=%s",
+            request_label,
+            model,
+            usage.get("output_tokens"),
+            max_tokens,
+        )
+        raise LLMError(
+            f"LLM hit max_tokens cap ({max_tokens}) for {request_label}; output was clipped."
+        )
 
     content_blocks = body.get("content")
     if isinstance(content_blocks, list):

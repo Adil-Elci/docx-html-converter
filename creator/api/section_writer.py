@@ -27,10 +27,15 @@ logger = logging.getLogger("creator.section_writer")
 
 DEFAULT_SECTION_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
-DEFAULT_TIMEOUT_SECONDS = 90
-DEFAULT_MAX_TOKENS = 4000
+DEFAULT_TIMEOUT_SECONDS = 120
+# 8000 tokens fits the largest realistic section: ~600 German words of
+# rich HTML (tables, lists, examples) + the JSON envelope. Earlier 4000
+# clipped on long sections under the new 1000-3000 word_count_target,
+# producing truncated JSON the parser couldn't repair.
+DEFAULT_MAX_TOKENS = 8000
 DEFAULT_TEMPERATURE = 0.4
 DEFAULT_PARALLEL_WORKERS = 4
+DEFAULT_RETRIES = 2  # 3 total attempts on this critical phase
 PROMPT_NAME = "section_writer"
 
 
@@ -189,6 +194,10 @@ def write_section(
             # Sections share a long stable system prompt; ephemeral cache means
             # only the first section in a batch pays full input-token price.
             cache_system=True,
+            # Sections are the most failure-prone phase under the new
+            # 1000-3000 word target; give the LLM 3 total attempts before
+            # the whole pipeline fails.
+            retries=DEFAULT_RETRIES,
         )
     except LLMError:
         raise

@@ -91,12 +91,13 @@ def test_extract_json_handles_surrounding_text_and_smart_quotes():
     assert payload["anchor_text_final"] == "Zur Quelle"
 
 
-def _anthropic_response(text: str = '{"foo":"bar"}') -> MagicMock:
+def _anthropic_response(text: str = '{"foo":"bar"}', stop_reason: str = "end_turn") -> MagicMock:
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
         "content": [{"type": "text", "text": text}],
         "usage": {"input_tokens": 100, "output_tokens": 20},
+        "stop_reason": stop_reason,
     }
     return response
 
@@ -157,6 +158,35 @@ def test_is_retryable_error_includes_invalid_json_and_missing_content():
     assert _is_retryable_error(LLMError("LLM response missing content.")) is True
     assert _is_retryable_error(LLMError("LLM HTTP 503: x")) is True
     assert _is_retryable_error(LLMError("LLM HTTP 400: bad request")) is False
+
+
+def test_is_retryable_error_includes_max_tokens_cap():
+    """A max_tokens hit deserves a retry — sometimes the model briefly went
+    verbose and a second attempt fits."""
+    assert _is_retryable_error(LLMError("LLM hit max_tokens cap (4000) for x; output was clipped.")) is True
+
+
+def test_call_anthropic_raises_distinct_error_on_max_tokens_stop():
+    """When Anthropic returns stop_reason='max_tokens' the response is
+    truncated; surface a clean, retryable error instead of a downstream
+    'invalid JSON' parse failure on the clipped string."""
+
+    def fake_post(url, headers, json, timeout):
+        return _anthropic_response('{"foo": "ba', stop_reason="max_tokens")
+
+    with patch("creator.api.llm.requests.post", side_effect=fake_post):
+        with pytest.raises(LLMError, match="max_tokens cap"):
+            _call_anthropic(
+                system_prompt="x",
+                user_prompt="y",
+                api_key="k",
+                base_url="https://api.anthropic.com/v1",
+                model="claude-sonnet-4-6",
+                timeout_seconds=30,
+                max_tokens=500,
+                temperature=0.3,
+                request_label="test",
+            )
 
 
 def test_call_llm_json_retries_once_on_invalid_json(monkeypatch):

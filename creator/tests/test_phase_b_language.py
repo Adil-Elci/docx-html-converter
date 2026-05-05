@@ -159,6 +159,45 @@ class TestContractGeneratorLanguage:
         assert "ZIEL-KEYWORD" in prompt
         assert "MOT-CLÉ CIBLE" not in prompt
 
+    def test_build_user_prompt_includes_current_year_de(self):
+        payload = ResearchPayload(
+            target_keyword="steuerberater hamburg",
+            location_code=2276,
+            language_code="de",
+        )
+        prompt = build_user_prompt(
+            payload, target_backlink_url="https://x.de/y", current_year=2026
+        )
+        assert "AKTUELLES JAHR: 2026" in prompt
+
+    def test_build_user_prompt_includes_current_year_fr(self):
+        payload = ResearchPayload(
+            target_keyword="expert-comptable paris",
+            location_code=2250,
+            language_code="fr",
+        )
+        prompt = build_user_prompt(
+            payload,
+            target_backlink_url="https://x.fr/y",
+            language="fr",
+            current_year=2026,
+        )
+        # NB: matches the existing FR-template convention (no thin space before
+        # colon for the static label/value lines; the headers do use it).
+        assert "ANNÉE EN COURS: 2026" in prompt
+
+    def test_build_user_prompt_defaults_year_to_today(self):
+        from datetime import datetime, timezone
+
+        payload = ResearchPayload(
+            target_keyword="kw",
+            location_code=2276,
+            language_code="de",
+        )
+        prompt = build_user_prompt(payload, target_backlink_url="https://x.de/y")
+        # No current_year passed -> uses today's UTC year
+        assert f"AKTUELLES JAHR: {datetime.now(timezone.utc).year}" in prompt
+
     def test_generate_contract_routes_french_prompt(self):
         captured: dict = {}
 

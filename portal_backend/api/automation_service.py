@@ -1466,21 +1466,37 @@ def _build_creator_output_for_v2(
     }
 
 
+_IMAGE_STYLE_DIRECTIVES = (
+    "Hyperrealistic editorial photograph, professional photography, "
+    "natural lighting, shallow depth of field, ultra-detailed, photorealistic, 8k."
+)
+_IMAGE_NEGATIVE_DIRECTIVES = (
+    "No text, no letters, no words, no captions, no signage, no watermarks, "
+    "no logos, no typography of any kind, no UI elements, no overlays."
+)
+
+
 def _build_image_prompt_from_contract(contract: Dict[str, Any]) -> str:
     """Templated featured-image prompt for v2 articles.
 
-    No LLM call: the contract already has h1 + meta_description, both crafted
-    by Sonnet 4.6 and English-friendly enough for Leonardo. Adding an LLM
+    No LLM call: the contract already has h1 + meta_description. Adding an LLM
     prompt-rewrite step would burn tokens for marginal gain.
+
+    Two style/negative directive blocks are appended so Flux Schnell
+    consistently produces hyperrealistic photography and avoids hallucinated
+    text/typography artifacts (Flux is much better than older models at
+    *not* generating text when explicitly told not to).
     """
 
     h1 = str(contract.get("h1") or contract.get("meta_title") or contract.get("target_keyword") or "").strip()
     meta_description = str(contract.get("meta_description") or "").strip()
     if h1 and meta_description:
-        return f"Editorial photo illustrating: {h1}. Context: {meta_description}"
-    if h1:
-        return f"Editorial photo illustrating: {h1}"
-    return f"Editorial photo illustrating: {contract.get('target_keyword') or 'business article'}"
+        subject = f"Editorial photo illustrating: {h1}. Context: {meta_description}"
+    elif h1:
+        subject = f"Editorial photo illustrating: {h1}"
+    else:
+        subject = f"Editorial photo illustrating: {contract.get('target_keyword') or 'business article'}"
+    return f"{subject}\n\nStyle: {_IMAGE_STYLE_DIRECTIVES}\n\nMust not contain: {_IMAGE_NEGATIVE_DIRECTIVES}"
 
 
 def _generate_featured_image_for_v2(
@@ -2202,7 +2218,7 @@ def get_runtime_config() -> Dict[str, Any]:
         "creator_endpoint": os.getenv("AUTOMATION_CREATOR_ENDPOINT", DEFAULT_CREATOR_ENDPOINT).strip(),
         "leonardo_api_key": os.getenv("LEONARDO_API_KEY", "").strip(),
         "leonardo_base_url": os.getenv("LEONARDO_BASE_URL", DEFAULT_LEONARDO_BASE_URL).strip(),
-        "leonardo_model_id": DEFAULT_LEONARDO_MODEL_ID,
+        "leonardo_model_id": os.getenv("LEONARDO_MODEL_ID", DEFAULT_LEONARDO_MODEL_ID).strip(),
         "image_width": read_int("AUTOMATION_IMAGE_WIDTH", DEFAULT_IMAGE_WIDTH),
         "image_height": read_int("AUTOMATION_IMAGE_HEIGHT", DEFAULT_IMAGE_HEIGHT),
         "timeout_seconds": read_int("AUTOMATION_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),

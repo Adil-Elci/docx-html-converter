@@ -7,6 +7,43 @@ import pytest
 from portal_backend.api import automation_service
 
 
+@pytest.fixture(autouse=True)
+def _stub_creator_pre_pipeline_calls(monkeypatch):
+    """The Phase D fit-validation step issues real HTTP calls to the creator
+    service before the contract spend (derive-topic + refine-topic). In unit
+    tests we don't want to hit the network -- stub them with sensible
+    no-op defaults. Tests that need to assert fit-fail behaviour can
+    override the stub explicitly.
+    """
+
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_derive_topic",
+        lambda **kwargs: {
+            "ok": True,
+            "target_keyword": "fallback derived keyword",
+            "language_code": "de",
+            "cache_hit": False,
+        },
+    )
+
+    def _fake_refine(*, target_keyword, **_kwargs):
+        return {
+            "ok": True,
+            "refined_keyword": target_keyword,
+            "original_keyword": target_keyword,
+            "changed": False,
+            "confidence": 0.9,
+            "rationale": "stubbed",
+        }
+
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_refine_topic_for_publisher",
+        _fake_refine,
+    )
+
+
 def test_wp_check_site_access_creates_and_cleans_up_probe_assets(monkeypatch) -> None:
     request_calls: list[tuple[str, str, dict[str, object] | None]] = []
     media_calls: list[dict[str, object]] = []
@@ -507,25 +544,39 @@ def test_run_create_article_pipeline_v2_falls_back_to_target_profile_topic(monke
     assert captured_v2["target_keyword"] == "kanzlei berlin"
 
 
-def test_run_create_article_pipeline_v2_passes_none_keyword_for_creator_derivation(monkeypatch):
-    """Phase C: when no topic and no profile fallback, the creator service is
-    called with target_keyword=None and is expected to derive it from the
-    target_site_url itself."""
+def test_run_create_article_pipeline_v2_derives_topic_upfront_when_missing(monkeypatch):
+    """Phase D: when no topic and no profile fallback, portal_backend calls
+    /v2/derive-topic BEFORE /v2/run-pipeline so the publisher-fit refiner can
+    run against the derived keyword without wasting the contract budget."""
 
     captured_v2 = {}
+    captured_derive: dict[str, object] = {}
+
+    def fake_derive(**kwargs):
+        captured_derive.update(kwargs)
+        return {
+            "ok": True,
+            "target_keyword": "günstige brillen online kaufen",
+            "language_code": "de",
+            "cache_hit": False,
+        }
 
     def fake_v2(**kwargs):
         captured_v2.update(kwargs)
         return _v2_response_with_sections()
 
+    monkeypatch.setattr(automation_service, "call_creator_v2_derive_topic", fake_derive)
     monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
     monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
 
     automation_service._run_create_article_pipeline_v2(
         **_common_v2_pipeline_kwargs(topic=None, target_profile_payload={}),
     )
-    assert captured_v2["target_keyword"] is None
-    assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
+    # Portal_backend resolves the keyword upfront via /v2/derive-topic, then
+    # passes it explicitly to /v2/run-pipeline.
+    assert captured_derive["target_url"] == "https://mandant.de/leistungen"
+    assert captured_v2["target_keyword"] == "günstige brillen online kaufen"
+    assert captured_v2["language"] == "de"
 
 
 def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates_and_no_explicit_site(monkeypatch):
@@ -544,6 +595,106 @@ def test_run_create_article_pipeline_v2_raises_when_no_publishing_candidates_and
                 publishing_site_url="",
                 publishing_site_id=None,
                 site_url="",
+            ),
+        )
+
+
+def test_run_create_article_pipeline_v2_refines_topic_for_publisher(monkeypatch):
+    """Phase D: when topic + publisher profile both exist, portal_backend
+    runs the fit refiner BEFORE the contract spend and uses the refined
+    keyword. Reproduces brillenhaus24 -> kidsblatt: target topic is
+    "günstige brillen", publisher is a kids magazine, refiner returns
+    "kinderbrillen" so the article fits the publisher's audience."""
+
+    captured_v2 = {}
+    captured_refine: dict[str, object] = {}
+
+    def fake_refine(**kwargs):
+        captured_refine.update(kwargs)
+        return {
+            "ok": True,
+            "refined_keyword": "kinderbrillen online kaufen",
+            "original_keyword": kwargs.get("target_keyword"),
+            "changed": True,
+            "confidence": 0.78,
+            "rationale": "publisher targets parents",
+        }
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_refine_topic_for_publisher", fake_refine)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            topic="günstige brillen online kaufen",
+            publishing_candidates=[
+                {
+                    "site_url": "https://kidsblatt.de",
+                    "site_id": "k-id",
+                    "fit_score": 30,
+                    "publishing_profile_payload": {
+                        "language": "de",
+                        "primary_context": "kids and family",
+                        "topics": ["parenting", "schule"],
+                    },
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "admin",
+                    "wp_app_password": "pw",
+                    "category_ids": [],
+                    "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
+            ],
+        ),
+    )
+    # Refiner saw the original keyword + the publisher profile.
+    assert captured_refine["target_keyword"] == "günstige brillen online kaufen"
+    assert captured_refine["publishing_profile_payload"]["primary_context"] == "kids and family"
+    # The pipeline call uses the refined keyword, not the original.
+    assert captured_v2["target_keyword"] == "kinderbrillen online kaufen"
+
+
+def test_run_create_article_pipeline_v2_hard_fails_on_no_publisher_fit(monkeypatch):
+    """Phase D: if the refiner says 'no_editorial_fit', the AutomationError
+    propagates out of call_creator_v2_refine_topic_for_publisher and the
+    contract is never built (no contract spend on a misfit job)."""
+
+    def fake_refine(**kwargs):
+        raise automation_service.AutomationError(
+            "Creator publisher fit failed [no_editorial_fit]: Adult product on a kids-only publisher."
+        )
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_refine_topic_for_publisher", fake_refine)
+    monkeypatch.setattr(
+        automation_service,
+        "call_creator_v2_pipeline",
+        lambda **kwargs: pytest.fail("v2 pipeline should not be called when fit fails"),
+    )
+
+    with pytest.raises(automation_service.AutomationError, match="no_editorial_fit"):
+        automation_service._run_create_article_pipeline_v2(
+            **_common_v2_pipeline_kwargs(
+                topic="adult product xyz",
+                publishing_candidates=[
+                    {
+                        "site_url": "https://kidsblatt.de",
+                        "site_id": "k-id",
+                        "fit_score": 30,
+                        "publishing_profile_payload": {"primary_context": "kids only"},
+                        "wp_rest_base": "/wp-json",
+                        "wp_username": "admin",
+                        "wp_app_password": "pw",
+                        "category_ids": [],
+                        "category_candidates": [],
+                        "internal_link_inventory": [],
+                        "is_general": False,
+                    },
+                ],
             ),
         )
 

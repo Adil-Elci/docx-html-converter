@@ -1041,6 +1041,97 @@ def call_creator_pair_fit(
     )
 
 
+def call_creator_v2_derive_topic(
+    *,
+    creator_endpoint: str,
+    target_url: str,
+    timeout_seconds: int = 60,
+) -> Dict[str, Any]:
+    """POST to the creator service's /v2/derive-topic endpoint.
+
+    Used when the webhook didn't provide an explicit topic so we can run
+    the publisher-fit validation BEFORE spending the contract budget.
+    Returns the full ``DerivedTopic`` payload as a dict; raises
+    ``AutomationError`` with the stable derivation code on failure.
+    """
+
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    body = {"target_url": target_url}
+    url = creator_endpoint.rstrip("/") + "/v2/derive-topic"
+    try:
+        response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
+    except requests.RequestException as exc:
+        raise AutomationError(f"Creator derive-topic request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError(
+            f"Creator derive-topic returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
+        ) from exc
+
+    if response.status_code == 422 and isinstance(payload, dict) and payload.get("error") == "topic_derivation_failed":
+        code = str(payload.get("code") or "derivation_failed")
+        message = str(payload.get("message") or "Topic derivation failed.")
+        raise AutomationError(f"Creator topic derivation failed [{code}]: {message}")
+    if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+        raise AutomationError(
+            f"Creator derive-topic unexpected response (HTTP {response.status_code}): {str(payload)[:300]}"
+        )
+    return payload
+
+
+def call_creator_v2_refine_topic_for_publisher(
+    *,
+    creator_endpoint: str,
+    target_keyword: str,
+    publishing_profile_payload: Optional[Dict[str, Any]],
+    language: str = "de",
+    min_confidence: float = 0.4,
+    timeout_seconds: int = 60,
+) -> Dict[str, Any]:
+    """POST to the creator service's /v2/refine-topic-for-publisher endpoint.
+
+    Returns the parsed verdict dict. Raises ``AutomationError`` when the
+    creator service hard-fails the topic-vs-publisher fit (no editorial
+    intersection or confidence below threshold) -- the message includes
+    the rationale so the admin portal can render it verbatim.
+    """
+
+    if not creator_endpoint:
+        raise AutomationError("Creator endpoint is not configured.")
+    body: Dict[str, Any] = {
+        "target_keyword": target_keyword,
+        "language": language,
+        "min_confidence": min_confidence,
+    }
+    if publishing_profile_payload:
+        body["publishing_profile_payload"] = publishing_profile_payload
+    url = creator_endpoint.rstrip("/") + "/v2/refine-topic-for-publisher"
+    try:
+        response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
+    except requests.RequestException as exc:
+        raise AutomationError(f"Creator publisher-fit request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError(
+            f"Creator publisher-fit returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
+        ) from exc
+
+    if response.status_code == 422 and isinstance(payload, dict) and payload.get("error") == "publisher_fit_failed":
+        code = str(payload.get("code") or "fit_failed")
+        message = str(payload.get("message") or "Publisher fit failed.")
+        raise AutomationError(f"Creator publisher fit failed [{code}]: {message}")
+    if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+        raise AutomationError(
+            f"Creator publisher-fit unexpected response (HTTP {response.status_code}): {str(payload)[:300]}"
+        )
+    return payload
+
+
 def call_creator_v2_pipeline(
     *,
     creator_endpoint: str,
@@ -1604,8 +1695,9 @@ def _run_create_article_pipeline_v2(
     publishing_candidates: Optional[List[Dict[str, Any]]],
     internal_link_inventory: Optional[List[Dict[str, Any]]],
     target_profile_payload: Optional[Dict[str, Any]],
-    anchor: Optional[str],
-    topic: Optional[str],
+    publishing_profile_payload: Optional[Dict[str, Any]] = None,
+    anchor: Optional[str] = None,
+    topic: Optional[str] = None,
     site_url: str,
     wp_rest_base: str,
     wp_username: str,
@@ -1641,10 +1733,44 @@ def _run_create_article_pipeline_v2(
         raise AutomationError("Creator v2 pipeline requires target_site_url for the backlink.")
 
     # Topic is optional in Phase C: if the webhook didn't provide it and the
-    # target profile doesn't carry it, the creator service will derive it from
-    # the target_site_url itself.
+    # target profile doesn't carry it, fall back to the creator's
+    # /v2/derive-topic endpoint (returns keyword + language). We derive
+    # upfront so the fit validator can run BEFORE the contract spend.
     profile_topic = (topic or "").strip() or _derive_keyword_from_target_profile(target_profile_payload)
     upfront_target_keyword: Optional[str] = profile_topic or None
+    upfront_language: Optional[str] = None
+    derivation_payload: Optional[Dict[str, Any]] = None
+
+    if not upfront_target_keyword:
+        try:
+            derivation_payload = call_creator_v2_derive_topic(
+                creator_endpoint=creator_endpoint,
+                target_url=target_site_url,
+                timeout_seconds=min(60, creator_timeout_seconds),
+            )
+        except AutomationError as exc:
+            _trace(
+                "warning",
+                "topic_derivation",
+                "failed",
+                "Creator topic derivation failed; proceeding without upfront topic.",
+                {"error": str(exc)[:300]},
+            )
+            derivation_payload = None
+        if derivation_payload:
+            upfront_target_keyword = str(derivation_payload.get("target_keyword") or "").strip() or None
+            upfront_language = str(derivation_payload.get("language_code") or "").strip().lower() or None
+            _trace(
+                "info",
+                "topic_derivation",
+                "complete",
+                "Topic derived from target URL.",
+                {
+                    "target_keyword": upfront_target_keyword,
+                    "language_code": upfront_language,
+                    "cache_hit": bool(derivation_payload.get("cache_hit")),
+                },
+            )
 
     # The user can either let the worker auto-discover candidates from
     # publishing sites associated with the client target, OR pick a specific
@@ -1663,7 +1789,12 @@ def _run_create_article_pipeline_v2(
                 "fit_score": 50,  # neutral; explicit selection bypasses topical fit anyway
                 "notes": ["explicit_user_selection"],
                 "internal_link_inventory": list(internal_link_inventory or []),
-                "publishing_profile_payload": {},
+                # Populate the profile payload from the webhook context if it
+                # was passed in (worker loads it from SiteProfileCache for the
+                # selected publishing site). Without this, fit-validation has
+                # no signal and silently passes mismatched topic/publisher
+                # pairs (the brillenhaus24 -> kidsblatt regression).
+                "publishing_profile_payload": dict(publishing_profile_payload or {}),
                 "wp_rest_base": wp_rest_base,
                 "wp_username": wp_username,
                 "wp_app_password": wp_app_password,
@@ -1685,6 +1816,59 @@ def _run_create_article_pipeline_v2(
             "target site with at least one publishing site."
         )
 
+    # Fit-validation: with a topic in hand and a publisher profile available,
+    # validate the editorial intersection BEFORE spending the contract budget.
+    # The Haiku-driven refiner either confirms the topic, refines it to fit
+    # the publisher's audience (e.g. brillen -> kinderbrillen on a kids site),
+    # or hard-fails when there's no genuine overlap.
+    fit_profile_payload: Dict[str, Any] = {}
+    for candidate in effective_candidates:
+        cand_profile = candidate.get("publishing_profile_payload") or {}
+        if cand_profile:
+            fit_profile_payload = dict(cand_profile)
+            break
+    fit_language = upfront_language or "de"
+    if upfront_target_keyword and fit_profile_payload:
+        try:
+            fit_payload = call_creator_v2_refine_topic_for_publisher(
+                creator_endpoint=creator_endpoint,
+                target_keyword=upfront_target_keyword,
+                publishing_profile_payload=fit_profile_payload,
+                language=fit_language,
+                timeout_seconds=min(60, creator_timeout_seconds),
+            )
+            refined = str(fit_payload.get("refined_keyword") or "").strip()
+            if refined and refined != upfront_target_keyword:
+                _trace(
+                    "info",
+                    "publisher_fit",
+                    "refined",
+                    "Topic refined to fit the publishing site's audience.",
+                    {
+                        "original": upfront_target_keyword,
+                        "refined": refined,
+                        "confidence": fit_payload.get("confidence"),
+                        "rationale": fit_payload.get("rationale"),
+                    },
+                )
+                upfront_target_keyword = refined
+            else:
+                _trace(
+                    "info",
+                    "publisher_fit",
+                    "ok",
+                    "Topic and publisher are a good fit.",
+                    {
+                        "keyword": upfront_target_keyword,
+                        "confidence": fit_payload.get("confidence"),
+                    },
+                )
+        except AutomationError as exc:
+            # publisher_fit_failed surfaces as AutomationError -- propagate so
+            # the admin sees the verbatim "no editorial fit" message instead
+            # of a wasted contract spend producing a misfit article.
+            raise
+
     _trace(
         "info",
         "creator_v2",
@@ -1700,6 +1884,7 @@ def _run_create_article_pipeline_v2(
         target_keyword=upfront_target_keyword,
         target_backlink_url=target_site_url,
         publishing_site_url=None,  # late-bind below
+        language=upfront_language,
         anchor_hint=anchor,
         timeout_seconds=creator_timeout_seconds,
     )
@@ -2012,6 +2197,7 @@ def run_create_article_pipeline(
         publishing_candidates=publishing_candidates,
         internal_link_inventory=internal_link_inventory,
         target_profile_payload=target_profile_payload,
+        publishing_profile_payload=publishing_profile_payload,
         anchor=anchor,
         topic=topic,
         site_url=site_url,

@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field
 
 from .models import ErrorResponse
 from .pipeline_runner import PipelineError, PipelineRun, run_pipeline
+from .publisher_fit import (
+    FitVerdict,
+    PublisherFitError,
+    validate_or_refine_topic_for_publisher,
+)
 from .topic_derivation import (
     DEFAULT_ALLOWED_LANGUAGES,
     DerivedTopic,
@@ -72,6 +77,65 @@ async def health() -> JSONResponse:
     )
     payload = {"ok": llm_ready, "llm_ready": llm_ready}
     return JSONResponse(status_code=200 if llm_ready else 503, content=payload)
+
+
+# ---- v2: validate/refine topic for a publishing site ---------------------
+
+
+class V2RefineTopicForPublisherRequest(BaseModel):
+    target_keyword: str = Field(..., min_length=2)
+    publishing_profile_payload: Optional[dict] = None
+    language: str = "de"
+    min_confidence: float = 0.4
+
+
+def _serialize_fit_verdict(v: FitVerdict) -> dict:
+    return {
+        "ok": True,
+        "refined_keyword": v.refined_keyword,
+        "original_keyword": v.original_keyword,
+        "changed": v.changed,
+        "confidence": v.confidence,
+        "rationale": v.rationale,
+        "cost_usd": v.cost_usd,
+    }
+
+
+@app.post("/v2/refine-topic-for-publisher")
+async def v2_refine_topic_for_publisher(payload: V2RefineTopicForPublisherRequest) -> JSONResponse:
+    """Validate that a target keyword has an editorial intersection with the
+    publishing site's audience; refine it if needed; hard-fail when no fit.
+
+    Used by portal_backend before the contract step on the v2 path so we
+    don't waste the contract budget on a topic the publisher would reject.
+    Returns ``422`` with stable codes ``no_editorial_fit`` /
+    ``fit_below_threshold`` when the topic and publisher are a poor match.
+    """
+
+    try:
+        verdict = validate_or_refine_topic_for_publisher(
+            target_keyword=payload.target_keyword,
+            publishing_profile_payload=payload.publishing_profile_payload,
+            language=payload.language,
+            min_confidence=payload.min_confidence,
+        )
+    except PublisherFitError as exc:
+        logger.warning(
+            "creator.refine_topic_failed code=%s message=%s",
+            exc.code,
+            str(exc),
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "error": "publisher_fit_failed",
+                "code": exc.code,
+                "message": str(exc),
+            },
+        )
+
+    return JSONResponse(status_code=200, content=_serialize_fit_verdict(verdict))
 
 
 # ---- v2: end-to-end pipeline ----------------------------------------------

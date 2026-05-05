@@ -1466,14 +1466,35 @@ def _build_creator_output_for_v2(
     }
 
 
-_IMAGE_STYLE_DIRECTIVES = (
+IMAGE_STYLE_DIRECTIVES = (
     "Hyperrealistic editorial photograph, professional photography, "
     "natural lighting, shallow depth of field, ultra-detailed, photorealistic, 8k."
 )
-_IMAGE_NEGATIVE_DIRECTIVES = (
+IMAGE_NEGATIVE_DIRECTIVES = (
     "No text, no letters, no words, no captions, no signage, no watermarks, "
     "no logos, no typography of any kind, no UI elements, no overlays."
 )
+# Marker we emit at the top of every directive block. Used to detect
+# already-styled prompts and avoid double-appending.
+_IMAGE_STYLE_MARKER = "Hyperrealistic editorial photograph"
+
+
+def apply_image_style_directives(prompt: str) -> str:
+    """Append the Flux Schnell style + negative directives to a subject prompt.
+
+    Idempotent: if the prompt already contains the style marker (because it
+    was produced by ``_build_image_prompt_from_contract`` on a v2 job), it's
+    returned unchanged. This lets the regenerate-image endpoint reuse a
+    stored prompt from a JobEvent without double-appending directives, while
+    still upgrading old prompts (or the generic fallback) to the new style.
+    """
+
+    text = (prompt or "").strip()
+    if not text:
+        return f"Editorial photo.\n\nStyle: {IMAGE_STYLE_DIRECTIVES}\n\nMust not contain: {IMAGE_NEGATIVE_DIRECTIVES}"
+    if _IMAGE_STYLE_MARKER in text:
+        return text
+    return f"{text}\n\nStyle: {IMAGE_STYLE_DIRECTIVES}\n\nMust not contain: {IMAGE_NEGATIVE_DIRECTIVES}"
 
 
 def _build_image_prompt_from_contract(contract: Dict[str, Any]) -> str:
@@ -1496,7 +1517,7 @@ def _build_image_prompt_from_contract(contract: Dict[str, Any]) -> str:
         subject = f"Editorial photo illustrating: {h1}"
     else:
         subject = f"Editorial photo illustrating: {contract.get('target_keyword') or 'business article'}"
-    return f"{subject}\n\nStyle: {_IMAGE_STYLE_DIRECTIVES}\n\nMust not contain: {_IMAGE_NEGATIVE_DIRECTIVES}"
+    return apply_image_style_directives(subject)
 
 
 def _generate_featured_image_for_v2(

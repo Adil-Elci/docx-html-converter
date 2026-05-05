@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..auth import ensure_client_access, ensure_site_access, get_current_user, is_admin, require_admin, user_client_ids
 from ..automation_service import (
     AutomationError,
+    apply_image_style_directives,
     download_binary_file,
     generate_image_via_leonardo,
     get_runtime_config,
@@ -995,7 +996,11 @@ def regenerate_pending_job_image(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     post_title = _extract_post_title(post_payload, fallback=f"Draft #{int(job.wp_post_id)}")
-    image_prompt = _resolve_job_image_prompt(db, job.id, fallback_title=post_title)
+    raw_prompt = _resolve_job_image_prompt(db, job.id, fallback_title=post_title)
+    # Idempotently ensure the Flux Schnell hyperrealistic + no-text directives
+    # are applied. v2 prompts already include them and pass through unchanged;
+    # legacy prompts and the generic fallback get upgraded to match.
+    image_prompt = apply_image_style_directives(raw_prompt)
     previous_featured_media_id = post_payload.get("featured_media")
     if not isinstance(previous_featured_media_id, int):
         previous_featured_media_id = None

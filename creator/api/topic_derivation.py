@@ -193,13 +193,71 @@ def _extract_page_text(html: str) -> str:
 
 
 def _normalize_keyword(value: str) -> str:
+    """Lower-case, strip punctuation, collapse whitespace. Does NOT split on
+    separators -- the caller now keeps both sides of '<brand> – <topic>'
+    titles as separate candidates and lets the brand filter decide.
+    """
+
     cleaned = re.sub(r"\s+", " ", (value or "")).strip().lower()
     cleaned = re.sub(r"[‐-―]", "-", cleaned)  # unicode hyphens
-    # Trim site-name suffixes commonly appended to <title>: " | Brand", " - Brand"
-    cleaned = re.split(r"\s+[\|\-–—]\s+", cleaned)[0].strip()
     cleaned = re.sub(r"[^\w\s\-'äöüßàâçéèêëîïôûùüÿœæ]", " ", cleaned, flags=re.UNICODE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+def _split_on_separator(value: str) -> List[str]:
+    """Split a title-like string on common brand-vs-topic separators
+    (` | `, ` - `, ` – `, ` — `) and return both sides if present.
+    """
+
+    parts = re.split(r"\s+[\|\-–—]\s+", (value or "").strip())
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _brand_tokens_from_url(url: str) -> set[str]:
+    """Extract brand-name tokens from the URL hostname.
+
+    For ``https://www.brillenhaus24.de`` this returns ``{"brillenhaus24"}``.
+    For multi-part hosts like ``shop.example.co.uk`` it returns
+    ``{"shop", "example"}``. We use these to filter candidate keywords --
+    a guest-post article should be ABOUT a topic the audience searches for,
+    not the client's brand name.
+    """
+
+    parsed = urlparse(url if "://" in (url or "") else f"https://{url}")
+    host = (parsed.netloc or "").strip().lower()
+    if not host:
+        return set()
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    # Drop the TLD and common second-level country suffixes (.co.uk, .com.au)
+    if len(parts) >= 3 and parts[-2] in {"co", "com", "org", "net", "ac"}:
+        parts = parts[:-2]
+    elif len(parts) >= 2:
+        parts = parts[:-1]
+    return {p for p in parts if p and len(p) >= 3}
+
+
+def _is_brand_only_keyword(keyword: str, brand_tokens: set[str]) -> bool:
+    """True when the keyword is dominantly the brand name (no real topic).
+
+    Tokens of the keyword that don't match the brand and don't look like
+    common boilerplate (de, com, online, shop, ...) count as "topic
+    content". A keyword is considered brand-only if it has at most one
+    such token. Examples for brand_tokens={"brillenhaus24"}:
+      - "brillenhaus24"          -> True
+      - "brillenhaus24.de"       -> True (".de" is just a TLD fragment)
+      - "brillenhaus24 online shop" -> True (only stop-ish tokens left)
+      - "günstige brillen online kaufen" -> False (3 topic tokens)
+    """
+
+    if not brand_tokens:
+        return False
+    boilerplate = {"de", "fr", "com", "org", "net", "online", "shop", "store", "site", "web", "page"}
+    tokens = re.findall(r"[a-zäöüßàâçéèêëîïôûùüÿœæ0-9]+", (keyword or "").lower())
+    topic_tokens = [t for t in tokens if t not in brand_tokens and t not in boilerplate and len(t) >= 3]
+    return len(topic_tokens) <= 1 and any(t in brand_tokens for t in tokens)
 
 
 def _slug_to_keyword(url: str) -> str:
@@ -213,9 +271,16 @@ def _slug_to_keyword(url: str) -> str:
 
 
 def _extract_deterministic_candidates(html: str, target_url: str) -> List[Tuple[str, str]]:
-    """Returns [(keyword, source)] in priority order, deduped."""
+    """Returns [(keyword, source)] in priority order, deduped.
+
+    For title-like fields with brand-vs-topic separators (e.g.
+    "Brand – Topic Description"), BOTH sides are pushed as candidates so
+    the topic side can win even when the brand appears first. Brand-only
+    candidates (derived from the URL hostname) are filtered out at the end.
+    """
 
     soup = BeautifulSoup(html or "", "lxml")
+    brand_tokens = _brand_tokens_from_url(target_url)
     out: List[Tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -228,12 +293,18 @@ def _extract_deterministic_candidates(html: str, target_url: str) -> List[Tuple[
         seen.add(normalized)
         out.append((normalized, source))
 
+    def push_split(value: str, source: str) -> None:
+        # Push the original first (often shorter brand chunk), then split
+        # parts so the topic side gets in even if it's after a separator.
+        for part in _split_on_separator(value):
+            push(part, source)
+
     if soup.title and soup.title.string:
-        push(str(soup.title.string), "title")
+        push_split(str(soup.title.string), "title")
 
     for tag_name, source_label in (("h1", "h1"), ("h2", "h2")):
         for tag in soup.find_all(tag_name)[:3]:
-            push(tag.get_text(" ", strip=True), source_label)
+            push_split(tag.get_text(" ", strip=True), source_label)
 
     for attr, value in (
         ("property", "og:title"),
@@ -241,13 +312,14 @@ def _extract_deterministic_candidates(html: str, target_url: str) -> List[Tuple[
     ):
         meta = soup.find("meta", attrs={attr: value})
         if meta and meta.get("content"):
-            push(str(meta.get("content")), "og")
+            push_split(str(meta.get("content")), "og")
 
     slug = _slug_to_keyword(target_url)
     if slug:
         push(slug, "slug")
 
-    return out[:MAX_CANDIDATES_TO_RANK]
+    filtered = [(kw, src) for kw, src in out if not _is_brand_only_keyword(kw, brand_tokens)]
+    return filtered[:MAX_CANDIDATES_TO_RANK]
 
 
 # ---- Haiku fallback for keyword extraction --------------------------------
@@ -258,7 +330,12 @@ _HAIKU_SYSTEM_PROMPT = (
     "Return JSON: {\"primary\": <string>, \"alternates\": [<string>, <string>]}. "
     "Rules: keyword MUST be in the requested language; 2-5 words; "
     "noun-phrase only (no questions, no full sentences); lowercase; "
-    "must reflect the page's main commercial topic, not boilerplate."
+    "must reflect the page's main commercial topic, not boilerplate. "
+    "CRITICAL: never return the brand name, company name, or domain "
+    "as the keyword. Return what a USER would type into Google to find "
+    "this kind of product or service (e.g. 'günstige brillen online "
+    "kaufen', not 'brillenhaus24'; 'expert-comptable paris', not "
+    "'cabinet dupont')."
 )
 
 
@@ -549,17 +626,26 @@ def derive_topic(
                 notes.append(f"haiku_failed:{str(exc)[:80]}")
 
     # Build merged candidate list, preserving source labels.
+    brand_tokens = _brand_tokens_from_url(cleaned_url)
     merged: List[Tuple[str, str]] = list(deterministic)
     seen = {kw for kw, _ in merged}
     for kw in haiku_keywords:
-        if kw and kw not in seen:
-            merged.append((kw, "haiku"))
-            seen.add(kw)
+        if not kw or kw in seen:
+            continue
+        # Defensive filter: if Haiku returned the brand despite the prompt,
+        # drop it. The deterministic path already filters but Haiku output
+        # is independent.
+        if _is_brand_only_keyword(kw, brand_tokens):
+            notes.append(f"haiku_brand_filtered:{kw}")
+            continue
+        merged.append((kw, "haiku"))
+        seen.add(kw)
 
     if not merged:
         raise TopicDerivationError(
             "no_candidates",
-            "Could not extract any keyword candidates from the target page.",
+            "Could not extract any topic-focused keyword candidates from the target page "
+            "(only brand/domain matches found).",
         )
 
     merged = merged[:MAX_CANDIDATES_TO_RANK]

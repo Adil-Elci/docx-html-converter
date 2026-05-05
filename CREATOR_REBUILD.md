@@ -149,8 +149,10 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 
 ## Deferred items / follow-ups
 
-- **Live env file cleanup** — done out-of-tree by the user via Dokploy. The audit produced this list (post-Phase-7d). On the live `portal_backend` env, delete: `CREATOR_SUPERVISOR_PIPELINE_ENABLED`, `CREATOR_PIPELINE_MODE`, `CREATOR_{SUPERVISOR,WRITER,CRITIC,REPAIR}_LLM_MODEL`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` (these only belong on creator). On the live `creator` env, delete: `CREATOR_SUPERVISOR_PIPELINE_ENABLED`, `CREATOR_PIPELINE_MODE`, `LEONARDO_API_KEY` (image step is portal-side), `CREATOR_HTTP_TIMEOUT_SECONDS`, `CREATOR_LLM_BASE_URL`, `CREATOR_LLM_API_KEY`, `CREATOR_LLM_MODEL_PLANNING`, `CREATOR_LLM_MODEL_WRITING`, `CREATOR_LLM_RETRIES`, plus all the `#CREATOR_*` commented lines. **Load-bearing keys to keep**: portal — `DATABASE_URL`, `WP_CREDENTIAL_ENCRYPTION_KEY`, `TRUSTED_PROXY_IPS`, `ANTHROPIC_API_KEY`, `LEONARDO_API_KEY`, all `AUTH_*`/`SMTP_*`, `CORS_ORIGINS`, `AUTOMATION_CREATOR_ENDPOINT`, `AUTOMATION_JOB_MAX_ATTEMPTS`, `AUTOMATION_LOG_LEVEL`; creator — `DATABASE_URL`, `ANTHROPIC_API_KEY`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `PORT`.
-- **Delete orphan creator modules** — `creator/api/llm_provider.py`, `creator/api/trend_cache.py`, `creator/api/site_fit_cache.py` are not imported anywhere after Phase 7d. They're 4llm-era leftovers. Their DB tables (`keyword_trend_cache`, `site_fit_cache`) can remain — they're orphan rows, not blocking. Pure code cleanup; do whenever convenient.
+- ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
+- ✅ **Delete orphan creator modules** — removed `creator/api/llm_provider.py`, `creator/api/trend_cache.py`, `creator/api/site_fit_cache.py` (zero importers after Phase 7d). DB tables (`keyword_trend_cache`, `site_fit_cache`) left in place — orphan rows, not blocking; can be dropped via a future migration if disk pressure shows up.
+
+The creator rebuild and its post-Phase-7 cleanup are now complete. No open follow-ups.
 
 ## External services & env vars
 

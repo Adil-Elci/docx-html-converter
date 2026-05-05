@@ -3,6 +3,35 @@ from __future__ import annotations
 from portal_backend.api.creator_history import collect_recent_creator_history
 
 
+def test_collect_recent_creator_history_reads_v2_contract_fields() -> None:
+    """v2 jobs store the topic under phase3.target_keyword.keyword and
+    pipeline_state.contract.target_keyword. Earlier the collector only read
+    legacy 4llm fields, so v2 jobs silently contributed nothing to dedup.
+    This test pins the v2 path."""
+
+    history = collect_recent_creator_history(
+        [
+            {
+                "phase3": {
+                    "target_keyword": {"keyword": "kurzsichtigkeit kinder"},
+                },
+                "phase5": {
+                    "title": "Kurzsichtigkeit bei Kindern: Warum mehr Grundschüler eine Brille brauchen",
+                    "meta_title": "Kurzsichtigkeit bei Kindern 2026 — was Eltern wissen sollten",
+                },
+                "pipeline_state": {
+                    "contract": {
+                        "target_keyword": "kurzsichtigkeit kinder",
+                        "h1": "Kurzsichtigkeit bei Kindern: Warum mehr Grundschüler eine Brille brauchen",
+                    },
+                },
+            },
+        ],
+    )
+    assert "kurzsichtigkeit kinder" in history["exclude_topics"]
+    assert any("Kurzsichtigkeit" in title for title in history["recent_article_titles"])
+
+
 def test_collect_recent_creator_history_merges_topics_and_titles_without_duplicates() -> None:
     history = collect_recent_creator_history(
         [

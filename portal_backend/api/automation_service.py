@@ -1087,9 +1087,12 @@ def call_creator_v2_brainstorm_topics(
     creator_endpoint: str,
     target_url: str,
     target_keyword: str,
-    publishing_profile_payload: Optional[Dict[str, Any]],
+    publisher_url: Optional[str] = None,
+    publishing_profile_payload: Optional[Dict[str, Any]] = None,
     language: str = "de",
     num_angles: int = 5,
+    exclude_topics: Optional[List[str]] = None,
+    use_cache: bool = True,
     timeout_seconds: int = 90,
 ) -> Dict[str, Any]:
     """POST to the creator service's /v2/brainstorm-topics endpoint.
@@ -1107,9 +1110,14 @@ def call_creator_v2_brainstorm_topics(
         "target_keyword": target_keyword,
         "language": language,
         "num_angles": num_angles,
+        "use_cache": use_cache,
     }
+    if publisher_url:
+        body["publisher_url"] = publisher_url
     if publishing_profile_payload:
         body["publishing_profile_payload"] = publishing_profile_payload
+    if exclude_topics:
+        body["exclude_topics"] = list(exclude_topics)
     url = creator_endpoint.rstrip("/") + "/v2/brainstorm-topics"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
@@ -1753,6 +1761,7 @@ def _run_create_article_pipeline_v2(
     publishing_profile_payload: Optional[Dict[str, Any]] = None,
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
+    exclude_topics: Optional[List[str]] = None,
     site_url: str,
     wp_rest_base: str,
     wp_username: str,
@@ -1932,14 +1941,26 @@ def _run_create_article_pipeline_v2(
     editorial_angle: Optional[Dict[str, Any]] = None
     explicit_topic_present = bool((topic or "").strip() or profile_topic)
     if upfront_target_keyword and not explicit_topic_present:
+        # Pull the publisher URL from the chosen / first effective candidate;
+        # this gives the brainstorm cache its second key dimension so we
+        # cache per (target, publisher) pair.
+        brainstorm_publisher_url: Optional[str] = None
+        for candidate in effective_candidates:
+            url_value = str(candidate.get("site_url") or "").strip()
+            if url_value:
+                brainstorm_publisher_url = url_value
+                break
         try:
             brainstorm_payload = call_creator_v2_brainstorm_topics(
                 creator_endpoint=creator_endpoint,
                 target_url=target_site_url,
                 target_keyword=upfront_target_keyword,
+                publisher_url=brainstorm_publisher_url,
                 publishing_profile_payload=fit_profile_payload or None,
                 language=fit_language,
                 num_angles=5,
+                exclude_topics=list(exclude_topics or []),
+                use_cache=True,
                 timeout_seconds=min(120, creator_timeout_seconds),
             )
         except AutomationError as exc:
@@ -1971,6 +1992,8 @@ def _run_create_article_pipeline_v2(
                     {
                         "title": editorial_angle["title"],
                         "target_keyword": upfront_target_keyword,
+                        "cache_hit": bool(brainstorm_payload.get("cache_hit")),
+                        "excluded_count": int(brainstorm_payload.get("excluded_count") or 0),
                         "alternates": [
                             {"title": str(a.get("title") or ""), "target_keyword": str(a.get("target_keyword") or "")}
                             for a in angles[1:]
@@ -2311,6 +2334,7 @@ def run_create_article_pipeline(
         publishing_profile_payload=publishing_profile_payload,
         anchor=anchor,
         topic=topic,
+        exclude_topics=exclude_topics,
         site_url=site_url,
         wp_rest_base=wp_rest_base,
         wp_username=wp_username,

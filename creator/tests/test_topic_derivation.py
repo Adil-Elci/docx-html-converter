@@ -51,11 +51,12 @@ def _http_response(*, status_code: int = 200, body: str = "", content_type: str 
 
 
 class TestNormalizeKeyword:
-    def test_strips_brand_suffix(self):
-        assert td._normalize_keyword("Steuerberater Hamburg | Beispiel GmbH") == "steuerberater hamburg"
-
-    def test_strips_dash_suffix(self):
-        assert td._normalize_keyword("Tax Advisor - Acme") == "tax advisor"
+    def test_keeps_full_string_no_more_dash_split(self):
+        # _normalize_keyword no longer splits on " - "/" – ". The candidate
+        # extractor (_extract_deterministic_candidates) now keeps both sides
+        # of a separator and lets the brand filter decide. The `|` itself is
+        # stripped by the punctuation regex, leaving a flat phrase.
+        assert td._normalize_keyword("Steuerberater Hamburg | Beispiel GmbH") == "steuerberater hamburg beispiel gmbh"
 
     def test_keeps_german_umlauts(self):
         assert td._normalize_keyword("Müller Söhne GmbH") == "müller söhne gmbh"
@@ -65,6 +66,58 @@ class TestNormalizeKeyword:
 
     def test_collapses_whitespace(self):
         assert td._normalize_keyword("  foo   bar  ") == "foo bar"
+
+
+class TestSplitOnSeparator:
+    def test_splits_on_em_dash(self):
+        assert td._split_on_separator("Brillenhaus24.de – Günstige Brillen online kaufen") == [
+            "Brillenhaus24.de",
+            "Günstige Brillen online kaufen",
+        ]
+
+    def test_splits_on_pipe(self):
+        assert td._split_on_separator("Steuerberater Hamburg | Kanzlei Müller") == [
+            "Steuerberater Hamburg",
+            "Kanzlei Müller",
+        ]
+
+    def test_no_separator_returns_single_element(self):
+        assert td._split_on_separator("Steuerberater Hamburg") == ["Steuerberater Hamburg"]
+
+
+class TestBrandFilter:
+    def test_brand_tokens_simple_de(self):
+        assert td._brand_tokens_from_url("https://www.brillenhaus24.de") == {"brillenhaus24"}
+
+    def test_brand_tokens_strips_www(self):
+        assert td._brand_tokens_from_url("https://www.kidsblatt.de/about") == {"kidsblatt"}
+
+    def test_brand_tokens_subdomain_kept(self):
+        # Subdomains can be brand-relevant (shop.example.com -> {"shop", "example"})
+        assert td._brand_tokens_from_url("https://shop.example.de") == {"shop", "example"}
+
+    def test_brand_tokens_co_uk_handled(self):
+        assert td._brand_tokens_from_url("https://acme.co.uk") == {"acme"}
+
+    def test_is_brand_only_keyword_pure_brand(self):
+        assert td._is_brand_only_keyword("brillenhaus24", {"brillenhaus24"}) is True
+
+    def test_is_brand_only_keyword_brand_plus_tld_fragment(self):
+        assert td._is_brand_only_keyword("brillenhaus24.de", {"brillenhaus24"}) is True
+
+    def test_is_brand_only_keyword_brand_plus_boilerplate(self):
+        assert td._is_brand_only_keyword("brillenhaus24 online shop", {"brillenhaus24"}) is True
+
+    def test_is_brand_only_keyword_real_topic_passes(self):
+        assert td._is_brand_only_keyword("günstige brillen online kaufen", {"brillenhaus24"}) is False
+
+    def test_is_brand_only_keyword_brand_plus_one_topic_word_blocks(self):
+        # Edge: "brillen brillenhaus24" — only one topic token, treated as brand-only
+        assert td._is_brand_only_keyword("brillenhaus24 brillen", {"brillenhaus24"}) is True
+
+    def test_is_brand_only_keyword_no_brand_tokens(self):
+        # When we don't know the brand (e.g. relative URL), nothing is filtered.
+        assert td._is_brand_only_keyword("anything", set()) is False
 
 
 class TestSlugToKeyword:
@@ -323,6 +376,43 @@ class TestDeriveTopic:
             )
         assert result.target_keyword == "haiku-derived keyword"
         assert "used_haiku_fallback" in result.notes
+
+    def test_brand_named_url_does_not_pick_brand_as_keyword(self):
+        """Reproduces the brillenhaus24.de regression: a brand-named domain
+        with a "Brand – Topic" title pattern must derive the topic side, not
+        the brand side."""
+
+        html = (
+            '<html lang="de"><head>'
+            '<title>Brillenhaus24.de – Günstige Brillen &amp; Komplettbrillen sicher online kaufen</title>'
+            '<meta property="og:title" content="Brillenhaus24.de – Günstige Brillen online">'
+            '</head><body>'
+            '<h1>Brillenhaus24 – Brillen online bestellen</h1>'
+            '<h2>Günstige Komplettbrillen</h2>'
+            '<p>Wir führen Brillen für jede Sehstärke.</p>'
+            '</body></html>'
+        )
+        client = MagicMock()
+        # Topic-side candidate gets real volume; brand-side would too if not filtered.
+        client.keyword_volume.return_value = _ranked_metrics({
+            "günstige brillen": 8000,
+            "komplettbrillen sicher online kaufen": 1500,
+            "brillen online bestellen": 6500,
+            "günstige komplettbrillen": 2200,
+        })
+        with patch.object(td.requests, "get", return_value=_http_response(body=html)):
+            result = derive_topic(
+                "https://www.brillenhaus24.de",
+                use_cache=False,
+                dataforseo_client=client,
+            )
+        assert "brillenhaus24" not in result.target_keyword.lower()
+        assert any(token in result.target_keyword for token in ("brillen", "komplettbrillen"))
+        # No candidate that's just the brand should leak through to the ranker.
+        for cand in result.candidates:
+            assert "brillenhaus24" not in cand.keyword or any(
+                t in cand.keyword for t in ("günstig", "online", "kaufen", "komplett", "brillen ")
+            ) and not td._is_brand_only_keyword(cand.keyword, {"brillenhaus24"})
 
     def test_haiku_skipped_without_api_key(self):
         html = '<html lang="de"><head></head><body><p>X</p></body></html>'

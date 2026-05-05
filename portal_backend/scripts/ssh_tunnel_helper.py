@@ -78,9 +78,10 @@ def setup_ssh_tunnel() -> bool:
 
         print("SSH tunnel established. Using localhost:5432", file=sys.stderr)
 
+        env_file = Path(__file__).resolve().parent.parent / ".env.live"
+        env_vars = _load_env_file(env_file)
+
         if not database_url:
-            env_file = Path(__file__).resolve().parent.parent / ".env.live"
-            env_vars = _load_env_file(env_file)
             if "DATABASE_URL" in env_vars:
                 remote_url = env_vars["DATABASE_URL"]
                 local_url = remote_url.replace(
@@ -93,6 +94,12 @@ def setup_ssh_tunnel() -> bool:
                 default_db_url = "postgresql://postgres:postgres@localhost:5432/portal_db"
                 os.environ["DATABASE_URL"] = default_db_url
                 print(f"Set DATABASE_URL to default: {default_db_url}", file=sys.stderr)
+
+        for key, value in env_vars.items():
+            if key == "DATABASE_URL":
+                continue
+            if key not in os.environ:
+                os.environ[key] = value
 
         os.environ["ALLOW_LOCALHOST_DB"] = "1"
         atexit.register(cleanup_ssh_tunnel)

@@ -149,9 +149,10 @@ Deleted: `pipeline.py` (14,930 lines), `supervisor.py`, `critic.py`, `repair.py`
 
 ## Deferred items / follow-ups
 
-- **`_select_best_accepted_pair` + `call_creator_pair_fit`** — currently unreachable from production (creator `/pair-fit` endpoint was deleted with 7d). The selection logic and its 9 tests are kept as a building block for v2-aware pair-fit ranking. Revisit when redesigning auto-site-selection.
-- **Live env file cleanup** — Dokploy env vars on the live `portal_backend` and `creator` services likely still hold legacy variables that no longer have any code reading them (e.g. `CREATOR_PIPELINE_MODE` was removed in Phase 0; legacy 4llm-only flags from before the rebuild). Walk the live env, cross-check against the codebase, and prune anything that's no longer referenced. **Now load-bearing**: `WP_CREDENTIAL_ENCRYPTION_KEY` (portal), `ANTHROPIC_API_KEY` / `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` (creator), `LEONARDO_API_KEY` (portal — required for v2 featured-image step), `TRUSTED_PROXY_IPS` (portal — required for rate-limit IP-trust to work behind Dokploy).
-- **Phase 6c — review-card HTML renderer** — skipped because the live admin portal already exposes `quality_report` + `judge_scores` via the existing job-detail page. Revisit only if a focused "send to client for sign-off" surface is wanted.
+- ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
+- ✅ **Delete orphan creator modules** — removed `creator/api/llm_provider.py`, `creator/api/trend_cache.py`, `creator/api/site_fit_cache.py` (zero importers after Phase 7d). DB tables (`keyword_trend_cache`, `site_fit_cache`) left in place — orphan rows, not blocking; can be dropped via a future migration if disk pressure shows up.
+
+The creator rebuild and its post-Phase-7 cleanup are now complete. No open follow-ups.
 
 ## External services & env vars
 

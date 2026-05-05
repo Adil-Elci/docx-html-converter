@@ -29,8 +29,16 @@ logger = logging.getLogger("creator.topic_brainstorm")
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
-DEFAULT_TIMEOUT_SECONDS = 60
+DEFAULT_TIMEOUT_SECONDS = 90
 DEFAULT_NUM_ANGLES = 5
+# Number of angles to brainstorm and cache on a fresh call. Sequential
+# consumption: portal_backend asks for num_angles=1 each time and gets the
+# next-unused (highest-ranked still-unpublished) angle from the cached batch.
+# Cache holds for 90 days OR until all 35 are excluded by the published-list
+# filter, whichever comes first. Per-article cost amortises to ~$0.002 once
+# the batch is reused across multiple orders.
+BRAINSTORM_BATCH_SIZE = 35
+DEFAULT_MAX_TOKENS = 6500  # ~35 angles x ~150 tokens each + JSON envelope
 
 
 class TopicBrainstormError(RuntimeError):
@@ -60,9 +68,11 @@ class BrainstormResult:
 
 _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
     "de": (
-        "Du bist ein erfahrener deutscher Magazin-Redakteur und SEO-Stratege. "
-        "Deine Aufgabe: schlage {n} editorial starke Themen-Angles für einen "
-        "Gastartikel vor, der auf einer Drittseite veröffentlicht wird.\n\n"
+        "Du bist ein erfahrener deutscher SEO-Stratege und Magazin-Redakteur. "
+        "Deine Aufgabe: schlage GENAU {n} editorial starke Themen-Angles für "
+        "einen Gastartikel vor, der auf einer Drittseite veröffentlicht wird, "
+        "und sortiere sie nach Ranking-Stärke für die organische Google-Suche "
+        "in Deutschland im aktuellen Jahr.\n\n"
         "Kontext, den du bekommst:\n"
         "- ZIEL-WEBSITE: das Unternehmen / Produkt, das den Backlink bekommt.\n"
         "- ZIEL-KEYWORD: das Such-Keyword, das aus der Ziel-URL abgeleitet wurde.\n"
@@ -77,23 +87,37 @@ _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
         "      \"title\": <string, der vorgeschlagene Artikel-Titel / H1>,\n"
         "      \"target_keyword\": <string, das passende deutsche Such-Keyword (2-5 Wörter, Kleinschreibung)>,\n"
         "      \"hook\": <string, ein Satz: was den Artikel interessant macht>,\n"
-        "      \"rationale\": <string, ein Satz: warum dieser Angle für Ziel + Publisher + 2026 funktioniert>\n"
+        "      \"rationale\": <string, ein Satz: warum dieser Angle für Ranking + Publisher + Aktualität funktioniert>\n"
         "    }}\n"
         "  ]\n"
         "}}\n\n"
-        "Regeln für gute Angles:\n"
+        "Liefere die volle Anzahl ({n}). Wenn du nur 10 starke Angles hast, "
+        "fülle den Rest mit realistischen Long-Tail-Variationen auf — keine "
+        "Lücken, keine Wiederholungen, keine Filler-Phrasen.\n\n"
+        "Sortier-Regel (KRITISCH — Index 0 = am stärksten):\n"
+        "- **Top ~10 (Head)**: Keywords mit hohem geschätztem Suchvolumen in Deutschland, "
+        "  klarer kommerzieller oder informationeller Intent, niedrige bis mittlere "
+        "  Wettbewerbsdichte für Gastbeiträge.\n"
+        "- **Mitte ~10-25 (Mid-Tail)**: Long-Tail-Varianten mit 3-5 Wörtern, mittlerem "
+        "  Volumen, geringerer Wettbewerb, oft saisonale oder regionale Schwerpunkte.\n"
+        "- **Tail ~26-{n} (Long-Tail / Nische)**: spezifische Frage- oder Anwendungs-"
+        "  Keywords (\"Wie ...\", \"Worauf achten ...\", \"... für Anfänger\"), niedriges "
+        "  Volumen, sehr geringer Wettbewerb. Schnell rankbare Quick-Wins.\n\n"
+        "Inhaltliche Regeln:\n"
         "- **Editorial first**: news-getrieben, ratgeberhaft, erklärend, oder trendbasiert. KEINE reinen Vergleichs-/Preisartikel als Hauptangle.\n"
         "- **Publisher-passend**: das Thema muss für die Audience der Veröffentlichungsseite relevant sein, nicht für die Audience der Ziel-Website.\n"
         "- **Aktualität**: bevorzuge Angles mit zeitlichem Bezug (Studien, Trends, Gesetzesänderungen, Saison) über zeitlose \"Was ist X\"-Themen.\n"
-        "- **Vielfalt**: liefere unterschiedliche Angles. Nicht 5x \"Vergleich von X\" mit Variationen.\n"
+        "- **Vielfalt**: alle {n} Angles müssen unterschiedlich sein — keine Variationen desselben Themas mit anderem Titel.\n"
         "- **Konkret**: Titel müssen konkrete Aussagen oder Fragen enthalten, keine Floskeln.\n"
         "- **Keine Marken in Titeln**: der Titel darf nicht den Markennamen / die Domain der Ziel-Website enthalten — der Backlink wird natürlich im Artikelkörper platziert.\n"
-        "- **Such-Keyword**: realistisch, das Nutzer in Deutschland 2026 in Google eingeben würden.\n"
+        "- **Such-Keyword**: realistisch, das Nutzer in Deutschland im aktuellen Jahr in Google eingeben würden — keine erfundenen Begriffe.\n"
         "- **Duplikate vermeiden**: wenn BEREITS VERWENDETE THEMEN gelistet sind, generiere KEINE Angles, deren Such-Keyword oder Titel inhaltlich (nicht nur wörtlich) einem dieser Themen entspricht.\n"
     ),
     "fr": (
-        "Vous êtes un rédacteur en chef de magazine francophone expérimenté et stratège SEO. "
-        "Votre tâche : proposez {n} angles éditoriaux forts pour un article invité publié sur un site tiers.\n\n"
+        "Vous êtes un stratège SEO francophone expérimenté et rédacteur en chef. "
+        "Votre tâche : proposez EXACTEMENT {n} angles éditoriaux forts pour un "
+        "article invité publié sur un site tiers, et triez-les par force de "
+        "classement sur la recherche organique Google en France pour l'année en cours.\n\n"
         "Contexte fourni :\n"
         "- SITE CIBLE : l'entreprise / le produit qui reçoit le backlink.\n"
         "- MOT-CLÉ CIBLE : le mot-clé de recherche dérivé de l'URL cible.\n"
@@ -108,18 +132,30 @@ _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
         "      \"title\": <string, le titre / H1 proposé>,\n"
         "      \"target_keyword\": <string, le mot-clé SEO français correspondant (2-5 mots, minuscules)>,\n"
         "      \"hook\": <string, une phrase : ce qui rend l'article intéressant>,\n"
-        "      \"rationale\": <string, une phrase : pourquoi cet angle marche pour cible + éditeur + 2026>\n"
+        "      \"rationale\": <string, une phrase : pourquoi cet angle marche pour le ranking + l'éditeur + l'actualité>\n"
         "    }}\n"
         "  ]\n"
         "}}\n\n"
-        "Règles pour de bons angles :\n"
+        "Fournissez le nombre complet ({n}). Si seuls 10 angles forts existent, "
+        "complétez avec des variantes long-tail réalistes — pas de trous, "
+        "pas de répétitions, pas de phrases creuses.\n\n"
+        "Règle de tri (CRITIQUE — index 0 = le plus fort) :\n"
+        "- **Top ~10 (Head)** : mots-clés au volume de recherche élevé en France, "
+        "  intention commerciale ou informationnelle claire, concurrence faible "
+        "  à moyenne pour des articles invités.\n"
+        "- **Milieu ~10-25 (Mid-Tail)** : variantes longue traîne de 3-5 mots, "
+        "  volume moyen, concurrence plus faible, souvent saisonnières ou régionales.\n"
+        "- **Queue ~26-{n} (Long-Tail / niche)** : mots-clés spécifiques de "
+        "  question ou usage (\"Comment ...\", \"Quels critères pour ...\", \"... pour débutants\"), "
+        "  volume faible, concurrence très faible. Quick-wins rapides à classer.\n\n"
+        "Règles de contenu :\n"
         "- **Éditorial d'abord** : actualité, conseil, explicatif, ou tendance. PAS d'articles purement comparatifs/tarifs comme angle principal.\n"
         "- **Adapté à l'éditeur** : le sujet doit intéresser l'audience du site de publication, pas celle du site cible.\n"
         "- **Actualité** : privilégiez les angles temporels (études, tendances, changements réglementaires, saisons) aux sujets atemporels \"Qu'est-ce que X\".\n"
-        "- **Variété** : proposez des angles différents. Pas 5x \"Comparatif de X\" avec variations.\n"
+        "- **Variété** : tous les {n} angles doivent être différents — pas de variations du même sujet sous un autre titre.\n"
         "- **Concret** : les titres doivent contenir des affirmations ou questions concrètes, pas des formules creuses.\n"
         "- **Pas de marques dans les titres** : le titre ne doit pas contenir le nom de marque / domaine du site cible — le backlink sera placé naturellement dans le corps.\n"
-        "- **Mot-clé** : réaliste, ce que des utilisateurs en France saisiraient sur Google en 2026.\n"
+        "- **Mot-clé** : réaliste, ce que des utilisateurs en France saisiraient sur Google dans l'année en cours — pas de termes inventés.\n"
         "- **Éviter les doublons** : si SUJETS DÉJÀ UTILISÉS sont listés, ne générez PAS d'angles dont le mot-clé ou le titre recoupe l'un de ces sujets (substantiellement, pas seulement à la lettre).\n"
     ),
 }
@@ -382,8 +418,13 @@ def brainstorm_editorial_angles(
         logger.warning("topic_brainstorm.no_api_key — returning empty angles")
         return BrainstormResult(angles=[], cost_usd=0.0)
 
+    # On a cache miss we ALWAYS generate the full batch (BRAINSTORM_BATCH_SIZE)
+    # and cache it. The caller's `num_angles` only controls how many filtered
+    # angles get returned to them on this call -- subsequent calls draw the
+    # remaining ranked angles from the cache without paying the LLM cost again.
+    batch_size = max(num_angles, BRAINSTORM_BATCH_SIZE)
     system_template = _LANGUAGE_SYSTEM_PROMPTS.get(lang) or _LANGUAGE_SYSTEM_PROMPTS["de"]
-    system_prompt = system_template.format(n=num_angles)
+    system_prompt = system_template.format(n=batch_size)
     user_prompt = _build_user_prompt(
         target_url=target_url,
         target_keyword=keyword,
@@ -401,7 +442,7 @@ def brainstorm_editorial_angles(
             base_url=base_url,
             model=model,
             timeout_seconds=timeout_seconds,
-            max_tokens=2000,
+            max_tokens=DEFAULT_MAX_TOKENS,
             temperature=0.9,  # higher for more creative variety
             request_label="topic_brainstorm",
         )
@@ -410,27 +451,31 @@ def brainstorm_editorial_angles(
         return BrainstormResult(angles=[], cost_usd=0.0)
 
     parsed = _parse_angles(payload)
-    # Defensive post-filter: if Haiku ignored the exclude list in the
+    # Defensive post-filter: if the LLM ignored the exclude list in the
     # prompt, drop dupes here so the caller never sees them.
     filtered, dropped = _filter_against_excludes(parsed, exclude_topics)
     final_angles = filtered[:num_angles]
 
-    # Write-back cache: store the FRESH angles (full list, not the filtered
-    # one) so the next call can reuse them with a different exclude list.
+    # Write-back cache: store the FULL ranked batch (unfiltered) so the next
+    # call can pull the next-unused angle for the SAME site pair without
+    # re-running the LLM. Cache TTL is 90 days; a different exclude list
+    # at read time just slides further down the same ranked list.
     if cache_lookup_key and cache_locale and parsed:
         try:
             from .topic_brainstorm_cache import upsert_brainstorm
             upsert_brainstorm(
                 lookup_key=cache_lookup_key,
                 locale=cache_locale,
-                payload=_serialize_angles_for_cache(parsed[:num_angles]),
+                payload=_serialize_angles_for_cache(parsed[:batch_size]),
             )
         except ImportError:
             pass
 
+    # ~$0.06 for a 35-angle Sonnet 4.6 call (≈1.5K tokens in, ≈3.5K out).
+    # Per-article cost amortises down as the batch is reused across orders.
     return BrainstormResult(
         angles=final_angles,
-        cost_usd=0.02,
+        cost_usd=0.06,
         cache_hit=False,
         excluded_count=dropped,
     )

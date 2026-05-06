@@ -713,6 +713,87 @@ def test_run_create_article_pipeline_v2_brainstorms_when_no_explicit_topic(monke
     assert "Studien" in angle["hook"]
 
 
+def test_run_create_article_pipeline_v2_rejects_title_shaped_brainstorm_keyword(monkeypatch):
+    """Regression for the brillenhaus DataForSEO 40501 failure: when
+    brainstorm hands back a title-shaped string in target_keyword (LLM drift),
+    the portal must keep the cleaner upfront keyword instead of forwarding
+    the title to /v2/run-pipeline (which would hit DataForSEO and fail)."""
+
+    captured_v2: dict[str, object] = {}
+
+    def fake_derive(**_kwargs):
+        return {
+            "ok": True,
+            "target_keyword": "kinderbrillen",
+            "language_code": "de",
+            "cache_hit": False,
+        }
+
+    def fake_brainstorm(**_kwargs):
+        return {
+            "ok": True,
+            "angles": [
+                {
+                    "title": "Augengesundheit und Sehhilfen: Wie die richtige Brille passt",
+                    # LLM put a title in the keyword field by mistake.
+                    "target_keyword": "Augengesundheit und Sehhilfen: Wie die richtige Brille passt",
+                    "hook": "h",
+                    "rationale": "r",
+                },
+            ],
+            "cost_usd": 0.02,
+        }
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_derive_topic", fake_derive)
+    monkeypatch.setattr(automation_service, "call_creator_v2_brainstorm_topics", fake_brainstorm)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            topic=None,
+            target_profile_payload={},
+            publishing_candidates=[
+                {
+                    "site_url": "https://kidsblatt.de",
+                    "site_id": "k-id",
+                    "fit_score": 30,
+                    "publishing_profile_payload": {"language": "de", "primary_context": "kids"},
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "admin",
+                    "wp_app_password": "pw",
+                    "category_ids": [],
+                    "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
+            ],
+        ),
+    )
+    # Title-shaped keyword was rejected; pipeline saw the clean upfront one.
+    assert captured_v2["target_keyword"] == "kinderbrillen"
+    # The angle metadata still flows through (title is still useful for the contract).
+    assert captured_v2["editorial_angle"]["title"].startswith("Augengesundheit")
+
+
+def test_looks_like_seo_keyword_helper():
+    assert automation_service._looks_like_seo_keyword("kinderbrillen") is True
+    assert automation_service._looks_like_seo_keyword("kinderbrillen kaufen") is True
+    assert automation_service._looks_like_seo_keyword("steuerberater hamburg altona") is True
+    # Title-shaped strings get rejected.
+    assert automation_service._looks_like_seo_keyword("Was Eltern wissen muessen: Der grosse Ratgeber") is False
+    assert automation_service._looks_like_seo_keyword("Brille fuer Kinder - alle Fakten") is False
+    assert automation_service._looks_like_seo_keyword("Brille | Shop | Online") is False
+    assert automation_service._looks_like_seo_keyword("Was kostet eine Brille?") is False
+    # Empty or whitespace-only inputs are also rejected.
+    assert automation_service._looks_like_seo_keyword("") is False
+    assert automation_service._looks_like_seo_keyword("   ") is False
+
+
 def test_run_create_article_pipeline_v2_skips_brainstorm_when_explicit_topic(monkeypatch):
     """When the admin pinned an explicit topic in the webhook, the brainstorm
     is skipped — we respect the explicit choice and don't override it."""

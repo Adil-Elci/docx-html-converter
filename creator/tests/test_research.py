@@ -16,6 +16,7 @@ from creator.api.entity_extract import EntityExtractionResult, ExtractedEntity
 from creator.api.research import (
     ResearchPayload,
     _find_common_h2_themes,
+    _sanitize_seo_keyword,
     _word_count_median,
     run_research,
     topical_gap,
@@ -357,3 +358,72 @@ def test_build_locale_combines_language_and_location():
 
     assert research_cache.build_locale("de", 2276) == "de-2276"
     assert research_cache.build_locale("EN", 2840) == "en-2840"
+
+
+# ---- _sanitize_seo_keyword ------------------------------------------------
+
+
+class TestSanitizeSeoKeyword:
+    def test_passthrough_for_clean_keyword(self):
+        assert _sanitize_seo_keyword("kinderbrillen kaufen") == "kinderbrillen kaufen"
+
+    def test_strips_after_colon(self):
+        # The brillenhaus regression: brainstorm returned a title-shaped string.
+        out = _sanitize_seo_keyword(
+            "Augengesundheit und Sehhilfen: Wie die richtige Brille zu deinem Lifestyle passt"
+        )
+        assert out == "Augengesundheit und Sehhilfen"
+
+    def test_strips_after_em_dash(self):
+        assert _sanitize_seo_keyword("brille kind — der ratgeber") == "brille kind"
+
+    def test_strips_after_pipe(self):
+        assert _sanitize_seo_keyword("brille | shop") == "brille"
+
+    def test_strips_after_question_mark(self):
+        assert _sanitize_seo_keyword("was kostet eine brille? alle fakten") == "was kostet eine brille"
+
+    def test_truncates_long_keyword_to_word_cap(self):
+        out = _sanitize_seo_keyword("a b c d e f g h i j k l m")
+        assert len(out.split()) <= 8
+
+    def test_returns_empty_on_empty_input(self):
+        assert _sanitize_seo_keyword("") == ""
+        assert _sanitize_seo_keyword("   ") == ""
+
+    def test_collapses_whitespace(self):
+        assert _sanitize_seo_keyword("  brille    kaufen  ") == "brille kaufen"
+
+
+def test_run_research_sanitizes_title_shaped_keyword(monkeypatch):
+    """Regression: brainstorm/selector occasionally hand us a title-shaped
+    string; research must sanitize before calling DataForSEO so we don't hit
+    status 40501 'Keyword text has too many words'."""
+
+    client = _make_client()
+    captured_keyword = {"value": None}
+    original_serp = client.serp_organic
+
+    def capture_serp(keyword, **kwargs):
+        captured_keyword["value"] = keyword
+        return original_serp.return_value
+
+    client.serp_organic.side_effect = capture_serp
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    with patch("creator.api.research.scrape_top_results", return_value=[]), \
+         patch("creator.api.research.extract_entities_from_competitors") as mock_entities:
+        mock_entities.return_value = EntityExtractionResult(entities=[], competitor_count=0)
+        payload = run_research(
+            target_keyword="Augengesundheit und Sehhilfen: Wie die richtige Brille zu deinem Lifestyle passt",
+            dataforseo=client,
+            use_cache=False,
+        )
+    # DataForSEO saw the sanitized form, not the title.
+    assert captured_keyword["value"] == "Augengesundheit und Sehhilfen"
+    # Payload reflects the sanitized keyword too.
+    assert payload.target_keyword == "Augengesundheit und Sehhilfen"
+
+
+def test_run_research_raises_on_unusable_keyword():
+    with pytest.raises(ValueError, match="unusable after sanitization"):
+        run_research(target_keyword="   ", use_cache=False)

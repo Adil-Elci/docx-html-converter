@@ -1331,6 +1331,28 @@ def _slugify(value: str) -> str:
     return slug[:90] or "artikel"
 
 
+_KEYWORD_TITLE_MARKERS = (":", " — ", " – ", " - ", " | ", "?", "!")
+_MAX_KEYWORD_WORDS = 8
+
+
+def _looks_like_seo_keyword(value: str) -> bool:
+    """Cheap shape check before we promote a string to ``target_keyword``.
+
+    Rejects title-shaped strings (multi-clause separators, multi-sentence
+    punctuation, > ~8 words). Used to gate brainstorm/selector outputs
+    before they're forwarded to DataForSEO, which rejects long keywords
+    with status 40501.
+    """
+
+    text = (value or "").strip()
+    if not text:
+        return False
+    if any(marker in text for marker in _KEYWORD_TITLE_MARKERS):
+        return False
+    words = text.split()
+    return len(words) <= _MAX_KEYWORD_WORDS
+
+
 def _derive_keyword_from_target_profile(target_profile_payload: Optional[Dict[str, Any]]) -> str:
     """Pull a clean SEO keyword candidate from the target profile.
 
@@ -1776,7 +1798,7 @@ def _run_create_article_pipeline_v2(
                 # LLM picked an id that doesn't match anything we sent (defensive).
                 chosen_candidate = effective_candidates[0]
             refined = str(best_pick.get("refined_topic") or "").strip()
-            if refined and refined != upfront_target_keyword:
+            if refined and refined != upfront_target_keyword and _looks_like_seo_keyword(refined):
                 _trace(
                     "info",
                     "publisher_selector",
@@ -1791,6 +1813,14 @@ def _run_create_article_pipeline_v2(
                     },
                 )
                 upfront_target_keyword = refined
+            elif refined and not _looks_like_seo_keyword(refined):
+                _trace(
+                    "warning",
+                    "publisher_selector",
+                    "refined_topic_rejected",
+                    "Selector refined_topic is title-shaped; keeping upfront keyword.",
+                    {"rejected_topic": refined[:160], "kept_keyword": upfront_target_keyword},
+                )
             else:
                 _trace(
                     "info",
@@ -1867,8 +1897,21 @@ def _run_create_article_pipeline_v2(
                     "rationale": str(top.get("rationale") or "").strip(),
                 }
                 top_keyword = str(top.get("target_keyword") or "").strip()
-                if top_keyword and top_keyword != upfront_target_keyword:
+                # Brainstorm sometimes returns the article TITLE in the
+                # target_keyword field (LLM drift). DataForSEO rejects
+                # multi-clause / colon-bearing strings with status 40501,
+                # so we keep the cleaner upfront keyword whenever the
+                # brainstorm output looks title-shaped.
+                if top_keyword and top_keyword != upfront_target_keyword and _looks_like_seo_keyword(top_keyword):
                     upfront_target_keyword = top_keyword
+                elif top_keyword and not _looks_like_seo_keyword(top_keyword):
+                    _trace(
+                        "warning",
+                        "brainstorm",
+                        "keyword_rejected",
+                        "Brainstorm target_keyword is title-shaped; keeping upfront keyword.",
+                        {"rejected_keyword": top_keyword[:160], "kept_keyword": upfront_target_keyword},
+                    )
                 _trace(
                     "info",
                     "brainstorm",

@@ -82,6 +82,12 @@ def resolve_source_url(source_type: str, doc_url: Optional[str], docx_file: Opti
     raise AutomationError("source_type must be one of google-doc, word-doc, docx-upload.")
 
 
+# Status codes worth retrying: shared-host blips (503), upstream gateway
+# failures (502/504), and rate limits (429). 5xx without one of these is
+# treated as a real server bug and not retried.
+_TRANSIENT_RETRY_STATUS_CODES = frozenset({429, 502, 503, 504})
+
+
 def _request_json(
     method: str,
     url: str,
@@ -90,34 +96,78 @@ def _request_json(
     json_body: Optional[Dict[str, Any]] = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     allow_redirects: bool = True,
+    max_attempts: int = 3,
+    retry_backoff_seconds: float = 2.0,
 ) -> Dict[str, Any]:
-    try:
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            json=json_body,
-            timeout=timeout_seconds,
-            allow_redirects=allow_redirects,
-        )
-    except requests.RequestException as exc:
-        raise AutomationError(f"Request failed for {url}: {exc}") from exc
+    """HTTP JSON request with retry on transient failures.
 
-    if 300 <= response.status_code < 400:
-        location = response.headers.get("Location", "")
-        raise AutomationError(f"Unexpected redirect from {url} to {location}.")
+    Retries the call on connection errors and the transient HTTP status
+    codes in ``_TRANSIENT_RETRY_STATUS_CODES`` (429/502/503/504) up to
+    ``max_attempts`` total tries with exponential backoff. The brillenhaus
+    test hit a 503 from a shared WP host AFTER the full ~$0.50 article
+    generation budget was already spent -- losing the article to a
+    transient host blip is the worst outcome we can have.
 
-    if response.status_code >= 400:
-        body = response.text[:600]
-        raise AutomationError(f"HTTP {response.status_code} from {url}: {body}")
+    4xx (other than 429) is treated as a permanent client error and
+    never retried.
+    """
 
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise AutomationError(f"Non-JSON response from {url}.") from exc
-    if not isinstance(payload, dict):
-        raise AutomationError(f"Expected JSON object from {url}, got {type(payload).__name__}.")
-    return payload
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json_body,
+                timeout=timeout_seconds,
+                allow_redirects=allow_redirects,
+            )
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= max_attempts:
+                raise AutomationError(f"Request failed for {url}: {exc}") from exc
+            sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "automation.http.connection_retry url=%s attempt=%s/%s sleep=%.1fs error=%s",
+                url, attempt, max_attempts, sleep_for, exc,
+            )
+            time.sleep(sleep_for)
+            continue
+
+        if 300 <= response.status_code < 400:
+            location = response.headers.get("Location", "")
+            raise AutomationError(f"Unexpected redirect from {url} to {location}.")
+
+        if response.status_code in _TRANSIENT_RETRY_STATUS_CODES:
+            if attempt < max_attempts:
+                sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+                logger.warning(
+                    "automation.http.transient_retry url=%s status=%s attempt=%s/%s sleep=%.1fs",
+                    url, response.status_code, attempt, max_attempts, sleep_for,
+                )
+                time.sleep(sleep_for)
+                continue
+            body = response.text[:600]
+            raise AutomationError(
+                f"HTTP {response.status_code} from {url} after {max_attempts} attempts: {body}"
+            )
+
+        if response.status_code >= 400:
+            body = response.text[:600]
+            raise AutomationError(f"HTTP {response.status_code} from {url}: {body}")
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AutomationError(f"Non-JSON response from {url}.") from exc
+        if not isinstance(payload, dict):
+            raise AutomationError(f"Expected JSON object from {url}, got {type(payload).__name__}.")
+        return payload
+
+    # Loop only exits via return/raise above; this is unreachable in practice
+    # but mypy/pylint prefer an explicit terminator.
+    raise AutomationError(f"Request to {url} ended without a response after {max_attempts} attempts.")
 
 
 def _read_bool_env(name: str, default: bool) -> bool:

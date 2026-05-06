@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Reject title-shaped keywords before DataForSEO sees them`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Retry transient WP publish failures (503/502/504/429)`
 
 ## Deployment
 
@@ -232,6 +232,10 @@ Second live test failed at research with DataForSEO 40501 (`Augengesundheit und 
 
 Tests: 467 passing (creator 335, portal 132).
 
+### Phase E follow-up #2 — retry transient WP publish failures
+
+Live `mysupr.de` test got HTTP 503 from `/wp-json/wp/v2/posts` AFTER the full ~$0.50 generation budget was already spent — the article was lost to a shared-host blip with no retry. `_request_json` now retries on 429 / 502 / 503 / 504 and connection errors with exponential backoff (default 3 attempts, 2s + 4s). 4xx (other than 429) still fails immediately — those are real client errors. 6 new tests; suite at 473 passing.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
@@ -269,7 +273,7 @@ python -m pytest creator/tests/ -v
 
 # Full portal_backend test suite
 python -m pytest portal_backend/tests/ -v
-# Expected: 132 passing as of Phase E
+# Expected: 138 passing as of Phase E follow-up #2
 ```
 
 ## Cross-session context pointers

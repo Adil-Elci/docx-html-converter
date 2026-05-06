@@ -11,6 +11,7 @@ to Opus 4.7 (~$0.30/contract) by setting CREATOR_CONTRACT_MODEL or passing
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -398,8 +399,34 @@ def generate_contract(
     # downstream prompts to the wrong locale.
     if isinstance(payload, dict):
         payload["language"] = language
+        _heal_html_entities_in_contract_payload(payload)
 
     try:
         return ContentContract.model_validate(payload)
     except Exception as exc:
         raise LLMError(f"Contract generator output failed schema validation: {exc}") from exc
+
+
+def _heal_html_entities_in_contract_payload(payload: Dict[str, Any]) -> None:
+    """Decode HTML entities the LLM occasionally injects into title-shaped fields.
+
+    Sonnet sometimes emits `&amp;` / `&quot;` etc. inside JSON strings because
+    the field will end up in HTML — but the contract stores raw text and the
+    assembler escapes it later. Fix in-place so downstream rendering doesn't
+    show literal entities like `Kinderbrillen &amp; Jugendbrillen`.
+    """
+
+    for key in ("h1", "meta_title", "meta_description"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            payload[key] = html.unescape(value)
+    sections = payload.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if isinstance(section, dict) and isinstance(section.get("h2"), str):
+                section["h2"] = html.unescape(section["h2"])
+    faq_items = payload.get("faq_items")
+    if isinstance(faq_items, list):
+        for item in faq_items:
+            if isinstance(item, dict) and isinstance(item.get("question"), str):
+                item["question"] = html.unescape(item["question"])

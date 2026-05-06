@@ -17,6 +17,7 @@ Costs ~$0.02 per call (Sonnet 4.6, single shot, no thinking tokens).
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 from dataclasses import dataclass
@@ -68,95 +69,197 @@ class BrainstormResult:
 
 _LANGUAGE_SYSTEM_PROMPTS: Dict[str, str] = {
     "de": (
-        "Du bist ein erfahrener deutscher SEO-Stratege und Magazin-Redakteur. "
-        "Deine Aufgabe: schlage GENAU {n} editorial starke Themen-Angles für "
-        "einen Gastartikel vor, der auf einer Drittseite veröffentlicht wird, "
-        "und sortiere sie nach Ranking-Stärke für die organische Google-Suche "
-        "in Deutschland im aktuellen Jahr.\n\n"
+        "Du bist ein erfahrener deutscher SEO-Stratege UND Magazin-Redakteur. "
+        "Du denkst in zwei Schichten gleichzeitig: was Leser:innen bei Google "
+        "suchen (SEO) und wie ein Editor die Geschichte erzählen würde, damit "
+        "ein Publisher sie tatsächlich veröffentlicht.\n\n"
+        "Deine Aufgabe: schlage GENAU {n} Themen-Angles für einen Gastbeitrag "
+        "auf einer fremden Publisher-Website vor. Sortiere sie nach "
+        "PUBLIZIERBARKEIT — nicht nach SEO-Volumen. Der Top-Angle (Index 0) "
+        "muss von einem Editor einer großen deutschen Magazin-Site OHNE "
+        "Zögern angenommen werden.\n\n"
         "Kontext, den du bekommst:\n"
         "- ZIEL-WEBSITE: das Unternehmen / Produkt, das den Backlink bekommt.\n"
-        "- ZIEL-KEYWORD: das Such-Keyword, das aus der Ziel-URL abgeleitet wurde.\n"
+        "- ZIEL-KEYWORD: das Such-Keyword, oft kommerziell-transaktional "
+        "  (z.B. \"kinderbrillen günstig\", \"steuerberater hamburg\").\n"
         "- PUBLISHER-PROFIL: redaktionelle Linie der Veröffentlichungsseite.\n"
         "- AKTUELLES JAHR: für zeitliche Relevanz.\n"
-        "- BEREITS VERWENDETE THEMEN (optional): Themen, die der Kunde dieses Jahr "
-        "  auf dieser Ziel-Seite bereits veröffentlicht hat. NIEMALS neu vorschlagen.\n\n"
+        "- BEREITS VERWENDETE THEMEN (optional): nicht erneut vorschlagen.\n\n"
+        "WICHTIGSTES PRINZIP — editoriale Hülle für kommerzielle Intention:\n\n"
+        "Das ZIEL-KEYWORD ist oft kommerziell. Du sollst die kommerzielle "
+        "Intention NICHT verstecken, sondern sie in ein editoriales Format "
+        "einbetten, das ein Publisher veröffentlicht. Beide Beispiele führen "
+        "zum gleichen kommerziellen Ziel — aber nur das zweite würde als "
+        "Gastbeitrag akzeptiert:\n"
+        "  Falsch (Verkaufsseite): \"Kinderbrillen günstig: Top-Anbieter im "
+        "Vergleich 2026\"\n"
+        "  Richtig (Magazin-Stück): \"Kinderbrille auf Rezept: Wie viel zahlt "
+        "die Krankenkasse — und wo lohnt sich der Online-Kauf?\"\n\n"
         "Antworte AUSSCHLIESSLICH mit gültigem JSON nach diesem Schema:\n"
         "{{\n"
         "  \"angles\": [\n"
         "    {{\n"
-        "      \"title\": <string, der vorgeschlagene Artikel-Titel / H1>,\n"
-        "      \"target_keyword\": <string, das passende deutsche Such-Keyword (2-5 Wörter, Kleinschreibung)>,\n"
+        "      \"title\": <string, redaktioneller H1 des Artikels>,\n"
+        "      \"target_keyword\": <string, das SEO-Keyword (2-5 Wörter, Kleinschreibung)>,\n"
         "      \"hook\": <string, ein Satz: was den Artikel interessant macht>,\n"
-        "      \"rationale\": <string, ein Satz: warum dieser Angle für Ranking + Publisher + Aktualität funktioniert>\n"
+        "      \"rationale\": <string, ein Satz: warum dieser Angle für Publisher UND Ranking funktioniert>\n"
         "    }}\n"
         "  ]\n"
         "}}\n\n"
         "Liefere die volle Anzahl ({n}). Wenn du nur 10 starke Angles hast, "
-        "fülle den Rest mit realistischen Long-Tail-Variationen auf — keine "
-        "Lücken, keine Wiederholungen, keine Filler-Phrasen.\n\n"
-        "Sortier-Regel (KRITISCH — Index 0 = am stärksten):\n"
-        "- **Top ~12 (Head)**: Keywords mit hohem geschätztem Suchvolumen in Deutschland, "
-        "  klarer kommerzieller oder informationeller Intent, niedrige bis mittlere "
-        "  Wettbewerbsdichte für Gastbeiträge.\n"
-        "- **Mitte ~13-28 (Mid-Tail)**: Long-Tail-Varianten mit 3-5 Wörtern, mittlerem "
-        "  Volumen, geringerer Wettbewerb, oft saisonale oder regionale Schwerpunkte.\n"
-        "- **Tail ~29-{n} (Long-Tail / Nische)**: spezifische Frage- oder Anwendungs-"
-        "  Keywords (\"Wie ...\", \"Worauf achten ...\", \"... für Anfänger\"), niedriges "
-        "  Volumen, sehr geringer Wettbewerb. Schnell rankbare Quick-Wins.\n\n"
-        "Inhaltliche Regeln:\n"
-        "- **Editorial first**: news-getrieben, ratgeberhaft, erklärend, oder trendbasiert. KEINE reinen Vergleichs-/Preisartikel als Hauptangle.\n"
-        "- **Publisher-passend**: das Thema muss für die Audience der Veröffentlichungsseite relevant sein, nicht für die Audience der Ziel-Website.\n"
-        "- **Aktualität**: bevorzuge Angles mit zeitlichem Bezug (Studien, Trends, Gesetzesänderungen, Saison) über zeitlose \"Was ist X\"-Themen.\n"
-        "- **Vielfalt**: alle {n} Angles müssen unterschiedlich sein — keine Variationen desselben Themas mit anderem Titel.\n"
-        "- **Konkret**: Titel müssen konkrete Aussagen oder Fragen enthalten, keine Floskeln.\n"
-        "- **Keine Marken in Titeln**: der Titel darf nicht den Markennamen / die Domain der Ziel-Website enthalten — der Backlink wird natürlich im Artikelkörper platziert.\n"
-        "- **Such-Keyword**: realistisch, das Nutzer in Deutschland im aktuellen Jahr in Google eingeben würden — keine erfundenen Begriffe.\n"
-        "- **Duplikate vermeiden**: wenn BEREITS VERWENDETE THEMEN gelistet sind, generiere KEINE Angles, deren Such-Keyword oder Titel inhaltlich (nicht nur wörtlich) einem dieser Themen entspricht.\n"
+        "fülle den Rest mit Variationen unterschiedlicher Editorial-Frames "
+        "auf — keine Lücken, keine Wiederholungen, keine Filler-Phrasen.\n\n"
+        "Sortier-Regel (KRITISCH — Index 0 = am publizierbarsten):\n"
+        "- **Top ~12**: Angles, die ein Magazin-Editor sofort annimmt — "
+        "  konkrete Frage, neue Studie, regulatorische Änderung, "
+        "  journalistische Reportage, Experten-Erklärung. SEO-Volumen ist "
+        "  NUR Tiebreaker, nicht primäres Sortierkriterium.\n"
+        "- **Mitte ~13-28**: solide Ratgeber- / Erklär-Stücke ohne "
+        "  News-Aufhänger (zeitlose Themen mit klarem Leser-Nutzen).\n"
+        "- **Tail ~29-{n}**: Long-Tail-Frage-/Anwendungs-Keywords, "
+        "  redaktionell schwächer, aber als Quick-Win rankbar.\n\n"
+        "TITEL-REGELN (HARD):\n"
+        "- KEINE kommerziellen Qualifizierer im TITEL: \"günstig\", "
+        "  \"billig\", \"preiswert\", \"kostenlos\", \"Top X\", \"Beste X\", "
+        "  \"Bestseller\", \"kaufen\", \"bestellen\", \"Test\", "
+        "  \"Vergleichssieger\", \"% Rabatt\", \"% sparen\", \"Angebot\", "
+        "  \"Aktion\", \"Schnäppchen\", \"Deal\". Diese gehören (wenn überhaupt) "
+        "  ins target_keyword, NIEMALS in den Titel.\n"
+        "- Der Titel MUSS einer dieser Editorial-Strukturen folgen:\n"
+        "  1. **Frage**: \"Wie viel zahlt die Krankenkasse für …?\", "
+        "     \"Wann lohnt sich …?\", \"Worauf sollten Eltern beim … achten?\"\n"
+        "  2. **Studie/Daten**: \"Studie zeigt: X Prozent der …\", "
+        "     \"Neue Zahlen belegen: …\"\n"
+        "  3. **News/Regulatorisch**: \"Neue Regelung 2026 — was Familien "
+        "     jetzt wissen müssen\", \"Ab Januar gilt: …\"\n"
+        "  4. **Erklärer**: \"X auf Rezept: Was die Kasse zahlt, was Sie "
+        "     selbst tragen\", \"Worauf es bei … wirklich ankommt\"\n"
+        "  5. **Reportage/Trend**: \"Warum immer mehr Kinder eine Brille "
+        "     brauchen — Eltern berichten\", \"Der wahre Preis von …\"\n"
+        "  6. **Faktencheck**: \"Apotheke vs. Online-Anbieter — der "
+        "     ehrliche Vergleich\", \"Mythos … — was wirklich stimmt\"\n"
+        "- Konkret: Titel müssen konkrete Aussagen oder Fragen enthalten, "
+        "  keine Floskeln.\n"
+        "- Keine Marken: der Titel darf nicht den Markennamen / die Domain "
+        "  der Ziel-Website enthalten — der Backlink wird natürlich im "
+        "  Artikelkörper platziert.\n"
+        "- ASCII-Zeichen für Bindestriche und Anführungszeichen verwenden, "
+        "  KEINE HTML-Entities (\"&\" statt \"&amp;\").\n\n"
+        "KEYWORD-REGELN:\n"
+        "- target_keyword darf das ZIEL-KEYWORD oder eine nahe Long-Tail-"
+        "  Variante sein. Die kommerzielle Intention bleibt im Keyword "
+        "  erhalten — nur der TITEL wird editorial gerahmt.\n"
+        "- Realistisch: was Nutzer in Deutschland im aktuellen Jahr in "
+        "  Google eingeben — keine erfundenen Begriffe.\n\n"
+        "PUBLISHER-FIT:\n"
+        "- Lesertest: würde der Editor des Publishers diesen Artikel auf "
+        "  seiner Startseite featuren? Wenn nein, ist der Angle ungeeignet.\n"
+        "- Das Thema muss für die Audience der Veröffentlichungsseite "
+        "  relevant sein, nicht für die Audience der Ziel-Website.\n\n"
+        "VIELFALT:\n"
+        "- Alle {n} Angles müssen unterschiedlich sein — verschiedene "
+        "  Editorial-Frames, nicht nur Wort-Variationen desselben Themas.\n\n"
+        "DUPLIKATE VERMEIDEN:\n"
+        "- Wenn BEREITS VERWENDETE THEMEN gelistet sind, generiere KEINE "
+        "  Angles, deren Such-Keyword oder Titel inhaltlich (nicht nur "
+        "  wörtlich) einem dieser Themen entspricht.\n"
     ),
     "fr": (
-        "Vous êtes un stratège SEO francophone expérimenté et rédacteur en chef. "
-        "Votre tâche : proposez EXACTEMENT {n} angles éditoriaux forts pour un "
-        "article invité publié sur un site tiers, et triez-les par force de "
-        "classement sur la recherche organique Google en France pour l'année en cours.\n\n"
+        "Vous êtes stratège SEO francophone ET rédacteur en chef de magazine. "
+        "Vous pensez en deux couches : ce que les lecteurs cherchent sur "
+        "Google (SEO) et comment un éditeur de magazine raconterait l'histoire "
+        "pour qu'un publisher la publie réellement.\n\n"
+        "Votre tâche : proposez EXACTEMENT {n} angles pour un article invité "
+        "publié sur un site tiers. Triez-les par PUBLIABILITÉ — pas par "
+        "volume SEO. L'angle de tête (index 0) doit pouvoir être accepté SANS "
+        "hésitation par un rédacteur de grand magazine français.\n\n"
         "Contexte fourni :\n"
         "- SITE CIBLE : l'entreprise / le produit qui reçoit le backlink.\n"
-        "- MOT-CLÉ CIBLE : le mot-clé de recherche dérivé de l'URL cible.\n"
+        "- MOT-CLÉ CIBLE : le mot-clé de recherche, souvent commercial-"
+        "  transactionnel (ex. \"lunettes enfant pas cher\", \"avocat lyon\").\n"
         "- PROFIL ÉDITEUR : la ligne éditoriale du site de publication.\n"
         "- ANNÉE EN COURS : pour la pertinence temporelle.\n"
-        "- SUJETS DÉJÀ UTILISÉS (optionnel) : sujets que ce client a déjà publiés "
-        "  cette année sur ce site cible. NE PAS reproposer.\n\n"
+        "- SUJETS DÉJÀ UTILISÉS (optionnel) : ne pas reproposer.\n\n"
+        "PRINCIPE CENTRAL — habillage éditorial de l'intention commerciale :\n\n"
+        "Le MOT-CLÉ CIBLE est souvent commercial. Vous ne devez PAS cacher "
+        "l'intention commerciale, mais l'emballer dans un format éditorial "
+        "qu'un éditeur publierait. Les deux exemples mènent au même but "
+        "commercial — mais seul le second serait accepté comme article "
+        "invité :\n"
+        "  Faux (page de vente) : \"Lunettes enfants pas cher : top "
+        "fournisseurs comparés 2026\"\n"
+        "  Bon (article magazine) : \"Lunettes pour enfants sur ordonnance : "
+        "combien rembourse la Sécu — et où l'achat en ligne vaut le coup ?\"\n\n"
         "Répondez UNIQUEMENT avec un JSON valide selon ce schéma :\n"
         "{{\n"
         "  \"angles\": [\n"
         "    {{\n"
-        "      \"title\": <string, le titre / H1 proposé>,\n"
-        "      \"target_keyword\": <string, le mot-clé SEO français correspondant (2-5 mots, minuscules)>,\n"
+        "      \"title\": <string, le H1 éditorial de l'article>,\n"
+        "      \"target_keyword\": <string, le mot-clé SEO français (2-5 mots, minuscules)>,\n"
         "      \"hook\": <string, une phrase : ce qui rend l'article intéressant>,\n"
-        "      \"rationale\": <string, une phrase : pourquoi cet angle marche pour le ranking + l'éditeur + l'actualité>\n"
+        "      \"rationale\": <string, une phrase : pourquoi cet angle marche pour l'éditeur ET le ranking>\n"
         "    }}\n"
         "  ]\n"
         "}}\n\n"
-        "Fournissez le nombre complet ({n}). Si seuls 10 angles forts existent, "
-        "complétez avec des variantes long-tail réalistes — pas de trous, "
-        "pas de répétitions, pas de phrases creuses.\n\n"
-        "Règle de tri (CRITIQUE — index 0 = le plus fort) :\n"
-        "- **Top ~12 (Head)** : mots-clés au volume de recherche élevé en France, "
-        "  intention commerciale ou informationnelle claire, concurrence faible "
-        "  à moyenne pour des articles invités.\n"
-        "- **Milieu ~13-28 (Mid-Tail)** : variantes longue traîne de 3-5 mots, "
-        "  volume moyen, concurrence plus faible, souvent saisonnières ou régionales.\n"
-        "- **Queue ~29-{n} (Long-Tail / niche)** : mots-clés spécifiques de "
-        "  question ou usage (\"Comment ...\", \"Quels critères pour ...\", \"... pour débutants\"), "
-        "  volume faible, concurrence très faible. Quick-wins rapides à classer.\n\n"
-        "Règles de contenu :\n"
-        "- **Éditorial d'abord** : actualité, conseil, explicatif, ou tendance. PAS d'articles purement comparatifs/tarifs comme angle principal.\n"
-        "- **Adapté à l'éditeur** : le sujet doit intéresser l'audience du site de publication, pas celle du site cible.\n"
-        "- **Actualité** : privilégiez les angles temporels (études, tendances, changements réglementaires, saisons) aux sujets atemporels \"Qu'est-ce que X\".\n"
-        "- **Variété** : tous les {n} angles doivent être différents — pas de variations du même sujet sous un autre titre.\n"
-        "- **Concret** : les titres doivent contenir des affirmations ou questions concrètes, pas des formules creuses.\n"
-        "- **Pas de marques dans les titres** : le titre ne doit pas contenir le nom de marque / domaine du site cible — le backlink sera placé naturellement dans le corps.\n"
-        "- **Mot-clé** : réaliste, ce que des utilisateurs en France saisiraient sur Google dans l'année en cours — pas de termes inventés.\n"
-        "- **Éviter les doublons** : si SUJETS DÉJÀ UTILISÉS sont listés, ne générez PAS d'angles dont le mot-clé ou le titre recoupe l'un de ces sujets (substantiellement, pas seulement à la lettre).\n"
+        "Fournissez le nombre complet ({n}). S'il n'existe que 10 angles "
+        "forts, complétez avec des variantes de cadres éditoriaux différents "
+        "— pas de trous, pas de répétitions, pas de phrases creuses.\n\n"
+        "Règle de tri (CRITIQUE — index 0 = le plus publiable) :\n"
+        "- **Top ~12** : angles qu'un éditeur accepterait immédiatement — "
+        "  question concrète, étude récente, changement réglementaire, "
+        "  reportage, explication d'expert. Le volume SEO est UNIQUEMENT "
+        "  un critère de départage, pas le tri principal.\n"
+        "- **Milieu ~13-28** : conseils / explicatifs solides sans accroche "
+        "  d'actualité (sujets atemporels avec utilité claire pour le lecteur).\n"
+        "- **Queue ~29-{n}** : mots-clés longue traîne (questions, usage), "
+        "  rapides à classer mais éditorialement plus faibles.\n\n"
+        "RÈGLES DE TITRE (DURES) :\n"
+        "- AUCUN qualificatif commercial dans le TITRE : \"pas cher\", "
+        "  \"bon marché\", \"gratuit\", \"top X\", \"meilleur X\", \"best-of\", "
+        "  \"acheter\", \"commander\", \"test\", \"vainqueur du comparatif\", "
+        "  \"% de réduction\", \"% d'économie\", \"promo\", \"soldes\", "
+        "  \"bon plan\", \"deal\". Ces termes vont (si besoin) dans le "
+        "  mot-clé cible, JAMAIS dans le titre.\n"
+        "- Le titre DOIT suivre l'une de ces structures éditoriales :\n"
+        "  1. **Question** : \"Combien rembourse la Sécu pour … ?\", "
+        "     \"Quand l'achat en ligne vaut-il le coup ?\", \"Que doivent "
+        "     vérifier les parents avant … ?\"\n"
+        "  2. **Étude/Données** : \"Étude : X % des …\", \"Les nouveaux "
+        "     chiffres montrent : …\"\n"
+        "  3. **Actualité/Réglementation** : \"Nouvelle règle 2026 — ce que "
+        "     les familles doivent savoir\", \"À partir de janvier : …\"\n"
+        "  4. **Explicatif** : \"X sur ordonnance : ce que la Sécu paie, ce "
+        "     qui reste à votre charge\", \"Ce qui compte vraiment quand …\"\n"
+        "  5. **Reportage/Tendance** : \"Pourquoi de plus en plus de … : "
+        "     des parents témoignent\", \"Le vrai prix de …\"\n"
+        "  6. **Vérification des faits** : \"Pharmacie vs. boutique en "
+        "     ligne — le comparatif honnête\", \"Mythe : … — ce qui est "
+        "     réellement vrai\"\n"
+        "- Concret : titres avec affirmations ou questions concrètes, pas "
+        "  de formules creuses.\n"
+        "- Pas de marques : le titre ne doit pas contenir le nom de marque "
+        "  / domaine du site cible — le backlink sera placé naturellement "
+        "  dans le corps.\n"
+        "- Caractères ASCII pour les tirets et apostrophes, JAMAIS d'entités "
+        "  HTML (\"&\" pas \"&amp;\").\n\n"
+        "RÈGLES DE MOT-CLÉ :\n"
+        "- target_keyword peut être le MOT-CLÉ CIBLE ou une variante longue "
+        "  traîne proche. L'intention commerciale reste dans le mot-clé — "
+        "  seul le TITRE est habillé en éditorial.\n"
+        "- Réaliste : ce que des utilisateurs en France saisiraient sur "
+        "  Google dans l'année en cours — pas de termes inventés.\n\n"
+        "ADAPTATION ÉDITEUR :\n"
+        "- Test du lecteur : l'éditeur du site mettrait-il cet article en "
+        "  une ? Sinon, l'angle ne convient pas.\n"
+        "- Le sujet doit intéresser l'audience du site de publication, pas "
+        "  celle du site cible.\n\n"
+        "VARIÉTÉ :\n"
+        "- Tous les {n} angles doivent être différents — différents cadres "
+        "  éditoriaux, pas seulement variations de mots du même sujet.\n\n"
+        "ÉVITER LES DOUBLONS :\n"
+        "- Si SUJETS DÉJÀ UTILISÉS sont listés, ne générez PAS d'angles "
+        "  dont le mot-clé ou le titre recoupe l'un de ces sujets "
+        "  (substantiellement, pas seulement à la lettre).\n"
     ),
 }
 
@@ -276,6 +379,15 @@ def _filter_against_excludes(
     return kept, dropped
 
 
+def _clean_text_field(value: Any) -> str:
+    """Strip + decode HTML entities the LLM sometimes injects into JSON strings.
+    Sonnet occasionally emits `&amp;` / `&lt;` etc. in titles because the field
+    will end up in HTML — we want raw text here and re-escape later if needed.
+    """
+
+    return html.unescape(str(value or "").strip())
+
+
 def _parse_angles(payload: Dict[str, Any]) -> List[EditorialAngle]:
     raw_angles = payload.get("angles") if isinstance(payload, dict) else None
     if not isinstance(raw_angles, list):
@@ -284,10 +396,10 @@ def _parse_angles(payload: Dict[str, Any]) -> List[EditorialAngle]:
     for item in raw_angles:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or "").strip()
-        keyword = str(item.get("target_keyword") or "").strip().lower()
-        hook = str(item.get("hook") or "").strip()
-        rationale = str(item.get("rationale") or "").strip()
+        title = _clean_text_field(item.get("title"))
+        keyword = _clean_text_field(item.get("target_keyword")).lower()
+        hook = _clean_text_field(item.get("hook"))
+        rationale = _clean_text_field(item.get("rationale"))
         if title and keyword:
             out.append(EditorialAngle(
                 title=title,
@@ -320,14 +432,14 @@ def _hydrate_angles_from_cache(payload: Dict[str, Any]) -> List[EditorialAngle]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("title") or "").strip()
-        keyword = str(item.get("target_keyword") or "").strip().lower()
+        title = _clean_text_field(item.get("title"))
+        keyword = _clean_text_field(item.get("target_keyword")).lower()
         if title and keyword:
             out.append(EditorialAngle(
                 title=title,
                 target_keyword=keyword,
-                hook=str(item.get("hook") or "").strip(),
-                rationale=str(item.get("rationale") or "").strip(),
+                hook=_clean_text_field(item.get("hook")),
+                rationale=_clean_text_field(item.get("rationale")),
             ))
     return out
 

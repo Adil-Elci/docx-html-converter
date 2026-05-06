@@ -1142,52 +1142,81 @@ def call_creator_v2_brainstorm_topics(
     return payload
 
 
-def call_creator_v2_refine_topic_for_publisher(
+def call_creator_v2_select_publisher(
     *,
     creator_endpoint: str,
+    target_url: str,
     target_keyword: str,
-    publishing_profile_payload: Optional[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    target_profile_payload: Optional[Dict[str, Any]] = None,
     language: str = "de",
-    min_confidence: float = 0.4,
     timeout_seconds: int = 60,
 ) -> Dict[str, Any]:
-    """POST to the creator service's /v2/refine-topic-for-publisher endpoint.
+    """POST to the creator service's /v2/select-publisher endpoint.
 
-    Returns the parsed verdict dict. Raises ``AutomationError`` when the
-    creator service hard-fails the topic-vs-publisher fit (no editorial
-    intersection or confidence below threshold) -- the message includes
-    the rationale so the admin portal can render it verbatim.
+    Returns the parsed selection dict (best_pick, ranking, no_fit, ...).
+    The endpoint never raises on ``no_fit`` -- that's a verdict the caller
+    handles by falling back to the Allgemein publisher. Raises
+    ``AutomationError`` only on infra failure / unexpected HTTP responses.
+
+    ``candidates`` is the deterministic shortlist (already top-K from the
+    portal site-fit ranker). Each candidate must carry ``site_id``,
+    ``site_url``, ``publishing_profile_payload``, and the ``is_general``
+    flag.
     """
 
     if not creator_endpoint:
         raise AutomationError("Creator endpoint is not configured.")
+    payload_candidates: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        site_id = str(candidate.get("site_id") or "").strip()
+        site_url = str(candidate.get("site_url") or "").strip()
+        if not site_id or not site_url:
+            continue
+        payload_candidates.append(
+            {
+                "site_id": site_id,
+                "site_url": site_url,
+                "publishing_profile_payload": candidate.get("publishing_profile_payload") or {},
+                "is_general": bool(candidate.get("is_general")),
+            }
+        )
+    if not payload_candidates:
+        raise AutomationError("No publishing candidates with site_id+site_url to select from.")
+
     body: Dict[str, Any] = {
+        "target_url": target_url,
         "target_keyword": target_keyword,
+        "candidates": payload_candidates,
         "language": language,
-        "min_confidence": min_confidence,
     }
-    if publishing_profile_payload:
-        body["publishing_profile_payload"] = publishing_profile_payload
-    url = creator_endpoint.rstrip("/") + "/v2/refine-topic-for-publisher"
+    if target_profile_payload:
+        body["target_profile_payload"] = target_profile_payload
+
+    url = creator_endpoint.rstrip("/") + "/v2/select-publisher"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
     except requests.RequestException as exc:
-        raise AutomationError(f"Creator publisher-fit request failed: {exc}") from exc
+        raise AutomationError(f"Creator publisher-selector request failed: {exc}") from exc
 
     try:
         payload = response.json()
     except ValueError as exc:
         raise AutomationError(
-            f"Creator publisher-fit returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
+            f"Creator publisher-selector returned non-JSON (HTTP {response.status_code}): {response.text[:300]}"
         ) from exc
 
-    if response.status_code == 422 and isinstance(payload, dict) and payload.get("error") == "publisher_fit_failed":
-        code = str(payload.get("code") or "fit_failed")
-        message = str(payload.get("message") or "Publisher fit failed.")
-        raise AutomationError(f"Creator publisher fit failed [{code}]: {message}")
+    if (
+        response.status_code == 422
+        and isinstance(payload, dict)
+        and payload.get("error") == "publisher_selection_failed"
+    ):
+        code = str(payload.get("code") or "selection_failed")
+        message = str(payload.get("message") or "Publisher selection failed.")
+        raise AutomationError(f"Creator publisher selector failed [{code}]: {message}")
     if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
         raise AutomationError(
-            f"Creator publisher-fit unexpected response (HTTP {response.status_code}): {str(payload)[:300]}"
+            f"Creator publisher-selector unexpected response (HTTP {response.status_code}): {str(payload)[:300]}"
         )
     return payload
 
@@ -1279,41 +1308,6 @@ def _normalize_text_tokens(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _token_set(value: str) -> set[str]:
-    return {token for token in re.findall(r"\b[a-z0-9]{3,}\b", _normalize_text_tokens(value))}
-
-
-def _similarity_score(text: str, reference: str) -> float:
-    left = _token_set(text)
-    right = _token_set(reference)
-    if not left or not right:
-        return 0.0
-    overlap = len(left & right)
-    return overlap / float(max(len(right), 1))
-
-
-def _flatten_candidate_text(candidate: Dict[str, Any]) -> str:
-    profile = candidate.get("publishing_profile_payload") or {}
-    notes = " ".join(str(item).strip() for item in (candidate.get("notes") or []) if str(item).strip())
-    profile_text = " ".join(
-        str(profile.get(key) or "").strip()
-        for key in ("primary_context", "secondary_contexts", "taxonomy_terms", "editorial_terms")
-    )
-    inventory_titles = " ".join(
-        str(item.get("title") or "").strip()
-        for item in (candidate.get("internal_link_inventory") or [])[:8]
-        if isinstance(item, dict)
-    )
-    return " ".join([notes, profile_text, inventory_titles]).strip()
-
-
-def _candidate_language(candidate: Dict[str, Any]) -> str:
-    """Returns the candidate's site language (ISO 639-1 lowercase, ``""`` if unknown)."""
-    return str(
-        (candidate.get("publishing_profile_payload") or {}).get("language") or ""
-    ).strip().lower()
-
-
 def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
     """True when the site is flagged as ``allgemein`` / general-topic.
 
@@ -1331,185 +1325,6 @@ def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
     return any(token in primary_context for token in ("allgemein", "general", "magazin"))
 
 
-# Floor below which the topical-fit score is considered "no real match"; we
-# fall back to allgemein candidates instead. Tuned conservatively: a fit_score
-# of 30/100 + zero similarity is still ~0.3, but a real topical match usually
-# clears 0.6+.
-_LATE_BIND_FIT_FLOOR = 0.6
-
-
-def _topical_fit_score(candidate: Dict[str, Any], topic_text: str) -> float:
-    candidate_text = _flatten_candidate_text(candidate)
-    score = float(candidate.get("fit_score") or 0) / 100.0
-    score += _similarity_score(candidate_text, topic_text) * 3.0
-    return score
-
-
-def _select_publish_target_for_v2(
-    *,
-    site_understanding: Dict[str, Any],
-    fallback_target: Dict[str, Any],
-    publishing_candidates: Optional[List[Dict[str, Any]]],
-) -> Dict[str, Any]:
-    """Pre-Phase-C selector (kept for backwards compat with callers that still
-    pass a synthetic ``site_understanding`` and don't yet have a contract).
-
-    For the late-binding path that runs *after* contract generation, see
-    :func:`select_publish_target_after_contract`.
-    """
-
-    topic_text = " ".join(
-        [
-            str(site_understanding.get("primary_niche") or ""),
-            str(site_understanding.get("main_topic") or ""),
-            " ".join(str(item) for item in (site_understanding.get("seed_keywords") or [])),
-        ]
-    ).strip()
-    best = dict(fallback_target)
-    best_score = -1.0
-    for candidate in publishing_candidates or []:
-        score = _topical_fit_score(candidate, topic_text)
-        target_language = str(site_understanding.get("language") or "").strip().lower()
-        candidate_language = _candidate_language(candidate)
-        if candidate_language and target_language and candidate_language == target_language:
-            score += 1.0
-        if score > best_score:
-            best_score = score
-            best = dict(candidate)
-    return best
-
-
-def select_publish_target_after_contract(
-    *,
-    contract: Dict[str, Any],
-    target_language: str,
-    fallback_target: Dict[str, Any],
-    publishing_candidates: Optional[List[Dict[str, Any]]],
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Late-binding publishing-site selector.
-
-    Returns ``(selected, reason)`` where ``reason`` carries telemetry about
-    why this site was picked (``mode``, ``score``, ``rejected_languages``,
-    ``rejected_below_floor``).
-
-    Algorithm:
-    1. Hard-filter by ``target_language``. Sites whose
-       ``publishing_profile_payload.language`` doesn't match the article's
-       language are dropped — we never publish a French article on a German
-       site or vice versa. Sites with an unknown language pass through (we
-       don't have enough signal to reject them).
-    2. Score remaining candidates using the contract's ``target_keyword`` +
-       ``required_entities`` (richer signal than the synthetic
-       site_understanding the legacy selector used).
-    3. If the best score >= ``_LATE_BIND_FIT_FLOOR``, take it.
-    4. Otherwise, prefer an ``is_general`` candidate (allgemein fallback).
-    5. Otherwise, take the best topical match anyway (better than the
-       fallback target, which may be inactive or stale).
-    6. If there are zero candidates at all, return ``fallback_target`` with a
-       ``no_candidates`` reason.
-    """
-
-    topic_text_parts: List[str] = [
-        str(contract.get("target_keyword") or ""),
-        " ".join(
-            str(entity.get("name") or "")
-            for entity in (contract.get("required_entities") or [])
-            if isinstance(entity, dict)
-        ),
-        " ".join(str(item) for item in (contract.get("secondary_keywords") or [])),
-    ]
-    topic_text = " ".join(part for part in topic_text_parts if part.strip()).strip()
-    target_language_lc = (target_language or "").strip().lower()
-
-    candidates = list(publishing_candidates or [])
-    rejected_for_language: List[str] = []
-    eligible: List[Dict[str, Any]] = []
-    for candidate in candidates:
-        cand_lang = _candidate_language(candidate)
-        if target_language_lc and cand_lang and cand_lang != target_language_lc:
-            rejected_for_language.append(str(candidate.get("site_url") or ""))
-            continue
-        eligible.append(candidate)
-
-    if not eligible:
-        return dict(fallback_target), {
-            "mode": "no_candidates",
-            "rejected_for_language": rejected_for_language,
-            "score": 0.0,
-        }
-
-    scored = sorted(
-        ((_topical_fit_score(c, topic_text), c) for c in eligible),
-        key=lambda item: item[0],
-        reverse=True,
-    )
-    best_score, best_candidate = scored[0]
-
-    if best_score >= _LATE_BIND_FIT_FLOOR:
-        return dict(best_candidate), {
-            "mode": "topical_fit",
-            "score": best_score,
-            "rejected_for_language": rejected_for_language,
-            "rejected_below_floor": [],
-        }
-
-    general = [c for c in eligible if _candidate_is_general(c)]
-    if general:
-        # Pick the highest-scored general site (still using topical fit so a
-        # weakly-related general site beats a totally unrelated one).
-        general_scored = sorted(
-            ((_topical_fit_score(c, topic_text), c) for c in general),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-        chosen_score, chosen = general_scored[0]
-        return dict(chosen), {
-            "mode": "allgemein_fallback",
-            "score": chosen_score,
-            "below_floor_score": best_score,
-            "rejected_for_language": rejected_for_language,
-        }
-
-    return dict(best_candidate), {
-        "mode": "best_below_floor",
-        "score": best_score,
-        "rejected_for_language": rejected_for_language,
-        "rejected_below_floor": [],
-    }
-
-
-def pre_flight_publishing_feasibility(
-    *,
-    target_language: str,
-    publishing_candidates: Optional[List[Dict[str, Any]]],
-) -> Tuple[bool, str]:
-    """Returns ``(feasible, reason)``.
-
-    Cheap deterministic check before spending the contract budget: is there
-    at least one publishing candidate whose language matches the target
-    article language, OR a general-topic site (which we treat as
-    language-flexible only if its language is unknown or matches)?
-    """
-
-    candidates = list(publishing_candidates or [])
-    if not candidates:
-        return False, "no_publishing_candidates_available"
-
-    target_language_lc = (target_language or "").strip().lower()
-    for candidate in candidates:
-        cand_lang = _candidate_language(candidate)
-        if not target_language_lc:
-            return True, "no_language_constraint"
-        if not cand_lang:
-            # Unknown-language candidates count as feasible — we don't want a
-            # missing publishing_profile_payload.language to block real work.
-            return True, "candidate_with_unknown_language_present"
-        if cand_lang == target_language_lc:
-            return True, f"matching_language_candidate:{candidate.get('site_url')}"
-
-    return False, f"no_candidates_match_language:{target_language_lc}"
-
-
 def _slugify(value: str) -> str:
     normalized = _normalize_text_tokens(value)
     slug = re.sub(r"\s+", "-", normalized).strip("-")
@@ -1517,9 +1332,20 @@ def _slugify(value: str) -> str:
 
 
 def _derive_keyword_from_target_profile(target_profile_payload: Optional[Dict[str, Any]]) -> str:
+    """Pull a clean SEO keyword candidate from the target profile.
+
+    Skips ``page_title`` deliberately: a raw page title like
+    ``'Brillenhaus24.de - Ihr Onlineshop fuer guenstige Brillen & Komplettbril'``
+    is junk as a search keyword and produced the brillenhaus -> Klimaschutz
+    mismatch (no publisher could plausibly fit a string like that). When
+    the profile only carries page-title-grade signal, returning ``""``
+    forces the caller to fall through to ``/v2/derive-topic``, which uses
+    DataForSEO to produce a real keyword.
+    """
+
     if not isinstance(target_profile_payload, dict):
         return ""
-    for key in ("domain_level_topic", "primary_context", "page_title"):
+    for key in ("domain_level_topic", "primary_context"):
         candidate = str(target_profile_payload.get(key) or "").strip()
         if candidate:
             return candidate
@@ -1880,58 +1706,126 @@ def _run_create_article_pipeline_v2(
             "target site with at least one publishing site."
         )
 
-    # Fit-validation: with a topic in hand and a publisher profile available,
-    # validate the editorial intersection BEFORE spending the contract budget.
-    # The Haiku-driven refiner either confirms the topic, refines it to fit
-    # the publisher's audience (e.g. brillen -> kinderbrillen on a kids site),
-    # or hard-fails when there's no genuine overlap.
-    fit_profile_payload: Dict[str, Any] = {}
-    for candidate in effective_candidates:
-        cand_profile = candidate.get("publishing_profile_payload") or {}
-        if cand_profile:
-            fit_profile_payload = dict(cand_profile)
-            break
+    # Publisher selection: pick the best-fit publisher from the shortlist
+    # in ONE Haiku call BEFORE spending the contract budget. The selector
+    # ranks all candidates relatively (so it can pick the best fit even
+    # when no candidate is a perfect topical match), refines the article
+    # topic to suit the chosen publisher's audience (e.g. brillen ->
+    # kinderbrillen on a family magazine), and returns ``no_fit=true`` only
+    # when literally none of the candidates have editorial overlap. In that
+    # case we fall back to an Allgemein / general publisher; if no general
+    # publisher is in the shortlist either, we hard-fail with a clear
+    # admin-facing message.
     fit_language = upfront_language or "de"
-    if upfront_target_keyword and fit_profile_payload:
+    selector_payload: Optional[Dict[str, Any]] = None
+    chosen_candidate: Optional[Dict[str, Any]] = None
+    if upfront_target_keyword:
         try:
-            fit_payload = call_creator_v2_refine_topic_for_publisher(
+            selector_payload = call_creator_v2_select_publisher(
                 creator_endpoint=creator_endpoint,
+                target_url=target_site_url,
                 target_keyword=upfront_target_keyword,
-                publishing_profile_payload=fit_profile_payload,
+                candidates=effective_candidates,
+                target_profile_payload=target_profile_payload,
                 language=fit_language,
                 timeout_seconds=min(60, creator_timeout_seconds),
             )
-            refined = str(fit_payload.get("refined_keyword") or "").strip()
+        except AutomationError as exc:
+            # Selector infra failure is logged but doesn't block: fall back
+            # to the deterministic top candidate so the run can complete.
+            _trace(
+                "warning",
+                "publisher_selector",
+                "failed",
+                "Publisher selector call failed; falling back to deterministic top candidate.",
+                {"error": str(exc)[:300]},
+            )
+            selector_payload = None
+
+    if selector_payload:
+        best_pick = selector_payload.get("best_pick") if isinstance(selector_payload.get("best_pick"), dict) else {}
+        no_fit = bool(selector_payload.get("no_fit"))
+        if no_fit:
+            general_candidates = [c for c in effective_candidates if _candidate_is_general(c)]
+            if not general_candidates:
+                raise AutomationError(
+                    "Creator publisher selector found no editorial fit among any "
+                    "candidate, and no Allgemein / general publisher is available "
+                    "as a fallback. Pick a different target or add a general site. "
+                    f"Rationale: {best_pick.get('rationale') or 'no overlap'}"
+                )
+            chosen_candidate = general_candidates[0]
+            _trace(
+                "info",
+                "publisher_selector",
+                "no_fit_allgemein_fallback",
+                "No editorial fit; routing to Allgemein publisher.",
+                {
+                    "selected_site_url": chosen_candidate.get("site_url"),
+                    "rationale": best_pick.get("rationale"),
+                },
+            )
+        else:
+            picked_id = str(best_pick.get("site_id") or "").strip()
+            if picked_id:
+                chosen_candidate = next(
+                    (c for c in effective_candidates if str(c.get("site_id") or "").strip() == picked_id),
+                    None,
+                )
+            if chosen_candidate is None:
+                # LLM picked an id that doesn't match anything we sent (defensive).
+                chosen_candidate = effective_candidates[0]
+            refined = str(best_pick.get("refined_topic") or "").strip()
             if refined and refined != upfront_target_keyword:
                 _trace(
                     "info",
-                    "publisher_fit",
+                    "publisher_selector",
                     "refined",
-                    "Topic refined to fit the publishing site's audience.",
+                    "Topic refined to fit the chosen publisher's audience.",
                     {
                         "original": upfront_target_keyword,
                         "refined": refined,
-                        "confidence": fit_payload.get("confidence"),
-                        "rationale": fit_payload.get("rationale"),
+                        "selected_site_url": chosen_candidate.get("site_url"),
+                        "confidence": best_pick.get("confidence"),
+                        "rationale": best_pick.get("rationale"),
                     },
                 )
                 upfront_target_keyword = refined
             else:
                 _trace(
                     "info",
-                    "publisher_fit",
-                    "ok",
-                    "Topic and publisher are a good fit.",
+                    "publisher_selector",
+                    "selected",
+                    "Publisher chosen by Haiku rerank.",
                     {
-                        "keyword": upfront_target_keyword,
-                        "confidence": fit_payload.get("confidence"),
+                        "selected_site_url": chosen_candidate.get("site_url"),
+                        "confidence": best_pick.get("confidence"),
+                        "rationale": best_pick.get("rationale"),
+                        "soft_passed": bool(selector_payload.get("soft_passed")),
                     },
                 )
-        except AutomationError as exc:
-            # publisher_fit_failed surfaces as AutomationError -- propagate so
-            # the admin sees the verbatim "no editorial fit" message instead
-            # of a wasted contract spend producing a misfit article.
-            raise
+
+    if chosen_candidate is None:
+        # Selector skipped (no upfront keyword) or its call failed: fall back to
+        # the first candidate, which is the deterministic top of the shortlist.
+        chosen_candidate = effective_candidates[0]
+        _trace(
+            "info",
+            "publisher_selector",
+            "deterministic_fallback",
+            "Using deterministic top candidate (selector skipped or unavailable).",
+            {"selected_site_url": chosen_candidate.get("site_url")},
+        )
+
+    chosen_profile_payload = chosen_candidate.get("publishing_profile_payload") or {}
+    chosen_site_url = str(chosen_candidate.get("site_url") or "").strip()
+    selected_publish_site_url = chosen_site_url or site_url
+    selected_publish_site_id = str(chosen_candidate.get("site_id") or publishing_site_id or "").strip() or None
+    selected_wp_rest_base = str(chosen_candidate.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
+    selected_wp_username = str(chosen_candidate.get("wp_username") or wp_username).strip() or wp_username
+    selected_wp_app_password = str(chosen_candidate.get("wp_app_password") or wp_app_password).strip() or wp_app_password
+    selected_category_ids = list(chosen_candidate.get("category_ids") or category_ids or [])
+    selected_category_candidates = list(chosen_candidate.get("category_candidates") or category_candidates or [])
 
     # Brainstorm an editorial angle for the article. Only runs when the
     # webhook didn't pin an explicit topic -- if the admin chose a topic
@@ -1941,22 +1835,13 @@ def _run_create_article_pipeline_v2(
     editorial_angle: Optional[Dict[str, Any]] = None
     explicit_topic_present = bool((topic or "").strip() or profile_topic)
     if upfront_target_keyword and not explicit_topic_present:
-        # Pull the publisher URL from the chosen / first effective candidate;
-        # this gives the brainstorm cache its second key dimension so we
-        # cache per (target, publisher) pair.
-        brainstorm_publisher_url: Optional[str] = None
-        for candidate in effective_candidates:
-            url_value = str(candidate.get("site_url") or "").strip()
-            if url_value:
-                brainstorm_publisher_url = url_value
-                break
         try:
             brainstorm_payload = call_creator_v2_brainstorm_topics(
                 creator_endpoint=creator_endpoint,
                 target_url=target_site_url,
                 target_keyword=upfront_target_keyword,
-                publisher_url=brainstorm_publisher_url,
-                publishing_profile_payload=fit_profile_payload or None,
+                publisher_url=chosen_site_url or None,
+                publishing_profile_payload=chosen_profile_payload or None,
                 language=fit_language,
                 num_angles=5,
                 exclude_topics=list(exclude_topics or []),
@@ -2006,9 +1891,10 @@ def _run_create_article_pipeline_v2(
         "info",
         "creator_v2",
         "start",
-        "Calling creator /v2/run-pipeline (late-bind publishing site).",
+        "Calling creator /v2/run-pipeline with the chosen publisher locked in.",
         {
             "target_keyword": upfront_target_keyword,
+            "publishing_site_url": selected_publish_site_url,
             "topic_will_be_derived": upfront_target_keyword is None,
         },
     )
@@ -2016,7 +1902,7 @@ def _run_create_article_pipeline_v2(
         creator_endpoint=creator_endpoint,
         target_keyword=upfront_target_keyword,
         target_backlink_url=target_site_url,
-        publishing_site_url=None,  # late-bind below
+        publishing_site_url=selected_publish_site_url or None,
         language=upfront_language,
         editorial_angle=editorial_angle,
         anchor_hint=anchor,
@@ -2036,53 +1922,6 @@ def _run_create_article_pipeline_v2(
         contract_for_select.get("language") or v2_response.get("language") or "de"
     ).strip().lower()
 
-    # Late-bind the publishing site using the contract entities + the
-    # detected language as a hard filter. Allgemein fallback kicks in when no
-    # candidate clears the topical-fit floor.
-    selected_target, selection_reason = select_publish_target_after_contract(
-        contract=contract_for_select,
-        target_language=article_language,
-        fallback_target={
-            "site_url": site_url,
-            "site_id": publishing_site_id,
-            "wp_rest_base": wp_rest_base,
-            "wp_username": wp_username,
-            "wp_app_password": wp_app_password,
-            "category_ids": list(category_ids or []),
-            "category_candidates": list(category_candidates or []),
-            "internal_link_inventory": list(internal_link_inventory or []),
-        },
-        publishing_candidates=effective_candidates,
-    )
-    if selection_reason.get("mode") == "no_candidates":
-        raise AutomationError(
-            f"Creator v2 pipeline could not place the article: no publishing candidate "
-            f"matches language {article_language!r}. "
-            f"Rejected for language: {selection_reason.get('rejected_for_language')}"
-        )
-
-    selected_publish_site_url = str(selected_target.get("site_url") or site_url).strip() or site_url
-    selected_publish_site_id = str(selected_target.get("site_id") or publishing_site_id or "").strip() or None
-    selected_wp_rest_base = str(selected_target.get("wp_rest_base") or wp_rest_base).strip() or wp_rest_base
-    selected_wp_username = str(selected_target.get("wp_username") or wp_username).strip() or wp_username
-    selected_wp_app_password = str(selected_target.get("wp_app_password") or wp_app_password).strip() or wp_app_password
-    selected_category_ids = list(selected_target.get("category_ids") or category_ids or [])
-    selected_category_candidates = list(selected_target.get("category_candidates") or category_candidates or [])
-
-    _trace(
-        "info",
-        "site_match",
-        "selected",
-        f"Late-bind publishing-site selection ({selection_reason.get('mode')}).",
-        {
-            "selected_site_url": selected_publish_site_url,
-            "selected_site_id": selected_publish_site_id,
-            "selection_mode": selection_reason.get("mode"),
-            "selection_score": selection_reason.get("score"),
-            "article_language": article_language,
-            "rejected_for_language": selection_reason.get("rejected_for_language"),
-        },
-    )
     _trace(
         "info",
         "creator_v2",

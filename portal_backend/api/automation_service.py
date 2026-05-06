@@ -1906,6 +1906,16 @@ def _run_create_article_pipeline_v2(
     selected_wp_app_password = str(chosen_candidate.get("wp_app_password") or wp_app_password).strip() or wp_app_password
     selected_category_ids = list(chosen_candidate.get("category_ids") or category_ids or [])
     selected_category_candidates = list(chosen_candidate.get("category_candidates") or category_candidates or [])
+    # Each WP site has its own user list, so author_id must follow the chosen
+    # publisher. Falling back to the caller's author_id only matches the
+    # originally-associated site -- using it on a different chosen publisher
+    # gets us an HTTP 400 rest_invalid_author from WP.
+    candidate_author_id_raw = chosen_candidate.get("author_id")
+    try:
+        candidate_author_id = int(candidate_author_id_raw) if candidate_author_id_raw is not None else 0
+    except (TypeError, ValueError):
+        candidate_author_id = 0
+    selected_author_id = candidate_author_id if candidate_author_id > 0 else author_id
 
     # Brainstorm an editorial angle for the article. Only runs when the
     # webhook didn't pin an explicit topic -- if the admin chose a topic
@@ -2142,7 +2152,7 @@ def _run_create_article_pipeline_v2(
             slug=slug,
             featured_media_id=featured_media_id,
             post_status=post_status,
-            author_id=author_id,
+            author_id=selected_author_id,
             category_ids=selected_category_ids,
             timeout_seconds=timeout_seconds,
         )
@@ -2159,7 +2169,7 @@ def _run_create_article_pipeline_v2(
             slug=slug,
             featured_media_id=featured_media_id,
             post_status=post_status,
-            author_id=author_id,
+            author_id=selected_author_id,
             category_ids=selected_category_ids,
             timeout_seconds=timeout_seconds,
         )

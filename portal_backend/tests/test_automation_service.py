@@ -856,11 +856,22 @@ def test_run_create_article_pipeline_v2_selector_picks_winner_and_refines_topic(
 
     monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
     monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
-    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+    captured_post: dict[str, object] = {}
+
+    def fake_create(**kwargs):
+        captured_post.update(kwargs)
+        return {"id": 1, "link": "x"}
+
+    monkeypatch.setattr(automation_service, "wp_create_post", fake_create)
 
     result = automation_service._run_create_article_pipeline_v2(
         **_common_v2_pipeline_kwargs(
             topic="günstige brillen online kaufen",
+            # Caller's author_id is 4 (matches the originally-associated site,
+            # not the chosen publisher). The publish call must use the chosen
+            # candidate's author_id (12) instead -- otherwise WP 400's with
+            # rest_invalid_author.
+            author_id=4,
             publishing_candidates=[
                 {
                     "site_url": "https://solar.de",
@@ -873,6 +884,7 @@ def test_run_create_article_pipeline_v2_selector_picks_winner_and_refines_topic(
                     "wp_rest_base": "/wp-json",
                     "wp_username": "admin",
                     "wp_app_password": "pw",
+                    "author_id": 7,  # solar.de's WP user
                     "category_ids": [],
                     "category_candidates": [],
                     "internal_link_inventory": [],
@@ -890,6 +902,7 @@ def test_run_create_article_pipeline_v2_selector_picks_winner_and_refines_topic(
                     "wp_rest_base": "/wp-json",
                     "wp_username": "kidsblatt-admin",
                     "wp_app_password": "kids-pw",
+                    "author_id": 12,  # kidsblatt's WP user
                     "category_ids": [11],
                     "category_candidates": [{"id": 11, "name": "Familie"}],
                     "internal_link_inventory": [],
@@ -907,8 +920,10 @@ def test_run_create_article_pipeline_v2_selector_picks_winner_and_refines_topic(
     assert captured_v2["publishing_site_url"] == "https://kidsblatt.de"
     # Pipeline used the refined topic, not the original buying-guide keyword.
     assert captured_v2["target_keyword"] == "kinderbrillen online kaufen"
-    # Publish step routes to the chosen publisher's WP credentials.
+    # Publish step routes to the chosen publisher's WP credentials AND author_id.
     assert result["selected_site_url"] == "https://kidsblatt.de"
+    assert captured_post["wp_username"] == "kidsblatt-admin"
+    assert captured_post["author_id"] == 12  # not 4 (caller default), not 7 (solar)
 
 
 def test_run_create_article_pipeline_v2_falls_back_to_allgemein_when_no_fit(monkeypatch):

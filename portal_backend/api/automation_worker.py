@@ -1085,6 +1085,19 @@ class AutomationJobWorker:
                             value = str((ranked_candidate.get("profile") or {}).get(key) or "").strip()
                             if value:
                                 candidate_notes.append(value)
+                        # author_id is per-candidate: each WP site has its own
+                        # user list, and the author_id from the originally-
+                        # associated site doesn't exist on a different chosen
+                        # publisher (HTTP 400 rest_invalid_author).
+                        candidate_credential_author_id: Optional[int] = None
+                        raw_candidate_author_id = candidate_credential.author_id
+                        if raw_candidate_author_id is not None:
+                            try:
+                                parsed_candidate_author_id = int(raw_candidate_author_id)
+                            except (TypeError, ValueError):
+                                parsed_candidate_author_id = 0
+                            if parsed_candidate_author_id > 0:
+                                candidate_credential_author_id = parsed_candidate_author_id
                         publishing_candidates.append(
                             {
                                 "site_url": candidate_site.site_url,
@@ -1097,6 +1110,7 @@ class AutomationJobWorker:
                                 "wp_rest_base": candidate_site.wp_rest_base,
                                 "wp_username": candidate_credential.wp_username,
                                 "wp_app_password": candidate_credential.wp_app_password,
+                                "author_id": candidate_credential_author_id,
                                 "category_ids": ordered_candidate_category_ids,
                                 "category_candidates": candidate_category_candidates,
                                 "is_general": bool(getattr(candidate_site, "is_general", False)),

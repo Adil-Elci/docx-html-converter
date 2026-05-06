@@ -201,7 +201,8 @@ def _is_retryable_error(error: LLMError) -> bool:
     match = re.search(r"llm http (\d+)", message)
     if match:
         code = int(match.group(1))
-        return code in {408, 409, 429, 500, 502, 503, 504}
+        # 529 = Anthropic "overloaded" (their servers, transient).
+        return code in {408, 409, 429, 500, 502, 503, 504, 529}
     if "timed out" in message:
         return True
     return False

@@ -9,11 +9,11 @@ from portal_backend.api import automation_service
 
 @pytest.fixture(autouse=True)
 def _stub_creator_pre_pipeline_calls(monkeypatch):
-    """The Phase D fit-validation step issues real HTTP calls to the creator
-    service before the contract spend (derive-topic + refine-topic). In unit
-    tests we don't want to hit the network -- stub them with sensible
-    no-op defaults. Tests that need to assert fit-fail behaviour can
-    override the stub explicitly.
+    """The pre-contract publisher selection step issues real HTTP calls to
+    the creator service (derive-topic + select-publisher). In unit tests we
+    don't want to hit the network -- stub them with sensible no-op defaults.
+    Tests that need to assert selector behaviour can override the stub
+    explicitly.
     """
 
     monkeypatch.setattr(
@@ -27,20 +27,32 @@ def _stub_creator_pre_pipeline_calls(monkeypatch):
         },
     )
 
-    def _fake_refine(*, target_keyword, **_kwargs):
+    def _fake_select(*, candidates, target_keyword, **_kwargs):
+        # Default stub: pick the first candidate, no refinement, no_fit=False.
+        first = (candidates or [{}])[0]
+        site_id = str(first.get("site_id") or "")
+        site_url = str(first.get("site_url") or "")
         return {
             "ok": True,
-            "refined_keyword": target_keyword,
-            "original_keyword": target_keyword,
-            "changed": False,
-            "confidence": 0.9,
-            "rationale": "stubbed",
+            "best_pick": {
+                "site_id": site_id,
+                "site_url": site_url,
+                "refined_topic": target_keyword,
+                "confidence": 0.9,
+                "rationale": "stubbed",
+            },
+            "no_fit": False,
+            "soft_passed": False,
+            "ranking": [
+                {"site_id": site_id, "site_url": site_url, "fit_score": 0.9, "rationale": "stubbed"}
+            ],
+            "cost_usd": 0.0,
         }
 
     monkeypatch.setattr(
         automation_service,
-        "call_creator_v2_refine_topic_for_publisher",
-        _fake_refine,
+        "call_creator_v2_select_publisher",
+        _fake_select,
     )
 
     # Brainstorm runs only when no explicit topic is provided. Stub it as
@@ -410,6 +422,14 @@ def test_derive_keyword_returns_empty_when_nothing_usable():
     assert automation_service._derive_keyword_from_target_profile({}) == ""
 
 
+def test_derive_keyword_skips_page_title_so_derive_topic_runs():
+    """A raw page_title like the brillenhaus24 case is too noisy to use as a
+    keyword; force the pipeline to fall through to /v2/derive-topic."""
+
+    profile = {"page_title": "Brillenhaus24.de - Ihr Onlineshop fuer guenstige Brillen"}
+    assert automation_service._derive_keyword_from_target_profile(profile) == ""
+
+
 # ---- _run_create_article_pipeline_v2 -----------------------------------
 
 
@@ -482,8 +502,9 @@ def test_run_create_article_pipeline_v2_publishes_and_adapts(monkeypatch):
 
     assert captured_v2["target_keyword"] == "steuerberater hamburg"
     assert captured_v2["target_backlink_url"] == "https://mandant.de/leistungen"
-    # Late-bind: site is selected AFTER the creator pipeline returns.
-    assert captured_v2["publishing_site_url"] is None
+    # Publisher is locked in BEFORE the creator pipeline now (selector ran
+    # against the deterministic shortlist and returned the chosen site).
+    assert captured_v2["publishing_site_url"] == "https://host.de"
     assert captured_v2["anchor_hint"] == "partial_match"
 
     assert result["post_event_type"] == "wp_post_created"
@@ -719,47 +740,54 @@ def test_run_create_article_pipeline_v2_skips_brainstorm_when_explicit_topic(mon
     assert captured_v2.get("editorial_angle") is None
 
 
-def test_run_create_article_pipeline_v2_refines_topic_for_publisher(monkeypatch):
-    """Phase D: when topic + publisher profile both exist, portal_backend
-    runs the fit refiner BEFORE the contract spend and uses the refined
-    keyword. Reproduces brillenhaus24 -> kidsblatt: target topic is
-    "günstige brillen", publisher is a kids magazine, refiner returns
-    "kinderbrillen" so the article fits the publisher's audience."""
+def test_run_create_article_pipeline_v2_selector_picks_winner_and_refines_topic(monkeypatch):
+    """Reproduces brillenhaus24 -> kidsblatt: shortlist contains an off-topic
+    Klimaschutz site and a family magazine. The new selector picks the family
+    magazine, refines the topic to 'kinderbrillen', and the contract step
+    runs against the chosen publisher (no late-binding)."""
 
-    captured_v2 = {}
-    captured_refine: dict[str, object] = {}
+    captured_v2: dict[str, object] = {}
+    captured_select: dict[str, object] = {}
 
-    def fake_refine(**kwargs):
-        captured_refine.update(kwargs)
+    def fake_select(**kwargs):
+        captured_select.update(kwargs)
         return {
             "ok": True,
-            "refined_keyword": "kinderbrillen online kaufen",
-            "original_keyword": kwargs.get("target_keyword"),
-            "changed": True,
-            "confidence": 0.78,
-            "rationale": "publisher targets parents",
+            "best_pick": {
+                "site_id": "kids-id",
+                "site_url": "https://kidsblatt.de",
+                "refined_topic": "kinderbrillen online kaufen",
+                "confidence": 0.86,
+                "rationale": "family-magazine audience fits kids' eyewear angle",
+            },
+            "no_fit": False,
+            "soft_passed": False,
+            "ranking": [
+                {"site_id": "kids-id", "site_url": "https://kidsblatt.de", "fit_score": 0.86, "rationale": "family fit"},
+                {"site_id": "solar-id", "site_url": "https://solar.de", "fit_score": 0.1, "rationale": "no overlap"},
+            ],
+            "cost_usd": 0.005,
         }
 
     def fake_v2(**kwargs):
         captured_v2.update(kwargs)
         return _v2_response_with_sections()
 
-    monkeypatch.setattr(automation_service, "call_creator_v2_refine_topic_for_publisher", fake_refine)
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
     monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
     monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
 
-    automation_service._run_create_article_pipeline_v2(
+    result = automation_service._run_create_article_pipeline_v2(
         **_common_v2_pipeline_kwargs(
             topic="günstige brillen online kaufen",
             publishing_candidates=[
                 {
-                    "site_url": "https://kidsblatt.de",
-                    "site_id": "k-id",
-                    "fit_score": 30,
+                    "site_url": "https://solar.de",
+                    "site_id": "solar-id",
+                    "fit_score": 60,
                     "publishing_profile_payload": {
                         "language": "de",
-                        "primary_context": "kids and family",
-                        "topics": ["parenting", "schule"],
+                        "primary_context": "klimaschutz und solar",
                     },
                     "wp_rest_base": "/wp-json",
                     "wp_username": "admin",
@@ -769,34 +797,122 @@ def test_run_create_article_pipeline_v2_refines_topic_for_publisher(monkeypatch)
                     "internal_link_inventory": [],
                     "is_general": False,
                 },
+                {
+                    "site_url": "https://kidsblatt.de",
+                    "site_id": "kids-id",
+                    "fit_score": 40,
+                    "publishing_profile_payload": {
+                        "language": "de",
+                        "primary_context": "kids and family",
+                        "topics": ["parenting", "schule"],
+                    },
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "kidsblatt-admin",
+                    "wp_app_password": "kids-pw",
+                    "category_ids": [11],
+                    "category_candidates": [{"id": 11, "name": "Familie"}],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
             ],
         ),
     )
-    # Refiner saw the original keyword + the publisher profile.
-    assert captured_refine["target_keyword"] == "günstige brillen online kaufen"
-    assert captured_refine["publishing_profile_payload"]["primary_context"] == "kids and family"
-    # The pipeline call uses the refined keyword, not the original.
+    # Selector saw the full shortlist with both candidates.
+    selector_ids = [c["site_id"] for c in captured_select["candidates"]]
+    assert "solar-id" in selector_ids
+    assert "kids-id" in selector_ids
+    # Pipeline ran with the SELECTOR's chosen publisher locked in -- not the
+    # deterministic top (solar) but the LLM-picked one (kids).
+    assert captured_v2["publishing_site_url"] == "https://kidsblatt.de"
+    # Pipeline used the refined topic, not the original buying-guide keyword.
     assert captured_v2["target_keyword"] == "kinderbrillen online kaufen"
+    # Publish step routes to the chosen publisher's WP credentials.
+    assert result["selected_site_url"] == "https://kidsblatt.de"
 
 
-def test_run_create_article_pipeline_v2_hard_fails_on_no_publisher_fit(monkeypatch):
-    """Phase D: if the refiner says 'no_editorial_fit', the AutomationError
-    propagates out of call_creator_v2_refine_topic_for_publisher and the
-    contract is never built (no contract spend on a misfit job)."""
+def test_run_create_article_pipeline_v2_falls_back_to_allgemein_when_no_fit(monkeypatch):
+    """When the selector returns ``no_fit=true``, the pipeline falls back to a
+    candidate flagged ``is_general`` instead of hard-failing."""
 
-    def fake_refine(**kwargs):
-        raise automation_service.AutomationError(
-            "Creator publisher fit failed [no_editorial_fit]: Adult product on a kids-only publisher."
-        )
+    captured_v2: dict[str, object] = {}
 
-    monkeypatch.setattr(automation_service, "call_creator_v2_refine_topic_for_publisher", fake_refine)
+    def fake_select(**_kwargs):
+        return {
+            "ok": True,
+            "best_pick": {"site_id": "", "site_url": "", "refined_topic": "", "confidence": 0.1, "rationale": "no overlap"},
+            "no_fit": True,
+            "soft_passed": False,
+            "ranking": [],
+            "cost_usd": 0.005,
+        }
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            topic="adult product xyz",
+            publishing_candidates=[
+                {
+                    "site_url": "https://kidsblatt.de",
+                    "site_id": "k-id",
+                    "fit_score": 30,
+                    "publishing_profile_payload": {"primary_context": "kids only"},
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "admin",
+                    "wp_app_password": "pw",
+                    "category_ids": [],
+                    "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
+                {
+                    "site_url": "https://allgemein.de",
+                    "site_id": "g-id",
+                    "fit_score": 10,
+                    "publishing_profile_payload": {"primary_context": "lifestyle"},
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "g-admin",
+                    "wp_app_password": "g-pw",
+                    "category_ids": [],
+                    "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": True,
+                },
+            ],
+        ),
+    )
+    assert captured_v2["publishing_site_url"] == "https://allgemein.de"
+    assert result["selected_site_url"] == "https://allgemein.de"
+
+
+def test_run_create_article_pipeline_v2_hard_fails_when_no_fit_and_no_general(monkeypatch):
+    """No editorial fit and no Allgemein candidate -> hard-fail before the
+    contract spend with a clear admin-facing message."""
+
+    def fake_select(**_kwargs):
+        return {
+            "ok": True,
+            "best_pick": {"site_id": "", "refined_topic": "", "confidence": 0.0, "rationale": "adult product on kids site"},
+            "no_fit": True,
+            "soft_passed": False,
+            "ranking": [],
+            "cost_usd": 0.005,
+        }
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
     monkeypatch.setattr(
         automation_service,
         "call_creator_v2_pipeline",
-        lambda **kwargs: pytest.fail("v2 pipeline should not be called when fit fails"),
+        lambda **kwargs: pytest.fail("v2 pipeline must not run when no fit + no general fallback"),
     )
 
-    with pytest.raises(automation_service.AutomationError, match="no_editorial_fit"):
+    with pytest.raises(automation_service.AutomationError, match="no editorial fit"):
         automation_service._run_create_article_pipeline_v2(
             **_common_v2_pipeline_kwargs(
                 topic="adult product xyz",
@@ -817,6 +933,31 @@ def test_run_create_article_pipeline_v2_hard_fails_on_no_publisher_fit(monkeypat
                 ],
             ),
         )
+
+
+def test_run_create_article_pipeline_v2_falls_back_to_top_candidate_when_selector_unavailable(monkeypatch):
+    """When the selector call itself raises (infra failure), the pipeline
+    keeps running with the deterministic top candidate -- network blips
+    must not block real work."""
+
+    captured_v2: dict[str, object] = {}
+
+    def fake_select(**_kwargs):
+        raise automation_service.AutomationError("Creator publisher-selector request failed: timeout")
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(),
+    )
+    # The pipeline still ran; deterministic top of the shortlist (host.de) wins.
+    assert captured_v2["publishing_site_url"] == "https://host.de"
 
 
 def test_run_create_article_pipeline_v2_synthesises_explicit_publishing_site(monkeypatch):
@@ -852,25 +993,6 @@ def test_run_create_article_pipeline_v2_synthesises_explicit_publishing_site(mon
     assert captured_v2["target_keyword"] == "steuerberater hamburg"
     assert result["selected_site_url"] == "https://kidsblatt.de"
     assert result["post_event_type"] == "wp_post_created"
-
-
-def test_run_create_article_pipeline_v2_raises_when_no_language_match(monkeypatch):
-    """Phase C: candidates exist but none match the article's language."""
-
-    french_response = _v2_response_with_sections()
-    french_response["language"] = "fr"
-    french_response["contract"]["language"] = "fr"
-
-    monkeypatch.setattr(
-        automation_service,
-        "call_creator_v2_pipeline",
-        lambda **kwargs: french_response,
-    )
-    with pytest.raises(automation_service.AutomationError, match="language"):
-        automation_service._run_create_article_pipeline_v2(
-            # All candidates are German -- but the article came back as French.
-            **_common_v2_pipeline_kwargs(),
-        )
 
 
 def test_run_create_article_pipeline_v2_uses_update_when_post_exists(monkeypatch):

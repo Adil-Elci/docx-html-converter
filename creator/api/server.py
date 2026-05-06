@@ -14,10 +14,10 @@ from pydantic import BaseModel, Field
 
 from .models import ErrorResponse
 from .pipeline_runner import PipelineError, PipelineRun, run_pipeline
-from .publisher_fit import (
-    FitVerdict,
-    PublisherFitError,
-    validate_or_refine_topic_for_publisher,
+from .publisher_selector import (
+    PublisherSelectorError,
+    SelectionResult,
+    select_best_publisher,
 )
 from .topic_brainstorm import (
     BrainstormResult,
@@ -85,49 +85,75 @@ async def health() -> JSONResponse:
     return JSONResponse(status_code=200 if llm_ready else 503, content=payload)
 
 
-# ---- v2: validate/refine topic for a publishing site ---------------------
+# ---- v2: pick the best publishing-site candidate -------------------------
 
 
-class V2RefineTopicForPublisherRequest(BaseModel):
-    target_keyword: str = Field(..., min_length=2)
+class V2SelectPublisherCandidate(BaseModel):
+    site_id: str = Field(..., min_length=1)
+    site_url: str = Field(..., min_length=4)
     publishing_profile_payload: Optional[dict] = None
+    is_general: bool = False
+
+
+class V2SelectPublisherRequest(BaseModel):
+    target_url: str = Field(..., min_length=4)
+    target_keyword: str = Field(..., min_length=2)
+    candidates: list[V2SelectPublisherCandidate] = Field(..., min_length=1)
+    target_profile_payload: Optional[dict] = None
     language: str = "de"
-    min_confidence: float = 0.4
 
 
-def _serialize_fit_verdict(v: FitVerdict) -> dict:
+def _serialize_selection(result: SelectionResult) -> dict:
     return {
         "ok": True,
-        "refined_keyword": v.refined_keyword,
-        "original_keyword": v.original_keyword,
-        "changed": v.changed,
-        "confidence": v.confidence,
-        "rationale": v.rationale,
-        "cost_usd": v.cost_usd,
+        "best_pick": {
+            "site_id": result.best_site_id,
+            "site_url": result.best_site_url,
+            "refined_topic": result.refined_topic,
+            "confidence": result.confidence,
+            "rationale": result.rationale,
+        },
+        "no_fit": result.no_fit,
+        "soft_passed": result.soft_passed,
+        "ranking": [
+            {
+                "site_id": r.site_id,
+                "site_url": r.site_url,
+                "fit_score": r.fit_score,
+                "rationale": r.rationale,
+            }
+            for r in result.ranking
+        ],
+        "cost_usd": result.cost_usd,
     }
 
 
-@app.post("/v2/refine-topic-for-publisher")
-async def v2_refine_topic_for_publisher(payload: V2RefineTopicForPublisherRequest) -> JSONResponse:
-    """Validate that a target keyword has an editorial intersection with the
-    publishing site's audience; refine it if needed; hard-fail when no fit.
+@app.post("/v2/select-publisher")
+async def v2_select_publisher(payload: V2SelectPublisherRequest) -> JSONResponse:
+    """Pick the best-fit publishing site from a deterministic shortlist.
 
-    Used by portal_backend before the contract step on the v2 path so we
-    don't waste the contract budget on a topic the publisher would reject.
-    Returns ``422`` with stable codes ``no_editorial_fit`` /
-    ``fit_below_threshold`` when the topic and publisher are a poor match.
+    The portal's site-fit ranker hands us a top-K shortlist (K is usually
+    5-8). One Haiku call ranks them relatively, picks the winner, and
+    returns a refined article topic tailored to the winner's audience
+    (e.g. eyewear -> kids' eyewear if a family magazine wins). The caller
+    is expected to lock the chosen publisher in BEFORE the contract step.
+
+    ``no_fit=true`` is a verdict, not an error: the caller should fall back
+    to the Allgemein / general publisher rather than failing the run.
+    Genuine input/infra errors return 422.
     """
 
     try:
-        verdict = validate_or_refine_topic_for_publisher(
+        result = select_best_publisher(
+            target_url=payload.target_url,
             target_keyword=payload.target_keyword,
-            publishing_profile_payload=payload.publishing_profile_payload,
+            candidates=[c.model_dump() for c in payload.candidates],
+            target_profile=payload.target_profile_payload,
             language=payload.language,
-            min_confidence=payload.min_confidence,
         )
-    except PublisherFitError as exc:
+    except PublisherSelectorError as exc:
         logger.warning(
-            "creator.refine_topic_failed code=%s message=%s",
+            "creator.select_publisher_failed code=%s message=%s",
             exc.code,
             str(exc),
         )
@@ -135,13 +161,13 @@ async def v2_refine_topic_for_publisher(payload: V2RefineTopicForPublisherReques
             status_code=422,
             content={
                 "ok": False,
-                "error": "publisher_fit_failed",
+                "error": "publisher_selection_failed",
                 "code": exc.code,
                 "message": str(exc),
             },
         )
 
-    return JSONResponse(status_code=200, content=_serialize_fit_verdict(verdict))
+    return JSONResponse(status_code=200, content=_serialize_selection(result))
 
 
 # ---- v2: brainstorm editorial angles --------------------------------------

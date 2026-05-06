@@ -328,8 +328,12 @@ def test_call_with_thinking_retries_on_529_overloaded():
          patch("creator.api.contract_generator.time.sleep", side_effect=lambda s: sleeps.append(s)):
         text = call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
     assert text == '{"ok":true}'
-    # Two retries with exponential backoff: 2s then 4s.
-    assert sleeps == [2.0, 4.0]
+    # Two retries with exponential backoff (2s and 4s base) plus jitter
+    # (0.8x-1.2x). Asserting bands rather than exact values because jitter
+    # is non-deterministic by design.
+    assert len(sleeps) == 2
+    assert 1.6 <= sleeps[0] <= 2.4
+    assert 3.2 <= sleeps[1] <= 4.8
 
 
 def test_call_with_thinking_retries_on_503():
@@ -366,9 +370,9 @@ def test_call_with_thinking_raises_after_retry_exhaustion():
 
     with patch("creator.api.contract_generator.requests.post", return_value=overloaded) as mock_post, \
          patch("creator.api.contract_generator.time.sleep", lambda s: None):
-        with pytest.raises(LLMError, match="after 3 attempts"):
+        with pytest.raises(LLMError, match="after 5 attempts"):
             call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
-    assert mock_post.call_count == 3
+    assert mock_post.call_count == 5
 
 
 def test_call_with_thinking_retries_on_connection_error():

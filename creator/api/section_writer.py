@@ -35,7 +35,7 @@ DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_MAX_TOKENS = 8000
 DEFAULT_TEMPERATURE = 0.4
 DEFAULT_PARALLEL_WORKERS = 4
-DEFAULT_RETRIES = 2  # 3 total attempts on this critical phase
+DEFAULT_RETRIES = 4  # 5 attempts (~30s budget) -- sections are critical and Anthropic 529s warrant generous retry
 PROMPT_NAME = "section_writer"
 
 

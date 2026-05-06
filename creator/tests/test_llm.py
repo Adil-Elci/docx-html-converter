@@ -2,7 +2,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from creator.api.llm import LLMError, _call_anthropic, _extract_json, _is_retryable_error, call_llm_json
+from creator.api.llm import (
+    DEFAULT_LLM_BACKOFF_SECONDS,
+    DEFAULT_LLM_RETRIES,
+    LLMError,
+    _call_anthropic,
+    _extract_json,
+    _is_retryable_error,
+    _retry_sleep_seconds,
+    call_llm_json,
+    call_llm_text,
+)
 
 
 def test_extract_json_repairs_trailing_commas_and_bare_keys():
@@ -284,3 +294,133 @@ def test_call_llm_json_raises_after_exhausting_retries(monkeypatch):
             retries=2,
             backoff_seconds=0.0,
         )
+
+
+# ---- retry budget + jitter -----------------------------------------------
+
+
+def _http_response(status_code: int, text: str) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = text
+    response.raise_for_status = MagicMock()
+    if status_code >= 400:
+        from requests.exceptions import HTTPError
+
+        def raise_for_status():
+            raise HTTPError(f"{status_code}", response=response)
+
+        response.raise_for_status = raise_for_status
+    return response
+
+
+def test_default_retries_is_overload_class():
+    """Anthropic 529 (overloaded) clears in seconds-to-minutes. The default
+    retry budget must cover at least the seconds-class events; one or two
+    retries (the old defaults) was too tight."""
+
+    assert DEFAULT_LLM_RETRIES >= 4
+    assert DEFAULT_LLM_BACKOFF_SECONDS >= 1.5
+
+
+def test_retry_sleep_seconds_applies_jitter():
+    """Backoff is base * 2**attempt * uniform(0.8, 1.2). Multiple calls at
+    the same attempt should land in the jitter band."""
+
+    samples = [_retry_sleep_seconds(2.0, 0) for _ in range(50)]
+    assert all(1.6 <= s <= 2.4 for s in samples), samples
+    assert len(set(round(s, 3) for s in samples)) > 1  # jitter is actually random
+
+    samples_attempt_2 = [_retry_sleep_seconds(2.0, 2) for _ in range(50)]
+    # 2.0 * 2**2 = 8.0 base; jitter band 6.4 - 9.6
+    assert all(6.4 <= s <= 9.6 for s in samples_attempt_2)
+
+
+def test_call_llm_text_retries_on_529_overloaded(monkeypatch):
+    """Regression: call_llm_text used to hardcode retries=0, so a single 529
+    on the voice_pass step lost the entire ~$0.30 of upstream work."""
+
+    overloaded = _http_response(529, '{"type":"error","error":{"type":"overloaded_error"}}')
+    success = _anthropic_response("polished article body")
+
+    call_count = {"n": 0}
+
+    def fake_post(url, headers, json, timeout):
+        idx = call_count["n"]
+        call_count["n"] += 1
+        return [overloaded, overloaded, success][idx]
+
+    monkeypatch.setattr("creator.api.llm.requests.post", fake_post)
+    monkeypatch.setattr("creator.api.llm.time.sleep", lambda _s: None)
+
+    result = call_llm_text(
+        system_prompt="s",
+        user_prompt="u",
+        api_key="k",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-sonnet-4-6",
+        timeout_seconds=30,
+        max_tokens=2000,
+    )
+    assert result == "polished article body"
+    assert call_count["n"] == 3  # two 529 retries + final success
+
+
+def test_call_llm_text_does_not_retry_4xx(monkeypatch):
+    """Bad request / bad auth should fail fast -- they never fix themselves."""
+
+    response = _http_response(401, "Unauthorized")
+    call_count = {"n": 0}
+
+    def fake_post(*_args, **_kwargs):
+        call_count["n"] += 1
+        return response
+
+    monkeypatch.setattr("creator.api.llm.requests.post", fake_post)
+    monkeypatch.setattr("creator.api.llm.time.sleep", lambda _s: None)
+
+    with pytest.raises(LLMError, match="HTTP 401"):
+        call_llm_text(
+            system_prompt="s",
+            user_prompt="u",
+            api_key="k",
+            base_url="https://api.anthropic.com/v1",
+            model="claude-sonnet-4-6",
+            timeout_seconds=30,
+            max_tokens=500,
+        )
+    assert call_count["n"] == 1
+
+
+def test_is_retryable_error_includes_529():
+    """529 must be in the retryable set (Anthropic 'overloaded')."""
+
+    err = LLMError("LLM HTTP 529: overloaded_error")
+    assert _is_retryable_error(err) is True
+
+
+def test_call_llm_json_retries_on_529_overloaded(monkeypatch):
+    overloaded = _http_response(529, "Overloaded")
+    success = _anthropic_response('{"ok": true}')
+
+    call_count = {"n": 0}
+
+    def fake_post(url, headers, json, timeout):
+        idx = call_count["n"]
+        call_count["n"] += 1
+        return [overloaded, overloaded, success][idx]
+
+    monkeypatch.setattr("creator.api.llm.requests.post", fake_post)
+    monkeypatch.setattr("creator.api.llm.time.sleep", lambda _s: None)
+
+    result = call_llm_json(
+        system_prompt="s",
+        user_prompt="u",
+        api_key="k",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-sonnet-4-6",
+        timeout_seconds=30,
+        max_tokens=400,
+    )
+    assert result == {"ok": True}
+    assert call_count["n"] == 3

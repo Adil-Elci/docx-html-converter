@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 from .contract import ContentContract
-from .llm import LLMError, _extract_json
+from .llm import LLMError, _extract_json, _retry_sleep_seconds
 from .prompt_registry import Prompt, load as load_prompt
 from .research import ResearchPayload
 
@@ -283,7 +283,7 @@ def call_with_thinking(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     thinking_budget_tokens: int = DEFAULT_THINKING_BUDGET_TOKENS,
     request_label: str = "contract_generator",
-    max_attempts: int = 3,
+    max_attempts: int = 5,
     retry_backoff_seconds: float = 2.0,
 ) -> str:
     """Issue a single request to a Claude model with extended thinking enabled.
@@ -323,7 +323,7 @@ def call_with_thinking(
             last_error = LLMError(f"contract thinking request failed ({model}): {exc}")
             if attempt >= max_attempts:
                 raise last_error from exc
-            sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+            sleep_for = _retry_sleep_seconds(retry_backoff_seconds, attempt - 1)
             logger.warning(
                 "creator.contract_generator.connection_retry label=%s attempt=%s/%s sleep=%.1fs error=%s",
                 request_label, attempt, max_attempts, sleep_for, exc,
@@ -333,7 +333,7 @@ def call_with_thinking(
 
         if response.status_code in _CONTRACT_RETRY_HTTP_CODES:
             if attempt < max_attempts:
-                sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+                sleep_for = _retry_sleep_seconds(retry_backoff_seconds, attempt - 1)
                 logger.warning(
                     "creator.contract_generator.transient_retry label=%s status=%s attempt=%s/%s sleep=%.1fs",
                     request_label, response.status_code, attempt, max_attempts, sleep_for,

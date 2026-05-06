@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-05 · **Last commit:** `Phase B+C: language parameterization + late-binding publishing-site selection`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Wrap commercial intent in editorial framing for guest-post titles`
 
 ## Deployment
 
@@ -197,12 +197,41 @@ Goal: make `topic` and `publishing_site_url` optional on the v2 webhook so the o
 | `publishing_site_url` | Late-bound by `select_publish_target_after_contract` using the actual contract entities + language | $0 (deterministic) | ↑ (richer topical-fit signal than synthetic site_understanding; allgemein fallback prevents zero-fit dead-ends) |
 | `language` | Auto-detected from target URL (`<html lang>` → TLD); enforced by language_consistency eval check | $0 | ↑ (no more silent German-tone-on-French-target regressions) |
 
+## Phase D — Editorial-frame guest-post titles · ✅ DONE (2026-05-06, `d55ad85`)
+
+**Problem.** Two live tests on a kids-glasses target produced H1s like `"Kinderbrillen &amp; Jugendbrillen 2026: Günstige Komplettbrillen richtig auswählen"` — pure buying-guide phrasing that any publisher editor would reject as a paid placement. Three structural failures fed into it:
+
+1. **Brainstorm prompts ranked by SEO volume.** The "Top ~12 (Head)" tier explicitly allowed *"klarer kommerzieller ODER informationeller Intent"* and was sorted by estimated search volume. In a transactional niche the highest-volume terms are commercial, so they bubbled to rank 0 — and `portal_backend.automation_service` auto-picks `angles[0]`. The "Editorial first" rule lower in the prompt was a soft guideline the LLM routed around (re-framing a commercial keyword as a *Ratgeber*).
+2. **Contract H1 was forced to contain the target_keyword.** Even when an editorial angle was provided, the contract prompt's *"h1 muss target_keyword enthalten"* rule (section 8) re-injected the SEO keyword into the H1, undoing the editorial framing.
+3. **Sonnet sometimes pre-escaped HTML in JSON strings.** `Kinderbrillen & Jugendbrillen` came back as `Kinderbrillen &amp; Jugendbrillen` because the LLM knew the field would end up in HTML, leaving literal entities in the contract.
+
+**User-stated requirement.** Even when the underlying SEO intent is commercial (e.g. `kinderbrillen günstig`), the *title* must wrap that intent in a publisher-acceptable editorial frame — same commercial destination, magazine-acceptable surface. The worked example: `"Kinderbrille auf Rezept: Wie viel zahlt die Krankenkasse — und wo lohnt sich der Online-Kauf?"`.
+
+**Changes.**
+
+- **Brainstorm DE+FR system prompts rewritten** (`creator/api/topic_brainstorm.py`):
+  - Ranking criterion changed from *SEO ranking strength* → *editorial publishability*. Rank 0 = the angle a magazine editor of a large German/French publisher would accept without hesitation. SEO volume is now an explicit tiebreaker only.
+  - Hard-coded the worked example (commercial vs. editorial title for kids' glasses) in the prompt body so the LLM has a concrete pattern to imitate.
+  - Six structured editorial frames the title MUST follow: question, study/data, regulatory news, explainer, reportage/trend, fact-check. Each frame has 2–3 example openings.
+  - Hard blocklist of commercial qualifiers in the *title* only (`günstig`, `billig`, `kaufen`, `Vergleich`, `Test`, `Top X`, `Beste`, `Rabatt`, `Angebot`, `Schnäppchen`, `Deal`, plus French equivalents). These remain allowed in `target_keyword` so SEO intent stays intact.
+  - Rationale field now asks "why this works for publisher AND ranking" instead of just ranking.
+- **Contract DE+FR prompts patched** (`creator/prompts/contract_generator/v1.de.md`, `v1.fr.md`):
+  - When an editorial angle is present in the user prompt, `h1 = angle.title` verbatim (only cosmetic edits like ASCII quotes/dashes allowed). The "h1 must contain target_keyword" rule is explicitly suspended in this case — SEO anchoring moves to `meta_title`, where it always belonged.
+  - H1 character cap raised from 12–96 → 12–160 chars (editorial questions run longer than buying-guide titles).
+  - Added the same commercial-qualifier blocklist for H1 with or without an angle.
+  - Year-injection rule (section 10) no longer pushes "2026" onto editorial titles when an angle is present; year goes into `meta_title` if relevant at all.
+- **HTML entity heal at parse time.** Added `_clean_text_field()` in `topic_brainstorm.py` that runs `html.unescape()` on `title`/`target_keyword`/`hook`/`rationale` for every parsed angle, applied in both `_parse_angles()` (fresh LLM output) and `_hydrate_angles_from_cache()` (cleans retroactively for existing cached batches). Mirror helper `_heal_html_entities_in_contract_payload()` in `contract_generator.py` walks `h1`/`meta_title`/`meta_description`/section H2s/FAQ questions before Pydantic validation.
+- **Brainstorm cache version bumped** `v1 → v2` (`creator/api/topic_brainstorm_cache.py`). The 90-day cache is keyed by version, so existing batches generated under the SEO-volume-first prompt are invalidated and the next call regenerates with the editorial-frame prompt. Per-pair cost amortises again over the next 45 angles.
+
+**Why H1 vs `target_keyword` split matters.** The SEO keyword still needs to appear in the article — but in `meta_title` (50–60 chars, browser tab + SERP snippet) and in section bodies, not in the H1 a magazine reader sees. Splitting these surfaces means the same article ranks for `kinderbrillen günstig` while reading like a Krankenkasse explainer on the publisher's homepage.
+
+**Tests.** 320 creator + 139 portal_backend, all green. Tests assert wiring (FR prompt routing, exclusion filtering, cache hit/miss) but not specific phrasing, so the prompt rewrite is unconstrained by the suite.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
 - ✅ **Delete orphan creator modules** — removed `creator/api/llm_provider.py`, `creator/api/trend_cache.py`, `creator/api/site_fit_cache.py` (zero importers after Phase 7d). DB tables (`keyword_trend_cache`, `site_fit_cache`) left in place — orphan rows, not blocking; can be dropped via a future migration if disk pressure shows up.
-
-The creator rebuild and its post-Phase-7 cleanup are now complete. No open follow-ups.
+- 🔜 **Validate Phase D editorial-frame fix on a live run.** The cache-bumped brainstorm needs at least one fresh end-to-end test against a transactional German keyword (e.g. `kinderbrillen günstig`) to confirm the new top angle reads like a publisher piece, not a buying guide. If the auto-pick still skews commercial, the next lever is splitting brainstorm output into `editorial_top` / `seo_long_tail` lists and pinning the auto-pick to `editorial_top[0]`.
 
 ## External services & env vars
 

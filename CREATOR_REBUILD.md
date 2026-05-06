@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Retry contract step on Anthropic 529 + fix stale Opus labels`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Bigger LLM retry budget with jitter for Anthropic 529 overload`
 
 ## Deployment
 
@@ -244,6 +244,17 @@ Same `mysupr.de` run hit HTTP 400 `rest_invalid_author` after retries succeeded:
 
 Live test failed with `Opus thinking HTTP 529: Overloaded` even though the contract step has used Sonnet 4.6 by default since `2026-05-03`. Two issues: (a) `contract_generator.call_with_thinking` raised error messages with the literal string "Opus" (stale labels from when it was Opus-only); (b) the function bypassed `call_llm_json`'s retry loop and made its own `requests.post`, so a transient Anthropic 529 (overloaded) immediately wasted the ~$0.05 of research already spent. Fix: rename labels to "contract thinking ({model})", add a retry loop over `{408, 429, 500, 502, 503, 504, 529}` + connection errors with the same 3-attempt / 2s+4s exponential-backoff pattern as `_request_json`. Also added 529 to `creator/llm._is_retryable_error` so brainstorm / sections / voice / judge benefit too. 6 new tests; suite at 479 passing.
 
+### Phase E follow-up #5 — overload-class retry budget across all LLM calls
+
+Live test still 529'd, this time on `voice_pass`. Root cause: `call_llm_text` had `retries=0` *hardcoded* — every voice_pass call had a single attempt, no retry. `call_llm_json` defaulted to `retries=1` (2 attempts), too tight for actual overload events. Fixes:
+- Parameterize `call_llm_text` retries (was hardcoded).
+- Both `call_llm_json` and `call_llm_text` now default to `retries=4` / `backoff=2.0s` → 5 attempts at 0/2/4/8/16s ≈ 30s budget, enough for typical overload events without making a clean run hang.
+- Add multiplicative jitter (0.8-1.2×) via shared `_retry_sleep_seconds()` so concurrent retries spread instead of dogpiling Anthropic during recovery. Reused in `contract_generator.call_with_thinking`.
+- `section_writer.DEFAULT_RETRIES` 2→4 to match (sections is a critical phase, voice now has 5 attempts; sections shouldn't be weaker).
+- `call_with_thinking` `max_attempts` 3→5 for parity.
+
+Tests: 485 passing. New coverage: `_retry_sleep_seconds` jitter band, `call_llm_text` 529 retry path, `call_llm_json` 529 retry path, default-budget guard, no-retry on 4xx.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
@@ -277,7 +288,7 @@ python -m creator.scripts.smoke_full_pipeline "steuerberater hamburg" https://cl
 
 # Full creator unit test suite
 python -m pytest creator/tests/ -v
-# Expected: 341 passing as of Phase E (was 320 at end of Phase D)
+# Expected: 347 passing as of Phase E (was 320 at end of Phase D)
 
 # Full portal_backend test suite
 python -m pytest portal_backend/tests/ -v

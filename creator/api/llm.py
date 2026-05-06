@@ -4,6 +4,7 @@ import ast
 import json
 import logging
 import os
+import random
 import re
 import time
 from typing import Any, Callable, Dict, Optional
@@ -469,6 +470,25 @@ def _call_anthropic(
     raise LLMError("LLM response missing content.")
 
 
+# Retry budget tuned for Anthropic 529 (overloaded). Default 4 retries with
+# 2.0s base backoff -> attempts at 0s, 2s, 4s, 8s, 16s (~30s total worst case
+# before raising). Covers the typical seconds-to-minutes overload event
+# without making short pipeline runs hang for ages.
+DEFAULT_LLM_RETRIES = 4
+DEFAULT_LLM_BACKOFF_SECONDS = 2.0
+# Jitter window: actual sleep = backoff * 2**attempt * random(0.8, 1.2).
+# Spreads concurrent retries so we don't dogpile Anthropic's recovery.
+_JITTER_MIN = 0.8
+_JITTER_MAX = 1.2
+
+
+def _retry_sleep_seconds(backoff_seconds: float, attempt: int) -> float:
+    """Compute an exponentially-backed-off sleep with multiplicative jitter."""
+
+    base = backoff_seconds * (2 ** attempt)
+    return base * random.uniform(_JITTER_MIN, _JITTER_MAX)
+
+
 def call_llm_json(
     *,
     system_prompt: str,
@@ -483,8 +503,8 @@ def call_llm_json(
     request_label: str = "",
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
     cache_system: bool = False,
-    retries: int = 1,
-    backoff_seconds: float = 1.5,
+    retries: int = DEFAULT_LLM_RETRIES,
+    backoff_seconds: float = DEFAULT_LLM_BACKOFF_SECONDS,
 ) -> Dict[str, Any]:
     if not api_key:
         raise LLMError("Missing LLM API key.")
@@ -534,7 +554,7 @@ def call_llm_json(
             last_error = exc
             if attempt >= retries or not _is_retryable_error(exc):
                 break
-            sleep_seconds = backoff_seconds * (2 ** attempt)
+            sleep_seconds = _retry_sleep_seconds(backoff_seconds, attempt)
             logger.warning(
                 "creator.llm_retry attempt=%s/%s sleep=%.1fs error=%s",
                 attempt + 1,
@@ -560,12 +580,12 @@ def call_llm_text(
     request_label: str = "",
     usage_collector: Optional[Callable[[Dict[str, Any]], None]] = None,
     cache_system: bool = False,
+    retries: int = DEFAULT_LLM_RETRIES,
+    backoff_seconds: float = DEFAULT_LLM_BACKOFF_SECONDS,
 ) -> str:
     if not api_key:
         raise LLMError("Missing LLM API key.")
     provider_is_anthropic = "anthropic" in (base_url or "").lower() or model.strip().lower().startswith("claude")
-    retries = 0
-    backoff_seconds = 0.0
 
     last_error: Optional[LLMError] = None
     for attempt in range(retries + 1):
@@ -602,7 +622,7 @@ def call_llm_text(
             last_error = exc
             if attempt >= retries or not _is_retryable_error(exc):
                 break
-            sleep_seconds = backoff_seconds * (2 ** attempt)
+            sleep_seconds = _retry_sleep_seconds(backoff_seconds, attempt)
             logger.warning(
                 "creator.llm_retry attempt=%s/%s sleep=%.1fs error=%s",
                 attempt + 1,

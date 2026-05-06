@@ -15,6 +15,7 @@ import html
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -260,7 +261,15 @@ def build_system_prompt(prompt: Prompt) -> str:
     return f"{prompt.body}\n\n# JSON-Schema\n\n```json\n{schema_json}\n```\n"
 
 
-# ---- Opus call with extended thinking --------------------------------------
+# ---- contract LLM call with extended thinking ------------------------------
+
+
+# Transient HTTP codes worth retrying on the contract endpoint. 529 is
+# Anthropic's "overloaded" status — equivalent to 503 from a normal API.
+# 408 is request timeout, 429 is rate limit; the rest are upstream/server
+# blips. 4xx outside this set are real client bugs (bad request, auth) and
+# must fail fast.
+_CONTRACT_RETRY_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504, 529})
 
 
 def call_with_thinking(
@@ -274,6 +283,8 @@ def call_with_thinking(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     thinking_budget_tokens: int = DEFAULT_THINKING_BUDGET_TOKENS,
     request_label: str = "contract_generator",
+    max_attempts: int = 3,
+    retry_backoff_seconds: float = 2.0,
 ) -> str:
     """Issue a single request to a Claude model with extended thinking enabled.
 
@@ -281,6 +292,12 @@ def call_with_thinking(
     Anthropic requires temperature=1.0 when thinking is enabled. Works with
     any Claude 4.x model that supports extended thinking (Sonnet 4.6 by
     default; Opus 4.7 is a drop-in upgrade).
+
+    Retries on transient HTTP failures (408/429/500/502/503/504/529) and
+    connection errors with exponential backoff. The contract step runs after
+    ~$0.05 of research has already been spent; losing the run to a
+    momentary Anthropic overload (HTTP 529) without a retry was the
+    failure mode that motivated this loop.
     """
 
     url = base_url.rstrip("/") + "/messages"
@@ -297,35 +314,70 @@ def call_with_thinking(
         "messages": [{"role": "user", "content": user_prompt}],
         "thinking": {"type": "enabled", "budget_tokens": thinking_budget_tokens},
     }
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=timeout_seconds)
-    except requests.RequestException as exc:
-        raise LLMError(f"Opus thinking request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise LLMError(f"Opus thinking HTTP {response.status_code}: {response.text[:400]}")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise LLMError("Opus thinking response was not JSON.") from exc
-    blocks = payload.get("content") or []
-    text_chunks: List[str] = []
-    for block in blocks:
-        if not isinstance(block, dict):
+
+    last_error: Optional[LLMError] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=timeout_seconds)
+        except requests.RequestException as exc:
+            last_error = LLMError(f"contract thinking request failed ({model}): {exc}")
+            if attempt >= max_attempts:
+                raise last_error from exc
+            sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "creator.contract_generator.connection_retry label=%s attempt=%s/%s sleep=%.1fs error=%s",
+                request_label, attempt, max_attempts, sleep_for, exc,
+            )
+            time.sleep(sleep_for)
             continue
-        if block.get("type") == "text":
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                text_chunks.append(text.strip())
-    usage = payload.get("usage") or {}
-    logger.info(
-        "creator.contract_generator.usage label=%s input=%s output=%s",
-        request_label,
-        usage.get("input_tokens"),
-        usage.get("output_tokens"),
-    )
-    if not text_chunks:
-        raise LLMError("Opus thinking response missing text content.")
-    return "\n".join(text_chunks)
+
+        if response.status_code in _CONTRACT_RETRY_HTTP_CODES:
+            if attempt < max_attempts:
+                sleep_for = retry_backoff_seconds * (2 ** (attempt - 1))
+                logger.warning(
+                    "creator.contract_generator.transient_retry label=%s status=%s attempt=%s/%s sleep=%.1fs",
+                    request_label, response.status_code, attempt, max_attempts, sleep_for,
+                )
+                time.sleep(sleep_for)
+                continue
+            raise LLMError(
+                f"contract thinking HTTP {response.status_code} ({model}) after {max_attempts} attempts: {response.text[:400]}"
+            )
+
+        if response.status_code >= 400:
+            raise LLMError(
+                f"contract thinking HTTP {response.status_code} ({model}): {response.text[:400]}"
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise LLMError(f"contract thinking response was not JSON ({model}).") from exc
+        blocks = payload.get("content") or []
+        text_chunks: List[str] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_chunks.append(text.strip())
+        usage = payload.get("usage") or {}
+        logger.info(
+            "creator.contract_generator.usage label=%s model=%s input=%s output=%s",
+            request_label,
+            model,
+            usage.get("input_tokens"),
+            usage.get("output_tokens"),
+        )
+        if not text_chunks:
+            raise LLMError(f"contract thinking response missing text content ({model}).")
+        return "\n".join(text_chunks)
+
+    # Loop only exits via return / raise; this terminator is unreachable in
+    # practice but keeps mypy happy and gives a clean message if the logic
+    # ever drifts.
+    raise LLMError(f"contract thinking ({model}) ended without a response after {max_attempts} attempts.")
 
 
 # ---- public API -------------------------------------------------------------

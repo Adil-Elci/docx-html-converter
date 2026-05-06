@@ -309,3 +309,94 @@ def test_call_with_thinking_raises_when_no_text_blocks():
     with patch("creator.api.contract_generator.requests.post", return_value=response):
         with pytest.raises(LLMError, match="missing text"):
             call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+
+
+def test_call_with_thinking_retries_on_529_overloaded():
+    """Anthropic returns HTTP 529 when their servers are overloaded -- it's
+    transient and identical in shape to a 503 from any other API. Failing
+    the contract step on a single 529 wastes the ~$0.05 of research that
+    just ran, so we retry with backoff."""
+
+    overloaded = MagicMock()
+    overloaded.status_code = 529
+    overloaded.text = '{"type":"error","error":{"type":"overloaded_error"}}'
+
+    success = _thinking_response('{"ok":true}')
+    sleeps: list[float] = []
+
+    with patch("creator.api.contract_generator.requests.post", side_effect=[overloaded, overloaded, success]), \
+         patch("creator.api.contract_generator.time.sleep", side_effect=lambda s: sleeps.append(s)):
+        text = call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    assert text == '{"ok":true}'
+    # Two retries with exponential backoff: 2s then 4s.
+    assert sleeps == [2.0, 4.0]
+
+
+def test_call_with_thinking_retries_on_503():
+    overloaded = MagicMock()
+    overloaded.status_code = 503
+    overloaded.text = "Service Unavailable"
+    success = _thinking_response('{"ok":1}')
+
+    with patch("creator.api.contract_generator.requests.post", side_effect=[overloaded, success]), \
+         patch("creator.api.contract_generator.time.sleep", lambda s: None):
+        text = call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    assert text == '{"ok":1}'
+
+
+def test_call_with_thinking_does_not_retry_4xx():
+    """400/401/403 etc. are real client errors -- bad request, bad auth.
+    They never fix themselves, so don't retry."""
+
+    response = MagicMock()
+    response.status_code = 401
+    response.text = "Unauthorized"
+
+    with patch("creator.api.contract_generator.requests.post", return_value=response) as mock_post, \
+         patch("creator.api.contract_generator.time.sleep", lambda s: None):
+        with pytest.raises(LLMError, match="HTTP 401"):
+            call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    assert mock_post.call_count == 1
+
+
+def test_call_with_thinking_raises_after_retry_exhaustion():
+    overloaded = MagicMock()
+    overloaded.status_code = 529
+    overloaded.text = "Overloaded"
+
+    with patch("creator.api.contract_generator.requests.post", return_value=overloaded) as mock_post, \
+         patch("creator.api.contract_generator.time.sleep", lambda s: None):
+        with pytest.raises(LLMError, match="after 3 attempts"):
+            call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    assert mock_post.call_count == 3
+
+
+def test_call_with_thinking_retries_on_connection_error():
+    """Network blips (timeouts, DNS) get the same retry treatment as 5xx."""
+
+    success = _thinking_response('{"ok":1}')
+
+    side_effects = [
+        __import__("requests").exceptions.ConnectionError("dns failure"),
+        success,
+    ]
+    with patch("creator.api.contract_generator.requests.post", side_effect=side_effects), \
+         patch("creator.api.contract_generator.time.sleep", lambda s: None):
+        text = call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    assert text == '{"ok":1}'
+
+
+def test_call_with_thinking_error_messages_use_model_name_not_opus():
+    """Regression: error messages used to say 'Opus thinking ...' even when
+    the actual model was Sonnet. Confusing in production logs."""
+
+    response = MagicMock()
+    response.status_code = 400
+    response.text = "bad request"
+
+    with patch("creator.api.contract_generator.requests.post", return_value=response):
+        with pytest.raises(LLMError) as exc_info:
+            call_with_thinking(system_prompt="s", user_prompt="u", api_key="k")
+    # The default model is Sonnet 4.6 -- error message must reflect that.
+    assert "claude-sonnet-4-6" in str(exc_info.value)
+    assert "Opus" not in str(exc_info.value)

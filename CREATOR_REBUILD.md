@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Retry transient WP publish failures (503/502/504/429)`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Use chosen publisher's author_id at WP publish`
 
 ## Deployment
 
@@ -235,6 +235,10 @@ Tests: 467 passing (creator 335, portal 132).
 ### Phase E follow-up #2 — retry transient WP publish failures
 
 Live `mysupr.de` test got HTTP 503 from `/wp-json/wp/v2/posts` AFTER the full ~$0.50 generation budget was already spent — the article was lost to a shared-host blip with no retry. `_request_json` now retries on 429 / 502 / 503 / 504 and connection errors with exponential backoff (default 3 attempts, 2s + 4s). 4xx (other than 429) still fails immediately — those are real client errors. 6 new tests; suite at 473 passing.
+
+### Phase E follow-up #3 — author_id follows the chosen publisher
+
+Same `mysupr.de` run hit HTTP 400 `rest_invalid_author` after retries succeeded: the publish step swapped `wp_username`/`wp_app_password`/`category_ids` to the selector's chosen publisher but kept the originally-associated site's `author_id`. Each WP site has its own user list, so author_id 4 didn't exist on mysupr.de. Worker now writes `author_id` per candidate in `publishing_candidates`; `_run_create_article_pipeline_v2` resolves `selected_author_id` from `chosen_candidate.author_id` (falls back to the caller's value when missing).
 
 ## Deferred items / follow-ups
 

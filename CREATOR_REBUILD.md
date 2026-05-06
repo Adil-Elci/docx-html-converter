@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Wrap commercial intent in editorial framing for guest-post titles`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Reject title-shaped keywords before DataForSEO sees them`
 
 ## Deployment
 
@@ -227,11 +227,67 @@ Goal: make `topic` and `publishing_site_url` optional on the v2 webhook so the o
 
 **Tests.** 320 creator + 139 portal_backend, all green. Tests assert wiring (FR prompt routing, exclusion filtering, cache hit/miss) but not specific phrasing, so the prompt rewrite is unconstrained by the suite.
 
+## Phase E — Publisher selector rebuild · ✅ DONE (2026-05-06, `ecbca1c` + `a5aa573`)
+
+**Problem.** Live test on `brillenhaus24.de` (eyewear e-commerce, no explicit publishing site) hard-failed with `creator.refine_topic_failed code=no_editorial_fit message=No editorial intersection between target keyword 'Brillenhaus24.de - Ihr Onlineshop für günstige Brillen & Komplettbril' and the publishing site's audience. Brillen-E-Commerce hat keine redaktionelle Überschneidung mit Klimaschutz, Solar und Nachhaltigkeit.` Three structural failures:
+
+1. **Single-candidate fit gate.** Phase D's `validate_or_refine_topic_for_publisher` ran Haiku against ONE candidate (the deterministic top-of-shortlist) and hard-failed if it didn't fit. Other ranked candidates were never tried. When the deterministic ranker put a Klimaschutz site first for an eyewear target, the entire run died.
+2. **Keyword was a raw page title.** `_derive_keyword_from_target_profile` fell through to `target_profile_payload["page_title"]` when `domain_level_topic` and `primary_context` were empty. The brillenhaus profile only had a page_title — `'Brillenhaus24.de - Ihr Onlineshop für günstige Brillen & Komplettbril'` — and that string is junk as a search keyword AND junk as a fit-check input.
+3. **Two-pass selection out of sync.** Old flow validated fit pre-contract on candidate[0], then re-ranked publishers POST-contract via `select_publish_target_after_contract`. The fit gate could kill a job that the post-contract selector would have routed to a different publisher anyway. Post-hoc selection also meant the contract was generated WITHOUT knowing the chosen publisher — a content-quality miss.
+
+**Architectural change.** Collapsed the deterministic-ranker → LLM-fit-gate → post-contract-reselection chain into a single relative rerank. The deterministic ranker still runs upstream as a *recall* mechanism that produces a top-K=8 shortlist; one Haiku 4.5 call then reranks the K candidates *together*, picks the winner, and refines the article topic for the chosen publisher's audience. Publisher is locked in BEFORE the contract step.
+
+- **`creator/api/publisher_selector.py`** (new) — `select_best_publisher(target_url, target_keyword, candidates, target_profile, language)` returns `SelectionResult{best_site_id, best_site_url, refined_topic, confidence, rationale, no_fit, ranking, soft_passed}`. Single Haiku call regardless of candidate count (capped at K=12 in the prompt). DE+FR system prompts. Comparing candidates relative to each other is much more stable than asking "does X fit?" per-candidate; the LLM can pick the best fit even when no candidate is a perfect topical match.
+- **`POST /v2/select-publisher`** endpoint (`creator/api/server.py`) — request `{target_url, target_keyword, candidates: [...], target_profile_payload?, language?}`, success returns the full `SelectionResult` JSON, infra failure returns HTTP 422 with `{ok: false, error: "publisher_selection_failed", code, message}`. **`no_fit=true` is a verdict, not an error** — the caller decides whether to fall back to the Allgemein publisher.
+- **Soft-pass on infra failure** — when the Anthropic API key is missing or the Haiku call times out, the selector returns `soft_passed=True` with the deterministic top candidate as the winner (confidence 0.5) instead of blocking the run. Network blips don't kill jobs.
+
+**Portal_backend rewiring.** `_run_create_article_pipeline_v2` in `automation_service.py`:
+- Replaced the single-candidate `call_creator_v2_refine_topic_for_publisher` step with `call_creator_v2_select_publisher` (new helper) that sends the full shortlist.
+- **`no_fit` fallback** — when the selector returns `no_fit=true`, the portal looks for a candidate flagged `is_general=True` (the Allgemein column added in Phase C) or matching the heuristic in `_candidate_is_general`. If found, that publisher wins; if not, hard-fails with a clean admin message instead of the previous wasted contract spend.
+- **Selector-down fallback** — if the selector call itself raises (`AutomationError`), the deterministic top candidate becomes the winner with a `publisher_selector.deterministic_fallback` trace event. Selection still happens.
+- **Publisher locked in pre-contract.** `call_creator_v2_pipeline` is now invoked with `publishing_site_url=<chosen>` instead of `None`. The contract, brainstorm, and section writers all run knowing the publisher.
+- **Removed** `select_publish_target_after_contract`, `pre_flight_publishing_feasibility`, `_topical_fit_score`, `_select_publish_target_for_v2`, `_candidate_language`, `_similarity_score`, `_flatten_candidate_text`, and `_LATE_BIND_FIT_FLOOR` — all became dead post-rewire (~485 lines removed).
+- **Kept** `_candidate_is_general` (still used by the no_fit fallback).
+- **Trace events** on the new path: `publisher_selector.refined`, `publisher_selector.selected`, `publisher_selector.no_fit_allgemein_fallback`, `publisher_selector.deterministic_fallback`, `publisher_selector.failed`, `publisher_selector.refined_topic_rejected`.
+
+**Deletions (in commit `ecbca1c`).**
+- `creator/api/publisher_fit.py` (the single-candidate fit gate).
+- `creator/tests/test_publisher_fit.py`.
+- `POST /v2/refine-topic-for-publisher` endpoint.
+- `portal_backend/tests/test_phase_c_late_binding.py` (tested the deleted post-contract reselector).
+
+**Target profile thinness fallback.** `_derive_keyword_from_target_profile` no longer accepts `page_title` as a keyword candidate. When the profile only carries a page title (the brillenhaus case), the helper returns `""` and the pipeline falls through to `/v2/derive-topic`, which uses DataForSEO to produce a real SEO keyword. The helper now relies only on `domain_level_topic` → `primary_context` → `topics[0]` — fields that are pre-cleaned, never raw HTML.
+
+### Phase E follow-up (commit `a5aa573`) — title-shaped keywords blocked before DataForSEO
+
+**Problem on second live test.** Pipeline ran further this time but failed at the research phase: `Creator v2 pipeline failed at phase [research]: DataForSEO task failed with status 40501: Invalid Field: 'keywords'. Keyword text has too many words: 'Augengesundheit und Sehhilfen: Wie die richtige Brille zu deinem Lifestyle passt'.` DataForSEO rejects keywords with multi-clause separators / >10 words, and brainstorm (or the new selector's `refined_topic`) had returned an article-title-shaped string in a keyword field.
+
+**Three layers of defense.**
+
+1. **`creator/api/research.py: _sanitize_seo_keyword(keyword) -> str`** — runs at the entry point of `run_research`. Drops everything after the first colon / em-dash / pipe / question mark / exclamation (title-shape splitters), collapses whitespace, caps at `MAX_KEYWORD_WORDS = 8`. If sanitization yields an empty string, raises `ValueError`. DataForSEO never sees a multi-clause string regardless of upstream LLM drift.
+2. **`portal_backend.api.automation_service: _looks_like_seo_keyword(value)`** — gates *both* the brainstorm angle's `target_keyword` AND the selector's `refined_topic` before they're allowed to override `upfront_target_keyword`. Rejects strings containing title splitters or > ~8 words. A rejected value is logged via trace event (`brainstorm.keyword_rejected` / `publisher_selector.refined_topic_rejected`) and the cleaner upfront keyword stays.
+3. **Selector prompt tightened (DE+FR).** `refined_topic` description now reads `"KURZES SEO-Suchkeyword (1-4 Woerter, Kleinschreibung) -- KEIN Artikel-Titel"` with explicit positive examples (`'kinderbrillen'`, `'kinderbrillen kaufen'`, `'sehhilfen kinder'`) and the failing string itself listed as a "FALSCH" example. Same treatment in the French variant.
+
+**Why three layers?** Different failure modes catch different things: layer 1 protects against ANY upstream source of bad keywords (including future paths we add); layer 2 keeps the cleaner upfront keyword instead of silently truncating to something the LLM didn't intend; layer 3 reduces the rate of bad keywords getting through in the first place. Each is small (~50 lines) and the cost of all three is one new helper plus one new sanitizer.
+
+### Cost / quality summary at end of Phase E
+
+| Step | Before | After | Cost delta | Quality delta |
+|---|---|---|---|---|
+| Publisher fit check | Haiku per candidate, hard-fail on top-1 mismatch | Single Haiku rerank over K=8 | -$0 (replaces 1+ calls with 1 call) | ↑↑ relative comparison stabler than absolute fit gate; locks publisher in pre-contract so brainstorm + sections + voice see the right audience |
+| Topic refinement | Separate `refine-topic-for-publisher` Haiku call | Same Haiku call as the rerank produces `refined_topic` | -$0.001 (one call, not two) | = (same refinement quality, faster) |
+| Post-contract reselection | `select_publish_target_after_contract` (deterministic) | Removed — selector decided already | -0 ms (deterministic was cheap anyway) | ↑ removes the coupled-knowledge bug where pre-contract fit-gate and post-contract selector disagreed |
+| DataForSEO keyword guard | None — title-shaped keywords reached the API and 40501'd the run | Sanitized in research, gated in portal | $0 | ↑ converts a hard-fail into a graceful trace event |
+
+**Tests.** 467 passing across portal_backend (132) + creator (335). New tests cover the brillenhaus → kidsblatt selection scenario, Allgemein fallback on `no_fit`, hard-fail when no general publisher, selector-infra-failure deterministic fallback, page-title keyword skip, keyword sanitizer (8 cases), title-shaped brainstorm keyword rejection, and the `_looks_like_seo_keyword` helper.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
 - ✅ **Delete orphan creator modules** — removed `creator/api/llm_provider.py`, `creator/api/trend_cache.py`, `creator/api/site_fit_cache.py` (zero importers after Phase 7d). DB tables (`keyword_trend_cache`, `site_fit_cache`) left in place — orphan rows, not blocking; can be dropped via a future migration if disk pressure shows up.
-- 🔜 **Validate Phase D editorial-frame fix on a live run.** The cache-bumped brainstorm needs at least one fresh end-to-end test against a transactional German keyword (e.g. `kinderbrillen günstig`) to confirm the new top angle reads like a publisher piece, not a buying guide. If the auto-pick still skews commercial, the next lever is splitting brainstorm output into `editorial_top` / `seo_long_tail` lists and pinning the auto-pick to `editorial_top[0]`.
+- ✅ **Phase D live validation** — done implicitly during Phase E debugging. Live run on `brillenhaus24.de` (eyewear / transactional) surfaced two non-Phase-D bugs (single-candidate fit gate + DataForSEO keyword shape) which Phase E fixed. The editorial-frame brainstorm itself produced angles like `"Augengesundheit und Sehhilfen: Wie die richtige Brille zu deinem Lifestyle passt"` — well-formed editorial titles, no commercial qualifiers — confirming the Phase D prompt rewrite is doing its job. Open follow-up if it ever regresses: split brainstorm output into `editorial_top` / `seo_long_tail` lists and pin auto-pick to `editorial_top[0]`.
+- 🔜 **Admin preview of selector ranking.** The selector returns a full ranked shortlist with per-candidate rationale, but the portal currently only consumes `best_pick`. Surfacing `ranking[0..2]` with rationale in the admin job-detail UI would let operators sanity-check the LLM's choice and override before content generation. Cheap (read-only on data we already have).
+- 🔜 **Make contract publisher-aware.** Phase E locks the publisher in pre-contract, but `contract_generator.py` still doesn't see the publisher profile. Feeding it (audience, primary context, sample headlines) would let the contract tailor section structure and tone to the actual target — strict content-quality win at zero infra cost.
 
 ## External services & env vars
 
@@ -258,7 +314,11 @@ python -m creator.scripts.smoke_full_pipeline "steuerberater hamburg" https://cl
 
 # Full creator unit test suite
 python -m pytest creator/tests/ -v
-# Expected: 94 passing as of Phase 3c
+# Expected: 335 passing as of Phase E (was 320 at end of Phase D)
+
+# Full portal_backend test suite
+python -m pytest portal_backend/tests/ -v
+# Expected: 132 passing as of Phase E
 ```
 
 ## Cross-session context pointers

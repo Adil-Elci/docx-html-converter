@@ -1283,3 +1283,140 @@ def test_run_create_article_pipeline_v2_skip_image_flag(monkeypatch):
     automation_service._run_create_article_pipeline_v2(
         **_common_v2_pipeline_kwargs(leonardo_api_key="leo-key", skip_image=True),
     )
+
+
+# ---- _request_json retry behaviour ---------------------------------------
+
+
+class _FakeHttpResponse:
+    """Stand-in for requests.Response with the fields _request_json reads."""
+
+    def __init__(self, status_code: int, payload=None, headers=None, text: str = ""):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+        self.headers = headers or {}
+        self.text = text or json.dumps(self._payload)
+
+    def json(self):
+        if isinstance(self._payload, ValueError):
+            raise self._payload
+        return self._payload
+
+
+def test_request_json_retries_503_and_eventually_succeeds(monkeypatch):
+    """Brillenhaus regression: a transient 503 from a shared WP host must
+    NOT lose the article. _request_json now retries 5xx-transient codes
+    with exponential backoff before raising."""
+
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def fake_request(**kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return _FakeHttpResponse(503, text="<html>Error 503</html>")
+        return _FakeHttpResponse(200, payload={"id": 9911})
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: sleeps.append(s))
+
+    result = automation_service._request_json(
+        "POST",
+        "https://wp.example/wp-json/wp/v2/posts",
+        json_body={"title": "x"},
+    )
+    assert result == {"id": 9911}
+    assert calls["count"] == 3  # two 503 retries + final 200
+    # Exponential backoff: 2s then 4s.
+    assert sleeps == [2.0, 4.0]
+
+
+def test_request_json_does_not_retry_4xx(monkeypatch):
+    """4xx errors are permanent client problems -- bad credentials, bad
+    payload -- and must fail loud on the first try."""
+
+    calls = {"count": 0}
+
+    def fake_request(**_kwargs):
+        calls["count"] += 1
+        return _FakeHttpResponse(401, text="Unauthorized")
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: None)
+
+    with pytest.raises(automation_service.AutomationError, match="HTTP 401"):
+        automation_service._request_json("GET", "https://wp.example/")
+    assert calls["count"] == 1
+
+
+def test_request_json_retries_429_rate_limit(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_request(**_kwargs):
+        calls["count"] += 1
+        if calls["count"] < 2:
+            return _FakeHttpResponse(429, text="Too Many Requests")
+        return _FakeHttpResponse(200, payload={"ok": True})
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: None)
+
+    result = automation_service._request_json("GET", "https://wp.example/")
+    assert result == {"ok": True}
+    assert calls["count"] == 2
+
+
+def test_request_json_raises_after_retry_exhaustion(monkeypatch):
+    """If all attempts hit transient errors, surface a clear error that
+    names the attempt count so logs make the failure mode obvious."""
+
+    calls = {"count": 0}
+
+    def fake_request(**_kwargs):
+        calls["count"] += 1
+        return _FakeHttpResponse(503, text="<html>Error 503</html>")
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: None)
+
+    with pytest.raises(automation_service.AutomationError, match="after 3 attempts"):
+        automation_service._request_json("POST", "https://wp.example/")
+    assert calls["count"] == 3
+
+
+def test_request_json_retries_connection_errors(monkeypatch):
+    """Network blips (timeouts, DNS hiccups) get the same retry treatment
+    as 5xx -- they're symmetrically transient."""
+
+    calls = {"count": 0}
+
+    def fake_request(**_kwargs):
+        calls["count"] += 1
+        if calls["count"] < 2:
+            raise automation_service.requests.ConnectionError("dns failure")
+        return _FakeHttpResponse(200, payload={"id": 1})
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: None)
+
+    result = automation_service._request_json("GET", "https://wp.example/")
+    assert result == {"id": 1}
+    assert calls["count"] == 2
+
+
+def test_request_json_max_attempts_one_disables_retry(monkeypatch):
+    """Callers that want hard-fail-on-first-error can opt out via
+    max_attempts=1."""
+
+    calls = {"count": 0}
+
+    def fake_request(**_kwargs):
+        calls["count"] += 1
+        return _FakeHttpResponse(503, text="<html>Error 503</html>")
+
+    monkeypatch.setattr(automation_service.requests, "request", fake_request)
+    monkeypatch.setattr(automation_service.time, "sleep", lambda s: None)
+
+    with pytest.raises(automation_service.AutomationError, match="HTTP 503"):
+        automation_service._request_json("GET", "https://wp.example/", max_attempts=1)
+    assert calls["count"] == 1

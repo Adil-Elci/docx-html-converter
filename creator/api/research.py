@@ -51,6 +51,40 @@ DEFAULT_HIGH_COVERAGE_THRESHOLD = 0.6
 DEFAULT_COMMON_H2_MIN_COMPETITORS = 2
 RESEARCH_VERSION = "v1"
 
+# DataForSEO rejects keywords above ~10 words with status 40501. Upstream
+# keyword sources (brainstorm angle target_keyword, selector refined_topic)
+# occasionally hand us a title-shaped string instead of a search keyword --
+# we sanitize defensively here so a single misbehaving LLM call doesn't
+# blow up the whole research phase. Cap conservatively below the API limit.
+MAX_KEYWORD_WORDS = 8
+
+
+_KEYWORD_TITLE_SPLITTERS = (":", " — ", " – ", " - ", " | ", "?", "!")
+
+
+def _sanitize_seo_keyword(keyword: str) -> str:
+    """Trim a possibly title-shaped string to a DataForSEO-acceptable keyword.
+
+    Drops everything after the first title-shape splitter (colon, em-dash,
+    pipe, question mark, exclamation), collapses whitespace, and truncates
+    to ``MAX_KEYWORD_WORDS`` words. Returns the cleaned string; an empty
+    return signals the caller to bail out before spending DataForSEO budget.
+    """
+
+    raw = (keyword or "").strip()
+    if not raw:
+        return ""
+    for splitter in _KEYWORD_TITLE_SPLITTERS:
+        if splitter in raw:
+            raw = raw.split(splitter, 1)[0].strip()
+            if not raw:
+                return ""
+    raw = re.sub(r"\s+", " ", raw).strip(' ,.;"\'')
+    words = raw.split(" ")
+    if len(words) > MAX_KEYWORD_WORDS:
+        raw = " ".join(words[:MAX_KEYWORD_WORDS])
+    return raw
+
 
 @dataclass
 class ResearchPayload:
@@ -215,6 +249,19 @@ def run_research(
     Cached payloads (within the seo_research_cache TTL) skip every spend
     item above and return ``total_cost_usd=0.0``.
     """
+
+    sanitized_keyword = _sanitize_seo_keyword(target_keyword)
+    if not sanitized_keyword:
+        raise ValueError(
+            f"target_keyword is empty or unusable after sanitization: {target_keyword!r}"
+        )
+    if sanitized_keyword != target_keyword:
+        logger.info(
+            "research.keyword_sanitized original=%r sanitized=%r",
+            target_keyword,
+            sanitized_keyword,
+        )
+        target_keyword = sanitized_keyword
 
     cache_key = research_cache.build_lookup_key(
         target_keyword=target_keyword,

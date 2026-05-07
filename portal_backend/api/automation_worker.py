@@ -1563,11 +1563,18 @@ class AutomationJobWorker:
             job.job_status = "succeeded"
             job.last_error = None
             session.add(job)
+            # Reuse creator_phase (allowed by job_events_event_type_check) to
+            # carry the publisher-selection result alongside a synthetic final
+            # phase. Adding a new event_type would require a DB migration; this
+            # is a diagnostic stop, so we piggy-back on an existing type.
             session.add(
                 JobEvent(
                     job_id=job_id,
-                    event_type="publisher_selected",
+                    event_type="creator_phase",
                     payload={
+                        "phase": 7,
+                        "label": "publisher_selected",
+                        "percent": 100,
                         "selected_site_id": selected_site_id,
                         "selected_site_url": site_url,
                         "stopped_after_selection": True,

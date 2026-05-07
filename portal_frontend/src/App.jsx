@@ -5314,28 +5314,30 @@ function CreatorProgressInline({
     .filter((url) => typeof url === "string" && url.length > 0);
 
   return (
-    <div className="creator-progress-inline" role="status" aria-live="polite" aria-label="Creator progress">
-      <div className="progress-steps progress-steps-inline" aria-hidden="true">
-        {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
-          const step = i + 1;
-          const isCompleted = allDone || step < currentPhase;
-          const isActive = !allDone && step === currentPhase;
-          const cls = isCompleted ? "completed" : isActive ? "active" : "";
-          return (
-            <div key={step} className={`progress-step progress-step-inline ${cls}`}>
-              <div className="progress-step-indicator progress-step-indicator-inline">
-                <div className="progress-step-dot" />
-                {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
+    <div className="creator-progress-inline-wrapper">
+      <div className="creator-progress-inline" role="status" aria-live="polite" aria-label="Creator progress">
+        <div className="progress-steps progress-steps-inline" aria-hidden="true">
+          {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
+            const step = i + 1;
+            const isCompleted = allDone || step < currentPhase;
+            const isActive = !allDone && step === currentPhase;
+            const cls = isCompleted ? "completed" : isActive ? "active" : "";
+            return (
+              <div key={step} className={`progress-step progress-step-inline ${cls}`}>
+                <div className="progress-step-indicator progress-step-indicator-inline">
+                  <div className="progress-step-dot" />
+                  {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
+                </div>
+                <div className="progress-step-content progress-step-content-inline">
+                  <span className="progress-step-label">{translate(CREATOR_PHASE_LABELS[step])}</span>
+                </div>
               </div>
-              <div className="progress-step-content progress-step-content-inline">
-                <span className="progress-step-label">{translate(CREATOR_PHASE_LABELS[step])}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div className={`creator-progress-inline-end ${allDone ? "is-complete" : ""}`.trim()} aria-live="polite">
-        {allDone ? <span className="creator-progress-inline-check">✓</span> : <strong>{aggPercent}%</strong>}
+            );
+          })}
+        </div>
+        <div className={`creator-progress-inline-end ${allDone ? "is-complete" : ""}`.trim()} aria-live="polite">
+          {allDone ? <span className="creator-progress-inline-check">✓</span> : <strong>{aggPercent}%</strong>}
+        </div>
       </div>
       {selectedSiteUrls.length > 0 ? (
         <div className="creator-progress-selected-publisher" aria-live="polite">

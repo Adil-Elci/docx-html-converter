@@ -2676,7 +2676,11 @@ export default function App() {
           if (!data?.found) { allDone = false; continue; }
           const phaseEvents = (data.events || []).filter((e) => e.event_type === "creator_phase");
           const last = phaseEvents.length > 0 ? phaseEvents[phaseEvents.length - 1] : null;
-          const selectedEvent = (data.events || []).find((e) => e.event_type === "publisher_selected");
+          const selectedEvent = (data.events || []).find(
+            (e) => (e.event_type === "publisher_selected" || e.event_type === "creator_phase")
+              && e.payload && typeof e.payload.selected_site_url === "string"
+              && e.payload.selected_site_url.length > 0,
+          );
           const selectedSiteUrl = selectedEvent?.payload?.selected_site_url || "";
           if (data.job_status === "pending_approval") {
             movedToPendingApproval.add(jid);

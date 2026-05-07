@@ -506,7 +506,28 @@ def _shortlist_ranked_publishing_candidates(
     else:
         shortlisted = [item for item in shortlisted if int(item.get("score") or 0) >= min_score]
         shortlisted.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
-    return shortlisted[: max(1, limit)]
+
+    head = shortlisted[: max(1, limit)]
+    head_ids = {str(item.get("site_id") or "") for item in head}
+
+    # Always make at least one Allgemein / general-purpose site reachable in
+    # the shortlist so the selector's no_fit / low-confidence path has
+    # somewhere to fall back to. Without this, niche targets that draw an
+    # all-mismatched shortlist end up hard-failing instead of routing to
+    # Allgemein. The lsdshop test was the canonical failure: every scored
+    # candidate was below floor, no Allgemein was reachable, run died.
+    general_extras: List[Dict[str, Any]] = []
+    for item in ranked:
+        if not bool(item.get("is_general")):
+            continue
+        if str(item.get("site_id") or "") in head_ids:
+            continue
+        general_extras.append(item)
+        if len(general_extras) >= 2:
+            break
+    if general_extras:
+        general_extras.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("site_name") or "")))
+    return head + general_extras
 
 
 def build_publishing_inventory_context(db: Session, *, site_id: UUID, article_limit: int = 80) -> Dict[str, Any]:
@@ -980,6 +1001,7 @@ def top_ranked_publishing_sites_for_target(
                 "profile": publishing_profile,
                 "content_hash": str(publishing_profile_record.content_hash or "").strip(),
                 "inventory_context": inventory_context,
+                "is_general": bool(getattr(site, "is_general", False)),
             }
         )
     ranked = _shortlist_ranked_publishing_candidates(

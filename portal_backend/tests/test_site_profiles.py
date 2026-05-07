@@ -572,3 +572,80 @@ def test_extract_internal_links_prefers_content_links_over_boilerplate_links() -
         "https://publisher.example.com/augenschutz-kinder",
         "https://publisher.example.com/uv-schutz-strand",
     ]
+
+
+def test_shortlist_always_includes_is_general_candidate() -> None:
+    """The lsdshop regression: every score-ranked candidate fell below the
+    threshold, no Allgemein was reachable, run hard-failed. Allgemein
+    sites must always be present in the shortlist as a fallback."""
+
+    ranked = [
+        {
+            "site_id": "topic-1", "site_url": "https://topic1.example",
+            "site_name": "Topic 1", "score": 40, "is_general": False,
+            "profile": {"primary_context": "finance"}, "details": {},
+        },
+        {
+            "site_id": "general-1", "site_url": "https://allgemein.example",
+            "site_name": "Allgemein", "score": 12, "is_general": True,
+            "profile": {"primary_context": "lifestyle"}, "details": {},
+        },
+    ]
+    shortlisted = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile={"primary_context": "shopping"},
+        limit=1,  # only 1 score-ranked slot
+        min_score=18,
+    )
+    site_urls = [item["site_url"] for item in shortlisted]
+    # Allgemein got a slot beyond the limit despite scoring below min_score.
+    assert "https://allgemein.example" in site_urls
+    assert "https://topic1.example" in site_urls
+
+
+def test_shortlist_does_not_double_include_is_general_already_in_head() -> None:
+    """When the Allgemein candidate already scored into the top-N, it
+    shouldn't appear twice in the shortlist."""
+
+    ranked = [
+        {
+            "site_id": "general-1", "site_url": "https://allgemein.example",
+            "site_name": "Allgemein", "score": 90, "is_general": True,
+            "profile": {"primary_context": "lifestyle"}, "details": {},
+        },
+        {
+            "site_id": "topic-1", "site_url": "https://topic.example",
+            "site_name": "Topic", "score": 40, "is_general": False,
+            "profile": {"primary_context": "finance"}, "details": {},
+        },
+    ]
+    shortlisted = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile={"primary_context": "shopping"},
+        limit=2,
+        min_score=18,
+    )
+    urls = [item["site_url"] for item in shortlisted]
+    assert urls.count("https://allgemein.example") == 1
+
+
+def test_shortlist_caps_extra_general_at_two() -> None:
+    """If many Allgemein sites are configured, only append a bounded
+    number as fallbacks so the prompt doesn't get stuffed with generalists."""
+
+    ranked = [{"site_id": "topic", "site_url": "https://topic.example", "site_name": "Topic",
+               "score": 50, "is_general": False, "profile": {}, "details": {}}]
+    for i in range(5):
+        ranked.append({
+            "site_id": f"g-{i}", "site_url": f"https://allg{i}.example",
+            "site_name": f"Allg {i}", "score": 5 + i, "is_general": True,
+            "profile": {}, "details": {},
+        })
+    shortlisted = _shortlist_ranked_publishing_candidates(
+        ranked,
+        target_profile={"primary_context": "shopping"},
+        limit=1,
+        min_score=18,
+    )
+    general_count = sum(1 for item in shortlisted if item.get("is_general"))
+    assert general_count == 2

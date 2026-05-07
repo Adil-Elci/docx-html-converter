@@ -1392,21 +1392,74 @@ def _summarise_selector_ranking(ranking: Any, *, top_n: int = 3) -> List[Dict[st
     return out
 
 
-def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
-    """True when the site is flagged as ``allgemein`` / general-topic.
+# A publisher is considered editorially broad when at least this many
+# distinct context labels have comparable weight (>= 50% of the top
+# context's score). Tuned empirically: a niche site usually has one
+# dominant context and small noise; a generalist (lifestyle/news magazine)
+# spreads roughly evenly across health, finance, family, real-estate, etc.
+_DIVERSITY_HEURISTIC_MIN_CONTEXTS = 3
+_DIVERSITY_HEURISTIC_RELATIVE_FLOOR = 0.5
 
-    Two signals: the explicit ``is_general`` boolean column on
-    ``publishing_sites`` (preferred, set in the admin portal), or a heuristic
-    on the profile's ``primary_context`` that contains ``allgemein`` /
-    ``general``. The heuristic catches sites we haven't manually flagged yet.
+
+def _profile_has_diverse_contexts(profile: Optional[Dict[str, Any]]) -> bool:
+    """Auto-flag generalist publishers from their context-score spread.
+
+    mysupr.de is the canonical case: title="Startseite",
+    description="Aktuelles" -- meta tags give nothing. But its homepage
+    H2s span skincare, real-estate, finance, relationships, food
+    culture, energy, sleep. The site profiler's ``context_scores`` dict
+    captures this spread; this heuristic returns True when 3+ contexts
+    sit within 50% of the top context's score.
+    """
+
+    if not isinstance(profile, dict):
+        return False
+    scores = profile.get("context_scores")
+    if not isinstance(scores, dict) or not scores:
+        return False
+    numeric: List[float] = []
+    for value in scores.values():
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            continue
+        if score > 0:
+            numeric.append(score)
+    if len(numeric) < _DIVERSITY_HEURISTIC_MIN_CONTEXTS:
+        return False
+    numeric.sort(reverse=True)
+    top_score = numeric[0]
+    if top_score <= 0:
+        return False
+    floor = top_score * _DIVERSITY_HEURISTIC_RELATIVE_FLOOR
+    qualifying = sum(1 for score in numeric if score >= floor)
+    return qualifying >= _DIVERSITY_HEURISTIC_MIN_CONTEXTS
+
+
+def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
+    """True when the site is flagged or detected as ``allgemein`` /
+    general-topic.
+
+    Three signals, in order of trust:
+    1. Explicit ``is_general`` column on ``publishing_sites`` (admin sets this).
+    2. Keyword heuristic on ``primary_context`` (contains
+       ``allgemein`` / ``general`` / ``magazin``).
+    3. Diversity heuristic: 3+ distinct context labels sit within 50% of
+       the top context's score -- a generalist spreads evenly while a
+       niche site has one dominant context.
+
+    Any of the three is sufficient. Auto-detection (#2 + #3) catches
+    sites we haven't manually flagged yet and is the safety net for the
+    no-fit fallback path.
     """
 
     if candidate.get("is_general"):
         return True
-    primary_context = str(
-        (candidate.get("publishing_profile_payload") or {}).get("primary_context") or ""
-    ).strip().lower()
-    return any(token in primary_context for token in ("allgemein", "general", "magazin"))
+    profile = candidate.get("publishing_profile_payload") or {}
+    primary_context = str(profile.get("primary_context") or "").strip().lower()
+    if any(token in primary_context for token in ("allgemein", "general", "magazin")):
+        return True
+    return _profile_has_diverse_contexts(profile)
 
 
 def _slugify(value: str) -> str:

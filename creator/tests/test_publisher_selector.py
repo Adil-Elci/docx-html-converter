@@ -42,6 +42,33 @@ class TestSummariseTargetProfile:
         assert "url: https://x.de" in out
         assert "(not available)" in out
 
+    def test_surfaces_homepage_headings(self):
+        """visible_headings is the highest-signal field on a thin profile.
+        The selector must see it so it can identify the business when meta
+        tags are empty."""
+
+        out = ps._summarise_target_profile(
+            {
+                "page_title": "Startseite",
+                "visible_headings": [
+                    "Autonome Reinigungsroboter fuer eine neue Aera",
+                    "PUDU CC1 der 4-in-1 Reinigungsroboter",
+                    "Warum autonome Reinigungsroboter?",
+                ],
+            },
+            target_url="https://nuvionrobotics.de",
+        )
+        assert "homepage headings:" in out
+        assert "Autonome Reinigungsroboter" in out
+        assert "PUDU CC1" in out
+
+    def test_surfaces_meta_description(self):
+        out = ps._summarise_target_profile(
+            {"meta_description": "Coaching, Retreats & Kurse mit therapeutischer Begleitung"},
+            target_url="https://pierreaurel.com",
+        )
+        assert "meta description: Coaching, Retreats" in out
+
 
 # ---- _summarise_candidate ------------------------------------------------
 
@@ -86,6 +113,56 @@ class TestSummariseCandidate:
         # No crash, no profile bullets, just id/url
         assert "site_id: x" in block
         assert "primary context" not in block
+
+    def test_surfaces_homepage_headings_and_recent_titles(self):
+        """The mysupr regression: meta tags read 'Startseite' / 'Aktuelles'
+        but the homepage actually shows a generalist health/finance/lifestyle
+        magazine. The selector must see headings + prominent_titles so it
+        can recognise editorial scope when the meta is thin."""
+
+        block = ps._summarise_candidate(
+            {
+                "site_id": "mysupr-id",
+                "site_url": "https://mysupr.de",
+                "publishing_profile_payload": {
+                    "page_title": "Startseite",
+                    "meta_description": "Aktuelles",
+                    "visible_headings": [
+                        "Die besten Hautpflegetipps fuer Diabetiker 2026",
+                        "Wohnen und Leben im gruenen Norden",
+                        "Eheringe kaufen: Worauf Paare achten sollten",
+                        "Kredit trotz schlechter Bonitaet",
+                    ],
+                    "prominent_titles": [
+                        "Traurigkeit ueberwinden: Praktische Tipps",
+                        "Gesunder Schlaf fuer Allergiker",
+                    ],
+                },
+            },
+            index=0,
+        )
+        assert "homepage headings:" in block
+        assert "Hautpflegetipps fuer Diabetiker" in block
+        assert "recent article titles:" in block
+        assert "Traurigkeit ueberwinden" in block
+
+    def test_caps_headings_higher_than_other_fields(self):
+        """Headings/titles get a higher cap because identifying a site's
+        actual editorial mix needs more than 6 samples."""
+
+        many_headings = [f"Article number {i:02d}" for i in range(15)]
+        block = ps._summarise_candidate(
+            {
+                "site_id": "x",
+                "site_url": "https://x.de",
+                "publishing_profile_payload": {"visible_headings": many_headings},
+            },
+            index=0,
+        )
+        # Cap is 12, not 6.
+        assert "Article number 11" in block
+        # But not all 15.
+        assert "Article number 14" not in block
 
 
 # ---- _parse_ranking + _resolve_best_pick ---------------------------------

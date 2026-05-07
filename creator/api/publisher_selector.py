@@ -196,7 +196,13 @@ def _coerce_string_list(value: Any, *, limit: int = 8) -> List[str]:
 
 def _summarise_target_profile(profile: Optional[Dict[str, Any]], target_url: str) -> str:
     """Compact summary of the target site so the LLM can reason about its
-    business context. Falls through gracefully if profile is sparse."""
+    business context. Falls through gracefully if profile is sparse.
+
+    ``visible_headings`` (H1/H2/H3 scraped from the homepage and linked
+    pages) is the highest-signal field for "what does this site actually
+    do" -- much more reliable than meta tags, which are often empty or
+    boilerplate. ``meta_description`` is included as a secondary signal.
+    """
 
     lines: List[str] = [f"- url: {target_url}"]
     if not isinstance(profile, dict):
@@ -207,6 +213,8 @@ def _summarise_target_profile(profile: Optional[Dict[str, Any]], target_url: str
         ("domain_level_topic", "domain topic"),
         ("primary_context", "primary context"),
         ("page_title", "page title"),
+        ("meta_description", "meta description"),
+        ("visible_headings", "homepage headings"),
         ("topics", "topics"),
         ("topic_clusters", "topic clusters"),
         ("services_or_products", "services / products"),
@@ -218,7 +226,10 @@ def _summarise_target_profile(profile: Optional[Dict[str, Any]], target_url: str
         if isinstance(raw, str) and raw.strip():
             lines.append(f"- {label}: {raw.strip()}")
             continue
-        items = _coerce_string_list(raw, limit=8)
+        # visible_headings can be long -- bump the limit so the LLM sees
+        # enough headings to identify the business clearly.
+        limit = 12 if key == "visible_headings" else 8
+        items = _coerce_string_list(raw, limit=limit)
         if items:
             lines.append(f"- {label}: {', '.join(items)}")
     if len(lines) == 1:
@@ -243,6 +254,13 @@ def _summarise_candidate(candidate: Dict[str, Any], index: int) -> str:
     if is_general:
         lines.append("    note: general-purpose / Allgemein publisher (broad lifestyle)")
 
+    # ``visible_headings`` (H1/H2/H3 from the publisher's homepage + a few
+    # linked pages) and ``prominent_titles`` (recent article titles from the
+    # WP REST inventory) are the highest-signal fields for "what does this
+    # publisher actually publish". A meta-tag-only profile fooled the
+    # selector into picking generalist sites with empty meta as no-fit
+    # filler -- once headings are surfaced, the LLM sees the actual
+    # editorial mix.
     candidate_fields: List[tuple[str, str]] = [
         ("primary_context", "primary context"),
         ("topics", "topics"),
@@ -251,14 +269,20 @@ def _summarise_candidate(candidate: Dict[str, Any], index: int) -> str:
         ("target_audience", "target audience"),
         ("editorial_terms", "editorial terms"),
         ("repeated_keywords", "repeated keywords"),
-        ("sample_page_titles", "sample headlines"),
+        ("visible_headings", "homepage headings"),
+        ("prominent_titles", "recent article titles"),
+        ("sample_page_titles", "sample page titles"),
     ]
+    headings_keys = {"visible_headings", "prominent_titles"}
     for key, label in candidate_fields:
         raw = profile.get(key)
         if isinstance(raw, str) and raw.strip():
             lines.append(f"    - {label}: {raw.strip()}")
             continue
-        items = _coerce_string_list(raw, limit=6)
+        # Headings/titles get a higher cap because identifying a publisher's
+        # editorial mix needs more than a handful of samples.
+        limit = 12 if key in headings_keys else 6
+        items = _coerce_string_list(raw, limit=limit)
         if items:
             lines.append(f"    - {label}: {', '.join(items)}")
     return "\n".join(lines)

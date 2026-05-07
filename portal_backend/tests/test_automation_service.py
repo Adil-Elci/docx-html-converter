@@ -1008,7 +1008,7 @@ def test_run_create_article_pipeline_v2_hard_fails_when_no_fit_and_no_general(mo
         lambda **kwargs: pytest.fail("v2 pipeline must not run when no fit + no general fallback"),
     )
 
-    with pytest.raises(automation_service.AutomationError, match="no editorial fit"):
+    with pytest.raises(automation_service.AutomationError, match="no_fit_verdict"):
         automation_service._run_create_article_pipeline_v2(
             **_common_v2_pipeline_kwargs(
                 topic="adult product xyz",
@@ -1435,3 +1435,188 @@ def test_request_json_max_attempts_one_disables_retry(monkeypatch):
     with pytest.raises(automation_service.AutomationError, match="HTTP 503"):
         automation_service._request_json("GET", "https://wp.example/", max_attempts=1)
     assert calls["count"] == 1
+
+
+# ---- selector confidence floor + ranking trace ---------------------------
+
+
+def test_run_create_article_pipeline_v2_low_confidence_routes_to_allgemein(monkeypatch):
+    """Selector returned a winner but confidence < 0.55: treat as effective
+    no_fit and route to Allgemein. The omgenius regression — a 'best of
+    bad' pick with weak rationale — is the failure this guards against."""
+
+    captured_v2: dict[str, object] = {}
+
+    def fake_select(**_kwargs):
+        return {
+            "ok": True,
+            "best_pick": {
+                "site_id": "marketing-id",
+                "site_url": "https://omgenius.de",
+                "refined_topic": "topic",
+                "confidence": 0.4,  # below floor
+                "rationale": "weak overlap, picked least bad option",
+            },
+            "no_fit": False,
+            "soft_passed": False,
+            "ranking": [
+                {"site_id": "marketing-id", "site_url": "https://omgenius.de", "fit_score": 0.4, "rationale": "weak"},
+            ],
+            "cost_usd": 0.005,
+        }
+
+    def fake_v2(**kwargs):
+        captured_v2.update(kwargs)
+        return _v2_response_with_sections()
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", fake_v2)
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    result = automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            topic="persoenlichkeitsentwicklung",
+            publishing_candidates=[
+                {
+                    "site_url": "https://omgenius.de",
+                    "site_id": "marketing-id",
+                    "fit_score": 50,
+                    "publishing_profile_payload": {"primary_context": "marketing"},
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "u", "wp_app_password": "p",
+                    "category_ids": [], "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": False,
+                },
+                {
+                    "site_url": "https://allgemein.de",
+                    "site_id": "general-id",
+                    "fit_score": 30,
+                    "publishing_profile_payload": {"primary_context": "lifestyle"},
+                    "wp_rest_base": "/wp-json",
+                    "wp_username": "g", "wp_app_password": "g",
+                    "category_ids": [], "category_candidates": [],
+                    "internal_link_inventory": [],
+                    "is_general": True,
+                },
+            ],
+        ),
+    )
+    # Low-confidence winner was rejected; Allgemein took over.
+    assert captured_v2["publishing_site_url"] == "https://allgemein.de"
+    assert result["selected_site_url"] == "https://allgemein.de"
+
+
+def test_run_create_article_pipeline_v2_low_confidence_hard_fails_when_no_general(monkeypatch):
+    """Confidence below floor and no Allgemein candidate -> hard-fail with
+    a message that names both the reason and the confidence number."""
+
+    def fake_select(**_kwargs):
+        return {
+            "ok": True,
+            "best_pick": {"site_id": "x", "site_url": "https://x.de", "refined_topic": "t", "confidence": 0.3, "rationale": "weak"},
+            "no_fit": False,
+            "soft_passed": False,
+            "ranking": [],
+            "cost_usd": 0.005,
+        }
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
+    monkeypatch.setattr(
+        automation_service, "call_creator_v2_pipeline",
+        lambda **kw: pytest.fail("pipeline must not run when low confidence + no general"),
+    )
+
+    with pytest.raises(automation_service.AutomationError, match="confidence_below_floor"):
+        automation_service._run_create_article_pipeline_v2(
+            **_common_v2_pipeline_kwargs(
+                publishing_candidates=[
+                    {
+                        "site_url": "https://x.de", "site_id": "x", "fit_score": 50,
+                        "publishing_profile_payload": {"primary_context": "x"},
+                        "wp_rest_base": "/wp-json", "wp_username": "u", "wp_app_password": "p",
+                        "category_ids": [], "category_candidates": [], "internal_link_inventory": [],
+                        "is_general": False,
+                    },
+                ],
+            ),
+        )
+
+
+def test_summarise_selector_ranking_keeps_top_n_and_truncates_rationale():
+    out = automation_service._summarise_selector_ranking(
+        [
+            {"site_id": "a", "site_url": "https://a.de", "fit_score": 0.9, "rationale": "x" * 300},
+            {"site_id": "b", "site_url": "https://b.de", "fit_score": 0.6, "rationale": "ok"},
+            {"site_id": "c", "site_url": "https://c.de", "fit_score": 0.3, "rationale": "weak"},
+            {"site_id": "d", "site_url": "https://d.de", "fit_score": 0.1, "rationale": "tail"},
+        ],
+        top_n=3,
+    )
+    assert len(out) == 3
+    # site_id is dropped; url/fit_score/rationale kept.
+    assert "site_id" not in out[0]
+    assert out[0]["site_url"] == "https://a.de"
+    assert out[0]["fit_score"] == 0.9
+    assert len(out[0]["rationale"]) <= 160
+
+
+def test_summarise_selector_ranking_handles_garbage():
+    assert automation_service._summarise_selector_ranking(None) == []
+    assert automation_service._summarise_selector_ranking("not a list") == []
+    assert automation_service._summarise_selector_ranking([{"site_id": "x"}, "junk"]) == [
+        {"site_url": "", "fit_score": 0.0, "rationale": ""},
+    ]
+
+
+def test_run_create_article_pipeline_v2_emits_ranking_in_trace(monkeypatch):
+    """The full top-3 ranking must appear in the publisher_selector.selected
+    trace details so admins can see *why* the winner won."""
+
+    events: list[tuple[str, str, str, dict]] = []
+
+    def trace(level, phase, event, message="", details=None):
+        events.append((level, phase, event, details or {}))
+
+    def fake_select(**_kwargs):
+        return {
+            "ok": True,
+            "best_pick": {"site_id": "best", "site_url": "https://best.de", "refined_topic": "t", "confidence": 0.85, "rationale": "great fit"},
+            "no_fit": False,
+            "soft_passed": False,
+            "ranking": [
+                {"site_id": "best", "site_url": "https://best.de", "fit_score": 0.85, "rationale": "great"},
+                {"site_id": "ok", "site_url": "https://ok.de", "fit_score": 0.6, "rationale": "ok"},
+                {"site_id": "weak", "site_url": "https://weak.de", "fit_score": 0.3, "rationale": "weak"},
+            ],
+            "cost_usd": 0.005,
+        }
+
+    monkeypatch.setattr(automation_service, "call_creator_v2_select_publisher", fake_select)
+    monkeypatch.setattr(automation_service, "call_creator_v2_pipeline", lambda **k: _v2_response_with_sections())
+    monkeypatch.setattr(automation_service, "wp_create_post", lambda **kw: {"id": 1, "link": "x"})
+
+    automation_service._run_create_article_pipeline_v2(
+        **_common_v2_pipeline_kwargs(
+            trace_event=trace,
+            publishing_candidates=[
+                {
+                    "site_url": "https://best.de", "site_id": "best", "fit_score": 80,
+                    "publishing_profile_payload": {"primary_context": "x"},
+                    "wp_rest_base": "/wp-json", "wp_username": "u", "wp_app_password": "p",
+                    "category_ids": [], "category_candidates": [], "internal_link_inventory": [],
+                    "is_general": False,
+                },
+            ],
+        ),
+    )
+    # The selector emits "selected" or "refined" (when topic was refined);
+    # both branches now carry the ranking. Pick whichever fired.
+    selector_event = next(
+        e for e in events
+        if e[1] == "publisher_selector" and e[2] in {"selected", "refined"}
+    )
+    ranking = selector_event[3]["ranking"]
+    assert len(ranking) == 3
+    assert ranking[0]["site_url"] == "https://best.de"
+    assert ranking[1]["site_url"] == "https://ok.de"

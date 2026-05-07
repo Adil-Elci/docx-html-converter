@@ -1358,6 +1358,40 @@ def _normalize_text_tokens(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+# Confidence floor for the selector's best_pick. A winner under this
+# threshold is treated as effective no_fit and routed to Allgemein --
+# the LLM tends to pick a "least-bad" option rather than declare
+# no_fit=true even when its rationale is weak. 0.55 is one notch above
+# the selector's "weak but possible overlap" band (0.4-0.6).
+MIN_SELECTOR_CONFIDENCE = 0.55
+
+
+def _summarise_selector_ranking(ranking: Any, *, top_n: int = 3) -> List[Dict[str, Any]]:
+    """Extract the top-N entries from a selector ranking for trace events.
+
+    Keeps only ``site_url`` + ``fit_score`` + a truncated ``rationale``;
+    drops ``site_id`` (internal UUIDs aren't useful in admin logs).
+    """
+
+    if not isinstance(ranking, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in ranking[:top_n]:
+        if not isinstance(item, dict):
+            continue
+        rationale = str(item.get("rationale") or "").strip()
+        try:
+            fit_score = float(item.get("fit_score") or 0.0)
+        except (TypeError, ValueError):
+            fit_score = 0.0
+        out.append({
+            "site_url": str(item.get("site_url") or "").strip(),
+            "fit_score": fit_score,
+            "rationale": rationale[:160],
+        })
+    return out
+
+
 def _candidate_is_general(candidate: Dict[str, Any]) -> bool:
     """True when the site is flagged as ``allgemein`` / general-topic.
 
@@ -1816,25 +1850,44 @@ def _run_create_article_pipeline_v2(
 
     if selector_payload:
         best_pick = selector_payload.get("best_pick") if isinstance(selector_payload.get("best_pick"), dict) else {}
-        no_fit = bool(selector_payload.get("no_fit"))
-        if no_fit:
+        ranking_summary = _summarise_selector_ranking(selector_payload.get("ranking"))
+        no_fit_verdict = bool(selector_payload.get("no_fit"))
+        try:
+            confidence = float(best_pick.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        # Confidence floor: a "best of bad" winner with confidence < 0.55
+        # gets treated as an effective no_fit. The LLM tends to pick a
+        # least-bad option rather than declare no_fit=true, but a sub-0.55
+        # winner means it didn't actually find a good fit -- routing to
+        # Allgemein is strictly better than shipping a misfit article.
+        below_floor = confidence < MIN_SELECTOR_CONFIDENCE
+        effective_no_fit = no_fit_verdict or below_floor
+
+        if effective_no_fit:
             general_candidates = [c for c in effective_candidates if _candidate_is_general(c)]
+            reason = "no_fit_verdict" if no_fit_verdict else "confidence_below_floor"
             if not general_candidates:
                 raise AutomationError(
-                    "Creator publisher selector found no editorial fit among any "
-                    "candidate, and no Allgemein / general publisher is available "
-                    "as a fallback. Pick a different target or add a general site. "
+                    f"Creator publisher selector did not find a fit "
+                    f"({reason}; confidence={confidence:.2f}) and no Allgemein / "
+                    f"general publisher is available as a fallback. Pick a "
+                    f"different target or flag a general site. "
                     f"Rationale: {best_pick.get('rationale') or 'no overlap'}"
                 )
             chosen_candidate = general_candidates[0]
             _trace(
                 "info",
                 "publisher_selector",
-                "no_fit_allgemein_fallback",
-                "No editorial fit; routing to Allgemein publisher.",
+                "allgemein_fallback",
+                f"No editorial fit ({reason}); routing to Allgemein publisher.",
                 {
                     "selected_site_url": chosen_candidate.get("site_url"),
+                    "fallback_reason": reason,
+                    "confidence": confidence,
                     "rationale": best_pick.get("rationale"),
+                    "ranking": ranking_summary,
                 },
             )
         else:
@@ -1858,8 +1911,9 @@ def _run_create_article_pipeline_v2(
                         "original": upfront_target_keyword,
                         "refined": refined,
                         "selected_site_url": chosen_candidate.get("site_url"),
-                        "confidence": best_pick.get("confidence"),
+                        "confidence": confidence,
                         "rationale": best_pick.get("rationale"),
+                        "ranking": ranking_summary,
                     },
                 )
                 upfront_target_keyword = refined
@@ -1879,9 +1933,10 @@ def _run_create_article_pipeline_v2(
                     "Publisher chosen by Haiku rerank.",
                     {
                         "selected_site_url": chosen_candidate.get("site_url"),
-                        "confidence": best_pick.get("confidence"),
+                        "confidence": confidence,
                         "rationale": best_pick.get("rationale"),
                         "soft_passed": bool(selector_payload.get("soft_passed")),
+                        "ranking": ranking_summary,
                     },
                 )
 

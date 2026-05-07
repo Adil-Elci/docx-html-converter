@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-06 · **Last commit:** `Bigger LLM retry budget with jitter for Anthropic 529 overload`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-07 · **Last commit:** `Selector guardrails: confidence floor, always-include Allgemein, ranking trace`
 
 ## Deployment
 
@@ -255,6 +255,20 @@ Live test still 529'd, this time on `voice_pass`. Root cause: `call_llm_text` ha
 
 Tests: 485 passing. New coverage: `_retry_sleep_seconds` jitter band, `call_llm_text` 529 retry path, `call_llm_json` 529 retry path, default-budget guard, no-retry on 4xx.
 
+### Phase E follow-up #6 — selector signals + guardrails
+
+10-target live test surfaced two issue classes: (a) two picks were strictly worse than another candidate already in the shortlist (das-programm → transportly when bhw-immobilien explicitly covers Handwerk; online-life-coaching → omgenius when 3 better options existed); (b) one target hard-failed because the only "general" candidate (mysupr) wasn't reachable even though its real homepage clearly markets a generalist health/lifestyle magazine — the cached profile only saw `title=Startseite` / `description=Aktuelles`.
+
+**Commit 1 — profile signal enrichment** ([3462966](commit/3462966)):
+The site-profiler already captures `visible_headings` (H1/H2/H3 from homepage + linked pages) and `prominent_titles` (recent article titles from WP REST inventory). The selector's `_summarise_candidate` / `_summarise_target_profile` simply weren't reading them. Surfaced both fields plus `meta_description` in the LLM prompt with a higher cap (12 vs 6) so the LLM can identify editorial scope from real content, not just meta tags.
+
+**Commit 2 — guardrails** ([this commit]):
+- **Confidence floor** (`MIN_SELECTOR_CONFIDENCE = 0.55`): a winner under that threshold is treated as effective `no_fit` and routed to Allgemein. Stops "best of bad" silent ships like the omgenius case.
+- **Always include `is_general=True` candidates in the shortlist**: appended after the score-ranked top-N (capped at 2 extras). The lsdshop hard-fail was caused by every score-ranked candidate falling below `min_score` and no Allgemein being reachable — now the Allgemein safety net is guaranteed if any general site is configured.
+- **Ranking trace**: `selector_payload.ranking[:3]` (site_url + fit_score + truncated rationale) now appears in `publisher_selector.selected` / `.refined` / `.allgemein_fallback` trace details so admins can see *why* the winner won and which runners-up the LLM considered.
+
+Tests: 497 passing (+8 guardrail tests). Operational follow-up: flag at least one real publishing site as `is_general=True` in production, otherwise the floor + always-include changes have nothing to fall back to.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
@@ -288,11 +302,11 @@ python -m creator.scripts.smoke_full_pipeline "steuerberater hamburg" https://cl
 
 # Full creator unit test suite
 python -m pytest creator/tests/ -v
-# Expected: 347 passing as of Phase E (was 320 at end of Phase D)
+# Expected: 351 passing as of Phase E (was 320 at end of Phase D)
 
 # Full portal_backend test suite
 python -m pytest portal_backend/tests/ -v
-# Expected: 138 passing as of Phase E follow-ups
+# Expected: 146 passing as of Phase E follow-ups
 ```
 
 ## Cross-session context pointers

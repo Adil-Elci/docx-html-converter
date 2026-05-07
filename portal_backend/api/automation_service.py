@@ -2025,6 +2025,29 @@ def _run_create_article_pipeline_v2(
         candidate_author_id = 0
     selected_author_id = candidate_author_id if candidate_author_id > 0 else author_id
 
+    # TEMP: stop after publisher selection so the admin portal can verify the
+    # selector's pick before the rest of the creator budget is spent. The
+    # chosen site is surfaced via a JobEvent that the Create Article UI reads.
+    _trace(
+        "info",
+        "publisher_selector",
+        "stopped_after_selection",
+        "Pipeline stopped after publisher selection (diagnostic mode).",
+        {"selected_site_url": selected_publish_site_url, "selected_site_id": selected_publish_site_id},
+    )
+    return {
+        "stop_after_publisher_selection": True,
+        "selected_site_id": selected_publish_site_id,
+        "selected_site_url": selected_publish_site_url,
+        "creator_output": None,
+        "image_url": "",
+        "media_payload": None,
+        "media_url": None,
+        "post_payload": {},
+        "post_event_type": "creator_post_skipped",
+        "selected_category_ids": selected_category_ids,
+    }
+
     # Brainstorm an editorial angle for the article. Only runs when the
     # webhook didn't pin an explicit topic -- if the admin chose a topic
     # we respect it. Sonnet 4.6 single shot (~$0.02). The auto-pick is the

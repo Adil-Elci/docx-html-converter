@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-07 · **Last commit:** `Selector guardrails: confidence floor, always-include Allgemein, ranking trace`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-07 · **Last commit:** `Auto-flag generalist publishers via context-spread heuristic`
 
 ## Deployment
 
@@ -269,6 +269,16 @@ The site-profiler already captures `visible_headings` (H1/H2/H3 from homepage + 
 
 Tests: 497 passing (+8 guardrail tests). Operational follow-up: flag at least one real publishing site as `is_general=True` in production, otherwise the floor + always-include changes have nothing to fall back to.
 
+### Phase E follow-up #7 — auto-flag generalist publishers via context spread
+
+The `is_general` DB flag was a manual admin toggle. mysupr.de is a textbook generalist (homepage spans health, finance, real-estate, family, lifestyle) but no admin had flagged it, so the no_fit fallback couldn't reach it. The existing keyword heuristic in `_candidate_is_general` only matched `primary_context` containing `allgemein` / `general` / `magazin` — too narrow.
+
+Added `_profile_has_diverse_contexts`: looks at `publishing_profile_payload.context_scores` (already populated by the site profiler — counter of context labels with int scores). If 3+ distinct contexts sit within 50% of the top context's score, flag as generalist. mysupr's snapshot scores `health: 100, real_estate: 80, finance: 75, family: 70, lifestyle: 60` → 5 contexts ≥ 50 → ✅. A niche site like a real-estate magazine scores `real_estate: 100, finance: 20, home: 10` → 0 qualifying contexts → ✅ stays niche. Two-topic publishers (finance + tech) don't qualify either — heuristic requires 3+, by design.
+
+Wired as third signal in `_candidate_is_general` after the explicit DB flag and the keyword heuristic. 10 new tests covering mysupr-shape, niche, two-topic, missing/empty/garbage scores, and explicit-flag override.
+
+Tests: 507 passing.
+
 ## Deferred items / follow-ups
 
 - ✅ **Live env file cleanup** — done by the user out-of-tree via Dokploy. Audit produced concrete keep/delete lists for both services; full reference captured in chat history.
@@ -306,7 +316,7 @@ python -m pytest creator/tests/ -v
 
 # Full portal_backend test suite
 python -m pytest portal_backend/tests/ -v
-# Expected: 146 passing as of Phase E follow-ups
+# Expected: 156 passing as of Phase E follow-up #7
 ```
 
 ## Cross-session context pointers

@@ -1620,3 +1620,105 @@ def test_run_create_article_pipeline_v2_emits_ranking_in_trace(monkeypatch):
     assert len(ranking) == 3
     assert ranking[0]["site_url"] == "https://best.de"
     assert ranking[1]["site_url"] == "https://ok.de"
+
+
+# ---- _candidate_is_general / diversity heuristic --------------------------
+
+
+class TestCandidateIsGeneral:
+    def test_explicit_is_general_flag_wins(self):
+        # Even with a niche-shaped profile, the DB flag overrides.
+        candidate = {
+            "is_general": True,
+            "publishing_profile_payload": {
+                "primary_context": "real_estate",
+                "context_scores": {"real_estate": 100, "lifestyle": 5},
+            },
+        }
+        assert automation_service._candidate_is_general(candidate) is True
+
+    def test_keyword_heuristic_matches_allgemein_in_primary_context(self):
+        candidate = {
+            "publishing_profile_payload": {"primary_context": "allgemein"},
+        }
+        assert automation_service._candidate_is_general(candidate) is True
+
+    def test_keyword_heuristic_matches_magazin(self):
+        candidate = {
+            "publishing_profile_payload": {"primary_context": "lifestyle magazin"},
+        }
+        assert automation_service._candidate_is_general(candidate) is True
+
+    def test_diversity_heuristic_flags_mysupr_shape(self):
+        """The mysupr regression: thin meta but homepage spans health,
+        finance, family, real_estate, lifestyle. The diversity heuristic
+        must catch this even when no admin has flagged it."""
+
+        candidate = {
+            "publishing_profile_payload": {
+                "primary_context": "lifestyle",
+                "context_scores": {
+                    "health": 100,
+                    "real_estate": 80,
+                    "finance": 75,
+                    "family": 70,
+                    "lifestyle": 60,
+                },
+            },
+        }
+        assert automation_service._candidate_is_general(candidate) is True
+
+    def test_diversity_heuristic_does_not_flag_niche(self):
+        """A focused publisher with one dominant context + small noise
+        is not a generalist."""
+
+        candidate = {
+            "publishing_profile_payload": {
+                "primary_context": "real_estate",
+                "context_scores": {"real_estate": 100, "finance": 20, "home": 10},
+            },
+        }
+        assert automation_service._candidate_is_general(candidate) is False
+
+    def test_diversity_heuristic_does_not_flag_two_topic_publisher(self):
+        """Two strong topics is bi-focal, not generalist (e.g. a finance
+        + tech publication). Heuristic requires 3+ comparable contexts."""
+
+        candidate = {
+            "publishing_profile_payload": {
+                "primary_context": "finance",
+                "context_scores": {"finance": 100, "tech": 80, "real_estate": 10},
+            },
+        }
+        assert automation_service._candidate_is_general(candidate) is False
+
+    def test_diversity_heuristic_handles_missing_scores(self):
+        # No context_scores key -> can't evaluate, no heuristic match.
+        candidate = {
+            "publishing_profile_payload": {"primary_context": "shopping"},
+        }
+        assert automation_service._candidate_is_general(candidate) is False
+
+    def test_diversity_heuristic_handles_empty_scores(self):
+        candidate = {
+            "publishing_profile_payload": {
+                "primary_context": "shopping",
+                "context_scores": {},
+            },
+        }
+        assert automation_service._candidate_is_general(candidate) is False
+
+    def test_diversity_heuristic_handles_garbage_score_values(self):
+        candidate = {
+            "publishing_profile_payload": {
+                "primary_context": "shopping",
+                "context_scores": {"a": "not a number", "b": None, "c": 50, "d": 40, "e": 30},
+            },
+        }
+        # Garbage entries skipped; remaining 3 (50, 40, 30) all >= 25 (50% of 50)
+        # → 3 qualifying contexts → flagged.
+        assert automation_service._candidate_is_general(candidate) is True
+
+    def test_no_signals_returns_false(self):
+        assert automation_service._candidate_is_general({}) is False
+        assert automation_service._candidate_is_general({"publishing_profile_payload": {}}) is False

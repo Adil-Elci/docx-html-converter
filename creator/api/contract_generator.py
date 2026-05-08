@@ -490,6 +490,11 @@ def _enforce_listicle_payload(payload: Dict[str, Any]) -> None:
     """
 
     payload["format"] = "listicle"
+    # Listicles are editorial — even when target_keyword is commercial, the
+    # article frame is informational and the backlink stays commercial.
+    # Force-pin so a stray "commercial" intent doesn't leak into downstream
+    # prompts (intro/outro section_writer reads ``contract.intent.value``).
+    payload["intent"] = "informational"
 
     plan = payload.get("listicle_plan")
     sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []

@@ -90,6 +90,7 @@ def run_pipeline(
     canonical_url: Optional[str] = None,
     language: Optional[str] = None,
     editorial_angle: Optional[dict] = None,
+    article_format: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -166,6 +167,20 @@ def run_pipeline(
     )
 
     # -- 2. Contract ---------------------------------------------------------
+    # Caller can pin the article format via either the top-level
+    # ``article_format`` param OR via ``editorial_angle.format``. The top-level
+    # param wins; we mirror it onto editorial_angle so prompt selection +
+    # format-pin both fire consistently.
+    requested_format = (article_format or "").strip().lower() or None
+    if requested_format not in (None, "narrative", "listicle"):
+        raise PipelineError("contract", f"Unsupported article_format {requested_format!r}; expected narrative or listicle.")
+    if requested_format == "listicle":
+        if editorial_angle is None:
+            editorial_angle = {"format": "listicle"}
+        elif isinstance(editorial_angle, dict):
+            editorial_angle.setdefault("format", "listicle")
+            # Force-override; defends against caller threading a stale value.
+            editorial_angle["format"] = "listicle"
     try:
         contract = generate_contract(
             research,

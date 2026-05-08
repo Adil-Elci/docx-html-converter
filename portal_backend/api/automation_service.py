@@ -1281,6 +1281,7 @@ def call_creator_v2_pipeline(
     canonical_url: Optional[str] = None,
     language: Optional[str] = None,
     editorial_angle: Optional[Dict[str, Any]] = None,
+    article_format: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -1322,6 +1323,8 @@ def call_creator_v2_pipeline(
         body["language"] = language
     if editorial_angle:
         body["editorial_angle"] = editorial_angle
+    if article_format and article_format.strip().lower() in {"narrative", "listicle"}:
+        body["article_format"] = article_format.strip().lower()
     url = creator_endpoint.rstrip("/") + "/v2/run-pipeline"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
@@ -2136,6 +2139,7 @@ def _run_create_article_pipeline_v2(
         publishing_site_url=selected_publish_site_url or None,
         language=upfront_language,
         editorial_angle=editorial_angle,
+        article_format=article_format,
         anchor_hint=anchor,
         timeout_seconds=creator_timeout_seconds,
     )

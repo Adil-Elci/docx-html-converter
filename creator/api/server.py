@@ -251,6 +251,7 @@ class V2RunPipelineRequest(BaseModel):
     publishing_site_url: Optional[str] = Field(default=None, min_length=4)
     language: Optional[str] = None  # ISO 639-1; auto-detected when absent
     editorial_angle: Optional[dict] = None  # brainstormed slant: {title, hook, rationale}
+    article_format: Optional[str] = None  # "narrative" (default) or "listicle"
     anchor_hint: Optional[str] = None
     canonical_url: Optional[str] = None
     skip_voice_pass: bool = False
@@ -409,6 +410,7 @@ async def v2_run_pipeline(payload: V2RunPipelineRequest) -> JSONResponse:
             publishing_site_url=payload.publishing_site_url,
             language=payload.language,
             editorial_angle=payload.editorial_angle,
+            article_format=payload.article_format,
             anchor_hint=payload.anchor_hint,
             canonical_url=payload.canonical_url,
             skip_voice_pass=payload.skip_voice_pass,

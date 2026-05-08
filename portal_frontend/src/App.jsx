@@ -3729,7 +3729,13 @@ export default function App() {
                   : t("heroSubmitArticle")}
               </h1>
               {isListiclesSection ? (
-                <p className="hero-subtitle">{t("listiclesHint")}</p>
+                <>
+                  <p className="hero-subtitle">{t("listiclesHint")}</p>
+                  <div className="format-chip" role="status" aria-live="polite">
+                    <span className="format-chip-dot" aria-hidden="true" />
+                    {t("formatChipListicle")}
+                  </div>
+                </>
               ) : null}
             </div>
           ) : null}
@@ -5884,6 +5890,39 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         />
       </svg>
     ),
+    services: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path
+          d="M19 12c0-.7-.1-1.3-.2-2l2-1.4-2-3.4-2.4.9c-.9-.7-1.9-1.3-3-1.6L13 2h-2l-.4 2.5c-1.1.3-2.1.9-3 1.6l-2.4-.9-2 3.4 2 1.4c-.1.7-.2 1.3-.2 2s.1 1.3.2 2l-2 1.4 2 3.4 2.4-.9c.9.7 1.9 1.3 3 1.6L11 22h2l.4-2.5c1.1-.3 2.1-.9 3-1.6l2.4.9 2-3.4-2-1.4c.1-.7.2-1.3.2-2z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    listicles: (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <circle cx="5.5" cy="6" r="1.4" fill="currentColor" />
+        <circle cx="5.5" cy="12" r="1.4" fill="currentColor" />
+        <circle cx="5.5" cy="18" r="1.4" fill="currentColor" />
+        <path d="M9 6h11M9 12h9M9 18h7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    "brand-mention": (
+      <svg viewBox="0 0 24 24" role="img" focusable="false">
+        <path
+          d="M5 11l9-6v14l-9-4z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <path d="M14 9.5l4.2-1.1M14 14.5l4.2 1.1" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M7 15v3.2a1 1 0 0 0 1 1h1.4a1 1 0 0 0 1-1V15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+    ),
     "pending-jobs": (
       <svg viewBox="0 0 24 24" role="img" focusable="false">
         <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -5948,40 +5987,86 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
   const childActiveById = (section) =>
     Array.isArray(section.children) && section.children.some((child) => child.id === activeSection);
 
+  const initialOpenGroups = useMemo(() => {
+    const out = {};
+    sections.forEach((section) => {
+      if (Array.isArray(section.children) && section.children.length > 0) {
+        out[section.id] = childActiveById(section);
+      }
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
+  const [openGroups, setOpenGroups] = useState(initialOpenGroups);
+
+  // Auto-open a group when one of its children becomes active (e.g. user
+  // navigates via deep-link or programmatic section change).
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      sections.forEach((section) => {
+        if (Array.isArray(section.children) && childActiveById(section) && !prev[section.id]) {
+          next[section.id] = true;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
+
+  const toggleGroup = (groupId) => {
+    setOpenGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
   return (
     <aside className="sidebar">
       <nav className="nav">
         {sections.map((section) => {
           if (Array.isArray(section.children) && section.children.length > 0) {
-            const isOpen = childActiveById(section) || activeSection === section.id;
+            const isOpen = !!openGroups[section.id];
             return (
-              <details key={section.id} className="nav-group" open={isOpen}>
-                <summary className="nav-item nav-group-summary">
+              <div key={section.id} className={`nav-group ${isOpen ? "is-open" : ""}`.trim()}>
+                <button
+                  type="button"
+                  className="nav-item nav-group-summary"
+                  aria-expanded={isOpen}
+                  onClick={() => toggleGroup(section.id)}
+                >
                   <span className="nav-item-content">
                     <span className="nav-icon" aria-hidden="true">
                       {sectionIcons[section.id] || sectionIcons["create-article"]}
                     </span>
                     <span className="nav-label">{section.label}</span>
                   </span>
-                </summary>
-                <div className="nav-group-children">
-                  {section.children.map((child) => (
-                    <button
-                      key={child.id}
-                      type="button"
-                      className={`nav-item nav-subitem ${activeSection === child.id ? "active" : ""}`}
-                      onClick={() => onSectionChange(child.id)}
-                    >
-                      <span className="nav-item-content">
-                        <span className="nav-icon" aria-hidden="true">
-                          {sectionIcons[child.id] || sectionIcons["create-article"]}
+                  <span className="nav-chevron" aria-hidden="true">
+                    <svg viewBox="0 0 16 16" focusable="false">
+                      <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
+                </button>
+                <div className="nav-group-children" aria-hidden={!isOpen}>
+                  <div className="nav-group-children-inner">
+                    {section.children.map((child) => (
+                      <button
+                        key={child.id}
+                        type="button"
+                        className={`nav-item nav-subitem ${activeSection === child.id ? "active" : ""}`}
+                        onClick={() => onSectionChange(child.id)}
+                        tabIndex={isOpen ? 0 : -1}
+                      >
+                        <span className="nav-item-content">
+                          <span className="nav-icon" aria-hidden="true">
+                            {sectionIcons[child.id] || sectionIcons["create-article"]}
+                          </span>
+                          <span className="nav-label">{child.label}</span>
                         </span>
-                        <span className="nav-label">{child.label}</span>
-                      </span>
-                    </button>
-                  ))}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </details>
+              </div>
             );
           }
           return (

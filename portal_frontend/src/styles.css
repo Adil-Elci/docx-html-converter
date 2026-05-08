@@ -615,6 +615,106 @@ h3,
   color: #fff;
 }
 
+/* ---- Services dropdown (collapsible nav group) ---- */
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.nav-group-summary {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: rotate(0deg);
+}
+
+.nav-group.is-open .nav-chevron {
+  transform: rotate(180deg);
+}
+
+.nav-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+.nav-group-children {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms ease;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.nav-group.is-open .nav-group-children {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.nav-group-children-inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.nav-subitem {
+  /* Indent submenu items so the visual hierarchy reads as nested. */
+  padding-left: 28px;
+  font-size: 0.95em;
+}
+
+.nav-subitem .nav-icon {
+  opacity: 0.85;
+}
+
+.app-shell.sidebar-hidden .nav-subitem {
+  padding-left: 0;
+}
+
+.app-shell.sidebar-hidden .nav-chevron {
+  display: none;
+}
+
+/* ---- Format chip on the listicle hero ---- */
+
+.format-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.format-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .app-main {
   min-width: 0;
   width: calc(100% - var(--portal-sidebar-width));

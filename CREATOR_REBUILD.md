@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-07 · **Last commit:** `Auto-flag generalist publishers via context-spread heuristic`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-08 · **Last commit:** `Piggy-back publisher selection on creator_phase event`
 
 ## Deployment
 
@@ -278,6 +278,68 @@ Added `_profile_has_diverse_contexts`: looks at `publishing_profile_payload.cont
 Wired as third signal in `_candidate_is_general` after the explicit DB flag and the keyword heuristic. 10 new tests covering mysupr-shape, niche, two-topic, missing/empty/garbage scores, and explicit-flag override.
 
 Tests: 507 passing.
+
+## Phase F — Listicle format · 🔜 PLANNED
+
+Goal: ranked-list articles ("Die 7 besten X 2026", "10 Tipps für Y") as a sibling to today's narrative shape. Both backlink and brand-mention modes (Phase G) compose with this. Lands first because it's purely additive — narrative path untouched. Driven from a separate session against a fresh branch off `creator-rebuild`.
+
+**Contract** ([contract.py](creator/api/contract.py)): add `ArticleFormat = NARRATIVE | LISTICLE` (default NARRATIVE) and `ListiclePlan(item_count: int 5..15, ranking_basis: "score"|"alphabetical"|"unranked", item_template: List[str])` — only set when `format=LISTICLE`. Default `item_template = ["name", "hook", "pros", "cons", "verdict"]` (rating optional). `SectionPlan` reused: `section_index 0` = intro, last = outro, middle = ranked items. Backlink target maps via `link_plan.section_index → item.rank`. Add `schema_spec.item_list: bool = True`.
+
+**Writer** — `creator/api/listicle_writer.py` (mirror of `section_writer.py`): one Sonnet 4.6 call per item, `cache_system=True`, parallel via `ThreadPoolExecutor`, `DEFAULT_RETRIES=4`. Returns `ItemDraft(rank, name, body_html, links_inserted, word_count)`. Item HTML shape: `<h2>{rank}. {name}</h2>` → intro `<p>` → `<h3>Vorteile</h3><ul>` → `<h3>Nachteile</h3><ul>` → `<p class="verdict">…</p>` → optional `<p class="rating">…</p>`. Output validated against `ItemDraft` Pydantic model.
+
+**Assembler** ([article_assembler.py](creator/api/article_assembler.py)): new `assemble_listicle()` branch — intro section → ranked items in rank order → outro section → FAQ → `ItemList` + Article + FAQPage JSON-LD blocks. `ItemList` lists each item's `name` + `position` + on-page anchor.
+
+**Prompts:** new `creator/prompts/contract_generator/v2.{de,fr}.md` — emit listicle contract when `editorial_angle.format == "listicle"` (v1 stays narrative-only; do not edit). New `creator/prompts/listicle_writer/v1.{de,fr}.md` — structural-tag whitelist + AI-tell blocklist mirror `section_writer/v1.*`. Voice pass v1 gets one extra preservation rule (rank numerals + verdict tag survive verbatim) — patch existing files, no version bump.
+
+**Eval** ([eval_harness.py](creator/api/eval_harness.py)): new `check_listicle_structure` (item count matches `contract.listicle_plan.item_count`; each item has the required template fields as detectable tags; rank numerals consecutive 1..N when `ranking_basis=score`). Keyword-density cap 3% → 4% for listicles (item-name repetition is honest). All other deterministic + judge axes reused unchanged.
+
+**Pipeline runner** ([pipeline_runner.py](creator/api/pipeline_runner.py)): single branch on `contract.format` — `write_all_sections` vs `write_all_items`, `assemble_article` vs `assemble_listicle`. Voice pass / judge / eval reused as-is. ~30 new lines.
+
+**Brainstorm** ([topic_brainstorm.py](creator/api/topic_brainstorm.py)): add 7th title-frame `listicle` (e.g. `"Die 7 besten Steuerberater in Hamburg 2026"`) — only emitted when caller passes `prefer_listicle=True`. Bump `BRAINSTORM_CACHE_VERSION v2 → v3` to invalidate prior batches.
+
+**Server**: existing `/v2/run-pipeline` accepts `editorial_angle.format = "listicle"` + optional `editorial_angle.item_count_hint`. No new endpoint.
+
+**Portal_backend** ([portal_schemas.py](portal_backend/api/portal_schemas.py) + [automation_service.py](portal_backend/api/automation_service.py)): add `AutomationRequest.article_format: "narrative"|"listicle"` (default narrative). Plumbed through `_run_create_article_pipeline_v2` → `call_creator_v2_pipeline(editorial_angle={...,"format":...})`. No new `request_kind` — listicle is a sub-shape of `create_article`. Worker (`automation_worker.py`) `_mark_creator_success` reads `creator_output.phase5.sections[*].links_inserted` either way (already shape-agnostic).
+
+**Migration:** Alembic 0052 — `jobs.article_format VARCHAR DEFAULT 'narrative' NOT NULL`. Optional follow-up: `publishing_sites.accepts_listicle BOOLEAN DEFAULT NULL` so the late-bind selector can learn per-publisher preference (out of scope for F itself).
+
+**Smoke + tests:** `creator/scripts/smoke_listicle.py` runs LIVE end-to-end and saves all artifacts to `creator/smoke_outputs/listicle-<ts>/`. ~30 new unit tests (contract round-trip narrative+listicle, listicle_writer parallel/serial paths, assembler ItemList JSON-LD, eval `listicle_structure` pass+fail, brainstorm listicle frame, pipeline_runner branch). Target: creator suite ~537 passing post-merge.
+
+**Risk to watch:** LLM over-listing ("Top 10" → 12 items); LLMs collapsing the pros/cons structure into prose. Hard cap in contract + `check_listicle_structure` deterministic gate + voice-pass preservation rule. Don't trust the prompt alone — three-layer defense, same pattern as Phase G's link-strip.
+
+**Live validation gate:** 10 live runs across 3+ publishers before flipping to ✅ DONE. Track per-publisher acceptance.
+
+## Phase G — Unlinked brand mentions · 🔜 PLANNED
+
+Goal: cheaper service tier — articles that name-drop the client brand for SEO entity-association + PR reach but contain ZERO outbound links to the client URL. Target_url still drives topic derivation and brand identification; it just never appears as `<a href>` or in plaintext. Composes with Phase F. Lands AFTER Phase F is live and validated — Phase G touches eval gates and worker persistence, safer once the format split has stabilized.
+
+**Brand input**: `AutomationRequest.client_brand_name: Optional[str]` — required when `link_mode=brand_mention`, ignored otherwise. Heuristic fallback only if explicit value is missing: URL host → strip TLD → titlecase (`mysupr.de` → `MySupr`). Surface forms = `client_brand_name` + `derived_topic.alternates` matches.
+
+**Contract** ([contract.py](creator/api/contract.py)): add `LinkMode = BACKLINK | BRAND_MENTION` (default BACKLINK). When `BRAND_MENTION`: `link_plan` is empty by construction (Pydantic validator enforces). Add new `EntityRequirement.role: Optional[Literal["client_brand", "supporting"]]` and, when role=client_brand, fields `min_mentions: int = 3`, `forbidden_anchor_phrases: List[str]` (default `["klicken Sie hier", "die Webseite", "hier", target host bare, target URL]`).
+
+**Contract generator** ([contract_generator.py](creator/api/contract_generator.py)): when `link_mode=brand_mention`, suppress `link_plan` output entirely and inject a placement directive — brand surfaces in intro + ≥2 distinct sections + FAQ, distributed natural cadence, never a CTA, never adjacent to a URL token. Per-language `contract_generator/v1.{de,fr}.md` gets a `link_mode` switch block (additive — does not break BACKLINK path).
+
+**Section writer** ([section_writer.py](creator/api/section_writer.py)): when `contract.link_mode=BRAND_MENTION`, post-process each draft to strip any `<a>` whose href contains the target host or target URL — replace tag with anchor text only. Log every strip via `logger.warning("section_writer.brand_mention_link_stripped url=%s anchor=%s")`. Existing required-entity injection already handles brand surface forms. `links_inserted` returns `[]` for these drafts.
+
+**Voice pass** ([voice_pass.py](creator/api/voice_pass.py)): existing URL-preservation rule extends — input `<a>` URLs must equal output `<a>` URLs (already enforced) AND when `link_mode=BRAND_MENTION` no `<a href>` may contain the target host. New `VoicePassValidationError` subclass `BrandMentionLinkLeakError` raised on violation; pipeline_runner re-raises as `PipelineError("voice_pass", …)`.
+
+**Eval** ([eval_harness.py](creator/api/eval_harness.py)):
+- `check_brand_mention_count` (deterministic): brand surface forms appear ≥ `min_mentions` times in article body. Surface form set built from `client_brand_name` + `derived_topic.alternates`. Case-insensitive whole-word match.
+- `check_no_target_url` (deterministic, HARD GATE): zero occurrences of target host in any `<a href>`, plaintext, or attribute of `final_html`. Failure auto-fails the entire `quality_report`.
+- `check_link_counts` runs only when `link_mode=BACKLINK`.
+- Judge: replace `backlink_anchor_naturalness` with `brand_mention_naturalness` when link_mode=brand_mention — does the brand read as editorial coverage (not paid placement)? `eval_judge/v1.{de,fr}.md` gets a `link_mode` switch.
+
+**Server**: `/v2/run-pipeline` accepts `link_mode: "backlink"|"brand_mention"` (default backlink) + `client_brand_name` (required when link_mode=brand_mention). 422 with `code=brand_name_required` if missing. No new endpoint.
+
+**Portal_backend** ([automation_service.py](portal_backend/api/automation_service.py) + [automation_worker.py](portal_backend/api/automation_worker.py)): `AutomationRequest.link_mode` + `client_brand_name` plumbed through. Worker branches on `pipeline_state.link_mode`: BACKLINK path writes `PlacedLink` rows as today; BRAND_MENTION path writes one `BrandMention` row per detected mention `{job_id, brand_surface_form, occurrence_count, sections_present_in: List[int]}`. JobEvents emit `brand_mention_complete` with the surface-form histogram.
+
+**Migration:** Alembic 0053 — `jobs.link_mode VARCHAR DEFAULT 'backlink' NOT NULL`, `jobs.client_brand_name VARCHAR NULL`, new `brand_mentions` table (`id`, `job_id` FK, `brand_surface_form`, `occurrence_count`, `sections_present_in JSONB`, `created_at`).
+
+**Smoke + tests:** `creator/scripts/smoke_brand_mention.py` runs LIVE and ASSERTS `check_no_target_url` passes before exit (this is the load-bearing safety property). ~25 new unit tests covering contract suppression of link_plan, section-writer link strip + log, voice-pass `BrandMentionLinkLeakError`, both new eval checks (pass + fail paths), judge axis swap, worker `BrandMention` persistence, AutomationRequest `brand_name_required` validation.
+
+**Risk to watch:** stealth link leakage. The section-writer `<a>`-strip + voice-pass URL guard + `check_no_target_url` deterministic gate are belt-and-suspenders-and-elastic — keep all three. Prompt rules alone are not enough; LLMs WILL fabricate `[brand](https://target/)` markdown-style links even with strict prompts.
+
+**Live validation gate:** 10 live runs spanning both formats (narrative + listicle) and both languages (de + fr). Manually verify zero target_url leakage in each before flipping to ✅ DONE.
 
 ## Deferred items / follow-ups
 

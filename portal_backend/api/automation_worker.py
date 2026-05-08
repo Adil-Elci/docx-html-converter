@@ -482,6 +482,7 @@ class AutomationJobWorker:
                     client_target_site_id=payload.get("target_site_id"),
                     anchor=payload.get("anchor"),
                     topic=payload.get("topic"),
+                    article_format=payload.get("article_format") or "narrative",
                     exclude_topics=payload.get("exclude_topics") or [],
                     recent_article_titles=payload.get("recent_article_titles") or [],
                     internal_link_inventory=payload.get("internal_link_inventory") or [],
@@ -700,6 +701,12 @@ class AutomationJobWorker:
                     target_site_id = None
             anchor = parsed_notes.get("anchor")
             topic = parsed_notes.get("topic")
+            # Job column is authoritative; notes are a back-compat fallback
+            # for any in-flight rows written before column existed.
+            job_article_format = (getattr(job, "article_format", None) or "").strip().lower()
+            article_format = job_article_format or (parsed_notes.get("article_format") or "narrative").strip().lower()
+            if article_format not in {"narrative", "listicle"}:
+                article_format = "narrative"
             auto_selected_site = parsed_notes.get("auto_selected_site", "").lower() == "true"
 
             credential_author_id_raw = credential.author_id
@@ -1156,6 +1163,7 @@ class AutomationJobWorker:
                 "target_site_url": target_site_url,
                 "anchor": anchor,
                 "topic": topic,
+                "article_format": article_format,
                 "exclude_topics": exclude_topics,
                 "recent_article_titles": recent_article_titles,
                 "internal_link_inventory": internal_link_inventory,

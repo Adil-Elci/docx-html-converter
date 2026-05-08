@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SearchIntent(str, Enum):
@@ -21,6 +21,11 @@ class GermanTone(str, Enum):
 class ArticleLanguage(str, Enum):
     DE = "de"
     FR = "fr"
+
+
+class ArticleFormat(str, Enum):
+    NARRATIVE = "narrative"
+    LISTICLE = "listicle"
 
 
 class LinkTarget(BaseModel):
@@ -67,6 +72,26 @@ class FAQItem(BaseModel):
 class SchemaSpec(BaseModel):
     article: bool = True
     faq_page: bool = True
+    item_list: bool = True
+
+
+class ListiclePlan(BaseModel):
+    """Listicle-format plan. Only populated when ``ContentContract.format=LISTICLE``.
+
+    Each ranked item becomes one ``<h2>`` block in the final article. Item count
+    bounded so eval can deterministically gate the structure (5..15).
+    """
+
+    item_count: int = Field(..., ge=5, le=15)
+    ranking_basis: Literal["score", "alphabetical", "unranked"] = "score"
+    item_template: List[str] = Field(
+        default_factory=lambda: ["name", "hook", "pros", "cons", "verdict"],
+        description="Required fields per item; the writer renders each as the matching HTML element.",
+    )
+    items: List[str] = Field(
+        default_factory=list,
+        description="Item names in their final ranked order. Length must equal item_count when populated.",
+    )
 
 
 class ContentContract(BaseModel):
@@ -83,6 +108,8 @@ class ContentContract(BaseModel):
     tone: GermanTone = GermanTone.SIE
     target_audience: str = Field(..., min_length=5)
     word_count_target: int = Field(..., ge=200, le=5000)
+    format: ArticleFormat = ArticleFormat.NARRATIVE
+    listicle_plan: Optional[ListiclePlan] = None
 
     # Contract bounds catch only output that would break downstream code.
     # SEO-quality bands (50-60 title, 140-160 description, 800-1500 words,
@@ -108,3 +135,20 @@ class ContentContract(BaseModel):
 
     competitor_top_urls: List[str] = Field(default_factory=list, max_length=5)
     contract_version: str = Field(default="v1")
+
+    @model_validator(mode="after")
+    def _validate_format_plan(self) -> "ContentContract":
+        if self.format == ArticleFormat.LISTICLE:
+            if self.listicle_plan is None:
+                raise ValueError("listicle_plan is required when format=listicle.")
+            items = self.listicle_plan.items
+            if items and len(items) != self.listicle_plan.item_count:
+                raise ValueError(
+                    f"listicle_plan.items length ({len(items)}) must match item_count ({self.listicle_plan.item_count})."
+                )
+        elif self.listicle_plan is not None:
+            # Narrative articles must not carry a listicle plan; reject silently
+            # rather than auto-clearing so the LLM doesn't ship a half-formed
+            # contract that's easy to misread downstream.
+            raise ValueError("listicle_plan must be omitted when format=narrative.")
+        return self

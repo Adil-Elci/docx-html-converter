@@ -91,8 +91,13 @@ const baseApiUrl = import.meta.env.VITE_API_BASE_URL || "";
 const defaultClientPortalHost = "clientsportal.elci.live";
 const defaultAdminPortalHost = "adminportal.elci.live";
 const defaultDbUpdaterHost = "updatedb.elci.live";
-const ADMIN_SECTIONS = ["admin", "task-board", "websites", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article"];
-const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article"];
+const ADMIN_SECTIONS = ["admin", "task-board", "websites", "site-access", "clients", "pending-jobs", "published-articles", "rejected-articles", "queue-dashboard", "submit-article", "create-article", "listicles", "brand-mention"];
+const CLIENT_SECTIONS = ["dashboard", "submit-article", "create-article", "listicles", "brand-mention"];
+
+// "Listicles" routes to the create-article surface but with article_format=listicle
+// preselected. "Brand mention" is a Phase G placeholder — UI is rendered but the
+// pipeline rejects it until Phase G ships.
+const SERVICE_SECTION_IDS = new Set(["submit-article", "create-article", "listicles", "brand-mention"]);
 const CLIENT_IDLE_LOGOUT_MS = 24 * 60 * 60 * 1000;
 const ADMIN_IDLE_LOGOUT_MS = 1 * 60 * 60 * 1000;
 const SUPER_ADMIN_EMAIL = "aat@elci.cloud";
@@ -1042,7 +1047,7 @@ export default function App() {
     return "";
   };
 
-  const buildSubmissionFormData = (block, { isCreateArticle, clientName, creatorSubmitKey }) => {
+  const buildSubmissionFormData = (block, { isCreateArticle, clientName, creatorSubmitKey, articleFormat }) => {
     const formData = new FormData();
     const sourceType = isCreateArticle ? "google-doc" : (block.source_type || "").trim();
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
@@ -1064,6 +1069,8 @@ export default function App() {
     if (isCreateArticle) {
       formData.append("creator_mode", "true");
       if ((creatorSubmitKey || "").trim()) formData.append("idempotency_key", creatorSubmitKey.trim());
+      const fmt = (articleFormat || "narrative").trim().toLowerCase();
+      if (fmt && fmt !== "narrative") formData.append("article_format", fmt);
     }
     if (!isCreateArticle && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
@@ -2815,6 +2822,7 @@ export default function App() {
         isCreateArticle: isCreateArticleSection,
         clientName: resolvedClientName,
         creatorSubmitKey,
+        articleFormat: articleFormatForSubmission,
       });
       const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
       let responseData = null;
@@ -2920,6 +2928,7 @@ export default function App() {
             isCreateArticle: isCreateArticleSection,
             clientName: resolvedClientName,
             creatorSubmitKey,
+            articleFormat: articleFormatForSubmission,
           });
           const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
           let responseData = null;
@@ -3117,8 +3126,13 @@ export default function App() {
   const isRejectedArticlesSection = isAdminUser && activeSection === "rejected-articles";
   const isQueueDashboardSection = isAdminUser && activeSection === "queue-dashboard";
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
-  const isCreateArticleSection = activeSection === "create-article";
+  const isListiclesSection = activeSection === "listicles";
+  const isBrandMentionSection = activeSection === "brand-mention";
+  // Listicles routes through the same Create Article surface; the only
+  // difference is the article_format submitted with the request.
+  const isCreateArticleSection = activeSection === "create-article" || isListiclesSection;
   const isSubmitArticleSection = activeSection === "submit-article";
+  const articleFormatForSubmission = isListiclesSection ? "listicle" : "narrative";
   const taskBoardUnreadCount = Number(taskBoard?.unseen_card_count || 0);
   const activeClient = clients[0] || null;
   const websitesPageCount = Math.max(1, Math.ceil(sites.length / websitesPageSize));
@@ -3707,7 +3721,23 @@ export default function App() {
         <div className={`container ${(isTaskBoardSection || isAdminPendingSection || isPublishedArticlesSection || isRejectedArticlesSection || isQueueDashboardSection || isSiteAccessSection) ? "container-wide" : ""} ${(isSubmitArticleSection || isCreateArticleSection) ? "request-container" : ""}`.trim()}>
           {(isSubmitArticleSection || isCreateArticleSection) ? (
             <div className="hero">
-              <h1>{isCreateArticleSection ? t("heroCreateArticle") : t("heroSubmitArticle")}</h1>
+              <h1>
+                {isListiclesSection
+                  ? t("heroListicles")
+                  : isCreateArticleSection
+                  ? t("heroCreateArticle")
+                  : t("heroSubmitArticle")}
+              </h1>
+              {isListiclesSection ? (
+                <p className="hero-subtitle">{t("listiclesHint")}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {isBrandMentionSection ? (
+            <div className="hero">
+              <h1>{t("heroBrandMention")}</h1>
+              <p className="hero-subtitle">{t("brandMentionComingSoon")}</p>
             </div>
           ) : null}
 
@@ -5886,6 +5916,17 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
     ),
   };
 
+  const servicesGroup = {
+    id: "services",
+    label: t("navServices"),
+    children: [
+      { id: "submit-article", label: t("navSubmitArticle") },
+      { id: "create-article", label: t("navCreateArticle") },
+      { id: "listicles", label: t("navListicles") },
+      { id: "brand-mention", label: t("navBrandMention") },
+    ],
+  };
+
   const sections = isAdminRole(userRole)
     ? [
         { id: "admin", label: t("navAdmin") },
@@ -5893,8 +5934,7 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
         { id: "websites", label: t("navWebsites") },
         { id: "site-access", label: t("navSiteAccess") },
         { id: "clients", label: t("navClients") },
-        { id: "submit-article", label: t("navSubmitArticle") },
-        { id: "create-article", label: t("navCreateArticle") },
+        servicesGroup,
         { id: "pending-jobs", label: t("navPendingJobs"), badge: pendingJobsCount },
         { id: "published-articles", label: t("navPublishedArticles") },
         { id: "rejected-articles", label: t("navRejectedArticles") },
@@ -5902,29 +5942,65 @@ function Sidebar({ t, userRole, activeSection, onSectionChange, pendingJobsCount
       ]
     : [
         { id: "dashboard", label: t("navClientDashboard") },
-        { id: "submit-article", label: t("navSubmitArticle") },
-        { id: "create-article", label: t("navCreateArticle") },
+        servicesGroup,
       ];
+
+  const childActiveById = (section) =>
+    Array.isArray(section.children) && section.children.some((child) => child.id === activeSection);
 
   return (
     <aside className="sidebar">
       <nav className="nav">
-        {sections.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            className={`nav-item ${activeSection === section.id ? "active" : ""}`}
-            onClick={() => onSectionChange(section.id)}
-          >
-            <span className="nav-item-content">
-              <span className="nav-icon" aria-hidden="true">
-                {sectionIcons[section.id]}
+        {sections.map((section) => {
+          if (Array.isArray(section.children) && section.children.length > 0) {
+            const isOpen = childActiveById(section) || activeSection === section.id;
+            return (
+              <details key={section.id} className="nav-group" open={isOpen}>
+                <summary className="nav-item nav-group-summary">
+                  <span className="nav-item-content">
+                    <span className="nav-icon" aria-hidden="true">
+                      {sectionIcons[section.id] || sectionIcons["create-article"]}
+                    </span>
+                    <span className="nav-label">{section.label}</span>
+                  </span>
+                </summary>
+                <div className="nav-group-children">
+                  {section.children.map((child) => (
+                    <button
+                      key={child.id}
+                      type="button"
+                      className={`nav-item nav-subitem ${activeSection === child.id ? "active" : ""}`}
+                      onClick={() => onSectionChange(child.id)}
+                    >
+                      <span className="nav-item-content">
+                        <span className="nav-icon" aria-hidden="true">
+                          {sectionIcons[child.id] || sectionIcons["create-article"]}
+                        </span>
+                        <span className="nav-label">{child.label}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            );
+          }
+          return (
+            <button
+              key={section.id}
+              type="button"
+              className={`nav-item ${activeSection === section.id ? "active" : ""}`}
+              onClick={() => onSectionChange(section.id)}
+            >
+              <span className="nav-item-content">
+                <span className="nav-icon" aria-hidden="true">
+                  {sectionIcons[section.id]}
+                </span>
+                <span className="nav-label">{section.label}</span>
               </span>
-              <span className="nav-label">{section.label}</span>
-            </span>
-            {typeof section.badge === "number" && section.badge > 0 ? <span className="nav-badge">{section.badge}</span> : null}
-          </button>
-        ))}
+              {typeof section.badge === "number" && section.badge > 0 ? <span className="nav-badge">{section.badge}</span> : null}
+            </button>
+          );
+        })}
       </nav>
 
     </aside>

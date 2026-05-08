@@ -1746,6 +1746,7 @@ def _run_create_article_pipeline_v2(
     publishing_profile_payload: Optional[Dict[str, Any]] = None,
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
+    article_format: str = "narrative",
     exclude_topics: Optional[List[str]] = None,
     site_url: str,
     wp_rest_base: str,
@@ -2032,6 +2033,7 @@ def _run_create_article_pipeline_v2(
     # trace events for transparency / future admin-side override UI.
     editorial_angle: Optional[Dict[str, Any]] = None
     explicit_topic_present = bool((topic or "").strip() or profile_topic)
+    is_listicle_request = (article_format or "narrative").lower() == "listicle"
     if upfront_target_keyword and not explicit_topic_present:
         try:
             brainstorm_payload = call_creator_v2_brainstorm_topics(
@@ -2044,6 +2046,7 @@ def _run_create_article_pipeline_v2(
                 num_angles=5,
                 exclude_topics=list(exclude_topics or []),
                 use_cache=True,
+                prefer_listicle=is_listicle_request,
                 timeout_seconds=min(120, creator_timeout_seconds),
             )
         except AutomationError as exc:
@@ -2064,6 +2067,8 @@ def _run_create_article_pipeline_v2(
                     "hook": str(top.get("hook") or "").strip(),
                     "rationale": str(top.get("rationale") or "").strip(),
                 }
+                if is_listicle_request:
+                    editorial_angle["format"] = "listicle"
                 top_keyword = str(top.get("target_keyword") or "").strip()
                 # Brainstorm sometimes returns the article TITLE in the
                 # target_keyword field (LLM drift). DataForSEO rejects
@@ -2098,6 +2103,20 @@ def _run_create_article_pipeline_v2(
                     },
                 )
 
+    # Listicle path needs an editorial_angle marker even when brainstorm was
+    # skipped (explicit topic) -- the creator's contract_generator picks v2
+    # listicle prompt only when editorial_angle.format == "listicle".
+    if is_listicle_request:
+        if editorial_angle is None:
+            editorial_angle = {
+                "title": "",
+                "hook": "",
+                "rationale": "",
+                "format": "listicle",
+            }
+        else:
+            editorial_angle.setdefault("format", "listicle")
+
     _trace(
         "info",
         "creator_v2",
@@ -2107,6 +2126,7 @@ def _run_create_article_pipeline_v2(
             "target_keyword": upfront_target_keyword,
             "publishing_site_url": selected_publish_site_url,
             "topic_will_be_derived": upfront_target_keyword is None,
+            "article_format": article_format,
         },
     )
     v2_response = call_creator_v2_pipeline(
@@ -2321,6 +2341,7 @@ def _run_create_article_pipeline_v2(
         "selected_category_ids": selected_category_ids,
         "selected_site_id": selected_publish_site_id,
         "selected_site_url": selected_publish_site_url,
+        "article_format": article_format,
     }
 
 
@@ -2333,6 +2354,7 @@ def run_create_article_pipeline(
     client_target_site_id: Optional[str],
     anchor: Optional[str],
     topic: Optional[str],
+    article_format: str = "narrative",
     exclude_topics: Optional[List[str]] = None,
     recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
@@ -2384,6 +2406,7 @@ def run_create_article_pipeline(
         publishing_profile_payload=publishing_profile_payload,
         anchor=anchor,
         topic=topic,
+        article_format=article_format,
         exclude_topics=exclude_topics,
         site_url=site_url,
         wp_rest_base=wp_rest_base,

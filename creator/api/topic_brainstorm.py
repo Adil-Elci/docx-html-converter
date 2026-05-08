@@ -312,6 +312,29 @@ def _format_exclude_topics(values: Optional[List[str]], language: str) -> str:
     return f"\nBEREITS VERWENDETE THEMEN (vermeiden)\n=====================================\n{bullet_lines}\n"
 
 
+_LISTICLE_DIRECTIVE_DE = (
+    "FORMAT-PRÄFERENZ: LISTICLE\n"
+    "==========================\n"
+    "Bevorzuge in dieser Brainstorm-Runde ranked-list / Top-N Titel-Frames.\n"
+    "Beispiele: \"Die 7 besten Steuerberater in Hamburg 2026\", \"Top 10 Anbieter "
+    "für Kinderbrillen — der Vergleich\", \"5 Wege, Y zu Z\". Mindestens 60% der "
+    "Angles MÜSSEN diesem Listicle-Format folgen (Ziffer + Substantiv-Plural + "
+    "Jahr / Qualifier). Die kommerziellen Qualifizierer aus den Titel-Regeln "
+    "bleiben verboten — Listicle-Frame ist redaktionell, nicht promotional.\n"
+)
+
+_LISTICLE_DIRECTIVE_FR = (
+    "PRÉFÉRENCE FORMAT : LISTICLE\n"
+    "============================\n"
+    "Privilégiez dans ce brainstorming des cadres en classement / top-N.\n"
+    "Exemples : « Les 7 meilleurs avocats à Lyon 2026 », « Top 10 fournisseurs "
+    "pour lunettes enfant — le comparatif », « 5 façons de faire X ». Au moins "
+    "60 % des angles DOIVENT suivre ce format listicle (chiffre + nom au "
+    "pluriel + année / qualificatif). Les qualificatifs commerciaux interdits "
+    "le restent — le cadre listicle est éditorial, pas promotionnel.\n"
+)
+
+
 def _build_user_prompt(
     *,
     target_url: str,
@@ -320,9 +343,13 @@ def _build_user_prompt(
     language: str,
     current_year: int,
     exclude_topics: Optional[List[str]] = None,
+    prefer_listicle: bool = False,
 ) -> str:
     publisher_summary = _summarise_publisher_profile(publishing_profile_payload or {})
     exclude_block = _format_exclude_topics(exclude_topics, language)
+    listicle_block = ""
+    if prefer_listicle:
+        listicle_block = (_LISTICLE_DIRECTIVE_FR if language == "fr" else _LISTICLE_DIRECTIVE_DE) + "\n"
     if language == "fr":
         return (
             f"SITE CIBLE : {target_url}\n"
@@ -330,6 +357,7 @@ def _build_user_prompt(
             f"ANNÉE EN COURS : {current_year}\n\n"
             f"PROFIL ÉDITEUR\n==============\n{publisher_summary}\n"
             f"{exclude_block}\n"
+            f"{listicle_block}"
             f"Proposez les angles maintenant."
         )
     # default DE
@@ -339,6 +367,7 @@ def _build_user_prompt(
         f"AKTUELLES JAHR: {current_year}\n\n"
         f"PUBLISHER-PROFIL\n================\n{publisher_summary}\n"
         f"{exclude_block}\n"
+        f"{listicle_block}"
         f"Schlage jetzt die Angles vor."
     )
 
@@ -456,6 +485,7 @@ def brainstorm_editorial_angles(
     exclude_topics: Optional[List[str]] = None,
     use_cache: bool = True,
     min_angles_after_filter: int = 1,
+    prefer_listicle: bool = False,
     api_key: Optional[str] = None,
     model: str = DEFAULT_MODEL,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
@@ -544,6 +574,7 @@ def brainstorm_editorial_angles(
         language=lang,
         current_year=year,
         exclude_topics=exclude_topics,
+        prefer_listicle=prefer_listicle,
     )
 
     try:

@@ -35,7 +35,7 @@ logger = logging.getLogger("creator.topic_brainstorm_cache")
 PROVIDER = "anthropic"
 CACHE_KIND = "brainstorm"
 DEFAULT_TTL_SECONDS = 90 * 24 * 60 * 60  # 90 days
-BRAINSTORM_CACHE_VERSION = "v2"  # bumped 2026-05-06: editorial-frame prompt rewrite
+BRAINSTORM_CACHE_VERSION = "v3"  # bumped 2026-05-08: added listicle title-frame
 
 _ENGINE: Optional[Engine] = None
 _METADATA = MetaData()

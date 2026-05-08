@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-08 · **Last commit:** `Piggy-back publisher selection on creator_phase event`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-08 · **Last commit:** `Phase F — listicle format end-to-end`
 
 ## Deployment
 
@@ -279,35 +279,24 @@ Wired as third signal in `_candidate_is_general` after the explicit DB flag and 
 
 Tests: 507 passing.
 
-## Phase F — Listicle format · 🔜 PLANNED
+## Phase F — Listicle format · ✅ DONE (2026-05-08)
 
-Goal: ranked-list articles ("Die 7 besten X 2026", "10 Tipps für Y") as a sibling to today's narrative shape. Both backlink and brand-mention modes (Phase G) compose with this. Lands first because it's purely additive — narrative path untouched. Driven from a separate session against a fresh branch off `creator-rebuild`.
+Ranked-list articles ("Die 7 besten X 2026") as a sibling to today's narrative shape. Purely additive — narrative path untouched.
 
-**Contract** ([contract.py](creator/api/contract.py)): add `ArticleFormat = NARRATIVE | LISTICLE` (default NARRATIVE) and `ListiclePlan(item_count: int 5..15, ranking_basis: "score"|"alphabetical"|"unranked", item_template: List[str])` — only set when `format=LISTICLE`. Default `item_template = ["name", "hook", "pros", "cons", "verdict"]` (rating optional). `SectionPlan` reused: `section_index 0` = intro, last = outro, middle = ranked items. Backlink target maps via `link_plan.section_index → item.rank`. Add `schema_spec.item_list: bool = True`.
+- **Contract** ([contract.py](creator/api/contract.py)): `ArticleFormat = NARRATIVE | LISTICLE` (default NARRATIVE), new `ListiclePlan(item_count: 5..15, ranking_basis, item_template, items)`. `model_validator` rejects narrative-with-plan and listicle-without-plan. `SchemaSpec.item_list: bool = True`.
+- **Writer** ([listicle_writer.py](creator/api/listicle_writer.py)): `ItemDraft(rank, name, body_html, links_inserted, word_count)`. `write_item` mirrors `section_writer` (Sonnet 4.6, `cache_system=True`, `DEFAULT_RETRIES=4`). `write_all_items` parallel via `ThreadPoolExecutor`. Item HTML shape: hook `<p>` → `<h3>Vorteile</h3><ul>` → `<h3>Nachteile</h3><ul>` → `<p class="verdict">`. Backlink `link_plan[].section_index` reused as item rank.
+- **Assembler** ([article_assembler.py](creator/api/article_assembler.py)): new `assemble_listicle()` — H1 → intro section → ranked items as `<h2>{rank}. {name}</h2>` → outro section → FAQ → ItemList + Article + FAQPage JSON-LD.
+- **Prompts**: new `creator/prompts/contract_generator/v2.{de,fr}.md` (listicle contract: 2 sections = intro+outro, listicle_plan with items, mid-rank backlink, 800-2400 word target). New `creator/prompts/listicle_writer/v1.{de,fr}.md` (per-item structure rules + AI-tell blocklist). Voice pass `v1.{de,fr}.md` patched with one preservation rule (rank numerals + `<p class="verdict">` + Vorteile/Nachteile headings unchanged).
+- **Eval** ([eval_harness.py](creator/api/eval_harness.py)): new `check_listicle_structure` (item count matches `item_count`; rank numerals consecutive 1..N when basis=score; verdict + pros + cons headings present per item). Keyword-density cap parameterized: 1.5% narrative, 4.0% listicle (item-name repetition is honest). All other axes reused.
+- **Pipeline runner** ([pipeline_runner.py](creator/api/pipeline_runner.py)): single branch on `contract.format`. Listicle path renders intro+outro via `write_section` (single calls, `sections[0]` and `sections[1]`) and items via `write_all_items`, then `assemble_listicle`. `PipelineRun.items: List[ItemDraft]` carries the new artifact. Voice/judge/eval reused unchanged.
+- **Brainstorm** ([topic_brainstorm.py](creator/api/topic_brainstorm.py)): `prefer_listicle=True` injects a per-language directive ("Die 7 besten ...", "Top 10 ...") into the user prompt; ≥60% of angles must follow listicle frame. `BRAINSTORM_CACHE_VERSION v2 → v3` invalidates prior batches. `/v2/brainstorm-topics` accepts the new flag.
+- **Server**: existing `/v2/run-pipeline` accepts `editorial_angle.format = "listicle"` — `contract_generator.generate_contract` switches to v2 prompt automatically. Response now serializes `items` + `format`.
+- **Portal_backend**: `AutomationSubmitArticleIn.article_format ∈ {narrative, listicle}` (default narrative) plumbed through notes → worker → `run_create_article_pipeline(article_format=...)` → `_run_create_article_pipeline_v2`. Listicle path forwards `prefer_listicle=True` to brainstorm and tags `editorial_angle.format = "listicle"` (synthesises an empty-title angle when admin pinned topic skipped brainstorm). `Job.article_format` column added.
+- **Migration**: Alembic 0053 — `jobs.article_format VARCHAR(24) DEFAULT 'narrative' NOT NULL` + check constraint.
+- **Frontend** ([App.jsx](portal_frontend/src/App.jsx) + [i18n.js](portal_frontend/src/i18n.js)): sidebar restructured into a "Services" collapsible group containing Submit Article / Create Article / Listicles / Brand Mention. Listicles routes through the existing Create Article surface with `articleFormatForSubmission="listicle"` flipped on submit. Brand Mention is a hero placeholder until Phase G ships. `<details>`-based dropdown auto-opens when a child is active.
+- **Tests**: 14 new in `creator/tests/test_listicle.py` covering contract round-trip, narrative/listicle plan validators, item-count mismatch rejection, listicle writer user prompt + write_item + write_all_items serial, assembler ItemList JSON-LD, listicle structure check (pass / missing item / non-consecutive ranks), keyword-density cap split, brainstorm directive flag, contract_generator v2 prompt selection. **Suite green: creator 365 passing, portal 156 passing.** Frontend build clean.
 
-**Writer** — `creator/api/listicle_writer.py` (mirror of `section_writer.py`): one Sonnet 4.6 call per item, `cache_system=True`, parallel via `ThreadPoolExecutor`, `DEFAULT_RETRIES=4`. Returns `ItemDraft(rank, name, body_html, links_inserted, word_count)`. Item HTML shape: `<h2>{rank}. {name}</h2>` → intro `<p>` → `<h3>Vorteile</h3><ul>` → `<h3>Nachteile</h3><ul>` → `<p class="verdict">…</p>` → optional `<p class="rating">…</p>`. Output validated against `ItemDraft` Pydantic model.
-
-**Assembler** ([article_assembler.py](creator/api/article_assembler.py)): new `assemble_listicle()` branch — intro section → ranked items in rank order → outro section → FAQ → `ItemList` + Article + FAQPage JSON-LD blocks. `ItemList` lists each item's `name` + `position` + on-page anchor.
-
-**Prompts:** new `creator/prompts/contract_generator/v2.{de,fr}.md` — emit listicle contract when `editorial_angle.format == "listicle"` (v1 stays narrative-only; do not edit). New `creator/prompts/listicle_writer/v1.{de,fr}.md` — structural-tag whitelist + AI-tell blocklist mirror `section_writer/v1.*`. Voice pass v1 gets one extra preservation rule (rank numerals + verdict tag survive verbatim) — patch existing files, no version bump.
-
-**Eval** ([eval_harness.py](creator/api/eval_harness.py)): new `check_listicle_structure` (item count matches `contract.listicle_plan.item_count`; each item has the required template fields as detectable tags; rank numerals consecutive 1..N when `ranking_basis=score`). Keyword-density cap 3% → 4% for listicles (item-name repetition is honest). All other deterministic + judge axes reused unchanged.
-
-**Pipeline runner** ([pipeline_runner.py](creator/api/pipeline_runner.py)): single branch on `contract.format` — `write_all_sections` vs `write_all_items`, `assemble_article` vs `assemble_listicle`. Voice pass / judge / eval reused as-is. ~30 new lines.
-
-**Brainstorm** ([topic_brainstorm.py](creator/api/topic_brainstorm.py)): add 7th title-frame `listicle` (e.g. `"Die 7 besten Steuerberater in Hamburg 2026"`) — only emitted when caller passes `prefer_listicle=True`. Bump `BRAINSTORM_CACHE_VERSION v2 → v3` to invalidate prior batches.
-
-**Server**: existing `/v2/run-pipeline` accepts `editorial_angle.format = "listicle"` + optional `editorial_angle.item_count_hint`. No new endpoint.
-
-**Portal_backend** ([portal_schemas.py](portal_backend/api/portal_schemas.py) + [automation_service.py](portal_backend/api/automation_service.py)): add `AutomationRequest.article_format: "narrative"|"listicle"` (default narrative). Plumbed through `_run_create_article_pipeline_v2` → `call_creator_v2_pipeline(editorial_angle={...,"format":...})`. No new `request_kind` — listicle is a sub-shape of `create_article`. Worker (`automation_worker.py`) `_mark_creator_success` reads `creator_output.phase5.sections[*].links_inserted` either way (already shape-agnostic).
-
-**Migration:** Alembic 0052 — `jobs.article_format VARCHAR DEFAULT 'narrative' NOT NULL`. Optional follow-up: `publishing_sites.accepts_listicle BOOLEAN DEFAULT NULL` so the late-bind selector can learn per-publisher preference (out of scope for F itself).
-
-**Smoke + tests:** `creator/scripts/smoke_listicle.py` runs LIVE end-to-end and saves all artifacts to `creator/smoke_outputs/listicle-<ts>/`. ~30 new unit tests (contract round-trip narrative+listicle, listicle_writer parallel/serial paths, assembler ItemList JSON-LD, eval `listicle_structure` pass+fail, brainstorm listicle frame, pipeline_runner branch). Target: creator suite ~537 passing post-merge.
-
-**Risk to watch:** LLM over-listing ("Top 10" → 12 items); LLMs collapsing the pros/cons structure into prose. Hard cap in contract + `check_listicle_structure` deterministic gate + voice-pass preservation rule. Don't trust the prompt alone — three-layer defense, same pattern as Phase G's link-strip.
-
-**Live validation gate:** 10 live runs across 3+ publishers before flipping to ✅ DONE. Track per-publisher acceptance.
+**Risk to watch:** LLM over-listing ("Top 10" → 12 items); LLMs collapsing the pros/cons structure into prose. Three-layer defense: hard cap in contract, `check_listicle_structure` deterministic gate, voice-pass preservation rule. Live validation gate (10 runs across 3+ publishers) is operational follow-up.
 
 ## Phase G — Unlinked brand mentions · 🔜 PLANNED
 
@@ -333,7 +322,7 @@ Goal: cheaper service tier — articles that name-drop the client brand for SEO 
 
 **Portal_backend** ([automation_service.py](portal_backend/api/automation_service.py) + [automation_worker.py](portal_backend/api/automation_worker.py)): `AutomationRequest.link_mode` + `client_brand_name` plumbed through. Worker branches on `pipeline_state.link_mode`: BACKLINK path writes `PlacedLink` rows as today; BRAND_MENTION path writes one `BrandMention` row per detected mention `{job_id, brand_surface_form, occurrence_count, sections_present_in: List[int]}`. JobEvents emit `brand_mention_complete` with the surface-form histogram.
 
-**Migration:** Alembic 0053 — `jobs.link_mode VARCHAR DEFAULT 'backlink' NOT NULL`, `jobs.client_brand_name VARCHAR NULL`, new `brand_mentions` table (`id`, `job_id` FK, `brand_surface_form`, `occurrence_count`, `sections_present_in JSONB`, `created_at`).
+**Migration:** Alembic 0054 — `jobs.link_mode VARCHAR DEFAULT 'backlink' NOT NULL`, `jobs.client_brand_name VARCHAR NULL`, new `brand_mentions` table (`id`, `job_id` FK, `brand_surface_form`, `occurrence_count`, `sections_present_in JSONB`, `created_at`). (0053 is consumed by Phase F's `jobs.article_format`.)
 
 **Smoke + tests:** `creator/scripts/smoke_brand_mention.py` runs LIVE and ASSERTS `check_no_target_url` passes before exit (this is the load-bearing safety property). ~25 new unit tests covering contract suppression of link_plan, section-writer link strip + log, voice-pass `BrandMentionLinkLeakError`, both new eval checks (pass + fail paths), judge axis swap, worker `BrandMention` persistence, AutomationRequest `brand_name_required` validation.
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
 
-from .contract import ContentContract
+from .contract import ArticleFormat, ContentContract
 from .entity_extract import ExtractedEntity
 from .eval_judge import JudgeScores
 from .research import ResearchPayload
@@ -27,6 +27,7 @@ from .research import ResearchPayload
 
 KEYWORD_DENSITY_MIN = 0.005  # 0.5%
 KEYWORD_DENSITY_MAX = 0.015  # 1.5%
+KEYWORD_DENSITY_MAX_LISTICLE = 0.040  # 4.0% — listicles repeat item names; honest density runs higher.
 WORD_COUNT_TOLERANCE = 0.20
 META_TITLE_MIN = 50
 META_TITLE_MAX = 60
@@ -264,14 +265,14 @@ def check_keyword_in_first_100_words(plain_text: str, keyword: str) -> CheckResu
     return CheckResult("keyword_in_first_100_words", passed)
 
 
-def check_keyword_density(plain_text: str, keyword: str) -> CheckResult:
+def check_keyword_density(plain_text: str, keyword: str, *, density_max: float = KEYWORD_DENSITY_MAX) -> CheckResult:
     words = _word_count(plain_text)
     if words == 0:
         return CheckResult("keyword_density", False, detail="empty article")
     pattern = re.compile(re.escape(keyword), re.IGNORECASE)
     occurrences = len(pattern.findall(plain_text))
     density = occurrences / words
-    passed = KEYWORD_DENSITY_MIN <= density <= KEYWORD_DENSITY_MAX
+    passed = KEYWORD_DENSITY_MIN <= density <= density_max
     return CheckResult("keyword_density", passed, value=density)
 
 
@@ -464,6 +465,92 @@ def check_paa_coverage(
     )
 
 
+# ---- Listicle-structure check ----------------------------------------------
+
+
+_LISTICLE_RANK_HEADING_PATTERN = re.compile(r"^\s*(\d+)\.\s*(.+)$")
+_LISTICLE_VERDICT_PATTERN = re.compile(r"<p[^>]*class\s*=\s*[\"'][^\"']*\bverdict\b", re.IGNORECASE)
+_LISTICLE_PROS_HEADING_PATTERN = re.compile(r"<h3[^>]*>\s*(Vorteile|Avantages)\s*</h3>", re.IGNORECASE)
+_LISTICLE_CONS_HEADING_PATTERN = re.compile(r"<h3[^>]*>\s*(Nachteile|Inconv[eé]nients)\s*</h3>", re.IGNORECASE)
+
+
+def check_listicle_structure(article_html: str, contract: ContentContract) -> CheckResult:
+    """Verify ranked-listicle structural invariants.
+
+    Passes only when:
+    1. Number of rank-prefixed `<h2>`s equals ``contract.listicle_plan.item_count``.
+    2. When ``ranking_basis="score"``, rank numerals are consecutive 1..N.
+    3. Each item carries a ``<p class="verdict">`` paragraph and a pros + cons heading.
+
+    Narrative articles bypass the check by returning a passed=True stub (the
+    caller is expected to skip the call entirely; this is a defensive fallback).
+    """
+
+    plan = contract.listicle_plan
+    if contract.format != ArticleFormat.LISTICLE or plan is None:
+        return CheckResult("listicle_structure", True, detail="not a listicle")
+
+    parser = _parse(article_html)
+    rank_headings: List[tuple[int, str]] = []
+    for heading in parser.h2:
+        match = _LISTICLE_RANK_HEADING_PATTERN.match(heading or "")
+        if match:
+            try:
+                rank_headings.append((int(match.group(1)), match.group(2).strip()))
+            except (TypeError, ValueError):
+                continue
+
+    expected = plan.item_count
+    if len(rank_headings) != expected:
+        return CheckResult(
+            "listicle_structure",
+            False,
+            value=float(len(rank_headings)),
+            detail=f"found {len(rank_headings)} ranked items, expected {expected}",
+        )
+
+    if plan.ranking_basis == "score":
+        ranks = [r for r, _ in rank_headings]
+        if ranks != list(range(1, expected + 1)):
+            return CheckResult(
+                "listicle_structure",
+                False,
+                value=float(len(rank_headings)),
+                detail=f"rank numerals not 1..{expected} consecutively: {ranks}",
+            )
+
+    template = {field.lower() for field in plan.item_template}
+    verdict_required = "verdict" in template
+    pros_required = "pros" in template
+    cons_required = "cons" in template
+
+    verdict_count = len(_LISTICLE_VERDICT_PATTERN.findall(article_html))
+    pros_count = len(_LISTICLE_PROS_HEADING_PATTERN.findall(article_html))
+    cons_count = len(_LISTICLE_CONS_HEADING_PATTERN.findall(article_html))
+
+    failures: List[str] = []
+    if verdict_required and verdict_count < expected:
+        failures.append(f"verdict tags {verdict_count}/{expected}")
+    if pros_required and pros_count < expected:
+        failures.append(f"pros headings {pros_count}/{expected}")
+    if cons_required and cons_count < expected:
+        failures.append(f"cons headings {cons_count}/{expected}")
+    if failures:
+        return CheckResult(
+            "listicle_structure",
+            False,
+            value=float(len(rank_headings)),
+            detail="; ".join(failures),
+        )
+
+    return CheckResult(
+        "listicle_structure",
+        True,
+        value=float(len(rank_headings)),
+        detail=f"{expected} items, structure intact",
+    )
+
+
 # ---- LLM-judged checks driven by JudgeScores (Phase 3b) --------------------
 
 def _judge_axis_to_check(name: str, axis) -> CheckResult:
@@ -524,10 +611,13 @@ def evaluate(
     else:
         readability_check = check_german_readability(plain)
 
+    is_listicle = contract.format == ArticleFormat.LISTICLE
+    density_cap = KEYWORD_DENSITY_MAX_LISTICLE if is_listicle else KEYWORD_DENSITY_MAX
+
     deterministic = [
         check_keyword_in_h1(h1, primary),
         check_keyword_in_first_100_words(plain, primary),
-        check_keyword_density(plain, primary),
+        check_keyword_density(plain, primary, density_max=density_cap),
         check_secondary_keyword_coverage(plain, contract.secondary_keywords),
         check_word_count_band(plain, contract.word_count_target, competitor_word_count_median),
         check_heading_hierarchy(parser),
@@ -541,6 +631,8 @@ def evaluate(
         check_topical_entity_coverage(plain, high_coverage_entities),
         check_paa_coverage(plain, paa_questions, language=resolved_language),
     ]
+    if is_listicle:
+        deterministic.append(check_listicle_structure(article_html, contract))
     if judge_scores is not None:
         llm_judged = llm_judged_checks_from_scores(judge_scores)
     else:

@@ -22,13 +22,14 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urlparse
 
-from .article_assembler import AssembledArticle, assemble_article
-from .contract import ContentContract
+from .article_assembler import AssembledArticle, assemble_article, assemble_listicle
+from .contract import ArticleFormat, ContentContract
 from .contract_generator import generate_contract
 from .eval_harness import QualityReport, evaluate
 from .eval_judge import JudgeScores, judge_article
+from .listicle_writer import ItemDraft, write_all_items
 from .research import ResearchPayload, run_research
-from .section_writer import SectionDraft, write_all_sections
+from .section_writer import SectionDraft, write_all_sections, write_section
 from .topic_derivation import DerivedTopic, TopicDerivationError, derive_topic
 from .voice_pass import refine_voice
 
@@ -60,6 +61,7 @@ class PipelineRun:
     quality_report: QualityReport
 
     derived_topic: Optional[DerivedTopic] = None
+    items: List[ItemDraft] = field(default_factory=list)
     skipped_voice_pass: bool = False
     skipped_judge: bool = False
     notes: List[str] = field(default_factory=list)
@@ -181,20 +183,51 @@ def run_pipeline(
         len(contract.ai_tell_blocklist),
     )
 
-    # -- 3. Sections (parallel) ---------------------------------------------
-    try:
-        sections = write_all_sections(contract=contract, parallel=True)
-    except Exception as exc:
-        raise PipelineError("sections", str(exc)) from exc
-    logger.info("pipeline.sections_done count=%s", len(sections))
+    # -- 3. Sections / Items (parallel) -------------------------------------
+    is_listicle = contract.format == ArticleFormat.LISTICLE
+    sections: List[SectionDraft] = []
+    items: List[ItemDraft] = []
+    if is_listicle:
+        # Listicle: contract.sections holds [intro, outro] (rendered via the
+        # narrative section_writer, single calls each). The listicle_writer
+        # emits one ItemDraft per ranked item, parallelized just like sections.
+        try:
+            if len(contract.sections) >= 1:
+                sections.append(write_section(contract=contract, section_index=0))
+            if len(contract.sections) >= 2:
+                sections.append(write_section(contract=contract, section_index=1))
+        except Exception as exc:
+            raise PipelineError("sections", str(exc)) from exc
+        try:
+            items = write_all_items(contract=contract, parallel=True)
+        except Exception as exc:
+            raise PipelineError("items", str(exc)) from exc
+        logger.info("pipeline.listicle_done items=%s sections=%s", len(items), len(sections))
+    else:
+        try:
+            sections = write_all_sections(contract=contract, parallel=True)
+        except Exception as exc:
+            raise PipelineError("sections", str(exc)) from exc
+        logger.info("pipeline.sections_done count=%s", len(sections))
 
     # -- 4. Assemble --------------------------------------------------------
     try:
-        assembled = assemble_article(
-            contract=contract,
-            sections=sections,
-            canonical_url=canonical_url,
-        )
+        if is_listicle:
+            intro = sections[0] if sections else SectionDraft(section_index=0, h2="", body_html="")
+            outro = sections[1] if len(sections) >= 2 else None
+            assembled = assemble_listicle(
+                contract=contract,
+                intro=intro,
+                items=items,
+                outro=outro,
+                canonical_url=canonical_url,
+            )
+        else:
+            assembled = assemble_article(
+                contract=contract,
+                sections=sections,
+                canonical_url=canonical_url,
+            )
     except Exception as exc:
         raise PipelineError("assemble", str(exc)) from exc
 
@@ -256,6 +289,7 @@ def run_pipeline(
         judge_scores=judge_scores,
         quality_report=quality_report,
         derived_topic=derived_topic,
+        items=items,
         skipped_voice_pass=skip_voice_pass,
         skipped_judge=skip_judge,
         notes=notes,

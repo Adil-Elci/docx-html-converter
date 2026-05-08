@@ -183,6 +183,7 @@ class V2BrainstormTopicsRequest(BaseModel):
     num_angles: int = Field(default=5, ge=1, le=50)
     exclude_topics: Optional[list[str]] = None
     use_cache: bool = True
+    prefer_listicle: bool = False
 
 
 def _serialize_brainstorm(result: BrainstormResult) -> dict:
@@ -224,6 +225,7 @@ async def v2_brainstorm_topics(payload: V2BrainstormTopicsRequest) -> JSONRespon
             num_angles=payload.num_angles,
             exclude_topics=payload.exclude_topics,
             use_cache=payload.use_cache,
+            prefer_listicle=payload.prefer_listicle,
         )
     except TopicBrainstormError as exc:
         logger.warning("creator.brainstorm_failed code=%s message=%s", exc.code, str(exc))
@@ -303,6 +305,8 @@ def _serialize_run(run: PipelineRun) -> dict:
         "research": _to_jsonable(run.research),
         "contract": run.contract.model_dump(mode="json"),
         "sections": [s.model_dump(mode="json") for s in run.sections],
+        "items": [i.model_dump(mode="json") for i in run.items],
+        "format": run.contract.format.value,
         "article_html": {
             "assembled": run.assembled.full_html,
             "refined_body": run.refined_article_html,

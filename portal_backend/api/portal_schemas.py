@@ -13,6 +13,7 @@ SOURCE_TYPES = {"google-doc", "docx-upload"}
 BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
 REQUEST_KINDS = {"submit_article", "create_article"}
+ARTICLE_FORMATS = {"narrative", "listicle"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
 JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying", "canceled"}
 EVENT_TYPES = {
@@ -791,12 +792,20 @@ class AutomationSubmitArticleIn(BaseModel):
     backlink_placement: str = "intro"
     post_status: Optional[str] = None
     author: Optional[int] = None
+    article_format: str = "narrative"
 
     @validator("request_kind")
     def validate_request_kind(cls, value: str) -> str:
         cleaned = value.strip().lower()
         if cleaned not in REQUEST_KINDS:
             raise ValueError("request_kind must be submit_article or create_article.")
+        return cleaned
+
+    @validator("article_format")
+    def validate_article_format(cls, value: str) -> str:
+        cleaned = (value or "narrative").strip().lower()
+        if cleaned not in ARTICLE_FORMATS:
+            raise ValueError("article_format must be narrative or listicle.")
         return cleaned
 
     @validator("source_type")

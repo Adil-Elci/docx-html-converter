@@ -417,6 +417,15 @@ def generate_contract(
         raise ValueError("target_backlink_url is required.")
 
     resolved_model = model or os.getenv("CREATOR_CONTRACT_MODEL", "").strip() or DEFAULT_CONTRACT_MODEL
+    # Listicle contracts use a separate prompt version (v2) that hard-pins
+    # ``format=listicle`` + a populated ``listicle_plan``; v1 stays narrative-
+    # only so the existing path is untouched. Caller signals listicle via
+    # ``editorial_angle.format = "listicle"``.
+    if prompt_version is None:
+        if isinstance(editorial_angle, dict) and str(editorial_angle.get("format") or "").lower() == "listicle":
+            prompt_version = "v2"
+        else:
+            prompt_version = "v1"
     prompt = load_prompt(PROMPT_NAME, prompt_version, language=language)
     system_prompt = build_system_prompt(prompt)
     user_prompt = build_user_prompt(

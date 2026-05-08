@@ -265,6 +265,76 @@ def test_brainstorm_listicle_directive_only_when_flag_set() -> None:
     assert "FORMAT-PRÄFERENZ: LISTICLE" in listicle
 
 
+def test_contract_generator_synthesises_listicle_plan_when_llm_drifts(monkeypatch) -> None:
+    """Catches the regression where the LLM ignores v2 prompt and emits a
+    narrative-shaped contract for a listicle request — Pydantic's default
+    format=narrative would silently win and the pipeline would render a
+    normal article.
+    """
+    from creator.api import contract_generator
+    from creator.api.research import ResearchPayload
+
+    def fake_load_prompt(name, version, language=None):
+        return contract_generator.Prompt(
+            name=name, version=version or "v1", language=language, body="STUB", metadata={}
+        )
+
+    narrative_shaped_response = (
+        '{"target_keyword": "steuerberater hamburg", "intent": "commercial",'
+        ' "target_audience": "Hamburger Unternehmer und Selbststaendige",'
+        ' "word_count_target": 1500,'
+        ' "h1": "Die 7 besten Steuerberater in Hamburg 2026",'
+        ' "meta_title": "Steuerberater Hamburg 2026: Die Top 7 im Vergleich",'
+        ' "meta_description": "Welche Steuerberater in Hamburg lohnen sich 2026? Die sieben besten Kanzleien im redaktionellen Vergleich auf einen Blick.",'
+        ' "slug": "steuerberater-hamburg-top-7-2026",'
+        ' "sections": [{"h2": "Einleitung und Auswahlkriterien", "mandate": "Kontextueller Aufhaenger und Auswahlkriterien.", "target_word_count": 200},'
+        '   {"h2": "Mueller and Partner", "mandate": "Item 1 description here", "target_word_count": 200},'
+        '   {"h2": "Schmidt Steuer GmbH", "mandate": "Item 2 description here", "target_word_count": 200},'
+        '   {"h2": "Weber Kanzlei", "mandate": "Item 3 description here", "target_word_count": 200},'
+        '   {"h2": "Fischer Steuern", "mandate": "Item 4 description here", "target_word_count": 200},'
+        '   {"h2": "Becker und Co", "mandate": "Item 5 description here", "target_word_count": 200},'
+        '   {"h2": "Hoffmann KG", "mandate": "Item 6 description here", "target_word_count": 200},'
+        '   {"h2": "Wagner Steuerberatung", "mandate": "Item 7 description here", "target_word_count": 200},'
+        '   {"h2": "Fazit und Empfehlung", "mandate": "Outro section", "target_word_count": 200}],'
+        ' "faq_items": [{"question": "Wie viel kostet ein Steuerberater?", "answer_outline": "Stundensatz ab 80 EUR aufwaerts."}, '
+        '   {"question": "Wann lohnt sich Steuerberatung?", "answer_outline": "Komplexe Faelle ab Selbstaendigkeit."}, '
+        '   {"question": "Welche Qualifikationen?", "answer_outline": "Diplom plus Pruefungen."}],'
+        ' "ai_tell_blocklist": ["Darueber hinaus", "Es ist wichtig zu beachten", "Zusammenfassend",'
+        '   "In der heutigen Zeit", "Letztendlich", "Abschliessend", "Im Folgenden", "wie bereits erwaehnt",'
+        '   "ohne Zweifel", "selbstverstaendlich", "essenziell", "ausserdem"],'
+        ' "secondary_keywords": ["steuerberater hamburg vergleich", "steuerberater hamburg kosten", "kanzlei hamburg",'
+        '   "steuerberatung hamburg", "buchhaltung hamburg"],'
+        ' "link_plan": [{"target_url": "https://example.de/leistungen", "anchor_strategy": "branded",'
+        '   "section_index": 4, "surrounding_context_requirements": "Empfehlung als Beispiel.",'
+        '   "link_type": "backlink"}]}'
+    )
+
+    def fake_caller(**kwargs):
+        return narrative_shaped_response
+
+    monkeypatch.setattr(contract_generator, "load_prompt", fake_load_prompt)
+    research = ResearchPayload(target_keyword="steuerberater hamburg", location_code=2276, language_code="de")
+    contract = contract_generator.generate_contract(
+        research,
+        target_backlink_url="https://example.de/leistungen",
+        editorial_angle={"format": "listicle", "title": "Die 7 besten Steuerberater in Hamburg 2026"},
+        llm_caller=fake_caller,
+        api_key="x",
+    )
+    # The defensive enforcer should have flipped this to a real listicle
+    # contract: format=listicle, listicle_plan with the 7 middle sections as
+    # ranked items, sections collapsed to [intro, outro].
+    assert contract.format.value == "listicle"
+    assert contract.listicle_plan is not None
+    assert contract.listicle_plan.item_count == 7
+    assert "Mueller and Partner" in contract.listicle_plan.items
+    assert "Wagner Steuerberatung" in contract.listicle_plan.items
+    assert len(contract.sections) == 2
+    assert contract.sections[0].h2.startswith("Einleitung")
+    assert contract.sections[1].h2.startswith("Fazit")
+    assert contract.schema_spec.item_list is True
+
+
 def test_contract_generator_picks_v2_prompt_for_listicle_angle(monkeypatch) -> None:
     from creator.api import contract_generator
     from creator.api.research import ResearchPayload

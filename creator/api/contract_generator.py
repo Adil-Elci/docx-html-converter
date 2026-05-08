@@ -421,11 +421,12 @@ def generate_contract(
     # ``format=listicle`` + a populated ``listicle_plan``; v1 stays narrative-
     # only so the existing path is untouched. Caller signals listicle via
     # ``editorial_angle.format = "listicle"``.
+    requested_listicle = (
+        isinstance(editorial_angle, dict)
+        and str(editorial_angle.get("format") or "").lower() == "listicle"
+    )
     if prompt_version is None:
-        if isinstance(editorial_angle, dict) and str(editorial_angle.get("format") or "").lower() == "listicle":
-            prompt_version = "v2"
-        else:
-            prompt_version = "v1"
+        prompt_version = "v2" if requested_listicle else "v1"
     prompt = load_prompt(PROMPT_NAME, prompt_version, language=language)
     system_prompt = build_system_prompt(prompt)
     user_prompt = build_user_prompt(
@@ -461,11 +462,102 @@ def generate_contract(
     if isinstance(payload, dict):
         payload["language"] = language
         _heal_html_entities_in_contract_payload(payload)
+        if requested_listicle:
+            _enforce_listicle_payload(payload)
 
     try:
         return ContentContract.model_validate(payload)
     except Exception as exc:
         raise LLMError(f"Contract generator output failed schema validation: {exc}") from exc
+
+
+def _enforce_listicle_payload(payload: Dict[str, Any]) -> None:
+    """Hard-pin the requested listicle format on the LLM's JSON output.
+
+    Even with the v2 listicle prompt selected, Sonnet sometimes emits a
+    narrative-shaped JSON (omits ``format`` + ``listicle_plan``, returns 4-6
+    long topical sections). The Pydantic default ``format=narrative`` would
+    silently win and the pipeline would render a normal article — exactly the
+    regression we're catching here. This function:
+
+    1. Forces ``payload["format"] = "listicle"``.
+    2. When ``listicle_plan`` is missing or empty, synthesises one from the
+       sections the LLM emitted: the *middle* sections become ranked items,
+       and ``sections`` is collapsed to [first, last] (intro + outro). Bounded
+       to 5..15 items to satisfy the ListiclePlan validator.
+    3. Bumps ``schema_spec.item_list = True`` so the assembler emits the
+       ItemList JSON-LD block.
+    """
+
+    payload["format"] = "listicle"
+
+    plan = payload.get("listicle_plan")
+    sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+    needs_synth = not isinstance(plan, dict) or not plan.get("item_count")
+
+    if needs_synth:
+        # Heuristic: the LLM likely produced one section per ranked item
+        # plus an intro and (sometimes) an outro. We treat sections[0] as
+        # intro and sections[-1] as outro when we have 7+; otherwise as
+        # intro + items only.
+        if len(sections) < 6:
+            raise LLMError(
+                "Listicle contract requested but the model returned no listicle_plan and "
+                f"only {len(sections)} sections — cannot synthesise items. Retry the contract step."
+            )
+        if len(sections) >= 7:
+            intro = sections[0]
+            outro = sections[-1]
+            middle = sections[1:-1]
+        else:
+            intro = sections[0]
+            outro = None
+            middle = sections[1:]
+        item_names = [str((s or {}).get("h2") or "").strip() for s in middle if isinstance(s, dict)]
+        item_names = [n for n in item_names if n]
+        if not 5 <= len(item_names) <= 15:
+            # Clip to bounds; if we end up below 5 we surface the LLM drift
+            # as a hard failure rather than ship a half-formed listicle.
+            if len(item_names) < 5:
+                raise LLMError(
+                    f"Listicle contract requested but synthesised only {len(item_names)} ranked items "
+                    f"from {len(sections)} sections — retry the contract step."
+                )
+            item_names = item_names[:15]
+        synthesised_plan = {
+            "item_count": len(item_names),
+            "ranking_basis": "score",
+            "item_template": ["name", "hook", "pros", "cons", "verdict"],
+            "items": item_names,
+        }
+        # Preserve any caller-supplied keys the LLM did set correctly.
+        if isinstance(plan, dict):
+            for key in ("ranking_basis", "item_template"):
+                if plan.get(key):
+                    synthesised_plan[key] = plan[key]
+        payload["listicle_plan"] = synthesised_plan
+        new_sections = [intro] if intro is not None else []
+        if outro is not None:
+            new_sections.append(outro)
+        payload["sections"] = new_sections
+        logger.warning(
+            "creator.contract_generator.listicle_synthesised items=%s sections_seen=%s",
+            len(item_names),
+            len(sections),
+        )
+    elif isinstance(plan, dict):
+        # Plan is present — make sure item_count matches items length when both
+        # are populated, since the validator rejects mismatches.
+        items = plan.get("items") if isinstance(plan.get("items"), list) else []
+        if items:
+            plan["item_count"] = len(items)
+
+    schema = payload.get("schema_spec")
+    if not isinstance(schema, dict):
+        schema = {}
+        payload["schema_spec"] = schema
+    schema.setdefault("article", True)
+    schema["item_list"] = True
 
 
 def _heal_html_entities_in_contract_payload(payload: Dict[str, Any]) -> None:

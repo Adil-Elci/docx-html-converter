@@ -2676,12 +2676,6 @@ export default function App() {
           if (!data?.found) { allDone = false; continue; }
           const phaseEvents = (data.events || []).filter((e) => e.event_type === "creator_phase");
           const last = phaseEvents.length > 0 ? phaseEvents[phaseEvents.length - 1] : null;
-          const selectedEvent = (data.events || []).find(
-            (e) => (e.event_type === "publisher_selected" || e.event_type === "creator_phase")
-              && e.payload && typeof e.payload.selected_site_url === "string"
-              && e.payload.selected_site_url.length > 0,
-          );
-          const selectedSiteUrl = selectedEvent?.payload?.selected_site_url || "";
           if (data.job_status === "pending_approval") {
             movedToPendingApproval.add(jid);
           }
@@ -2697,7 +2691,6 @@ export default function App() {
             done: jobDone,
             failed: data.job_status === "failed",
             canceled: data.job_status === "canceled",
-            selectedSiteUrl,
           };
           if (!jobDone) allDone = false;
         } catch {
@@ -5313,49 +5306,31 @@ function CreatorProgressInline({
     ? Math.round(jobIds.reduce((sum, jid) => sum + (progress[jid]?.percent || 0), 0) / jobIds.length)
     : 0;
   const currentPhase = info.phase || 0;
-  const selectedSiteUrls = jobIds
-    .map((jid) => progress[jid]?.selectedSiteUrl)
-    .filter((url) => typeof url === "string" && url.length > 0);
 
   return (
-    <div className="creator-progress-inline-wrapper">
-      <div className="creator-progress-inline" role="status" aria-live="polite" aria-label="Creator progress">
-        <div className="progress-steps progress-steps-inline" aria-hidden="true">
-          {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
-            const step = i + 1;
-            const isCompleted = allDone || step < currentPhase;
-            const isActive = !allDone && step === currentPhase;
-            const cls = isCompleted ? "completed" : isActive ? "active" : "";
-            return (
-              <div key={step} className={`progress-step progress-step-inline ${cls}`}>
-                <div className="progress-step-indicator progress-step-indicator-inline">
-                  <div className="progress-step-dot" />
-                  {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
-                </div>
-                <div className="progress-step-content progress-step-content-inline">
-                  <span className="progress-step-label">{translate(CREATOR_PHASE_LABELS[step])}</span>
-                </div>
+    <div className="creator-progress-inline" role="status" aria-live="polite" aria-label="Creator progress">
+      <div className="progress-steps progress-steps-inline" aria-hidden="true">
+        {Array.from({ length: CREATOR_TOTAL_PHASES }, (_, i) => {
+          const step = i + 1;
+          const isCompleted = allDone || step < currentPhase;
+          const isActive = !allDone && step === currentPhase;
+          const cls = isCompleted ? "completed" : isActive ? "active" : "";
+          return (
+            <div key={step} className={`progress-step progress-step-inline ${cls}`}>
+              <div className="progress-step-indicator progress-step-indicator-inline">
+                <div className="progress-step-dot" />
+                {step < CREATOR_TOTAL_PHASES && <div className="progress-step-line progress-step-line-inline" />}
               </div>
-            );
-          })}
-        </div>
-        <div className={`creator-progress-inline-end ${allDone ? "is-complete" : ""}`.trim()} aria-live="polite">
-          {allDone ? <span className="creator-progress-inline-check">✓</span> : <strong>{aggPercent}%</strong>}
-        </div>
+              <div className="progress-step-content progress-step-content-inline">
+                <span className="progress-step-label">{translate(CREATOR_PHASE_LABELS[step])}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {selectedSiteUrls.length > 0 ? (
-        <div className="creator-progress-selected-publisher" aria-live="polite">
-          <strong>Selected publisher:</strong>{" "}
-          {selectedSiteUrls.map((url, idx) => (
-            <span key={`${url}-${idx}`}>
-              {idx > 0 ? ", " : null}
-              <a href={url.startsWith("http") ? url : `https://${url}`} target="_blank" rel="noreferrer">
-                {url}
-              </a>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <div className={`creator-progress-inline-end ${allDone ? "is-complete" : ""}`.trim()} aria-live="polite">
+        {allDone ? <span className="creator-progress-inline-check">✓</span> : <strong>{aggPercent}%</strong>}
+      </div>
     </div>
   );
 }

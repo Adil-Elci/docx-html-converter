@@ -532,19 +532,6 @@ class AutomationJobWorker:
                 if self._is_job_canceled(job_id):
                     logger.info("automation.worker.canceled_after_creator job_id=%s", job_id)
                     return
-                if pipeline_result.get("stop_after_publisher_selection"):
-                    self._mark_publisher_selected(
-                        job_id,
-                        selected_site_id=pipeline_result.get("selected_site_id"),
-                        selected_site_url=pipeline_result.get("selected_site_url"),
-                        backend_trace=backend_trace,
-                    )
-                    logger.info(
-                        "automation.worker.publisher_selected_only job_id=%s site_url=%s",
-                        job_id,
-                        pipeline_result.get("selected_site_url"),
-                    )
-                    return
                 append_execution_trace_event(
                     backend_trace,
                     level="info",
@@ -1546,42 +1533,6 @@ class AutomationJobWorker:
                 send_client_publish_notification(session, job_id=job_id, post_payload=post_payload)
             except Exception:
                 logger.exception("automation.worker.publish_notification_failed job_id=%s", job_id)
-
-    def _mark_publisher_selected(
-        self,
-        job_id: UUID,
-        *,
-        selected_site_id: Optional[str],
-        selected_site_url: Optional[str],
-        backend_trace: Optional[List[Dict[str, Any]]] = None,
-    ) -> None:
-        site_url = (selected_site_url or "").strip()
-        with self._sessionmaker() as session:
-            job = session.query(Job).filter(Job.id == job_id).first()
-            if not job:
-                return
-            job.job_status = "succeeded"
-            job.last_error = None
-            session.add(job)
-            # Reuse creator_phase (allowed by job_events_event_type_check) to
-            # carry the publisher-selection result alongside a synthetic final
-            # phase. Adding a new event_type would require a DB migration; this
-            # is a diagnostic stop, so we piggy-back on an existing type.
-            session.add(
-                JobEvent(
-                    job_id=job_id,
-                    event_type="creator_phase",
-                    payload={
-                        "phase": 7,
-                        "label": "publisher_selected",
-                        "percent": 100,
-                        "selected_site_id": selected_site_id,
-                        "selected_site_url": site_url,
-                        "stopped_after_selection": True,
-                    },
-                )
-            )
-            session.commit()
 
     def _mark_failed_or_retry(self, job_id: UUID, *, max_attempts: int, error_message: str) -> None:
         with self._sessionmaker() as session:

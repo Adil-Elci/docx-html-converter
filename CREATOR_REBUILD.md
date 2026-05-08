@@ -279,6 +279,27 @@ Wired as third signal in `_candidate_is_general` after the explicit DB flag and 
 
 Tests: 507 passing.
 
+## Phase F.1 — Framework-only listicle (quality rebuild) · ✅ DONE (2026-05-08)
+
+Live tests after the initial Phase F ship still produced narrative-shaped articles. Root cause: items were either topic-labels ("Honorarstruktur") or hallucinated entities, so even a structurally-listicle article read like a regular topic piece. Phase F.1 restricts listicles to **framework subtype only** (mistakes / questions / signs / tips / criteria / steps) — items are conceptual, writable from research alone, no entity hallucination risk.
+
+- **Brainstorm** ([topic_brainstorm.py](creator/api/topic_brainstorm.py)) — `prefer_listicle` directive rewritten to whitelist 6 framework shapes per language, hard-blocklist `"Die N besten ..."` / `"Top N ..."` / `"Vergleich der besten ..."`. ≥80% of angles must follow whitelist. Cache version v3 → v4 invalidates 90-day batches generated under old prompt.
+- **Contract v2 prompts** ([contract_generator/v2.{de,fr}.md](creator/prompts/contract_generator/v2.de.md)) rewritten with: 6 allowed frames + h1 examples per frame; positive (✅) / negative (❌) item examples (action statements vs topic nouns); parallelism rule (all imperative OR all questions OR all statements — no mix); explicit `intent=informational` requirement for listicles.
+- **Listicle writer prompts** ([listicle_writer/v1.{de,fr}.md](creator/prompts/listicle_writer/v1.de.md)) rewritten with: load-bearing concrete-claims rule (every bullet needs a digit, time-frame, or condition — no bare adjectives); load-bearing topic-specificity rule (no generalising about parent topic); full worked example per language showing complete item HTML; "would this sentence apply to another item?" self-check.
+- **Listicle writer code** ([listicle_writer.py](creator/api/listicle_writer.py)) — user prompt now includes the full peer-item list with the current item marked, so the writer can match parallel form and avoid content overlap. ~+700 input tokens per item × 7 items ≈ $0.015/article — worth it for parallelism.
+- **`_enforce_listicle_payload`** ([contract_generator.py](creator/api/contract_generator.py)) also force-pins `intent=informational` (was previously only forcing `format` and `schema_spec.item_list`). Listicle is editorial; commercial intent leaks into intro/outro section_writer prompts.
+- **Pipeline runner** ([pipeline_runner.py](creator/api/pipeline_runner.py)):
+  - Hard-fail on format drift: when `article_format=listicle` requested but `contract.format != LISTICLE` (synthesiser couldn't repair), raise `PipelineError("contract", ...)` instead of silently rendering narrative.
+  - Auto-skip voice pass when `contract.format == LISTICLE` regardless of `skip_voice_pass` flag. Voice pass exists to smooth narrative prose flow — useless on rigid item structure, non-trivial risk of collapsing pros/cons into prose. Saves ~$0.03 per article.
+- **Eval** ([eval_harness.py](creator/api/eval_harness.py)) — new `check_listicle_item_substance`: splits article at `<h2>{rank}.` boundaries, requires each chunk to carry `<p class="verdict">`, ≥3 `<li>` bullets, ≥1 digit. Catches "items collapsed to bare paragraphs" failure mode.
+- **Portal telemetry** ([automation_service.py](portal_backend/api/automation_service.py)) — emits `format_pin/verified` (or `drift`) JobEvent with `{requested_format, returned_format, item_count, item_preview, h1}` and `listicle/items_written` JobEvent with per-item `{rank, name, word_count, has_verdict, li_count, h3_count}`. Belt-and-suspenders abort if `is_listicle_request and returned_format != "listicle"` (creator side already raises but the portal verifies).
+- **Frontend** ([i18n.js](portal_frontend/src/i18n.js)) — listicle hint copy lists the 6 allowed framework shapes and explicitly notes "Top N best providers" needs Phase F.2 entity research. Format chip copy clarified as "framework list".
+- **Cost (per listicle)**: ~$0.27 — research $0.10 + contract $0.06 + 7 items × $0.015 = $0.10 + judge $0.005 + image $0.02 + DataForSEO $0.02, voice pass auto-skipped.
+
+**Tests**: 23 in `creator/tests/test_listicle.py` (+8 new in F.1) covering: peer-items in writer prompt (DE+FR), `intent=informational` force-pin, format-drift hard-fail in pipeline_runner, voice-pass auto-skip on listicle, `check_listicle_item_substance` pass/fail paths. **Suite green: creator 374 passing, portal 156 passing.**
+
+**Known limitation:** "Top N best X" ranking listicles deferred to Phase F.2 — they need entity discovery (SERP scrape "best of" pages, dedupe, intersect 3-5 sources) + per-entity research (one DataForSEO+scrape per entity, cached). ~2-3× cost of framework listicles. Worth it only after F.1 stabilises.
+
 ## Phase F — Listicle format · ✅ DONE (2026-05-08)
 
 Ranked-list articles ("Die 7 besten X 2026") as a sibling to today's narrative shape. Purely additive — narrative path untouched.

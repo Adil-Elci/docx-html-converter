@@ -472,6 +472,9 @@ _LISTICLE_RANK_HEADING_PATTERN = re.compile(r"^\s*(\d+)\.\s*(.+)$")
 _LISTICLE_VERDICT_PATTERN = re.compile(r"<p[^>]*class\s*=\s*[\"'][^\"']*\bverdict\b", re.IGNORECASE)
 _LISTICLE_PROS_HEADING_PATTERN = re.compile(r"<h3[^>]*>\s*(Vorteile|Avantages)\s*</h3>", re.IGNORECASE)
 _LISTICLE_CONS_HEADING_PATTERN = re.compile(r"<h3[^>]*>\s*(Nachteile|Inconv[eé]nients)\s*</h3>", re.IGNORECASE)
+_LISTICLE_ITEM_H2_SPLIT_PATTERN = re.compile(r"<h2[^>]*>\s*(\d+)\.\s*", re.IGNORECASE)
+_LI_TAG_PATTERN = re.compile(r"<li(?:\s|>)", re.IGNORECASE)
+_DIGIT_PATTERN = re.compile(r"\d")
 
 
 def check_listicle_structure(article_html: str, contract: ContentContract) -> CheckResult:
@@ -548,6 +551,81 @@ def check_listicle_structure(article_html: str, contract: ContentContract) -> Ch
         True,
         value=float(len(rank_headings)),
         detail=f"{expected} items, structure intact",
+    )
+
+
+def _split_listicle_item_chunks(article_html: str) -> List[str]:
+    """Split assembled listicle HTML at each ``<h2>{rank}.`` boundary.
+
+    Returns the raw HTML chunks of each ranked item — content between one
+    rank-prefixed `<h2>` and the next one (or end of article). Intro / outro
+    sections are anchored by non-numbered `<h2>`s and excluded.
+    """
+
+    if not article_html:
+        return []
+    boundaries: List[int] = []
+    for match in _LISTICLE_ITEM_H2_SPLIT_PATTERN.finditer(article_html):
+        boundaries.append(match.start())
+    if not boundaries:
+        return []
+    chunks: List[str] = []
+    for index, start in enumerate(boundaries):
+        end = boundaries[index + 1] if index + 1 < len(boundaries) else len(article_html)
+        # Stop the final chunk at the next non-numbered <h2> (the outro) so
+        # outro prose doesn't count as item content.
+        if index + 1 == len(boundaries):
+            outro_match = re.search(r"<h2[^>]*>(?!\s*\d+\.)", article_html[start + 1 : end], re.IGNORECASE)
+            if outro_match:
+                end = start + 1 + outro_match.start()
+        chunks.append(article_html[start:end])
+    return chunks
+
+
+def check_listicle_item_substance(article_html: str, contract: ContentContract) -> CheckResult:
+    """Each listicle item must carry verdict tag + ≥3 `<li>` + ≥1 digit.
+
+    Catches the "items are bare paragraphs" failure mode where the writer
+    drops the pros/cons structure and the verdict tag, producing prose that
+    looks like a regular article paragraph.
+    """
+
+    if contract.format != ArticleFormat.LISTICLE or contract.listicle_plan is None:
+        return CheckResult("listicle_item_substance", True, detail="not a listicle")
+
+    expected = contract.listicle_plan.item_count
+    chunks = _split_listicle_item_chunks(article_html)
+    if len(chunks) != expected:
+        return CheckResult(
+            "listicle_item_substance",
+            False,
+            value=float(len(chunks)),
+            detail=f"could not isolate {expected} ranked-item chunks (saw {len(chunks)})",
+        )
+
+    failures: List[str] = []
+    for index, chunk in enumerate(chunks, start=1):
+        if not _LISTICLE_VERDICT_PATTERN.search(chunk):
+            failures.append(f"item {index}: missing <p class=\"verdict\">")
+            continue
+        li_count = len(_LI_TAG_PATTERN.findall(chunk))
+        if li_count < 3:
+            failures.append(f"item {index}: only {li_count} <li> bullets")
+            continue
+        if not _DIGIT_PATTERN.search(chunk):
+            failures.append(f"item {index}: no digit / concrete claim")
+    if failures:
+        return CheckResult(
+            "listicle_item_substance",
+            False,
+            value=float(len(chunks)),
+            detail="; ".join(failures[:3]),
+        )
+    return CheckResult(
+        "listicle_item_substance",
+        True,
+        value=float(len(chunks)),
+        detail=f"{expected} items: verdict + ≥3 bullets + concrete claims",
     )
 
 
@@ -633,6 +711,7 @@ def evaluate(
     ]
     if is_listicle:
         deterministic.append(check_listicle_structure(article_html, contract))
+        deterministic.append(check_listicle_item_substance(article_html, contract))
     if judge_scores is not None:
         llm_judged = llm_judged_checks_from_scores(judge_scores)
     else:

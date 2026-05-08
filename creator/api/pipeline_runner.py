@@ -191,11 +191,26 @@ def run_pipeline(
         )
     except Exception as exc:
         raise PipelineError("contract", str(exc)) from exc
+
+    # Hard-fail format drift: if the caller asked for a listicle but the
+    # contract came back narrative (synthesiser couldn't repair), don't
+    # silently render a normal article. Surface the failure so the admin
+    # can retry; loud failure beats silent regression.
+    if requested_format == "listicle" and contract.format != ArticleFormat.LISTICLE:
+        raise PipelineError(
+            "contract",
+            f"article_format=listicle was requested but contract returned format={contract.format.value!r} "
+            "with no listicle_plan. The model ignored the v2 prompt and the synthesiser could not repair. "
+            "Retry the request.",
+        )
+
     logger.info(
-        "pipeline.contract_done sections=%s entities=%s ai_tells=%s",
+        "pipeline.contract_done format=%s sections=%s entities=%s ai_tells=%s items=%s",
+        contract.format.value,
         len(contract.sections),
         len(contract.required_entities),
         len(contract.ai_tell_blocklist),
+        len(contract.listicle_plan.items) if contract.listicle_plan else 0,
     )
 
     # -- 3. Sections / Items (parallel) -------------------------------------
@@ -247,16 +262,31 @@ def run_pipeline(
         raise PipelineError("assemble", str(exc)) from exc
 
     # -- 5. Voice pass (optional) -------------------------------------------
-    if skip_voice_pass:
+    # Listicles have rigid per-item structure (h3 Vorteile / h3 Nachteile /
+    # p.verdict). Voice pass exists to smooth prose flow between narrative
+    # sections — it has no value for a listicle and a non-trivial chance of
+    # collapsing the structure into prose. Auto-skip when format=listicle,
+    # regardless of caller's skip_voice_pass flag.
+    auto_skip_voice = is_listicle
+    effective_skip_voice = skip_voice_pass or auto_skip_voice
+    if effective_skip_voice:
         refined_body = assembled.article_html
-        notes.append("voice_pass skipped by caller")
+        notes.append(
+            "voice_pass auto-skipped (listicle format)"
+            if auto_skip_voice and not skip_voice_pass
+            else "voice_pass skipped by caller"
+        )
     else:
         try:
             refined_body = refine_voice(article_html=assembled.article_html, contract=contract)
         except Exception as exc:
             raise PipelineError("voice_pass", str(exc)) from exc
     final_html = "\n".join([refined_body, *assembled.schema_blocks])
-    logger.info("pipeline.voice_pass_done skipped=%s", skip_voice_pass)
+    logger.info(
+        "pipeline.voice_pass_done skipped=%s auto_skip=%s",
+        effective_skip_voice,
+        auto_skip_voice and not skip_voice_pass,
+    )
 
     # -- 6. Judge (optional) ------------------------------------------------
     judge_scores: Optional[JudgeScores] = None
@@ -305,7 +335,7 @@ def run_pipeline(
         quality_report=quality_report,
         derived_topic=derived_topic,
         items=items,
-        skipped_voice_pass=skip_voice_pass,
+        skipped_voice_pass=effective_skip_voice,
         skipped_judge=skip_judge,
         notes=notes,
     )

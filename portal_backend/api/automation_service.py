@@ -2157,6 +2157,64 @@ def _run_create_article_pipeline_v2(
         contract_for_select.get("language") or v2_response.get("language") or "de"
     ).strip().lower()
 
+    # Format-pin verification + telemetry. The creator pipeline already
+    # hard-fails on format drift (PipelineError surfaces as AutomationError)
+    # but we also emit a JobEvent so admins can see in the trace what the
+    # contract actually returned and which item names were picked.
+    returned_format = str(contract_for_select.get("format") or "narrative").strip().lower()
+    listicle_plan = contract_for_select.get("listicle_plan") if isinstance(contract_for_select, dict) else None
+    listicle_items = (
+        list(listicle_plan.get("items") or []) if isinstance(listicle_plan, dict) else []
+    )
+    item_count = len(listicle_items)
+    _trace(
+        "info" if returned_format == article_format else "warning",
+        "format_pin",
+        "verified" if returned_format == article_format else "drift",
+        f"Contract format={returned_format} (requested={article_format}); items={item_count}.",
+        {
+            "requested_format": article_format,
+            "returned_format": returned_format,
+            "item_count": item_count,
+            "item_preview": [str(name)[:80] for name in listicle_items[:5]],
+            "h1": str(contract_for_select.get("h1") or "")[:200],
+        },
+    )
+    if is_listicle_request and returned_format != "listicle":
+        # Belt-and-suspenders: the creator side already raises on this, but
+        # if a stray response slips through with format mismatch we hard-fail
+        # here too rather than ship a narrative article under a listicle job.
+        raise AutomationError(
+            f"Listicle was requested but contract returned format={returned_format!r}. "
+            "Refusing to publish as a regular article."
+        )
+
+    if is_listicle_request:
+        # Per-item summary so admins can see at a glance whether items have
+        # the expected structure (verdict tag + bullets). Helps spot writer
+        # regressions without cracking open the full pipeline payload.
+        items_payload = v2_response.get("items") if isinstance(v2_response.get("items"), list) else []
+        item_summary: List[Dict[str, Any]] = []
+        for entry in items_payload:
+            if not isinstance(entry, dict):
+                continue
+            body = str(entry.get("body_html") or "")
+            item_summary.append({
+                "rank": entry.get("rank"),
+                "name": str(entry.get("name") or "")[:120],
+                "word_count": entry.get("word_count"),
+                "has_verdict": ("class=\"verdict\"" in body) or ("class='verdict'" in body),
+                "li_count": body.count("<li"),
+                "h3_count": body.count("<h3"),
+            })
+        _trace(
+            "info",
+            "listicle",
+            "items_written",
+            f"Listicle items written: {len(item_summary)}.",
+            {"items": item_summary},
+        )
+
     _trace(
         "info",
         "creator_v2",

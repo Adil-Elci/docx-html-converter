@@ -79,6 +79,19 @@ def _format_link(link: Optional[LinkTarget], target_keyword: str, language: str)
     )
 
 
+def _format_peer_items(plan: "ListiclePlan", rank: int, language: str) -> str:
+    """Render the full peer-item list so the writer can match parallel form
+    and avoid overlapping with content that belongs to other items."""
+
+    if not plan.items:
+        return "(keine Peer-Items übergeben)" if language != "fr" else "(aucun peer-item fourni)"
+    lines: List[str] = []
+    for index, item in enumerate(plan.items, start=1):
+        marker = " ← DIESES ITEM" if index == rank and language != "fr" else (" ← CET ITEM" if index == rank else "")
+        lines.append(f"  {index}. {item}{marker}")
+    return "\n".join(lines)
+
+
 def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
     plan = contract.listicle_plan
     if plan is None:
@@ -91,6 +104,34 @@ def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
     link = _link_for_item(contract, rank)
     template_str = ", ".join(plan.item_template) or "name, hook, pros, cons, verdict"
     avg_words = max(120, contract.word_count_target // max(1, plan.item_count + 2))
+    peer_block = _format_peer_items(plan, rank, language)
+    if language == "fr":
+        return (
+            f"CONTEXTE GLOBAL DU CONTRAT\n"
+            f"==========================\n"
+            f"target_keyword : {contract.target_keyword}\n"
+            f"intent         : {contract.intent.value}\n"
+            f"audience       : {contract.target_audience}\n"
+            f"format         : listicle ({plan.item_count} items, basis={plan.ranking_basis})\n\n"
+            f"CET ITEM (rang {rank} sur {plan.item_count})\n"
+            f"================================================\n"
+            f"Énoncé de l'item : {name}\n"
+            f"Mots cible       : {avg_words} mots\n"
+            f"Champs obligatoires : {template_str}\n\n"
+            f"TOUS LES PEER-ITEMS DU LISTICLE (pour parallélisme + éviter recoupements)\n"
+            f"========================================================================\n"
+            f"{peer_block}\n\n"
+            f"ENTITÉS OBLIGATOIRES pour cet item\n"
+            f"==================================\n"
+            f"{_format_entities(entities, language)}\n\n"
+            f"BACKLINK\n"
+            f"========\n"
+            f"{_format_link(link, contract.target_keyword, language)}\n\n"
+            f"LISTE NOIRE IA SPÉCIFIQUE AU CONTRAT\n"
+            f"====================================\n"
+            + ("\n".join(f"  - {phrase}" for phrase in contract.ai_tell_blocklist) or "  (vide)")
+            + "\n\nRédigez maintenant cet item au format JSON selon le schéma du system prompt."
+        )
     return (
         f"GLOBALER VERTRAG-KONTEXT\n"
         f"========================\n"
@@ -100,9 +141,12 @@ def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
         f"format         : listicle ({plan.item_count} ranked items, basis={plan.ranking_basis})\n\n"
         f"DIESER EINTRAG (Rang {rank} von {plan.item_count})\n"
         f"==================================================\n"
-        f"Item-Name      : {name}\n"
+        f"Item-Statement : {name}\n"
         f"Ziel-Wortzahl  : {avg_words} Wörter\n"
         f"Pflicht-Felder : {template_str}\n\n"
+        f"ALLE PEER-ITEMS DES LISTICLES (für Parallelität + Vermeidung von Überlappungen)\n"
+        f"==============================================================================\n"
+        f"{peer_block}\n\n"
         f"PFLICHT-ENTITÄTEN für diesen Eintrag\n"
         f"========================================\n"
         f"{_format_entities(entities, language)}\n\n"
@@ -112,7 +156,7 @@ def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
         f"VERTRAGSWEITE AI-FLOSKEL-BLOCKLISTE\n"
         f"===================================\n"
         + ("\n".join(f"  - {phrase}" for phrase in contract.ai_tell_blocklist) or "  (leer)")
-        + f"\n\nSchreibe JETZT diesen Listen-Eintrag als JSON gemäß dem System-Schema."
+        + "\n\nSchreibe JETZT diesen Listen-Eintrag als JSON gemäß dem System-Schema."
     )
 
 

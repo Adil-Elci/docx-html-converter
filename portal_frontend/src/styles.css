@@ -4722,6 +4722,70 @@ input:disabled {
   justify-content: flex-end;
 }
 
+.pending-edit-panel {
+  width: 100%;
+  margin-top: 14px;
+  border-top: 1px solid var(--border-faint);
+  padding-top: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.pending-edit-panel label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+.pending-edit-panel input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pending-edit-content {
+  min-height: 320px;
+  max-height: 600px;
+  overflow-y: auto;
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.7;
+  background: var(--surface-raised, #fafbfc);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.pending-edit-content:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.pending-edit-content h1,
+.pending-edit-content h2,
+.pending-edit-content h3 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.3;
+}
+
+.pending-edit-content h1 { font-size: 1.5em; }
+.pending-edit-content h2 { font-size: 1.25em; }
+.pending-edit-content h3 { font-size: 1.05em; }
+
+.pending-edit-content p { margin: 0 0 0.75em; }
+.pending-edit-content ul,
+.pending-edit-content ol { padding-left: 1.4em; margin: 0 0 0.75em; }
+
+.pending-edit-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
 .published-list-table {
   display: grid;
   gap: 6px;

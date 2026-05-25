@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+import json
 import logging
 import os
 import re
@@ -1513,6 +1514,382 @@ def preview_pending_job_draft(
         event.preventDefault();
         scrollToHeading(headingTarget);
       }});
+    }})();
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html, status_code=status.HTTP_200_OK)
+
+
+@router.get("/{job_id}/draft-edit", response_class=HTMLResponse)
+def edit_pending_job_draft(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> HTMLResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
+    credential = _get_enabled_credential_for_site(db, site.id)
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    try:
+        post_payload = wp_get_post(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    title = ""
+    if isinstance(post_payload.get("title"), dict):
+        title = str(post_payload["title"].get("raw") or post_payload["title"].get("rendered") or "").strip()
+    title = title or f"Draft #{job.wp_post_id}"
+
+    content_html = ""
+    if isinstance(post_payload.get("content"), dict):
+        content_html = str(post_payload["content"].get("raw") or post_payload["content"].get("rendered") or "")
+    content_html = _sanitize_html_for_preview(content_html)
+
+    featured_image_url = _pick_featured_image_url(post_payload)
+    if not featured_image_url:
+        featured_media_id = post_payload.get("featured_media")
+        if isinstance(featured_media_id, int) and featured_media_id > 0:
+            try:
+                media_payload = wp_get_media(
+                    site_url=site.site_url,
+                    wp_rest_base=site.wp_rest_base,
+                    wp_username=credential.wp_username,
+                    wp_app_password=credential.wp_app_password,
+                    media_id=featured_media_id,
+                    timeout_seconds=config["timeout_seconds"],
+                )
+                maybe_url = media_payload.get("source_url")
+                if isinstance(maybe_url, str) and maybe_url.strip():
+                    featured_image_url = maybe_url.strip()
+            except AutomationError:
+                featured_image_url = ""
+
+    site_url = (site.site_url or "").strip()
+    job_id_str = str(job_id)
+    safe_content_json = json.dumps(content_html).replace("</", r"<\/")
+    featured_img_html = (
+        f'<img src="{escape(featured_image_url)}" alt="Featured image" />'
+        if featured_image_url
+        else '<div class="no-image">No featured image — regenerate one below.</div>'
+    )
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Edit: {escape(title)}</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f7fb;
+      color: #0f172a;
+      line-height: 1.6;
+    }}
+    .toolbar {{
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: #fff;
+      border-bottom: 1px solid #dbe2ef;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .toolbar-label {{
+      font-size: 13px;
+      font-weight: 700;
+      color: #0f172a;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }}
+    .toolbar-label span {{
+      font-weight: 400;
+      color: #64748b;
+      font-size: 12px;
+      margin-left: 6px;
+    }}
+    .btn {{
+      appearance: none;
+      background: #2563eb;
+      color: #fff;
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity .15s;
+    }}
+    .btn:hover {{ opacity: .88; }}
+    .btn:disabled {{ opacity: .48; cursor: default; }}
+    .btn.secondary {{
+      background: #fff;
+      color: #2563eb;
+    }}
+    .status-msg {{
+      font-size: 12px;
+      color: #64748b;
+      min-width: 120px;
+      text-align: right;
+    }}
+    .status-msg.error {{ color: #b91c1c; }}
+    .status-msg.ok {{ color: #15803d; }}
+    .content-wrap {{
+      max-width: 820px;
+      margin: 28px auto;
+      padding: 0 20px 80px;
+    }}
+    .featured-image {{
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #dbe2ef;
+      background: #f1f5f9;
+      margin-bottom: 22px;
+    }}
+    .featured-image img {{
+      width: 100%;
+      height: auto;
+      display: block;
+    }}
+    .no-image {{
+      padding: 28px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 14px;
+    }}
+    .article-title {{
+      font-size: 2em;
+      font-weight: 800;
+      line-height: 1.18;
+      margin: 0 0 22px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      outline: none;
+      border: 2px solid transparent;
+      min-height: 1.3em;
+      word-break: break-word;
+    }}
+    .article-title:focus {{
+      border-color: #2563eb;
+      background: #f8fbff;
+    }}
+    .section-card {{
+      background: #fff;
+      border: 1px solid #dbe2ef;
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 14px;
+    }}
+    .section-card.intro {{ border-left: 4px solid #93c5fd; }}
+    .section-h2 {{
+      font-size: 1.25em;
+      font-weight: 700;
+      margin: 0 0 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      outline: none;
+      border: 2px solid transparent;
+      min-height: 1.3em;
+    }}
+    .section-h2:focus {{
+      border-color: #93c5fd;
+      background: #f8fbff;
+    }}
+    .section-body {{
+      outline: none;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 4px 8px;
+      min-height: 1.5em;
+    }}
+    .section-body:focus {{ border-color: #dbe2ef; }}
+    .section-body p {{ margin: 0 0 .75em; }}
+    .section-body ul, .section-body ol {{ padding-left: 1.5em; margin: 0 0 .75em; }}
+    .section-body li {{ margin-bottom: .25em; }}
+    .section-body h3 {{ font-size: 1.05em; font-weight: 700; margin: .8em 0 .3em; }}
+    .section-body h4 {{ font-size: .95em; font-weight: 700; margin: .6em 0 .25em; }}
+    .section-body a {{ color: #2563eb; }}
+    .section-body table {{ border-collapse: collapse; width: 100%; margin: 0 0 .75em; font-size: .95em; }}
+    .section-body th, .section-body td {{ border: 1px solid #dbe2ef; padding: 6px 10px; text-align: left; }}
+    .section-body th {{ background: #f1f5f9; font-weight: 600; }}
+    .section-body strong {{ font-weight: 700; }}
+    [contenteditable]:empty::before {{
+      content: attr(data-placeholder);
+      color: #94a3b8;
+      pointer-events: none;
+      font-weight: 400;
+      font-style: italic;
+    }}
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="toolbar-label">
+      Edit Draft<span>· {escape(site_url)}</span>
+    </div>
+    <button id="btn-regen" class="btn secondary" type="button">Regenerate Image</button>
+    <button id="btn-save" class="btn" type="button">Save</button>
+    <span id="status-msg" class="status-msg" role="status" aria-live="polite"></span>
+  </div>
+
+  <div class="content-wrap">
+    <div class="featured-image" id="featured-wrap">{featured_img_html}</div>
+    <h1 class="article-title" id="edit-title" contenteditable="true" data-placeholder="Article title...">{escape(title)}</h1>
+    <div id="sections"></div>
+  </div>
+
+  <script type="application/json" id="raw-content">{safe_content_json}</script>
+  <script>
+    (function () {{
+      const JOB_ID = "{job_id_str}";
+      const titleEl = document.getElementById("edit-title");
+      const sectionsEl = document.getElementById("sections");
+      const statusEl = document.getElementById("status-msg");
+      const saveBtn = document.getElementById("btn-save");
+      const regenBtn = document.getElementById("btn-regen");
+
+      let rawHtml = "";
+      try {{ rawHtml = JSON.parse(document.getElementById("raw-content").textContent || '""'); }} catch {{}}
+
+      function parseSections(html) {{
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        const sections = [];
+        let cur = {{ h2: null, parts: [] }};
+        for (const child of Array.from(tmp.children)) {{
+          if (child.tagName === "H2") {{
+            if (cur.h2 !== null || cur.parts.length) sections.push(cur);
+            cur = {{ h2: child.innerHTML.trim(), parts: [] }};
+          }} else {{
+            cur.parts.push(child.outerHTML);
+          }}
+        }}
+        if (cur.h2 !== null || cur.parts.length) sections.push(cur);
+        return sections;
+      }}
+
+      function buildCards(sections) {{
+        sectionsEl.innerHTML = "";
+        for (const sec of sections) {{
+          const card = document.createElement("div");
+          card.className = "section-card" + (sec.h2 === null ? " intro" : "");
+          if (sec.h2 !== null) {{
+            const h2El = document.createElement("div");
+            h2El.className = "section-h2";
+            h2El.contentEditable = "true";
+            h2El.innerHTML = sec.h2;
+            h2El.dataset.placeholder = "Section heading…";
+            card.appendChild(h2El);
+          }}
+          const bodyEl = document.createElement("div");
+          bodyEl.className = "section-body";
+          bodyEl.contentEditable = "true";
+          bodyEl.innerHTML = sec.parts.join("");
+          bodyEl.dataset.placeholder = "Section content…";
+          card.appendChild(bodyEl);
+          sectionsEl.appendChild(card);
+        }}
+      }}
+
+      function reconstruct() {{
+        const parts = [];
+        for (const card of sectionsEl.querySelectorAll(".section-card")) {{
+          const h2El = card.querySelector(".section-h2");
+          const bodyEl = card.querySelector(".section-body");
+          if (h2El) parts.push("<h2>" + h2El.innerHTML + "</h2>");
+          if (bodyEl) parts.push(bodyEl.innerHTML);
+        }}
+        return parts.join("\\n");
+      }}
+
+      function setStatus(msg, type) {{
+        statusEl.textContent = msg;
+        statusEl.className = "status-msg" + (type ? " " + type : "");
+        if (type === "ok") setTimeout(() => {{ if (statusEl.textContent === msg) statusEl.textContent = ""; }}, 3000);
+      }}
+
+      function setBusy(busy) {{
+        saveBtn.disabled = busy;
+        regenBtn.disabled = busy;
+        for (const el of sectionsEl.querySelectorAll("[contenteditable]")) {{
+          el.contentEditable = String(!busy);
+        }}
+        titleEl.contentEditable = String(!busy);
+      }}
+
+      async function save() {{
+        setBusy(true);
+        setStatus("Saving…", "");
+        try {{
+          const resp = await fetch("/jobs/" + JOB_ID + "/draft-content", {{
+            method: "PATCH",
+            credentials: "include",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ title: titleEl.textContent.trim(), content_html: reconstruct() }}),
+          }});
+          if (!resp.ok) {{
+            const d = await resp.json().catch(() => ({{}}));
+            throw new Error(d.detail || d.error || "Save failed");
+          }}
+          setStatus("Saved.", "ok");
+        }} catch (err) {{
+          setStatus(err.message || "Save failed.", "error");
+        }} finally {{
+          setBusy(false);
+        }}
+      }}
+
+      async function regenImage() {{
+        setBusy(true);
+        setStatus("Regenerating image…", "");
+        try {{
+          const resp = await fetch("/jobs/" + JOB_ID + "/regenerate-image", {{
+            method: "POST",
+            credentials: "include",
+            headers: {{ "Content-Type": "application/json" }},
+          }});
+          if (!resp.ok) {{
+            const d = await resp.json().catch(() => ({{}}));
+            throw new Error(d.detail || d.error || "Regenerate failed");
+          }}
+          setStatus("Done — reloading…", "ok");
+          setTimeout(() => window.location.reload(), 1200);
+        }} catch (err) {{
+          setStatus(err.message || "Regenerate failed.", "error");
+          setBusy(false);
+        }}
+      }}
+
+      saveBtn.addEventListener("click", save);
+      regenBtn.addEventListener("click", regenImage);
+
+      buildCards(parseSections(rawHtml));
     }})();
   </script>
 </body>

@@ -1589,7 +1589,7 @@ def edit_pending_job_draft(
     featured_img_html = (
         f'<img src="{escape(featured_image_url)}" alt="Featured image" />'
         if featured_image_url
-        else '<div class="no-image">No featured image — regenerate one below.</div>'
+        else '<div class="no-image">No featured image yet</div>'
     )
 
     html = f"""<!doctype html>
@@ -1607,22 +1607,26 @@ def edit_pending_job_draft(
       color: #0f172a;
       line-height: 1.6;
     }}
+
+    /* ── Toolbar ── */
     .toolbar {{
       position: sticky;
       top: 0;
       z-index: 100;
       background: #fff;
       border-bottom: 1px solid #dbe2ef;
-      padding: 10px 24px;
+      padding: 8px 20px;
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
     }}
     .toolbar-label {{
       font-size: 13px;
       font-weight: 700;
       color: #0f172a;
       flex: 1;
+      min-width: 120px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1633,37 +1637,137 @@ def edit_pending_job_draft(
       font-size: 12px;
       margin-left: 6px;
     }}
+
+    /* ── Format bar — mirrors task-board .workflow-format-toolbar ── */
+    .format-bar {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      flex-wrap: nowrap;
+      border: 1px solid #dbe2ef;
+      border-radius: 10px;
+      background: #f1f5f9;
+      overflow: hidden;
+    }}
+    .fmt-btn {{
+      min-height: 30px;
+      padding: 0 12px;
+      border: 0;
+      border-right: 1px solid #dbe2ef;
+      border-radius: 0;
+      background: transparent;
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+    }}
+    .fmt-btn:last-child {{ border-right: 0; }}
+    .fmt-btn:hover {{ background: color-mix(in srgb, #f1f5f9 74%, #2563eb 26%); }}
+    .fmt-btn:disabled {{ opacity: .45; cursor: default; }}
+    .fmt-size {{
+      min-height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-left: 1px solid #dbe2ef;
+      border-radius: 0;
+      background: transparent;
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      appearance: auto;
+    }}
+    .fmt-size:disabled {{ opacity: .45; cursor: default; }}
+
+    /* ── Action buttons ── */
+    .toolbar-actions {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }}
     .btn {{
       appearance: none;
       background: #2563eb;
       color: #fff;
       border: 1px solid #2563eb;
       border-radius: 8px;
-      padding: 8px 16px;
+      padding: 7px 14px;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       white-space: nowrap;
-      transition: opacity .15s;
     }}
     .btn:hover {{ opacity: .88; }}
-    .btn:disabled {{ opacity: .48; cursor: default; }}
-    .btn.secondary {{
-      background: #fff;
-      color: #2563eb;
-    }}
+    .btn:disabled {{ opacity: .45; cursor: default; }}
+    .btn.secondary {{ background: #fff; color: #2563eb; }}
     .status-msg {{
       font-size: 12px;
       color: #64748b;
-      min-width: 120px;
-      text-align: right;
+      min-width: 100px;
     }}
     .status-msg.error {{ color: #b91c1c; }}
     .status-msg.ok {{ color: #15803d; }}
+
+    /* ── Page body: sidebar + content ── */
+    .page-body {{
+      display: flex;
+      align-items: flex-start;
+    }}
+
+    /* ── Section nav sidebar ── */
+    .section-nav {{
+      width: 210px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 53px;
+      max-height: calc(100vh - 53px);
+      overflow-y: auto;
+      padding: 20px 14px 40px;
+      border-right: 1px solid #dbe2ef;
+      background: #fff;
+    }}
+    .nav-header {{
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      margin-bottom: 10px;
+      padding-left: 8px;
+    }}
+    .nav-list {{
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 2px;
+    }}
+    .nav-item {{
+      display: block;
+      padding: 6px 8px;
+      font-size: 12.5px;
+      color: #475569;
+      border-radius: 6px;
+      cursor: pointer;
+      line-height: 1.4;
+      word-break: break-word;
+      border: none;
+      background: none;
+      text-align: left;
+      width: 100%;
+    }}
+    .nav-item:hover {{ background: #f1f5f9; color: #0f172a; }}
+    .nav-item.active {{ background: #eff6ff; color: #2563eb; font-weight: 600; }}
+    .nav-item.is-title {{ font-weight: 700; font-size: 13px; color: #0f172a; }}
+
+    /* ── Article content area ── */
     .content-wrap {{
-      max-width: 820px;
-      margin: 28px auto;
-      padding: 0 20px 80px;
+      flex: 1;
+      min-width: 0;
+      max-width: 760px;
+      padding: 28px 24px 80px;
     }}
     .featured-image {{
       border-radius: 12px;
@@ -1678,13 +1782,13 @@ def edit_pending_job_draft(
       display: block;
     }}
     .no-image {{
-      padding: 28px;
+      padding: 22px;
       text-align: center;
       color: #94a3b8;
-      font-size: 14px;
+      font-size: 13px;
     }}
     .article-title {{
-      font-size: 2em;
+      font-size: 1.95em;
       font-weight: 800;
       line-height: 1.18;
       margin: 0 0 22px;
@@ -1695,20 +1799,20 @@ def edit_pending_job_draft(
       min-height: 1.3em;
       word-break: break-word;
     }}
-    .article-title:focus {{
-      border-color: #2563eb;
-      background: #f8fbff;
-    }}
+    .article-title:focus {{ border-color: #2563eb; background: #f8fbff; }}
+
+    /* ── Section cards ── */
     .section-card {{
       background: #fff;
       border: 1px solid #dbe2ef;
       border-radius: 12px;
-      padding: 20px 24px;
+      padding: 20px 22px;
       margin-bottom: 14px;
+      scroll-margin-top: 70px;
     }}
     .section-card.intro {{ border-left: 4px solid #93c5fd; }}
     .section-h2 {{
-      font-size: 1.25em;
+      font-size: 1.2em;
       font-weight: 700;
       margin: 0 0 10px;
       padding: 4px 8px;
@@ -1717,16 +1821,13 @@ def edit_pending_job_draft(
       border: 2px solid transparent;
       min-height: 1.3em;
     }}
-    .section-h2:focus {{
-      border-color: #93c5fd;
-      background: #f8fbff;
-    }}
+    .section-h2:focus {{ border-color: #93c5fd; background: #f8fbff; }}
     .section-body {{
       outline: none;
       border: 2px solid transparent;
       border-radius: 6px;
       padding: 4px 8px;
-      min-height: 1.5em;
+      min-height: 2em;
     }}
     .section-body:focus {{ border-color: #dbe2ef; }}
     .section-body p {{ margin: 0 0 .75em; }}
@@ -1735,7 +1836,7 @@ def edit_pending_job_draft(
     .section-body h3 {{ font-size: 1.05em; font-weight: 700; margin: .8em 0 .3em; }}
     .section-body h4 {{ font-size: .95em; font-weight: 700; margin: .6em 0 .25em; }}
     .section-body a {{ color: #2563eb; }}
-    .section-body table {{ border-collapse: collapse; width: 100%; margin: 0 0 .75em; font-size: .95em; }}
+    .section-body table {{ border-collapse: collapse; width: 100%; margin: 0 0 .75em; font-size: .94em; }}
     .section-body th, .section-body td {{ border: 1px solid #dbe2ef; padding: 6px 10px; text-align: left; }}
     .section-body th {{ background: #f1f5f9; font-weight: 600; }}
     .section-body strong {{ font-weight: 700; }}
@@ -1746,37 +1847,71 @@ def edit_pending_job_draft(
       font-weight: 400;
       font-style: italic;
     }}
+    @media (max-width: 680px) {{
+      .section-nav {{ display: none; }}
+      .format-bar {{ display: none; }}
+    }}
   </style>
 </head>
 <body>
   <div class="toolbar">
-    <div class="toolbar-label">
-      Edit Draft<span>· {escape(site_url)}</span>
+    <div class="toolbar-label">Edit Draft<span>· {escape(site_url)}</span></div>
+
+    <div class="format-bar" id="format-bar">
+      <button class="fmt-btn" id="fmt-bold" type="button" title="Bold">Bold</button>
+      <button class="fmt-btn" id="fmt-italic" type="button" title="Italic">Italic</button>
+      <button class="fmt-btn" id="fmt-underline" type="button" title="Underline">Underline</button>
+      <select class="fmt-size" id="fmt-size" title="Font size">
+        <option value="10">10pt</option>
+        <option value="12">12pt</option>
+        <option value="14" selected>14pt</option>
+        <option value="16">16pt</option>
+        <option value="18">18pt</option>
+      </select>
     </div>
-    <button id="btn-regen" class="btn secondary" type="button">Regenerate Image</button>
-    <button id="btn-save" class="btn" type="button">Save</button>
-    <span id="status-msg" class="status-msg" role="status" aria-live="polite"></span>
+
+    <div class="toolbar-actions">
+      <button id="btn-regen" class="btn secondary" type="button">Regenerate Image</button>
+      <button id="btn-save" class="btn" type="button">Save</button>
+      <button id="btn-cancel" class="btn secondary" type="button">Cancel</button>
+      <span id="status-msg" class="status-msg" role="status" aria-live="polite"></span>
+    </div>
   </div>
 
-  <div class="content-wrap">
-    <div class="featured-image" id="featured-wrap">{featured_img_html}</div>
-    <h1 class="article-title" id="edit-title" contenteditable="true" data-placeholder="Article title...">{escape(title)}</h1>
-    <div id="sections"></div>
+  <div class="page-body">
+    <nav class="section-nav" id="section-nav" aria-label="Article sections">
+      <div class="nav-header">Sections</div>
+      <ul class="nav-list" id="nav-list"></ul>
+    </nav>
+
+    <main class="content-wrap">
+      <div class="featured-image" id="featured-wrap">{featured_img_html}</div>
+      <h1 class="article-title" id="edit-title" contenteditable="true" data-placeholder="Article title…">{escape(title)}</h1>
+      <div id="sections"></div>
+    </main>
   </div>
 
   <script type="application/json" id="raw-content">{safe_content_json}</script>
   <script>
     (function () {{
       const JOB_ID = "{job_id_str}";
-      const titleEl = document.getElementById("edit-title");
+      const titleEl   = document.getElementById("edit-title");
       const sectionsEl = document.getElementById("sections");
-      const statusEl = document.getElementById("status-msg");
-      const saveBtn = document.getElementById("btn-save");
-      const regenBtn = document.getElementById("btn-regen");
+      const navList   = document.getElementById("nav-list");
+      const statusEl  = document.getElementById("status-msg");
+      const saveBtn   = document.getElementById("btn-save");
+      const regenBtn  = document.getElementById("btn-regen");
+      const cancelBtn = document.getElementById("btn-cancel");
+      const fmtBold   = document.getElementById("fmt-bold");
+      const fmtItalic = document.getElementById("fmt-italic");
+      const fmtUnder  = document.getElementById("fmt-underline");
+      const fmtSize   = document.getElementById("fmt-size");
 
+      // ── Parse raw content ──────────────────────────────────────
       let rawHtml = "";
       try {{ rawHtml = JSON.parse(document.getElementById("raw-content").textContent || '""'); }} catch {{}}
 
+      // ── Section parsing ────────────────────────────────────────
       function parseSections(html) {{
         const tmp = document.createElement("div");
         tmp.innerHTML = html;
@@ -1794,17 +1929,20 @@ def edit_pending_job_draft(
         return sections;
       }}
 
+      // ── Build section cards ────────────────────────────────────
       function buildCards(sections) {{
         sectionsEl.innerHTML = "";
-        for (const sec of sections) {{
+        sections.forEach((sec, idx) => {{
           const card = document.createElement("div");
           card.className = "section-card" + (sec.h2 === null ? " intro" : "");
+          card.dataset.idx = idx;
           if (sec.h2 !== null) {{
             const h2El = document.createElement("div");
             h2El.className = "section-h2";
             h2El.contentEditable = "true";
             h2El.innerHTML = sec.h2;
             h2El.dataset.placeholder = "Section heading…";
+            h2El.addEventListener("input", () => syncNavItem(idx, h2El.textContent.trim()));
             card.appendChild(h2El);
           }}
           const bodyEl = document.createElement("div");
@@ -1814,35 +1952,101 @@ def edit_pending_job_draft(
           bodyEl.dataset.placeholder = "Section content…";
           card.appendChild(bodyEl);
           sectionsEl.appendChild(card);
-        }}
+        }});
       }}
 
+      // ── Sidebar nav ────────────────────────────────────────────
+      function buildNav(sections) {{
+        navList.innerHTML = "";
+
+        // Title entry
+        const titleItem = document.createElement("li");
+        const titleBtn = document.createElement("button");
+        titleBtn.className = "nav-item is-title";
+        titleBtn.dataset.navIdx = "title";
+        titleBtn.textContent = titleEl.textContent.trim() || "Title";
+        titleBtn.addEventListener("click", () => titleEl.scrollIntoView({{ behavior: "smooth", block: "start" }}));
+        titleItem.appendChild(titleBtn);
+        navList.appendChild(titleItem);
+
+        titleEl.addEventListener("input", () => {{ titleBtn.textContent = titleEl.textContent.trim() || "Title"; }});
+
+        sections.forEach((sec, idx) => {{
+          const li = document.createElement("li");
+          const btn = document.createElement("button");
+          btn.className = "nav-item";
+          btn.dataset.navIdx = idx;
+          btn.textContent = sec.h2 ? stripHtml(sec.h2) : "Intro";
+          btn.addEventListener("click", () => {{
+            const card = sectionsEl.querySelector(`[data-idx="${{idx}}"]`);
+            if (card) card.scrollIntoView({{ behavior: "smooth", block: "start" }});
+          }});
+          li.appendChild(btn);
+          navList.appendChild(li);
+        }});
+      }}
+
+      function syncNavItem(idx, text) {{
+        const btn = navList.querySelector(`[data-nav-idx="${{idx}}"]`);
+        if (btn) btn.textContent = text || "Section " + (idx + 1);
+      }}
+
+      function stripHtml(html) {{
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        return tmp.textContent || "";
+      }}
+
+      // ── Scroll spy ────────────────────────────────────────────
+      function initScrollSpy() {{
+        const cards = Array.from(sectionsEl.querySelectorAll(".section-card"));
+        if (!cards.length) return;
+        const obs = new IntersectionObserver((entries) => {{
+          for (const e of entries) {{
+            if (!e.isIntersecting) continue;
+            const idx = e.target.dataset.idx;
+            for (const btn of navList.querySelectorAll(".nav-item")) {{
+              btn.classList.toggle("active", btn.dataset.navIdx === idx);
+            }}
+          }}
+        }}, {{ threshold: 0.25 }});
+        cards.forEach((c) => obs.observe(c));
+      }}
+
+      // ── Content reconstruction ────────────────────────────────
       function reconstruct() {{
         const parts = [];
         for (const card of sectionsEl.querySelectorAll(".section-card")) {{
-          const h2El = card.querySelector(".section-h2");
+          const h2El  = card.querySelector(".section-h2");
           const bodyEl = card.querySelector(".section-body");
-          if (h2El) parts.push("<h2>" + h2El.innerHTML + "</h2>");
+          if (h2El)  parts.push("<h2>" + h2El.innerHTML + "</h2>");
           if (bodyEl) parts.push(bodyEl.innerHTML);
         }}
         return parts.join("\\n");
       }}
 
+      // ── Status ────────────────────────────────────────────────
       function setStatus(msg, type) {{
         statusEl.textContent = msg;
         statusEl.className = "status-msg" + (type ? " " + type : "");
         if (type === "ok") setTimeout(() => {{ if (statusEl.textContent === msg) statusEl.textContent = ""; }}, 3000);
       }}
 
+      // ── Busy state ───────────────────────────────────────────
       function setBusy(busy) {{
         saveBtn.disabled = busy;
         regenBtn.disabled = busy;
+        fmtBold.disabled  = busy;
+        fmtItalic.disabled = busy;
+        fmtUnder.disabled  = busy;
+        fmtSize.disabled   = busy;
+        titleEl.contentEditable = String(!busy);
         for (const el of sectionsEl.querySelectorAll("[contenteditable]")) {{
           el.contentEditable = String(!busy);
         }}
-        titleEl.contentEditable = String(!busy);
       }}
 
+      // ── Save ─────────────────────────────────────────────────
       async function save() {{
         setBusy(true);
         setStatus("Saving…", "");
@@ -1865,6 +2069,7 @@ def edit_pending_job_draft(
         }}
       }}
 
+      // ── Regenerate image ──────────────────────────────────────
       async function regenImage() {{
         setBusy(true);
         setStatus("Regenerating image…", "");
@@ -1886,10 +2091,55 @@ def edit_pending_job_draft(
         }}
       }}
 
+      // ── Formatting toolbar ────────────────────────────────────
+      // Use mousedown + preventDefault so the contenteditable keeps focus
+      function bindFmt(btn, cmd) {{
+        btn.addEventListener("mousedown", (e) => {{
+          e.preventDefault();
+          document.execCommand(cmd, false);
+        }});
+      }}
+      bindFmt(fmtBold,   "bold");
+      bindFmt(fmtItalic, "italic");
+      bindFmt(fmtUnder,  "underline");
+
+      // Font-size: save selection before select opens, restore + apply on change
+      let savedRange = null;
+      fmtSize.addEventListener("mousedown", () => {{
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) savedRange = sel.getRangeAt(0).cloneRange();
+      }});
+      fmtSize.addEventListener("change", () => {{
+        const size = parseInt(fmtSize.value, 10);
+        if (!savedRange) return;
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(savedRange);
+        if (!sel.isCollapsed) {{
+          const fragment = savedRange.extractContents();
+          const span = document.createElement("span");
+          span.style.fontSize = size + "px";
+          span.style.lineHeight = "1.6";
+          span.appendChild(fragment);
+          savedRange.insertNode(span);
+          const newRange = document.createRange();
+          newRange.selectNodeContents(span);
+          sel.removeAllRanges();
+          sel.addRange(newRange);
+        }}
+        savedRange = null;
+      }});
+
+      // ── Wire buttons ─────────────────────────────────────────
       saveBtn.addEventListener("click", save);
       regenBtn.addEventListener("click", regenImage);
+      cancelBtn.addEventListener("click", () => window.close());
 
-      buildCards(parseSections(rawHtml));
+      // ── Init ─────────────────────────────────────────────────
+      const sections = parseSections(rawHtml);
+      buildCards(sections);
+      buildNav(sections);
+      initScrollSpy();
     }})();
   </script>
 </body>
@@ -1992,6 +2242,17 @@ def update_draft_content(
     if isinstance(updated.get("content"), dict):
         updated_html = str(updated["content"].get("rendered") or "")
     updated_html = updated_html or payload.content_html
+
+    creator_output = db.query(CreatorOutput).filter(CreatorOutput.job_id == job.id).first()
+    if creator_output:
+        creator_output.draft_article_html = payload.content_html
+        creator_output.updated_at = datetime.now(timezone.utc)
+
+    submission = db.query(Submission).filter(Submission.id == job.submission_id).first()
+    if submission and payload.title:
+        submission.title = payload.title
+
+    db.commit()
 
     return DraftContentUpdateOut(ok=True, title=updated_title, content_html=updated_html)
 

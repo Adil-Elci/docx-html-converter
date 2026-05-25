@@ -215,6 +215,47 @@ def test_call_creator_v2_pipeline_forwards_skip_flags(monkeypatch):
     assert body["skip_entity_extraction"] is True
 
 
+def test_call_creator_v2_pipeline_forwards_service_type(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["body"] = json
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="x x",
+        target_backlink_url="https://client.de/y",
+        publishing_site_url="https://example.de",
+        service_type="brand_mention",
+        brand_name="Brillenhaus24",
+    )
+    body = captured["body"]
+    assert body["service_type"] == "brand_mention"
+    assert body["brand_name"] == "Brillenhaus24"
+
+
+def test_call_creator_v2_pipeline_omits_service_type_when_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout, allow_redirects):
+        captured["body"] = json
+        return _FakeResponse(200, _v2_happy_payload())
+
+    monkeypatch.setattr(automation_service.requests, "post", fake_post)
+    automation_service.call_creator_v2_pipeline(
+        creator_endpoint="https://creator.example",
+        target_keyword="x x",
+        target_backlink_url="https://client.de/y",
+        publishing_site_url="https://example.de",
+        service_type="article",
+    )
+    # article is the creator-side default; still forwarded explicitly is fine,
+    # but brand_name must not appear when unset.
+    assert "brand_name" not in captured["body"]
+
+
 def test_call_creator_v2_pipeline_raises_on_pipeline_failed(monkeypatch):
     failure = {
         "ok": False,

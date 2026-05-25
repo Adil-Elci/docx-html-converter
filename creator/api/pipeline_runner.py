@@ -18,12 +18,13 @@ bare traceback through the whole chain.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urlparse
 
 from .article_assembler import AssembledArticle, assemble_article, assemble_listicle
-from .contract import ArticleFormat, ContentContract
+from .contract import ArticleFormat, ContentContract, ServiceType
 from .contract_generator import generate_contract
 from .eval_harness import QualityReport, evaluate
 from .eval_judge import JudgeScores, judge_article
@@ -72,7 +73,34 @@ def _host_from_url(url: str) -> str:
     host = (parsed.netloc or parsed.path or "").strip().lower()
     if host.startswith("www."):
         host = host[4:]
-    return host
+    return host.split("/")[0].split(":")[0]
+
+
+def _strip_links_to_host(html: str, target_host: str) -> tuple[str, int]:
+    """Unwrap any ``<a>`` whose href contains ``target_host``, keeping inner text.
+
+    Used by the brand-mention service as the deterministic last line of defense
+    against a stealth backlink the writer/voice pass might have fabricated.
+    Returns ``(html, count_stripped)``.
+    """
+
+    if not html or not target_host:
+        return html, 0
+    count = 0
+
+    def _replace(match: "re.Match") -> str:
+        nonlocal count
+        href = (match.group("href") or "").lower()
+        if target_host in href:
+            count += 1
+            return match.group("inner")
+        return match.group(0)
+
+    pattern = re.compile(
+        r"<a\b[^>]*\bhref\s*=\s*[\"'](?P<href>[^\"']*)[\"'][^>]*>(?P<inner>.*?)</a>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub(_replace, html), count
 
 
 _LANGUAGE_TO_LOCATION: dict = {
@@ -91,6 +119,8 @@ def run_pipeline(
     language: Optional[str] = None,
     editorial_angle: Optional[dict] = None,
     article_format: Optional[str] = None,
+    service_type: Optional[str] = None,
+    brand_name: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -174,6 +204,13 @@ def run_pipeline(
     requested_format = (article_format or "").strip().lower() or None
     if requested_format not in (None, "narrative", "listicle"):
         raise PipelineError("contract", f"Unsupported article_format {requested_format!r}; expected narrative or listicle.")
+
+    requested_service = (service_type or "article").strip().lower()
+    if requested_service not in ("article", "brand_mention"):
+        raise PipelineError("contract", f"Unsupported service_type {requested_service!r}; expected article or brand_mention.")
+    service_enum = ServiceType(requested_service)
+    if service_enum == ServiceType.BRAND_MENTION:
+        notes.append("service_type=brand_mention (no outbound link to target)")
     if requested_format == "listicle":
         if editorial_angle is None:
             editorial_angle = {"format": "listicle"}
@@ -188,6 +225,8 @@ def run_pipeline(
             anchor_hint=anchor_hint,
             language=normalized_language,
             editorial_angle=editorial_angle,
+            service_type=service_enum,
+            brand_name=brand_name,
         )
     except Exception as exc:
         raise PipelineError("contract", str(exc)) from exc
@@ -281,6 +320,18 @@ def run_pipeline(
             refined_body = refine_voice(article_html=assembled.article_html, contract=contract)
         except Exception as exc:
             raise PipelineError("voice_pass", str(exc)) from exc
+
+    # Brand-mention safety net: the prompt forbids linking the target and the
+    # eval gate flags any leak, but stealth links are the load-bearing risk for
+    # this product (an LLM will occasionally fabricate one despite the prompt).
+    # Deterministically unwrap any anchor pointing at the target host so a leak
+    # can never actually ship, regardless of what the writer/voice pass emitted.
+    if service_enum == ServiceType.BRAND_MENTION:
+        target_host = _host_from_url(target_backlink_url)
+        refined_body, stripped = _strip_links_to_host(refined_body, target_host)
+        if stripped:
+            notes.append(f"brand_mention: stripped {stripped} stray link(s) to target host")
+            logger.warning("pipeline.brand_mention_links_stripped count=%s host=%s", stripped, target_host)
     final_html = "\n".join([refined_body, *assembled.schema_blocks])
     logger.info(
         "pipeline.voice_pass_done skipped=%s auto_skip=%s",
@@ -310,6 +361,7 @@ def run_pipeline(
             research=research,
             judge_scores=judge_scores,
             language=normalized_language,
+            target_url=target_backlink_url,
         )
     except Exception as exc:
         raise PipelineError("eval", str(exc)) from exc

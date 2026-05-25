@@ -58,7 +58,7 @@ def _make_listicle_contract(item_count: int = 5) -> ContentContract:
         link_plan=[
             LinkTarget(
                 target_url="https://example.de/steuerberater",
-                anchor_strategy="branded",
+                anchor_strategy="partial_match",
                 section_index=3,
                 surrounding_context_requirements="Empfehlung als konkretes Beispiel auf Rang 3.",
                 link_type="backlink",

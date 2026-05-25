@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .contract import ContentContract, EntityRequirement, LinkTarget, SectionPlan
+from .contract import ContentContract, EntityRequirement, LinkTarget, SectionPlan, ServiceType
 from .llm import LLMError, call_llm_json
 from .prompt_registry import load as load_prompt
 
@@ -90,6 +90,30 @@ def _format_link(link: Optional[LinkTarget], target_keyword: str) -> str:
     )
 
 
+def _format_service_directive(contract: ContentContract) -> str:
+    is_fr = contract.language.value == "fr"
+    if contract.service_type == ServiceType.BRAND_MENTION:
+        brand = (contract.brand_name or "").strip()
+        if is_fr:
+            return (
+                "MODE MENTION DE MARQUE : n'insérez AUCUN lien (`<a href>`) ni URL dans cette section. "
+                + (f"Si la marque « {brand} » figure dans les entités obligatoires ci-dessus, citez-la en texte brut, naturellement." if brand else "")
+            )
+        return (
+            "SERVICE-MODUS MARKENERWÄHNUNG: Füge in diesem Abschnitt KEINEN Link (`<a href>`) und KEINE URL ein. "
+            + (f"Wenn die Marke „{brand}\" oben unter den Pflicht-Entitäten steht, erwähne sie als Klartext, natürlich im Satz." if brand else "")
+        )
+    if is_fr:
+        return (
+            "MODE ARTICLE : ne nommez JAMAIS le site cible (marque, domaine, nom d'entreprise) — ni dans le texte, "
+            "ni dans le texte d'ancre. Le backlink reste dissimulé derrière une ancre contextuelle/mot-clé."
+        )
+    return (
+        "SERVICE-MODUS ARTIKEL: Nenne die Ziel-Website NIEMALS offen (kein Markenname, keine Domain, kein Firmenname) "
+        "— weder im Fließtext noch im Anker-Text. Der Backlink bleibt hinter einem kontextuellen/Keyword-Anker verborgen."
+    )
+
+
 def _format_required_elements(elements: List[str]) -> str:
     if not elements:
         return "(keine zwingenden Strukturelemente)"
@@ -139,8 +163,9 @@ def build_user_prompt(
         f"PFLICHT-ENTITÄTEN für diesen Abschnitt\n"
         f"========================================\n"
         f"{_format_entities(entities)}\n\n"
-        f"BACKLINK\n"
-        f"========\n"
+        f"BACKLINK / SERVICE-MODUS\n"
+        f"========================\n"
+        f"{_format_service_directive(contract)}\n"
         f"{_format_link(link, contract.target_keyword)}\n\n"
         f"VERTRAGSWEITE AI-FLOSKEL-BLOCKLISTE (zusätzlich zur System-Prompt-Liste)\n"
         f"========================================================================\n"

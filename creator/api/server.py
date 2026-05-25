@@ -252,6 +252,8 @@ class V2RunPipelineRequest(BaseModel):
     language: Optional[str] = None  # ISO 639-1; auto-detected when absent
     editorial_angle: Optional[dict] = None  # brainstormed slant: {title, hook, rationale}
     article_format: Optional[str] = None  # "narrative" (default) or "listicle"
+    service_type: Optional[str] = None  # "article" (default, hidden backlink) or "brand_mention" (open name-drop, no link)
+    brand_name: Optional[str] = None  # explicit brand name for brand_mention; derived from target URL when absent
     anchor_hint: Optional[str] = None
     canonical_url: Optional[str] = None
     skip_voice_pass: bool = False
@@ -308,6 +310,8 @@ def _serialize_run(run: PipelineRun) -> dict:
         "sections": [s.model_dump(mode="json") for s in run.sections],
         "items": [i.model_dump(mode="json") for i in run.items],
         "format": run.contract.format.value,
+        "service_type": run.contract.service_type.value,
+        "brand_name": run.contract.brand_name,
         "article_html": {
             "assembled": run.assembled.full_html,
             "refined_body": run.refined_article_html,
@@ -411,6 +415,8 @@ async def v2_run_pipeline(payload: V2RunPipelineRequest) -> JSONResponse:
             language=payload.language,
             editorial_angle=payload.editorial_angle,
             article_format=payload.article_format,
+            service_type=payload.service_type,
+            brand_name=payload.brand_name,
             anchor_hint=payload.anchor_hint,
             canonical_url=payload.canonical_url,
             skip_voice_pass=payload.skip_voice_pass,

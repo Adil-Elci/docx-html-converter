@@ -637,6 +637,7 @@ def _compose_submission_notes(
     auto_selected_site: bool = False,
     submission_origin_metadata: Optional[Dict[str, str]] = None,
     article_format: Optional[str] = None,
+    service_type: Optional[str] = None,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -659,6 +660,8 @@ def _compose_submission_notes(
         parts.append(f"topic={_safe_note_value(topic)}")
     if article_format and article_format.strip().lower() not in {"", "narrative"}:
         parts.append(f"article_format={_safe_note_value(article_format.strip().lower())}")
+    if service_type and service_type.strip().lower() not in {"", "article"}:
+        parts.append(f"service_type={_safe_note_value(service_type.strip().lower())}")
     if manual_create_article:
         parts.append("manual_create_article=true")
     if creator_mode:
@@ -808,6 +811,7 @@ def _enqueue_job(
         auto_selected_site=auto_selected_site,
         submission_origin_metadata=submission_origin_metadata,
         article_format=getattr(payload, "article_format", None),
+        service_type=getattr(payload, "service_type", None),
     )
 
     existing_submission = _find_existing_submission(
@@ -862,6 +866,7 @@ def _enqueue_job(
             approved_at=None,
             attempt_count=0,
             article_format=getattr(payload, "article_format", "narrative") or "narrative",
+            service_type=getattr(payload, "service_type", "article") or "article",
         )
         db.add(job)
         db.commit()
@@ -894,6 +899,8 @@ def _enqueue_job(
         approved_by_name_snapshot=None,
         approved_at=None,
         attempt_count=0,
+        article_format=getattr(payload, "article_format", "narrative") or "narrative",
+        service_type=getattr(payload, "service_type", "article") or "article",
     )
     db.add(job)
     db.commit()

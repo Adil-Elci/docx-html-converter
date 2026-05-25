@@ -16,8 +16,9 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
-from .contract import ArticleFormat, ContentContract
+from .contract import ArticleFormat, ContentContract, ServiceType
 from .entity_extract import ExtractedEntity
 from .eval_judge import JudgeScores
 from .research import ResearchPayload
@@ -320,6 +321,80 @@ def check_link_counts(parser: _ArticleParser, host_domain: str) -> CheckResult:
         "link_counts",
         internal_ok and external_ok,
         detail=f"internal={internal} external={external}",
+    )
+
+
+def _host_from_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.split("/")[0].split(":")[0]
+
+
+def _target_brand_tokens(target_url: str) -> set:
+    """Conservative set of strings that betray an open mention of the target.
+
+    Only the joined domain core (e.g. ``brillenhaus24``) and the full host
+    (``brillenhaus24.de``) — NOT the individual hyphen-split words, which on
+    descriptive domains (``berlin-immobilien.de``) are legitimate topical terms
+    and would false-positive a clean hidden-backlink article.
+    """
+
+    host = _host_from_url(target_url)
+    if not host:
+        return set()
+    tokens = {host}
+    core = host.split(".")[0]
+    if len(core) >= 5:
+        tokens.add(core)
+        dehyphenated = core.replace("-", "").replace("_", "")
+        if len(dehyphenated) >= 5:
+            tokens.add(dehyphenated)
+    return tokens
+
+
+def check_hidden_backlink(parser: _ArticleParser, target_url: str) -> CheckResult:
+    """Article mode: the target site must never be named openly.
+
+    The backlink may (and should) exist as an ``href``, but the target's
+    brand/domain must not appear in visible prose or anchor text. Conservative
+    token set keeps false positives low on descriptive domains.
+    """
+
+    tokens = _target_brand_tokens(target_url)
+    if not tokens:
+        return CheckResult("hidden_backlink", True, detail="no target tokens to check")
+    plain_lower = parser.plain_text.lower()
+    in_text = sorted(t for t in tokens if t in plain_lower)
+    if in_text:
+        return CheckResult(
+            "hidden_backlink",
+            False,
+            detail=f"target named openly in body/anchor text: {', '.join(in_text)}",
+        )
+    return CheckResult("hidden_backlink", True, detail="target not named in visible text")
+
+
+def check_brand_mention(parser: _ArticleParser, contract: ContentContract, target_url: str) -> CheckResult:
+    """Brand-mention mode: brand named in prose AND zero links to the target."""
+
+    brand = (contract.brand_name or "").strip()
+    plain_lower = parser.plain_text.lower()
+    present = bool(brand) and brand.lower() in plain_lower
+    if not present:
+        present = any(tok in plain_lower for tok in _target_brand_tokens(target_url))
+    target_host = _host_from_url(target_url)
+    linked = bool(target_host) and any(
+        target_host in (link["href"] or "").lower() for link in parser.links
+    )
+    passed = present and not linked
+    return CheckResult(
+        "brand_mention",
+        passed,
+        detail=f"brand_present={present} target_linked={linked} brand={brand!r}",
     )
 
 
@@ -640,12 +715,20 @@ def _judge_axis_to_check(name: str, axis) -> CheckResult:
     )
 
 
-def llm_judged_checks_from_scores(scores: JudgeScores) -> List[CheckResult]:
-    return [
-        _judge_axis_to_check("intent_match", scores.intent_match),
-        _judge_axis_to_check("backlink_anchor_naturalness", scores.backlink_anchor_naturalness),
-        _judge_axis_to_check("eeat_signal_density", scores.eeat_signal_density),
-    ]
+def llm_judged_checks_from_scores(
+    scores: JudgeScores,
+    *,
+    include_backlink_axis: bool = True,
+) -> List[CheckResult]:
+    checks = [_judge_axis_to_check("intent_match", scores.intent_match)]
+    # Brand-mention articles carry no backlink, so anchor naturalness is N/A —
+    # the judge still scores it against an empty link plan, but we don't gate.
+    if include_backlink_axis:
+        checks.append(
+            _judge_axis_to_check("backlink_anchor_naturalness", scores.backlink_anchor_naturalness)
+        )
+    checks.append(_judge_axis_to_check("eeat_signal_density", scores.eeat_signal_density))
+    return checks
 
 
 def stub_intent_match() -> CheckResult:
@@ -672,6 +755,7 @@ def evaluate(
     research: Optional[ResearchPayload] = None,
     judge_scores: Optional[JudgeScores] = None,
     language: Optional[str] = None,
+    target_url: Optional[str] = None,
 ) -> QualityReport:
     parser = _parse(article_html)
     plain = parser.plain_text
@@ -679,6 +763,7 @@ def evaluate(
     h1 = parser.h1[0] if parser.h1 else ""
 
     resolved_language = (language or contract.language.value).lower()
+    is_brand_mention = contract.service_type == ServiceType.BRAND_MENTION
 
     competitor_word_count_median = research.competitor_word_count_median if research else None
     high_coverage_entities = research.high_coverage_entities if research else []
@@ -699,8 +784,6 @@ def evaluate(
         check_secondary_keyword_coverage(plain, contract.secondary_keywords),
         check_word_count_band(plain, contract.word_count_target, competitor_word_count_median),
         check_heading_hierarchy(parser),
-        check_link_counts(parser, host_domain),
-        check_anchor_diversity(parser),
         check_image_alt_text(parser),
         check_meta_lengths(meta_title, meta_description),
         check_ai_tell_blocklist(plain, contract.ai_tell_blocklist),
@@ -709,17 +792,27 @@ def evaluate(
         check_topical_entity_coverage(plain, high_coverage_entities),
         check_paa_coverage(plain, paa_questions, language=resolved_language),
     ]
+    # Link/anchor checks are service-specific: brand-mention carries no links
+    # (name-drop only), article carries a hidden backlink that must not name
+    # the target.
+    if is_brand_mention:
+        deterministic.append(check_brand_mention(parser, contract, target_url or ""))
+    else:
+        deterministic.append(check_link_counts(parser, host_domain))
+        deterministic.append(check_anchor_diversity(parser))
+        deterministic.append(check_hidden_backlink(parser, target_url or ""))
     if is_listicle:
         deterministic.append(check_listicle_structure(article_html, contract))
         deterministic.append(check_listicle_item_substance(article_html, contract))
     if judge_scores is not None:
-        llm_judged = llm_judged_checks_from_scores(judge_scores)
+        llm_judged = llm_judged_checks_from_scores(
+            judge_scores, include_backlink_axis=not is_brand_mention
+        )
     else:
-        llm_judged = [
-            stub_intent_match(),
-            stub_backlink_anchor_naturalness(),
-            stub_eeat_density(),
-        ]
+        llm_judged = [stub_intent_match()]
+        if not is_brand_mention:
+            llm_judged.append(stub_backlink_anchor_naturalness())
+        llm_judged.append(stub_eeat_density())
     return QualityReport(
         contract_target_keyword=primary,
         deterministic=deterministic,

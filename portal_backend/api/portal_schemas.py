@@ -14,6 +14,7 @@ BACKLINK_PLACEMENTS = {"intro", "conclusion"}
 POST_STATUSES = {"draft", "publish"}
 REQUEST_KINDS = {"submit_article", "create_article"}
 ARTICLE_FORMATS = {"narrative", "listicle"}
+SERVICE_TYPES = {"article", "brand_mention"}
 SUBMISSION_STATUSES = {"received", "validated", "rejected", "queued"}
 JOB_STATUSES = {"queued", "processing", "pending_approval", "rejected", "succeeded", "failed", "retrying", "canceled"}
 EVENT_TYPES = {
@@ -793,6 +794,7 @@ class AutomationSubmitArticleIn(BaseModel):
     post_status: Optional[str] = None
     author: Optional[int] = None
     article_format: str = "narrative"
+    service_type: str = "article"
 
     @validator("request_kind")
     def validate_request_kind(cls, value: str) -> str:
@@ -806,6 +808,13 @@ class AutomationSubmitArticleIn(BaseModel):
         cleaned = (value or "narrative").strip().lower()
         if cleaned not in ARTICLE_FORMATS:
             raise ValueError("article_format must be narrative or listicle.")
+        return cleaned
+
+    @validator("service_type")
+    def validate_service_type(cls, value: str) -> str:
+        cleaned = (value or "article").strip().lower()
+        if cleaned not in SERVICE_TYPES:
+            raise ValueError("service_type must be article or brand_mention.")
         return cleaned
 
     @validator("source_type")

@@ -15,13 +15,16 @@ import html
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
-from .contract import ContentContract
+from urllib.parse import urlparse
+
+from .contract import OPEN_ANCHOR_STRATEGIES, ContentContract, ServiceType
 from .llm import LLMError, _extract_json, _retry_sleep_seconds
 from .prompt_registry import Prompt, load as load_prompt
 from .research import ResearchPayload
@@ -209,6 +212,87 @@ def _format_editorial_angle(angle: Optional[Dict[str, Any]], language: str) -> s
     return "\n".join(lines) + "\n\n"
 
 
+def brand_name_from_url(url: str) -> str:
+    """Best-effort human-readable brand name from a target URL hostname.
+
+    ``https://www.brillenhaus24.de/kinder`` -> ``Brillenhaus24``. Used as a
+    fallback when the caller doesn't supply an explicit brand name for the
+    brand-mention service. Strips ``www.``, drops the TLD, splits on
+    hyphens/dots, and title-cases each token.
+    """
+
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    host = host.split("/")[0].split(":")[0]
+    labels = host.split(".")
+    core = labels[0] if labels else host
+    parts = [p for p in re.split(r"[-_]", core) if p]
+    return " ".join(p.capitalize() for p in parts) if parts else core.capitalize()
+
+
+def _format_service_directive(
+    service_type: ServiceType,
+    brand_name: Optional[str],
+    language: str,
+) -> str:
+    """High-priority block injected at the top of the user prompt.
+
+    Overrides the generic backlink/brand rules in the system prompt so a single
+    prompt file can serve both the article (hidden backlink) and brand-mention
+    (open name-drop, no link) services.
+    """
+
+    is_fr = (language or "de").lower() == "fr"
+    if service_type == ServiceType.BRAND_MENTION:
+        brand = (brand_name or "").strip() or "(Marke aus der Ziel-URL ableiten)"
+        if is_fr:
+            return (
+                "MODE DE SERVICE : MENTION DE MARQUE (sans lien) — PRIORITÉ ABSOLUE\n"
+                "==================================================================\n"
+                "- L'article ne contient AUCUN lien vers l'URL cible. `link_plan` DOIT être vide ([]).\n"
+                f"- La marque « {brand} » est citée nommément 1 à 3 fois dans le corps du texte, "
+                "naturellement (exemple, fournisseur, référence) — jamais publicitaire, jamais comme sujet principal.\n"
+                f"- Ajoutez « {brand} » dans `required_entities` avec un `placement_hint` désignant une section "
+                "intermédiaire (pas l'intro ni la conclusion).\n"
+                "- AUCUN `<a href>`, aucune URL, aucun « cliquez ici ». Uniquement le nom de la marque en texte brut.\n\n"
+            )
+        return (
+            "SERVICE-MODUS: MARKENERWÄHNUNG (ohne Link) — HÖCHSTE PRIORITÄT\n"
+            "==============================================================\n"
+            "- Der Artikel enthält KEINEN Link zur Ziel-URL. `link_plan` MUSS leer sein ([]).\n"
+            f"- Die Marke „{brand}\" wird 1–3 Mal natürlich im Fließtext namentlich erwähnt "
+            "(als Beispiel, Anbieter oder Referenz) — niemals werblich, niemals als Hauptthema.\n"
+            f"- Füge „{brand}\" zu `required_entities` hinzu, mit `placement_hint` auf eine mittlere "
+            "Sektion (NICHT Einleitung oder Fazit).\n"
+            "- KEIN `<a href>`, keine URL, kein „klicken Sie hier\". Nur der Markenname als Klartext.\n\n"
+        )
+    if is_fr:
+        return (
+            "MODE DE SERVICE : ARTICLE (backlink dissimulé) — PRIORITÉ ABSOLUE\n"
+            "================================================================\n"
+            "- L'article contient EXACTEMENT un backlink vers l'URL cible, intégré comme ancre naturelle.\n"
+            "- Le site cible ne doit JAMAIS être nommé ouvertement : ni le nom de marque, ni le domaine, "
+            "ni le nom de l'entreprise — ni dans le H1/meta/corps, ni dans le texte d'ancre.\n"
+            "- `anchor_strategy` DOIT être `partial_match`, `contextual` ou `exact_match`. "
+            "`branded` et `generic` sont INTERDITS.\n"
+            "- Le lecteur ne doit pas pouvoir deviner quel site est promu : le lien ressemble à une simple source rédactionnelle.\n"
+            "- `link_plan` : EXACTEMENT une entrée, `link_type=\"backlink\"`, dans une section intermédiaire.\n\n"
+        )
+    return (
+        "SERVICE-MODUS: ARTIKEL (versteckter Backlink) — HÖCHSTE PRIORITÄT\n"
+        "================================================================\n"
+        "- Der Artikel enthält GENAU EINEN Backlink zur Ziel-URL, eingebettet als natürlicher Anker.\n"
+        "- Die Ziel-Website darf NIRGENDWO offen genannt werden: weder Markenname, Domain noch Firmenname — "
+        "nicht im H1/meta/Body und nicht im Anker-Text.\n"
+        "- `anchor_strategy` MUSS `partial_match`, `contextual` oder `exact_match` sein. "
+        "`branded` und `generic` sind VERBOTEN.\n"
+        "- Der Leser darf nicht erkennen, welche Seite beworben wird — der Link wirkt wie eine beiläufige redaktionelle Quelle.\n"
+        "- `link_plan`: GENAU EIN Eintrag, `link_type=\"backlink\"`, in einer mittleren Sektion.\n\n"
+    )
+
+
 def build_user_prompt(
     payload: ResearchPayload,
     *,
@@ -217,13 +301,17 @@ def build_user_prompt(
     language: str = "de",
     current_year: Optional[int] = None,
     editorial_angle: Optional[Dict[str, Any]] = None,
+    service_type: ServiceType = ServiceType.ARTICLE,
+    brand_name: Optional[str] = None,
 ) -> str:
     t = _user_prompt_template(language)
     median = payload.competitor_word_count_median or t["median_unknown"]
     locale_label = f"location_code={payload.location_code}, language_code={payload.language_code}"
     year = int(current_year) if current_year is not None else datetime.now(timezone.utc).year
     angle_block = _format_editorial_angle(editorial_angle, language)
+    service_block = _format_service_directive(service_type, brand_name, language)
     return (
+        f"{service_block}"
         f"{t['target_keyword_label']}: {payload.target_keyword}\n"
         f"{t['backlink_label']}: {target_backlink_url}\n"
         f"{t['anchor_label']}: {anchor_hint or t['anchor_default']}\n"
@@ -390,6 +478,8 @@ def generate_contract(
     anchor_hint: Optional[str] = None,
     language: str = "de",
     editorial_angle: Optional[Dict[str, Any]] = None,
+    service_type: ServiceType = ServiceType.ARTICLE,
+    brand_name: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
@@ -416,6 +506,11 @@ def generate_contract(
     if not target_backlink_url.strip():
         raise ValueError("target_backlink_url is required.")
 
+    service_type = ServiceType(service_type)
+    resolved_brand_name = (brand_name or "").strip() or None
+    if service_type == ServiceType.BRAND_MENTION and not resolved_brand_name:
+        resolved_brand_name = brand_name_from_url(target_backlink_url)
+
     resolved_model = model or os.getenv("CREATOR_CONTRACT_MODEL", "").strip() or DEFAULT_CONTRACT_MODEL
     # Listicle contracts use a separate prompt version (v2) that hard-pins
     # ``format=listicle`` + a populated ``listicle_plan``; v1 stays narrative-
@@ -435,6 +530,8 @@ def generate_contract(
         anchor_hint=anchor_hint,
         language=language,
         editorial_angle=editorial_angle,
+        service_type=service_type,
+        brand_name=resolved_brand_name,
     )
 
     caller = llm_caller or call_with_thinking
@@ -464,6 +561,7 @@ def generate_contract(
         _heal_html_entities_in_contract_payload(payload)
         if requested_listicle:
             _enforce_listicle_payload(payload)
+        _enforce_service_type_payload(payload, service_type, resolved_brand_name)
 
     try:
         return ContentContract.model_validate(payload)
@@ -563,6 +661,75 @@ def _enforce_listicle_payload(payload: Dict[str, Any]) -> None:
         payload["schema_spec"] = schema
     schema.setdefault("article", True)
     schema["item_list"] = True
+
+
+def _enforce_service_type_payload(
+    payload: Dict[str, Any],
+    service_type: ServiceType,
+    brand_name: Optional[str],
+) -> None:
+    """Hard-pin the service contract on the LLM's JSON output.
+
+    The system prompt + injected SERVICE-MODUS block already instruct the model,
+    but we don't trust prose alone for an invariant the schema validator
+    enforces. For brand-mention we clear any stray link_plan and guarantee the
+    brand appears as a required entity; for article we strip any open anchor
+    strategy (``branded``/``generic``) the model may have chosen despite the
+    directive, coercing it to a hidden ``contextual`` anchor.
+    """
+
+    payload["service_type"] = service_type.value
+
+    if service_type == ServiceType.BRAND_MENTION:
+        payload["brand_name"] = brand_name
+        if payload.get("link_plan"):
+            logger.warning(
+                "creator.contract_generator.brand_mention_link_stripped count=%s",
+                len(payload.get("link_plan") or []),
+            )
+        payload["link_plan"] = []
+        if brand_name:
+            _ensure_brand_entity(payload, brand_name)
+        return
+
+    # Article mode: never name the target. Coerce open anchor strategies.
+    payload["brand_name"] = None
+    link_plan = payload.get("link_plan")
+    if isinstance(link_plan, list):
+        for link in link_plan:
+            if isinstance(link, dict) and link.get("anchor_strategy") in OPEN_ANCHOR_STRATEGIES:
+                logger.warning(
+                    "creator.contract_generator.open_anchor_coerced strategy=%s",
+                    link.get("anchor_strategy"),
+                )
+                link["anchor_strategy"] = "contextual"
+
+
+def _ensure_brand_entity(payload: Dict[str, Any], brand_name: str) -> None:
+    """Guarantee the brand name is a required entity placed in a middle block.
+
+    The section/listicle writer injects required entities into the body; this is
+    how the brand actually lands in the prose for the brand-mention service.
+    """
+
+    entities = payload.get("required_entities")
+    if not isinstance(entities, list):
+        entities = []
+        payload["required_entities"] = entities
+    if any(isinstance(e, dict) and str(e.get("name", "")).strip().lower() == brand_name.lower() for e in entities):
+        return
+
+    is_listicle = str(payload.get("format") or "").lower() == "listicle"
+    if is_listicle:
+        plan = payload.get("listicle_plan") if isinstance(payload.get("listicle_plan"), dict) else {}
+        item_count = int(plan.get("item_count") or 0)
+        mid = max(2, min(item_count - 1, (item_count // 2) + 1)) if item_count >= 3 else 1
+        placement = f"in item {mid}"
+    else:
+        sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+        mid = max(1, len(sections) // 2) if len(sections) >= 3 else 0
+        placement = f"in section {mid}"
+    entities.append({"name": brand_name, "placement_hint": placement})
 
 
 def _heal_html_entities_in_contract_payload(payload: Dict[str, Any]) -> None:

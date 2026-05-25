@@ -23,6 +23,7 @@ from ..automation_service import (
     wp_create_media_item,
     wp_get_media,
     wp_get_post,
+    wp_patch_post_content,
     wp_publish_post,
     wp_update_post_featured_media,
 )
@@ -33,6 +34,9 @@ from ..portal_models import Asset, Client, CreatorOutput, Job, JobEvent, Site, S
 from ..portal_schemas import (
     AssetCreate,
     AssetOut,
+    DraftContentOut,
+    DraftContentUpdateIn,
+    DraftContentUpdateOut,
     JobCreate,
     JobEventCreate,
     JobEventOut,
@@ -1515,6 +1519,104 @@ def preview_pending_job_draft(
 </html>
 """
     return HTMLResponse(content=html, status_code=status.HTTP_200_OK)
+
+
+@router.get("/{job_id}/draft-content", response_model=DraftContentOut)
+def get_draft_content(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> DraftContentOut:
+    job = _get_job_or_404(db, job_id)
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
+    credential = _get_enabled_credential_for_site(db, site.id)
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    try:
+        post_payload = wp_get_post(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    title = ""
+    if isinstance(post_payload.get("title"), dict):
+        title = str(post_payload["title"].get("raw") or post_payload["title"].get("rendered") or "").strip()
+    title = title or f"Draft #{job.wp_post_id}"
+
+    content_html = ""
+    if isinstance(post_payload.get("content"), dict):
+        content_html = str(post_payload["content"].get("raw") or post_payload["content"].get("rendered") or "")
+
+    excerpt = ""
+    if isinstance(post_payload.get("excerpt"), dict):
+        excerpt = str(post_payload["excerpt"].get("raw") or post_payload["excerpt"].get("rendered") or "")
+
+    slug = str(post_payload.get("slug") or "")
+
+    return DraftContentOut(title=title, content_html=content_html, excerpt=excerpt, slug=slug)
+
+
+@router.patch("/{job_id}/draft-content", response_model=DraftContentUpdateOut)
+def update_draft_content(
+    job_id: UUID,
+    payload: DraftContentUpdateIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> DraftContentUpdateOut:
+    job = _get_job_or_404(db, job_id)
+    if job.wp_post_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job has no WordPress draft post.")
+
+    site = db.query(Site).filter(Site.id == job.site_id).first()
+    if not site:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Publishing site not found for job.")
+    credential = _get_enabled_credential_for_site(db, site.id)
+
+    try:
+        config = get_runtime_config()
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    try:
+        updated = wp_patch_post_content(
+            site_url=site.site_url,
+            wp_rest_base=site.wp_rest_base,
+            wp_username=credential.wp_username,
+            wp_app_password=credential.wp_app_password,
+            post_id=int(job.wp_post_id),
+            title=payload.title,
+            content_html=payload.content_html,
+            timeout_seconds=config["timeout_seconds"],
+        )
+    except AutomationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    updated_title = ""
+    if isinstance(updated.get("title"), dict):
+        updated_title = str(updated["title"].get("rendered") or "").strip()
+    updated_title = updated_title or payload.title
+
+    updated_html = ""
+    if isinstance(updated.get("content"), dict):
+        updated_html = str(updated["content"].get("rendered") or "")
+    updated_html = updated_html or payload.content_html
+
+    return DraftContentUpdateOut(ok=True, title=updated_title, content_html=updated_html)
 
 
 @router.post("/{job_id}/reject", response_model=PendingJobRejectOut)

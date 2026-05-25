@@ -1006,3 +1006,21 @@ class PendingJobRejectIn(BaseModel):
 class PendingJobRejectOut(BaseModel):
     ok: bool = True
     job: JobOut
+
+
+class DraftContentOut(BaseModel):
+    title: str
+    content_html: str
+    excerpt: str
+    slug: str
+
+
+class DraftContentUpdateIn(BaseModel):
+    title: str
+    content_html: str
+
+
+class DraftContentUpdateOut(BaseModel):
+    ok: bool = True
+    title: str
+    content_html: str

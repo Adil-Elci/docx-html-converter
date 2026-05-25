@@ -795,6 +795,7 @@ class AutomationSubmitArticleIn(BaseModel):
     author: Optional[int] = None
     article_format: str = "narrative"
     service_type: str = "article"
+    brand_name: Optional[str] = None
 
     @validator("request_kind")
     def validate_request_kind(cls, value: str) -> str:

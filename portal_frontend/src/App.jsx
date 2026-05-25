@@ -1072,6 +1072,9 @@ export default function App() {
       if (fmt && fmt !== "narrative") formData.append("article_format", fmt);
       const svc = (serviceType || "article").trim().toLowerCase();
       if (svc && svc !== "article") formData.append("service_type", svc);
+      if (svc === "brand_mention" && (block.brand_name || "").trim()) {
+        formData.append("brand_name", block.brand_name.trim());
+      }
     }
     if (!isCreateArticle && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
@@ -5185,6 +5188,17 @@ export default function App() {
                                   placeholder={t("placeholderTopic")}
                                 />
                               </div>
+                              {isBrandMentionSection ? (
+                                <div className="submission-field submission-field-inline submission-field-brand-name">
+                                  <label>{t("brandName")}</label>
+                                  <input
+                                    type="text"
+                                    value={block.brand_name || ""}
+                                    onChange={(e) => setSubmissionBlockField(block.id, "brand_name", e.target.value)}
+                                    placeholder={t("placeholderBrandName")}
+                                  />
+                                </div>
+                              ) : null}
                             </>
                           ) : null}
 

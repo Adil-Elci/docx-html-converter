@@ -638,6 +638,7 @@ def _compose_submission_notes(
     submission_origin_metadata: Optional[Dict[str, str]] = None,
     article_format: Optional[str] = None,
     service_type: Optional[str] = None,
+    brand_name: Optional[str] = None,
 ) -> str:
     parts = [
         f"idempotency_key={_safe_note_value(idempotency_key)}",
@@ -662,6 +663,8 @@ def _compose_submission_notes(
         parts.append(f"article_format={_safe_note_value(article_format.strip().lower())}")
     if service_type and service_type.strip().lower() not in {"", "article"}:
         parts.append(f"service_type={_safe_note_value(service_type.strip().lower())}")
+    if brand_name and brand_name.strip():
+        parts.append(f"brand_name={_safe_note_value(brand_name.strip())}")
     if manual_create_article:
         parts.append("manual_create_article=true")
     if creator_mode:
@@ -812,6 +815,7 @@ def _enqueue_job(
         submission_origin_metadata=submission_origin_metadata,
         article_format=getattr(payload, "article_format", None),
         service_type=getattr(payload, "service_type", None),
+        brand_name=getattr(payload, "brand_name", None),
     )
 
     existing_submission = _find_existing_submission(

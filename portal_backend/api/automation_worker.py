@@ -484,6 +484,7 @@ class AutomationJobWorker:
                     topic=payload.get("topic"),
                     article_format=payload.get("article_format") or "narrative",
                     service_type=payload.get("service_type") or "article",
+                    brand_name=payload.get("brand_name"),
                     exclude_topics=payload.get("exclude_topics") or [],
                     recent_article_titles=payload.get("recent_article_titles") or [],
                     internal_link_inventory=payload.get("internal_link_inventory") or [],
@@ -712,6 +713,7 @@ class AutomationJobWorker:
             service_type = job_service_type or (parsed_notes.get("service_type") or "article").strip().lower()
             if service_type not in {"article", "brand_mention"}:
                 service_type = "article"
+            brand_name = (parsed_notes.get("brand_name") or "").strip() or None
             auto_selected_site = parsed_notes.get("auto_selected_site", "").lower() == "true"
 
             credential_author_id_raw = credential.author_id
@@ -1170,6 +1172,7 @@ class AutomationJobWorker:
                 "topic": topic,
                 "article_format": article_format,
                 "service_type": service_type,
+                "brand_name": brand_name,
                 "exclude_topics": exclude_topics,
                 "recent_article_titles": recent_article_titles,
                 "internal_link_inventory": internal_link_inventory,

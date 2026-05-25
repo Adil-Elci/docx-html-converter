@@ -1046,7 +1046,7 @@ export default function App() {
     return "";
   };
 
-  const buildSubmissionFormData = (block, { isCreateArticle, clientName, creatorSubmitKey, articleFormat }) => {
+  const buildSubmissionFormData = (block, { isCreateArticle, clientName, creatorSubmitKey, articleFormat, serviceType }) => {
     const formData = new FormData();
     const sourceType = isCreateArticle ? "google-doc" : (block.source_type || "").trim();
     const effectiveClientName = ((block.client_name || "").trim() || clientName);
@@ -1070,6 +1070,8 @@ export default function App() {
       if ((creatorSubmitKey || "").trim()) formData.append("idempotency_key", creatorSubmitKey.trim());
       const fmt = (articleFormat || "narrative").trim().toLowerCase();
       if (fmt && fmt !== "narrative") formData.append("article_format", fmt);
+      const svc = (serviceType || "article").trim().toLowerCase();
+      if (svc && svc !== "article") formData.append("service_type", svc);
     }
     if (!isCreateArticle && sourceType === "google-doc") {
       formData.append("doc_url", (block.doc_url || "").trim());
@@ -2814,6 +2816,7 @@ export default function App() {
         clientName: resolvedClientName,
         creatorSubmitKey,
         articleFormat: articleFormatForSubmission,
+        serviceType: serviceTypeForSubmission,
       });
       const effectiveSourceType = isCreateArticleSection ? "google-doc" : (block.source_type || "").trim();
       let responseData = null;
@@ -3119,11 +3122,14 @@ export default function App() {
   const isClientDashboardSection = !isAdminUser && activeSection === "dashboard";
   const isListiclesSection = activeSection === "listicles";
   const isBrandMentionSection = activeSection === "brand-mention";
-  // Listicles routes through the same Create Article surface; the only
-  // difference is the article_format submitted with the request.
-  const isCreateArticleSection = activeSection === "create-article" || isListiclesSection;
+  // Listicles and Brand Mention both route through the same Create Article
+  // surface. Listicles differs only by article_format; Brand Mention differs
+  // by service_type (open name-drop, no backlink to the target).
+  const isCreateArticleSection =
+    activeSection === "create-article" || isListiclesSection || isBrandMentionSection;
   const isSubmitArticleSection = activeSection === "submit-article";
   const articleFormatForSubmission = isListiclesSection ? "listicle" : "narrative";
+  const serviceTypeForSubmission = isBrandMentionSection ? "brand_mention" : "article";
   const taskBoardUnreadCount = Number(taskBoard?.unseen_card_count || 0);
   const activeClient = clients[0] || null;
   const websitesPageCount = Math.max(1, Math.ceil(sites.length / websitesPageSize));
@@ -3715,6 +3721,8 @@ export default function App() {
               <h1>
                 {isListiclesSection
                   ? t("heroListicles")
+                  : isBrandMentionSection
+                  ? t("heroBrandMention")
                   : isCreateArticleSection
                   ? t("heroCreateArticle")
                   : t("heroSubmitArticle")}
@@ -3727,14 +3735,15 @@ export default function App() {
                     {t("formatChipListicle")}
                   </div>
                 </>
+              ) : isBrandMentionSection ? (
+                <>
+                  <p className="hero-subtitle">{t("brandMentionHint")}</p>
+                  <div className="format-chip" role="status" aria-live="polite">
+                    <span className="format-chip-dot" aria-hidden="true" />
+                    {t("formatChipBrandMention")}
+                  </div>
+                </>
               ) : null}
-            </div>
-          ) : null}
-
-          {isBrandMentionSection ? (
-            <div className="hero">
-              <h1>{t("heroBrandMention")}</h1>
-              <p className="hero-subtitle">{t("brandMentionComingSoon")}</p>
             </div>
           ) : null}
 

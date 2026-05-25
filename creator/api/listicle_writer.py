@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .contract import ContentContract, EntityRequirement, LinkTarget, ListiclePlan
+from .contract import ContentContract, EntityRequirement, LinkTarget, ListiclePlan, ServiceType
 from .llm import LLMError, call_llm_json
 from .prompt_registry import load as load_prompt
 from .section_writer import InsertedLink
@@ -79,6 +79,30 @@ def _format_link(link: Optional[LinkTarget], target_keyword: str, language: str)
     )
 
 
+def _format_service_directive(contract: ContentContract) -> str:
+    is_fr = contract.language.value == "fr"
+    if contract.service_type == ServiceType.BRAND_MENTION:
+        brand = (contract.brand_name or "").strip()
+        if is_fr:
+            return (
+                "MODE MENTION DE MARQUE : n'insérez AUCUN lien (`<a href>`) ni URL dans cet item. "
+                + (f"Si la marque « {brand} » figure dans les entités obligatoires, citez-la en texte brut, naturellement." if brand else "")
+            )
+        return (
+            "SERVICE-MODUS MARKENERWÄHNUNG: Füge in diesem Eintrag KEINEN Link (`<a href>`) und KEINE URL ein. "
+            + (f"Wenn die Marke „{brand}\" unter den Pflicht-Entitäten steht, erwähne sie als Klartext, natürlich im Satz." if brand else "")
+        )
+    if is_fr:
+        return (
+            "MODE ARTICLE : ne nommez JAMAIS le site cible (marque, domaine, nom d'entreprise) — ni dans le texte, "
+            "ni dans le texte d'ancre. Le backlink reste dissimulé derrière une ancre contextuelle/mot-clé."
+        )
+    return (
+        "SERVICE-MODUS ARTIKEL: Nenne die Ziel-Website NIEMALS offen (kein Markenname, keine Domain, kein Firmenname) "
+        "— weder im Fließtext noch im Anker-Text. Der Backlink bleibt hinter einem kontextuellen/Keyword-Anker verborgen."
+    )
+
+
 def _format_peer_items(plan: "ListiclePlan", rank: int, language: str) -> str:
     """Render the full peer-item list so the writer can match parallel form
     and avoid overlapping with content that belongs to other items."""
@@ -124,8 +148,9 @@ def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
             f"ENTITÉS OBLIGATOIRES pour cet item\n"
             f"==================================\n"
             f"{_format_entities(entities, language)}\n\n"
-            f"BACKLINK\n"
-            f"========\n"
+            f"BACKLINK / MODE DE SERVICE\n"
+            f"==========================\n"
+            f"{_format_service_directive(contract)}\n"
             f"{_format_link(link, contract.target_keyword, language)}\n\n"
             f"LISTE NOIRE IA SPÉCIFIQUE AU CONTRAT\n"
             f"====================================\n"
@@ -150,8 +175,9 @@ def build_user_prompt(*, contract: ContentContract, rank: int) -> str:
         f"PFLICHT-ENTITÄTEN für diesen Eintrag\n"
         f"========================================\n"
         f"{_format_entities(entities, language)}\n\n"
-        f"BACKLINK\n"
-        f"========\n"
+        f"BACKLINK / SERVICE-MODUS\n"
+        f"========================\n"
+        f"{_format_service_directive(contract)}\n"
         f"{_format_link(link, contract.target_keyword, language)}\n\n"
         f"VERTRAGSWEITE AI-FLOSKEL-BLOCKLISTE\n"
         f"===================================\n"

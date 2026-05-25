@@ -283,6 +283,10 @@ class Job(Base):
             "article_format IN ('narrative','listicle')",
             name="jobs_article_format_check",
         ),
+        CheckConstraint(
+            "service_type IN ('article','brand_mention')",
+            name="jobs_service_type_check",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -291,6 +295,7 @@ class Job(Base):
     site_id = Column("publishing_site_id", UUID(as_uuid=True), ForeignKey("publishing_sites.id"), nullable=False)
     job_status = Column(Text, nullable=False, default="queued")
     article_format = Column(String(24), nullable=False, default="narrative", server_default="narrative")
+    service_type = Column(String(24), nullable=False, default="article", server_default="article")
     requires_admin_approval = Column(Boolean, nullable=False, default=False)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_by_name_snapshot = Column(Text, nullable=True)

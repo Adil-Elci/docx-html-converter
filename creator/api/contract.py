@@ -28,6 +28,28 @@ class ArticleFormat(str, Enum):
     LISTICLE = "listicle"
 
 
+class ServiceType(str, Enum):
+    """Which guest-post product this article is.
+
+    ``ARTICLE`` (default): the article carries a backlink to the target site,
+    but the target is NEVER named openly — the anchor is a natural/contextual
+    or keyword phrase, never the brand/domain. The reader cannot tell which
+    site is being promoted.
+
+    ``BRAND_MENTION``: the target brand is name-dropped openly for SEO entity
+    association + PR reach, but the article carries ZERO outbound links to the
+    target (``link_plan`` is empty).
+    """
+
+    ARTICLE = "article"
+    BRAND_MENTION = "brand_mention"
+
+
+# Anchor strategies that name the target site outright. Forbidden in ARTICLE
+# mode, where the backlink must stay hidden behind a neutral anchor.
+OPEN_ANCHOR_STRATEGIES = frozenset({"branded"})
+
+
 class LinkTarget(BaseModel):
     target_url: str = Field(..., description="Absolute URL the anchor must point to.")
     anchor_strategy: str = Field(
@@ -111,6 +133,16 @@ class ContentContract(BaseModel):
     format: ArticleFormat = ArticleFormat.NARRATIVE
     listicle_plan: Optional[ListiclePlan] = None
 
+    service_type: ServiceType = ServiceType.ARTICLE
+    brand_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-readable brand/site name of the backlink target. Required for "
+            "service_type=brand_mention (the name to drop in the body); ignored for "
+            "service_type=article, where the target is never named."
+        ),
+    )
+
     # Contract bounds catch only output that would break downstream code.
     # SEO-quality bands (50-60 title, 140-160 description, 800-1500 words,
     # etc.) live in eval_harness, where they surface as flagged checks for
@@ -151,4 +183,26 @@ class ContentContract(BaseModel):
             # rather than auto-clearing so the LLM doesn't ship a half-formed
             # contract that's easy to misread downstream.
             raise ValueError("listicle_plan must be omitted when format=narrative.")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_service_type(self) -> "ContentContract":
+        # Brand-mention articles never link to the target — a stray link_plan
+        # entry would make the section writer insert a backlink, defeating the
+        # whole "unlinked mention" product. Article-mode links must stay hidden:
+        # the 'branded' anchor names the target outright, which is exactly what
+        # this mode forbids.
+        if self.service_type == ServiceType.BRAND_MENTION:
+            if self.link_plan:
+                raise ValueError(
+                    "service_type=brand_mention must have an empty link_plan "
+                    "(no outbound link to the target site)."
+                )
+        else:
+            for link in self.link_plan:
+                if link.anchor_strategy in OPEN_ANCHOR_STRATEGIES:
+                    raise ValueError(
+                        f"service_type=article forbids the {link.anchor_strategy!r} anchor "
+                        "strategy — the target site must never be named openly."
+                    )
         return self

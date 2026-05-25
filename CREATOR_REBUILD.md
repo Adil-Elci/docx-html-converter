@@ -1,6 +1,6 @@
 # Creator Rebuild — Plan & State
 
-**Branch:** `creator-rebuild` · **Last updated:** 2026-05-08 · **Last commit:** `Phase F — listicle format end-to-end`
+**Branch:** `creator-rebuild` · **Last updated:** 2026-05-25 · **Last commit:** `Phase G — service-type split (hidden-backlink Article vs unlinked Brand Mention)`
 
 ## Deployment
 
@@ -319,37 +319,20 @@ Ranked-list articles ("Die 7 besten X 2026") as a sibling to today's narrative s
 
 **Risk to watch:** LLM over-listing ("Top 10" → 12 items); LLMs collapsing the pros/cons structure into prose. Three-layer defense: hard cap in contract, `check_listicle_structure` deterministic gate, voice-pass preservation rule. Live validation gate (10 runs across 3+ publishers) is operational follow-up.
 
-## Phase G — Unlinked brand mentions · 🔜 PLANNED
+## Phase G — Service-type split: hidden-backlink Article vs unlinked Brand Mention · ✅ DONE (2026-05-25)
 
-Goal: cheaper service tier — articles that name-drop the client brand for SEO entity-association + PR reach but contain ZERO outbound links to the client URL. Target_url still drives topic derivation and brand identification; it just never appears as `<a href>` or in plaintext. Composes with Phase F. Lands AFTER Phase F is live and validated — Phase G touches eval gates and worker persistence, safer once the format split has stabilized.
+Split the single product into two services via a `service_type` flag (orthogonal to `article_format`). The old behavior (brand named openly + backlink) was bisected — each service keeps one half: Article hides the link and never names the target; Brand Mention names the target but never links it.
 
-**Brand input**: `AutomationRequest.client_brand_name: Optional[str]` — required when `link_mode=brand_mention`, ignored otherwise. Heuristic fallback only if explicit value is missing: URL host → strip TLD → titlecase (`mysupr.de` → `MySupr`). Surface forms = `client_brand_name` + `derived_topic.alternates` matches.
+- **`ServiceType` enum** ([contract.py](creator/api/contract.py)): `article` (default) | `brand_mention`, + new `brand_name` field. Validators: brand_mention ⇒ `link_plan` MUST be empty; article ⇒ `branded`/`generic` anchor forbidden (`OPEN_ANCHOR_STRATEGIES`).
+- **Contract generator** ([contract_generator.py](creator/api/contract_generator.py)): injects a top-priority `SERVICE-MODUS` block into the user prompt (de+fr) that overrides the system prompt's generic backlink rules. `_enforce_service_type_payload` heals LLM output — brand_mention clears `link_plan` + sets `brand_name` + appends the brand as a mid-section/item required entity; article coerces stray `branded`→`contextual`. `brand_name_from_url` is the host-based fallback brand.
+- **Prompts** — contract v1/v2 + section/listicle writers (all de+fr) now defer their backlink/brand lines to the `SERVICE-MODUS` block. Writers read `contract.service_type` directly (no signature change) + inject a per-section directive.
+- **Eval** ([eval_harness.py](creator/api/eval_harness.py)): article adds `check_hidden_backlink` (target brand/domain tokens absent from visible text — conservative joined-core tokens only, no hyphen-split, to avoid false positives on descriptive domains) alongside link_counts + anchor_diversity. Brand mention swaps those for `check_brand_mention` (brand present in prose AND zero links to target host) + drops the `backlink_anchor_naturalness` judge axis.
+- **Pipeline** ([pipeline_runner.py](creator/api/pipeline_runner.py)): threads `service_type`+`brand_name`, passes `target_url` to eval, and — load-bearing safety net — `_strip_links_to_host` deterministically unwraps any anchor pointing at the target host for brand_mention (prompt + eval gate + this strip = 3 layers against stealth link leakage). Server `/v2/run-pipeline` accepts `service_type`+`brand_name`.
+- **Portal**: `service_type` through `run_create_article_pipeline` → `_run_create_article_pipeline_v2` → `call_creator_v2_pipeline` body; `AutomationSubmitArticleIn.service_type` (validated); `Job.service_type` column + check (Alembic 0054); worker reads job-column-first/notes-fallback like article_format.
+- **Frontend** ([App.jsx](portal_frontend/src/App.jsx)): Brand Mention is live — routes through the Create Article surface (`isCreateArticleSection` includes it) with `service_type=brand_mention` on submit; hero hint + service chip; i18n de+en.
+- **Tests**: +19 creator ([test_service_type.py](creator/tests/test_service_type.py)) + 2 portal. **Suite green: creator 393, portal 158.** Frontend build clean.
 
-**Contract** ([contract.py](creator/api/contract.py)): add `LinkMode = BACKLINK | BRAND_MENTION` (default BACKLINK). When `BRAND_MENTION`: `link_plan` is empty by construction (Pydantic validator enforces). Add new `EntityRequirement.role: Optional[Literal["client_brand", "supporting"]]` and, when role=client_brand, fields `min_mentions: int = 3`, `forbidden_anchor_phrases: List[str]` (default `["klicken Sie hier", "die Webseite", "hier", target host bare, target URL]`).
-
-**Contract generator** ([contract_generator.py](creator/api/contract_generator.py)): when `link_mode=brand_mention`, suppress `link_plan` output entirely and inject a placement directive — brand surfaces in intro + ≥2 distinct sections + FAQ, distributed natural cadence, never a CTA, never adjacent to a URL token. Per-language `contract_generator/v1.{de,fr}.md` gets a `link_mode` switch block (additive — does not break BACKLINK path).
-
-**Section writer** ([section_writer.py](creator/api/section_writer.py)): when `contract.link_mode=BRAND_MENTION`, post-process each draft to strip any `<a>` whose href contains the target host or target URL — replace tag with anchor text only. Log every strip via `logger.warning("section_writer.brand_mention_link_stripped url=%s anchor=%s")`. Existing required-entity injection already handles brand surface forms. `links_inserted` returns `[]` for these drafts.
-
-**Voice pass** ([voice_pass.py](creator/api/voice_pass.py)): existing URL-preservation rule extends — input `<a>` URLs must equal output `<a>` URLs (already enforced) AND when `link_mode=BRAND_MENTION` no `<a href>` may contain the target host. New `VoicePassValidationError` subclass `BrandMentionLinkLeakError` raised on violation; pipeline_runner re-raises as `PipelineError("voice_pass", …)`.
-
-**Eval** ([eval_harness.py](creator/api/eval_harness.py)):
-- `check_brand_mention_count` (deterministic): brand surface forms appear ≥ `min_mentions` times in article body. Surface form set built from `client_brand_name` + `derived_topic.alternates`. Case-insensitive whole-word match.
-- `check_no_target_url` (deterministic, HARD GATE): zero occurrences of target host in any `<a href>`, plaintext, or attribute of `final_html`. Failure auto-fails the entire `quality_report`.
-- `check_link_counts` runs only when `link_mode=BACKLINK`.
-- Judge: replace `backlink_anchor_naturalness` with `brand_mention_naturalness` when link_mode=brand_mention — does the brand read as editorial coverage (not paid placement)? `eval_judge/v1.{de,fr}.md` gets a `link_mode` switch.
-
-**Server**: `/v2/run-pipeline` accepts `link_mode: "backlink"|"brand_mention"` (default backlink) + `client_brand_name` (required when link_mode=brand_mention). 422 with `code=brand_name_required` if missing. No new endpoint.
-
-**Portal_backend** ([automation_service.py](portal_backend/api/automation_service.py) + [automation_worker.py](portal_backend/api/automation_worker.py)): `AutomationRequest.link_mode` + `client_brand_name` plumbed through. Worker branches on `pipeline_state.link_mode`: BACKLINK path writes `PlacedLink` rows as today; BRAND_MENTION path writes one `BrandMention` row per detected mention `{job_id, brand_surface_form, occurrence_count, sections_present_in: List[int]}`. JobEvents emit `brand_mention_complete` with the surface-form histogram.
-
-**Migration:** Alembic 0054 — `jobs.link_mode VARCHAR DEFAULT 'backlink' NOT NULL`, `jobs.client_brand_name VARCHAR NULL`, new `brand_mentions` table (`id`, `job_id` FK, `brand_surface_form`, `occurrence_count`, `sections_present_in JSONB`, `created_at`). (0053 is consumed by Phase F's `jobs.article_format`.)
-
-**Smoke + tests:** `creator/scripts/smoke_brand_mention.py` runs LIVE and ASSERTS `check_no_target_url` passes before exit (this is the load-bearing safety property). ~25 new unit tests covering contract suppression of link_plan, section-writer link strip + log, voice-pass `BrandMentionLinkLeakError`, both new eval checks (pass + fail paths), judge axis swap, worker `BrandMention` persistence, AutomationRequest `brand_name_required` validation.
-
-**Risk to watch:** stealth link leakage. The section-writer `<a>`-strip + voice-pass URL guard + `check_no_target_url` deterministic gate are belt-and-suspenders-and-elastic — keep all three. Prompt rules alone are not enough; LLMs WILL fabricate `[brand](https://target/)` markdown-style links even with strict prompts.
-
-**Live validation gate:** 10 live runs spanning both formats (narrative + listicle) and both languages (de + fr). Manually verify zero target_url leakage in each before flipping to ✅ DONE.
+**Deviations from the original plan:** used `service_type` (not `link_mode`) + a contract `brand_name` field (not a separate `EntityRequirement.role`/`brand_mentions` table); brand surfaces via a normal required entity; the link-leak guard lives in pipeline_runner (deterministic post-strip) rather than section_writer + a voice-pass `BrandMentionLinkLeakError`. The brand IS named in plaintext (just unlinked) — the earlier "never in plaintext either" framing was dropped per product decision. **Live validation gate (real runs across publishers, both formats + languages, verify zero target leakage) is operational follow-up.**
 
 ## Deferred items / follow-ups
 

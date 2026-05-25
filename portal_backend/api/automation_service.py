@@ -1308,6 +1308,8 @@ def call_creator_v2_pipeline(
     language: Optional[str] = None,
     editorial_angle: Optional[Dict[str, Any]] = None,
     article_format: Optional[str] = None,
+    service_type: Optional[str] = None,
+    brand_name: Optional[str] = None,
     skip_voice_pass: bool = False,
     skip_judge: bool = False,
     skip_related_keywords: bool = False,
@@ -1351,6 +1353,10 @@ def call_creator_v2_pipeline(
         body["editorial_angle"] = editorial_angle
     if article_format and article_format.strip().lower() in {"narrative", "listicle"}:
         body["article_format"] = article_format.strip().lower()
+    if service_type and service_type.strip().lower() in {"article", "brand_mention"}:
+        body["service_type"] = service_type.strip().lower()
+    if brand_name and brand_name.strip():
+        body["brand_name"] = brand_name.strip()
     url = creator_endpoint.rstrip("/") + "/v2/run-pipeline"
     try:
         response = requests.post(url, json=body, timeout=timeout_seconds, allow_redirects=False)
@@ -1776,6 +1782,7 @@ def _run_create_article_pipeline_v2(
     anchor: Optional[str] = None,
     topic: Optional[str] = None,
     article_format: str = "narrative",
+    service_type: str = "article",
     exclude_topics: Optional[List[str]] = None,
     site_url: str,
     wp_rest_base: str,
@@ -2156,6 +2163,7 @@ def _run_create_article_pipeline_v2(
             "publishing_site_url": selected_publish_site_url,
             "topic_will_be_derived": upfront_target_keyword is None,
             "article_format": article_format,
+            "service_type": service_type,
         },
     )
     v2_response = call_creator_v2_pipeline(
@@ -2166,6 +2174,7 @@ def _run_create_article_pipeline_v2(
         language=upfront_language,
         editorial_angle=editorial_angle,
         article_format=article_format,
+        service_type=service_type,
         anchor_hint=anchor,
         timeout_seconds=creator_timeout_seconds,
     )
@@ -2430,6 +2439,7 @@ def _run_create_article_pipeline_v2(
         "selected_site_id": selected_publish_site_id,
         "selected_site_url": selected_publish_site_url,
         "article_format": article_format,
+        "service_type": service_type,
     }
 
 
@@ -2443,6 +2453,7 @@ def run_create_article_pipeline(
     anchor: Optional[str],
     topic: Optional[str],
     article_format: str = "narrative",
+    service_type: str = "article",
     exclude_topics: Optional[List[str]] = None,
     recent_article_titles: Optional[List[str]] = None,
     internal_link_inventory: Optional[List[Dict[str, Any]]] = None,
@@ -2495,6 +2506,7 @@ def run_create_article_pipeline(
         anchor=anchor,
         topic=topic,
         article_format=article_format,
+        service_type=service_type,
         exclude_topics=exclude_topics,
         site_url=site_url,
         wp_rest_base=wp_rest_base,

@@ -763,15 +763,8 @@ export default function App() {
   const [pendingBulkAction, setPendingBulkAction] = useState("");
   const [publishingJobId, setPublishingJobId] = useState("");
   const [rejectingJobId, setRejectingJobId] = useState("");
-  const [regeneratingImageJobId, setRegeneratingImageJobId] = useState("");
   const [openRejectJobId, setOpenRejectJobId] = useState("");
   const [rejectForms, setRejectForms] = useState({});
-  const [openEditJobId, setOpenEditJobId] = useState("");
-  const [editDraftTitle, setEditDraftTitle] = useState("");
-  const [editDraftHtml, setEditDraftHtml] = useState("");
-  const [editDraftLoading, setEditDraftLoading] = useState(false);
-  const [editDraftSaving, setEditDraftSaving] = useState(false);
-  const editContentRef = useRef(null);
   const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
   const [bulkRejectForm, setBulkRejectForm] = useState(emptyRejectForm());
   const [publishedArticles, setPublishedArticles] = useState([]);
@@ -821,7 +814,7 @@ export default function App() {
   const pendingSelectedCount = pendingSelectedJobIds.length;
   const allPendingSelected = pendingJobs.length > 0 && pendingJobs.every((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
   const somePendingSelected = pendingJobs.some((item) => pendingSelectedJobIdSet.has(String(item.job_id || "")));
-  const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId || regeneratingImageJobId);
+  const pendingActionsBusy = Boolean(pendingBulkAction || publishingJobId || rejectingJobId);
   const activeSitesStatCount = siteAccessCheckResult ? siteAccessCheckResult.accessible_count : readySites.length;
   const isSuperAdmin = (
     ((currentUser?.email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL)
@@ -1648,49 +1641,6 @@ export default function App() {
     }
   };
 
-  const openDraftEditor = async (jobId) => {
-    setOpenEditJobId(jobId);
-    setOpenRejectJobId("");
-    setEditDraftTitle("");
-    setEditDraftHtml("");
-    setEditDraftLoading(true);
-    setError("");
-    try {
-      const data = await api.get(`/jobs/${jobId}/draft-content`);
-      setEditDraftTitle(data.title || "");
-      setEditDraftHtml(data.content_html || "");
-    } catch (err) {
-      setError(err.message);
-      setOpenEditJobId("");
-    } finally {
-      setEditDraftLoading(false);
-    }
-  };
-
-  const closeDraftEditor = () => {
-    setOpenEditJobId("");
-    setEditDraftTitle("");
-    setEditDraftHtml("");
-  };
-
-  const saveDraftEdits = async (jobId) => {
-    const htmlContent = editContentRef.current ? editContentRef.current.innerHTML : editDraftHtml;
-    try {
-      setEditDraftSaving(true);
-      setError("");
-      setSuccess("");
-      await api.patch(`/jobs/${jobId}/draft-content`, {
-        title: editDraftTitle,
-        content_html: htmlContent,
-      });
-      setSuccess(t("draftSavedSuccess"));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setEditDraftSaving(false);
-    }
-  };
-
   const toggleClientPublishNotifications = async (client) => {
     const clientId = String(client?.id || "").trim();
     if (!clientId) return;
@@ -1897,21 +1847,6 @@ export default function App() {
     });
   };
 
-  const regeneratePendingJobImage = async (jobId) => {
-    try {
-      setRegeneratingImageJobId(jobId);
-      setError("");
-      setSuccess("");
-      await api.post(`/jobs/${jobId}/regenerate-image`, {});
-      await loadPendingJobs();
-      setImageRegenToast({ open: true, message: t("adminImageRegeneratedSuccess"), closing: false });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setRegeneratingImageJobId("");
-    }
-  };
-
   const postMultipartWithProgress = (url, formData, headers = {}) => (
     new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -1963,6 +1898,13 @@ export default function App() {
       return apiBase ? `${apiBase}/jobs/${encodeURIComponent(jobId)}/draft-preview` : `/jobs/${encodeURIComponent(jobId)}/draft-preview`;
     }
     return (item?.wp_post_url || "").trim();
+  };
+
+  const getDraftEditUrl = (item) => {
+    const jobId = (item?.job_id || "").toString().trim();
+    const apiBase = (baseApiUrl || "").trim().replace(/\/+$/, "");
+    if (!jobId || !item?.wp_post_id) return "";
+    return apiBase ? `${apiBase}/jobs/${encodeURIComponent(jobId)}/draft-edit` : `/jobs/${encodeURIComponent(jobId)}/draft-edit`;
   };
 
   const formatPublishedAt = (value) => {
@@ -4843,28 +4785,15 @@ export default function App() {
                               {t("viewDraft")}
                             </button>
                           )}
-                          <button
-                            className="btn secondary"
-                            type="button"
-                            onClick={() => {
-                              if (openEditJobId === item.job_id) {
-                                closeDraftEditor();
-                              } else {
-                                openDraftEditor(item.job_id);
-                              }
-                            }}
-                            disabled={!item.wp_post_id || pendingActionsBusy || editDraftSaving}
-                          >
-                            {editDraftLoading && openEditJobId === item.job_id ? t("loadingDraftContent") : t("editDraft")}
-                          </button>
-                          <button
-                            className="btn secondary"
-                            type="button"
-                            onClick={() => regeneratePendingJobImage(item.job_id)}
-                            disabled={!item.wp_post_id || pendingActionsBusy}
-                          >
-                            {regeneratingImageJobId === item.job_id ? t("regeneratingImage") : t("regeneratePostImage")}
-                          </button>
+                          {getDraftEditUrl(item) ? (
+                            <a className="btn secondary" href={getDraftEditUrl(item)} target="_blank" rel="noreferrer">
+                              {t("editDraft")}
+                            </a>
+                          ) : (
+                            <button className="btn secondary" type="button" disabled>
+                              {t("editDraft")}
+                            </button>
+                          )}
                           <button
                             className="btn"
                             type="button"
@@ -4931,48 +4860,6 @@ export default function App() {
                               disabled={pendingActionsBusy}
                             >
                               {rejectingJobId === item.job_id ? t("rejecting") : t("confirmReject")}
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-                      {openEditJobId === item.job_id && !editDraftLoading ? (
-                        <div className="pending-edit-panel">
-                          <div>
-                            <label htmlFor={`edit-title-${item.job_id}`}>{t("editDraftTitle")}</label>
-                            <input
-                              id={`edit-title-${item.job_id}`}
-                              type="text"
-                              value={editDraftTitle}
-                              onChange={(e) => setEditDraftTitle(e.target.value)}
-                              disabled={editDraftSaving}
-                            />
-                          </div>
-                          <div>
-                            <label>{t("editDraftContent")}</label>
-                            <div
-                              ref={editContentRef}
-                              className="pending-edit-content"
-                              contentEditable={!editDraftSaving}
-                              suppressContentEditableWarning
-                              dangerouslySetInnerHTML={{ __html: editDraftHtml }}
-                            />
-                          </div>
-                          <div className="pending-edit-actions">
-                            <button
-                              className="btn secondary"
-                              type="button"
-                              onClick={closeDraftEditor}
-                              disabled={editDraftSaving}
-                            >
-                              {t("close")}
-                            </button>
-                            <button
-                              className="btn"
-                              type="button"
-                              onClick={() => saveDraftEdits(item.job_id)}
-                              disabled={editDraftSaving}
-                            >
-                              {editDraftSaving ? t("savingDraft") : t("saveDraft")}
                             </button>
                           </div>
                         </div>
